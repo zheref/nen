@@ -66,6 +66,7 @@ import { readTextFile } from "../cli/inputs.js";
 import { parsePipeTable, renderPipeTable } from "../cli/table.js";
 import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
 import { normalizeEol } from "../seam/exec.js";
+import { ANSWER_BOOLEAN_FLAGS, ANSWER_LIST_FLAGS, ANSWER_VALUE_FLAGS, runAnswer } from "./answer.js";
 
 import {
   GATE_NAMES, MARKER_FILE, STOP_MARK_CONTRACT, STOP_MARK_CONTRACT_V2,
@@ -82,6 +83,10 @@ const USAGE = `nen stop [--who <name>] [--gate G1|G1-M|G2|G3|G4|G5] [--notified]
 nen stop clear [--repo <path>]
 nen stop show  [--repo <path>] [--json]
 nen stop --template
+nen stop answer --record <effort-id> --gate G1|G1-M|G2|G3|G4|G5 --who <name>
+         --question-file <path> --option <key>=<label>::<consequence> [--option ...]
+         (--pick <key> | --typed-file <path>) [--dry-run] [--repo <path>] [--json]
+nen stop answer show <effort-id> [--repo <path>] [--json]
 
 Render the gate-stop banner and the padded-markdown efforts table. The
 embedded python3 this was ported from is removed -- there is only ever this
@@ -126,6 +131,20 @@ show:
   missing marker is exit 0 with 'no marker'. This is the validator a hook or a
   report can rely on; schema check --ledger uses the same validator.
 
+answer:
+  Record the answer a stop received, as one JSON record
+  { contract, id, effortId, n, gate, who, question, options[{key,label,consequence}],
+  kind, pick, typed, answeredAt } at <git common dir>/.nen/stops/<effort>/<n>.json,
+  and print its id R-YYYY-MM-DD-nn -- never reused: reserved by an exclusive
+  create under <git common dir>/.nen/stop-ids/ before the record is written.
+  --pick <key> records kind 'picked'. --typed-file keeps the reply VERBATIM
+  (the verbatim text is for a typed reply only; a pick records the key): kind
+  'typed', unless the text is word for word one option's label, which records
+  kind 'picked' with that key and the text kept. This verb records; it never
+  chooses. --dry-run writes nothing and shows the record and the next free id.
+  'answer show <effort-id>' lists the effort's records; one that is not JSON
+  or not this contract's is exit 1, never skipped.
+
 clear:
   Remove '${MARKER_FILE}' when it exists. A surface with no Stop hook consumes
   the marker itself once the bell has rung; this is that consumption as a verb.
@@ -169,10 +188,25 @@ export const stopCommand: Command = {
   // as an unknown subcommand (review finding on zheref/nen#216). `clear` and
   // `show` are recognised in run() instead.
   flags: {
-    values: ["who", "gate", "title", "body", "report-url", "options", "propose-issue"],
-    booleans: ["notified", "template", "mark"],
+    values: ["who", "gate", "title", "body", "report-url", "options", "propose-issue", ...ANSWER_VALUE_FLAGS],
+    booleans: ["notified", "template", "mark", ...ANSWER_BOOLEAN_FLAGS],
+    lists: [...ANSWER_LIST_FLAGS],
   },
   run(context: CommandContext): number {
+    if (context.args.positionals[1] === "answer") return runAnswer(context);
+    // THE ANSWER FLAGS ARE `stop answer`'s ALONE. This family declares one
+    // flag spec for every form, so a flag only `answer` reads would otherwise
+    // parse cleanly on the banner and be silently dropped -- a `--pick` the
+    // caller believes was recorded. Refused by name instead.
+    for (const flag of ANSWER_VALUE_FLAGS) {
+      if (context.args.values[flag] !== undefined) throw new VerbUsageError(`--${flag} belongs to 'nen stop answer' only.`);
+    }
+    for (const flag of ANSWER_LIST_FLAGS) {
+      if ((context.args.lists[flag] ?? []).length > 0) throw new VerbUsageError(`--${flag} belongs to 'nen stop answer' only.`);
+    }
+    for (const flag of ANSWER_BOOLEAN_FLAGS) {
+      if (context.args.booleans.has(flag)) throw new VerbUsageError(`--${flag} belongs to 'nen stop answer' only.`);
+    }
     if (context.args.positionals[1] === "clear") return clearMarker(context);
     if (context.args.positionals[1] === "show") return showMarker(context);
     const gate = context.args.values["gate"] ?? null;
