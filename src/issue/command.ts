@@ -86,6 +86,7 @@ import {
   selectKind,
 } from "./shape.js";
 import { readTitleFile } from "./title.js";
+import { extractCriteria, ISSUE_CRITERIA_CONTRACT } from "./criteria.js";
 import { plainLine } from "../cli/plain.js";
 
 export function numberList(value: string | undefined): readonly number[] {
@@ -163,6 +164,8 @@ export const ISSUE_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   // issue itself, and nothing written either way.
   "body-check": { values: ["body-file", "ref", "target", "requirements-from", "kind"] },
   questions: { values: ["body-file", "ref", "target"] },
+  // The AC rows of one issue body (./criteria.ts), read-only like the two above.
+  criteria: { values: ["body-file", "ref", "target"] },
 };
 
 /**
@@ -739,7 +742,18 @@ usage:
       not be read, 2 usage. --json: '{ contract: "nen.issue.questions/v0.1",
       source, counts: { open, resolved, needsMarkers, unrecognised }, open:
       [{ id, number, gate, line }], resolved: [{ id, number, line }],
-      needsMarkers: [{ label, line }], unrecognised: [{ line, text }] }'.`;
+      needsMarkers: [{ label, line }], unrecognised: [{ line, text }] }'.
+
+  nen issue criteria (--ref <CODE>#<N> --target <owner/name> | --body-file <path>)
+      Read-only. Lists the acceptance criteria an issue body states: every
+      list row '- AC-{n}: <text>' outside fenced code and comments, with its
+      number, text and line, and any AC number stated twice. A body with no
+      AC row is reported not verifiable -- nothing to verify, never "all
+      verified". 'nen pr converge' compares these rows with a PR's verify
+      rows. Exits: 0 whenever the body was read, 1 when the issue could not
+      be read or carried no body, 2 usage. --json: '{ contract:
+      "nen.issue.criteria/v0.1", source, verifiable, criteria: [{ id, number,
+      text, line }], duplicates: [{ id, lines }] }'.`;
 
 export const issueCommand: Command = {
   name: "issue",
@@ -780,6 +794,8 @@ export const issueCommand: Command = {
         return issueBodyCheck(context);
       case "questions":
         return issueQuestions(context);
+      case "criteria":
+        return issueCriteria(context);
       default:
         return chainTerminus(context);
     }
@@ -2260,5 +2276,19 @@ function issueQuestions(context: CommandContext): number {
     ...report.unrecognised.map((row): string => `UNRECOGNISED line ${row.line}: ${row.text}`),
   ].map(plainLine);
   emit(context.io, context.json, { contract: ISSUE_QUESTIONS_CONTRACT, source, ...report }, lines);
+  return 0;
+}
+
+function issueCriteria(context: CommandContext): number {
+  const { body, source } = readShapeBody(context, "criteria");
+  const report = extractCriteria(body);
+  const lines = [
+    report.verifiable
+      ? `${report.criteria.length} AC row(s), ${report.duplicates.length} duplicate number(s) -- ${describeSource(source)}`
+      : `0 AC row(s): not verifiable -- ${describeSource(source)}`,
+    ...report.criteria.map((criterion): string => `${criterion.id} line ${criterion.line}: ${criterion.text}`),
+    ...report.duplicates.map((duplicate): string => `DUPLICATE ${duplicate.id} lines ${duplicate.lines.join(", ")}`),
+  ].map(plainLine);
+  emit(context.io, context.json, { contract: ISSUE_CRITERIA_CONTRACT, source, ...report }, lines);
   return 0;
 }

@@ -185,12 +185,17 @@ export function foldTitle(text: string): string {
 }
 
 /** One source line as the row and marker readers see it: comments and inline code removed, fenced code blank. */
-interface MaskedLine {
+export interface MaskedLine {
   readonly line: number;
   readonly text: string;
 }
 
-function maskedLines(body: string): MaskedLine[] {
+/**
+ * The body's lines with fenced code blanked and HTML comments removed; inline
+ * code is masked too unless `keepInlineCode` (../issue/criteria.ts reads a
+ * criterion's text and a verify row's evidence, where inline code is content).
+ */
+export function maskedLines(body: string, options: { readonly keepInlineCode?: boolean } = {}): MaskedLine[] {
   const rows = body.replace(/^﻿/, "").replace(/\r\n?/g, "\n").split("\n");
   const masked: MaskedLine[] = [];
   let fence: string | null = null;
@@ -210,7 +215,7 @@ function maskedLines(body: string): MaskedLine[] {
       masked.push({ line: index + 1, text: "" });
       return;
     }
-    masked.push({ line: index + 1, text: stripped.text.replace(/(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)/g, " ") });
+    masked.push({ line: index + 1, text: options.keepInlineCode === true ? stripped.text : stripped.text.replace(/(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)/g, " ") });
   });
   return masked;
 }

@@ -14,7 +14,7 @@ new verbs, `usage record`, `usage show`, `wc catch-up`, `wc publish`,
 `commit write` and `pr open`; the usage ledger, the `steps[]` a `shu` run
 leaves on an open phase, the pinned stall rule and the `profile` policy key
 arrive with them): 44 command
-families, 142 verbs, every flag checked against the binary this repository
+families, 144 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -69,8 +69,9 @@ the paths and slugs they are handed. Every verb of
 [`issue consolidate-close`](#nen-issue-consolidate-close), which require it,
 and [`issue comment`](#nen-issue-comment),
 [`issue edit-body`](#nen-issue-edit-body),
-[`issue body-check`](#nen-issue-body-check) and
-[`issue questions`](#nen-issue-questions), which read it as the base their
+[`issue body-check`](#nen-issue-body-check),
+[`issue questions`](#nen-issue-questions) and
+[`issue criteria`](#nen-issue-criteria), which read it as the base their
 relative `--body-file`, `--current-body-out`, `--requirements-from` and
 `--private-names-ignore-file` resolve against. Their argument tables say so.
 
@@ -208,7 +209,7 @@ change from a compatible one.
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **76 shapes** and **79 ids** (`nen.runner.plan`,
+binary carries**, writing or reading — **78 shapes** and **81 ids** (`nen.runner.plan`,
 `nen.stop.mark` and `nen.wc.worktree.copies` each have two versions, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -250,10 +251,10 @@ file formats).
 - **`decisions`** — `nen.decisions/v0.1`
 - **`dev`** — `nen.dev.release-publish/v0.1`
 - **`direct`** — `nen.direct.answer/v0.1` · `nen.direct.matrix/v0.1` · `nen.direct.registry/v0.1` · `nen.direct.resolve/v0.1`
-- **`issue`** — `nen.issue.body-check/v0.1` · `nen.issue.edit-body/v0.3` · `nen.issue.questions/v0.1` · `nen.issue.reconcile/v0.1`
+- **`issue`** — `nen.issue.body-check/v0.1` · `nen.issue.criteria/v0.1` · `nen.issue.edit-body/v0.3` · `nen.issue.questions/v0.1` · `nen.issue.reconcile/v0.1`
 - **`loop`** — `nen.loop.iterate/v0.1`
 - **`phase`** — `nen.phase.ledger/v0.1`
-- **`pr`** — `nen.pr.edit-body/v0.1` · `nen.pr.mark-ready/v0.1` · `nen.pr.merge-delivery/v0.1` · `nen.pr.merge-unit/v0.1` · `nen.pr.open/v0.1` · `nen.pr.sections/v0.1` · `nen.pr.ready.head-mismatch/v0.1` · `nen.pr.ready/v0.1` · `nen.pr.threads-settle/v0.1` · `nen.pr.threads/v0.1`
+- **`pr`** — `nen.pr.converge/v0.1` · `nen.pr.edit-body/v0.1` · `nen.pr.mark-ready/v0.1` · `nen.pr.merge-delivery/v0.1` · `nen.pr.merge-unit/v0.1` · `nen.pr.open/v0.1` · `nen.pr.sections/v0.1` · `nen.pr.ready.head-mismatch/v0.1` · `nen.pr.ready/v0.1` · `nen.pr.threads-settle/v0.1` · `nen.pr.threads/v0.1`
 - **`release`** — `nen.release.unit-check/v0.1`
 - **`repo`** — `nen.repo.classify/v0.1`
 - **`report`** — `nen.report.data/v0.1` · `nen.report.graph/v0.1` · `nen.report.render/v0.1`
@@ -821,7 +822,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 142 verbs, grouped as the README groups them. **Reads** is what a
+All 144 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -835,6 +836,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`pr`](#family-pr) | [`nen pr sections resolve`](#nen-pr-sections-resolve) | resolves a caller-owned section catalogue by kind, family and conditional facts | --catalogue JSON; optional workflow.json pr.sections overrides | yes |
 | [`pr`](#family-pr) | [`nen pr sections family`](#nen-pr-sections-family) | folds taxonomy jobs into the catalogue family with the most jobs, ties by declared precedence | --taxonomy and --catalogue JSON | yes |
 | [`pr`](#family-pr) | [`nen pr fetch`](#nen-pr-fetch) | one typed snapshot of a PR: head sha, mergeability, check rollup, per-commit reviews, review threads, pending review requests | github (gh) | yes |
+| [`pr`](#family-pr) | [`nen pr converge`](#nen-pr-converge) | read-only: compares the AC rows of every issue a PR closes with the PR body's verify rows, per criterion; compares, never decides | github (gh pr view, gh api issue reads) | yes |
 | [`pr`](#family-pr) | [`nen pr next-blocker`](#nen-pr-next-blocker) | the first blocking condition, in fixed order (conflict, red check, owed round, unresolved thread, missing body requirement) | nen/gates.json (or --gates), github (gh) | yes |
 | [`pr`](#family-pr) | [`nen pr cascade-main`](#nen-pr-cascade-main) | merges (never rebases) the trunk into the current branch and pushes on a clean merge, or stops there under `--no-push` | git (fetch/merge/push, reaches origin) | yes |
 | [`pr`](#family-pr) | [`nen pr retarget`](#nen-pr-retarget) | gh pr edit --base, for a stacked PR after its predecessor merges | github (gh) | yes |
@@ -930,6 +932,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`issue`](#family-issue) | [`nen issue edit-body`](#nen-issue-edit-body) | replaces an issue's body outright with a file's bytes, certifying the number is an ISSUE (never a PR) before any write | gh (api read to certify, issue edit unless --dry-run) | yes |
 | [`issue`](#family-issue) | [`nen issue body-check`](#nen-issue-body-check) | read-only: does an issue body carry every section its kind requires in the caller's catalogue, with content patterns, contiguous and measurable numbered rows, and vague-word advisories | --body-file or gh (api read), the --requirements-from catalogue | yes |
 | [`issue`](#family-issue) | [`nen issue questions`](#nen-issue-questions) | read-only: counts an issue body's open OQ-{n} rows, resolved ones and [NEEDS ...] markers; counts, never decides | --body-file or gh (api read) | yes |
+| [`issue`](#family-issue) | [`nen issue criteria`](#nen-issue-criteria) | read-only: lists an issue body's AC-{n} acceptance-criterion rows with their text; a body with none is not verifiable | --body-file or gh (api read) | yes |
 | [`idea`](#family-idea) | [`nen idea file`](#nen-idea-file) | file an idea issue (reusing issue file's own choreography), then read it back over the API and diff title/body/labels against what was submitted | nen/labels.json; gh (issue create + api read) | yes |
 | [`scaffold`](#family-scaffold) | [`nen scaffold init`](#nen-scaffold-init) | stand an EXISTING repository up: the directory skeleton, the trailer-enforcing commit-msg hook, the trunk-guarding pre-commit hook, a canon-values.yml template, nen/contract.json's project block, nen/workflow.json's policy, the schemas/-&gt;nen/ copy migration, the stack's CI workflow, .gitignore upkeep, and a closing `shu tools` CHECK that installs nothing | nen/contract.json + nen/workflow.json (both hooks are generated FROM the policy) + the legacy schemas/ copies; the bundled profiles pack and templates/; writes to disk under --repo; spawns the version probes the target declares (never on --dry-run) | yes |
 | [`scaffold`](#family-scaffold) | [`nen scaffold new`](#nen-scaffold-new) | write a FRESH tree for one stack into an empty --dir: the template's files with {{name}} substituted, the CI workflow, .gitignore, both git hooks, nen/workflow.json's policy, and nen/contract.json as `shu detect` proposes it off the marker just written -- every post-step PRINTED, none run | the bundled profiles pack and templates/; writes to disk under --dir; spawns nothing at all | yes |
@@ -2526,6 +2529,69 @@ nen pr fetch --target o/n --pr 9
   review threads: 0 (0 unresolved)
 ```
 (from `src/pr/command.test.ts`'s scripted `next-blocker` fixture, which drives the same `fetchPullRequest` this verb calls and prints the same three `gh` calls' worth of data — this verb reaches GitHub, so it was not run live here; `o/n` and `#9` are the test's own placeholder target/number, since `printSnapshot` never prints the target itself)
+
+### `nen pr converge`
+
+Acceptance-criterion coverage as data (Hatsu's ruling HR-11): compares the criteria every closing issue states with the rows the pull request's verify section carries, and reports each criterion's coverage. **Read-only**, and it **compares two lists and decides nothing**: whether a `partial` may land, or whether an issue that states no criterion blocks anything, is the caller's rule. The exit code says only which facts were found.
+
+**Usage**
+
+```text
+nen pr converge --target <owner/name> --pr <n> [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--target <owner/name>` | yes | The repository the pull request lives in. | Missing or malformed exits 2. |
+| `--pr <n>` | yes | The pull-request number. | Missing or not a positive whole number exits 2. |
+| `--json` | no | The report as one JSON document. | |
+
+Every other flag is refused at exit 2 before any `gh` call. It reads no `--repo`.
+
+**What it reads.** The pull request through `gh pr view <n> --repo <target> --json number,url,headRefOid,body,closingIssuesReferences` -- the `gh pr view` read [`pr fetch`](#nen-pr-fetch) and [`issue open-pr-check`](#nen-issue-open-pr-check) make; `closingIssuesReferences` is GitHub's own list of the issues the PR closes, a body keyword and a sidebar link alike. Each closing issue is read over REST (`gh api repos/<owner/name>/issues/<N>`) in **its own repository**, and its criteria extracted as [`issue criteria`](#nen-issue-criteria) extracts them: every list row `- AC-{n}: <text>` outside fenced code and HTML comments.
+
+<a id="the-verify-row-grammar"></a>
+
+**The verify-row grammar.** A verify row is a Markdown table line, outside fenced code and HTML comments, anywhere in the PR body (Hatsu's `templates/pr-body/verify.md` puts the table under its verify heading), with exactly three cells:
+
+```text
+| <criterion> | <word> | <evidence> |
+```
+
+- `<criterion>` -- `AC-{n}`; `<CODE>#<N>/AC-{n}`; `<owner/name>#<N>/AC-{n}`; `#<N>/AC-{n}`; or `none` (a change no criterion asked for). One wrapping of `**`, `__` or backticks is read through. A qualified criterion names closing issue `N`; an `owner/name` prefix must be that issue's repository, and a `CODE` prefix is echoed, never resolved. A bare `AC-{n}` names the one closing issue that states `AC-{n}`; when two do, the row is **ambiguous** and matches neither -- nen will not pick.
+- `<word>` -- exactly one of `satisfied`, `partial`, `missing`, `contradicts`, `unrequested`, read case-insensitively.
+- `<evidence>` -- a test name, a `path:line`, a scenario. Empty, a dash, or a `<placeholder>` left from the template counts as **no evidence**. A `|` inside the cell is written `\|`.
+
+A table line whose first cell mentions `AC-` and is none of those spellings (`AC-1, AC-2`, the template's `<CODE>#<N>/AC-<k>` placeholder) is listed as **malformed**, never skipped. Header and separator rows name no criterion and are not rows.
+
+**What it reports, per criterion:**
+
+| Coverage | Meaning |
+|---|---|
+| `covered-with-evidence` | exactly one readable row names it, and its evidence cell says something |
+| `covered-without-evidence` | exactly one readable row names it, with no evidence |
+| `missing-row` | no row names it |
+| `malformed-row` | one row names it and could not be read: an unknown word, or not three cells |
+| `duplicate-rows` | two or more rows name it; nen will not pick one |
+| `not-verifiable` | the closing issue states no AC row: one row for the issue, with a null `id` -- **never a pass** |
+
+Beside the coverage, the row's `word` when exactly one readable row names the criterion. Rows that name a criterion no closing issue states, or name one ambiguously, are **unmatched**; `none` rows are listed as **unrequested** with their word and evidence. A pull request that closes no issue reports `verifiable: false` and no criterion.
+
+**Output and exit codes** -- the line `<n> criterion row(s) across <n> closing issue(s), <n> blocking -- <n> covered with evidence, <n> without, <n> missing-row, <n> malformed-row, <n> duplicate-rows, <n> not-verifiable` (or `<owner/name>#<n> closes no issue: no criterion to compare (not verifiable)`), then one `<COVERAGE>  <owner/name>#<N>/<AC-n> <word> (line <n>)` line per criterion and `UNREQUESTED`, `UNMATCHED` and `MALFORMED` lines. `--json`: `{ contract, target, pr, url, headSha, closingIssues, verifiable, criteria, unrequested, unmatched, malformed, counts, blocking }` -- `contract` is `nen.pr.converge/v0.1`; `closingIssues` each `{ issue, criteria, verifiable }` (`issue` is `owner/name#N`, `criteria` the number of AC rows); `verifiable` false when the PR closes no issue or any closing issue states no criterion; `criteria` each `{ issue, id, text, coverage, word, evidence, rows }` (`id` `AC-{n}` or null on `not-verifiable`, `rows` the verify-row line numbers naming it); `unrequested` each `{ line, word, evidence, problem }`; `unmatched` and `malformed` each `{ line, cell, reason }`; `counts` one count per coverage plus `words: { satisfied, partial, missing, contradicts, unrequested }`; `blocking` one `<owner/name>#<N>/<AC-n>: <reason>` string per criterion that sets exit 1. Exit **0** when no criterion blocks (a `not-verifiable` row and a PR closing no issue included -- `verifiable: false` says so); exit **1** when any criterion is `missing-row`, `malformed-row` or `duplicate-rows`, or its row says `missing` or `contradicts`; exit **2** on usage, and when it **could not read**: the pull request, its `body` or `closingIssuesReferences`, a closing reference naming no number and repository, a closing issue or its body, a closing number that names a pull request, or a full page of 100 closing references (the rest unread). "Could not read" is never "nothing to cover": stdout stays empty and stderr names what failed.
+
+**Example**
+
+```bash
+nen pr converge --target o/n --pr 5
+```
+```text
+2 criterion row(s) across 1 closing issue(s), 0 blocking -- 1 covered with evidence, 1 without, 0 missing-row, 0 malformed-row, 0 duplicate-rows, 0 not-verifiable
+COVERED-WITH-EVIDENCE  o/n#12/AC-1 satisfied (line 5)
+COVERED-WITHOUT-EVIDENCE  o/n#12/AC-2 partial (line 6)
+```
+(shape from `src/pr/converge.test.ts`; this verb reaches GitHub, so it was not run live here)
 
 ### `nen pr next-blocker`
 
@@ -9337,6 +9403,40 @@ RESOLVED  OQ-2 line 2
 NEEDS     CLARIFICATION line 3
 ```
 (shape from `src/issue/shape-command.test.ts`)
+
+### `nen issue criteria`
+
+Lists the acceptance criteria an issue body states (Hatsu's ruling HR-11) -- the list [`pr converge`](#nen-pr-converge) compares a pull request's verify rows against. **Read-only**; it extracts and never judges whether a criterion is well written ([`issue body-check`](#nen-issue-body-check) measures that against the caller's catalogue).
+
+**Usage**
+
+```text
+nen issue criteria (--ref <CODE>#<N> --target <owner/name> | --body-file <path>) [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--ref <CODE>#<N>` | one of the two | The issue to read. | As [`issue body-check`](#nen-issue-body-check)'s: needs `--target`; the `CODE` is echoed, never resolved; a pull request is refused at exit 2. |
+| `--target <owner/name>` | with `--ref` | The repository `--ref` is read from. | |
+| `--body-file <path>` | one of the two | The issue body, read from disk. | As [`issue body-check`](#nen-issue-body-check)'s; resolves against `--repo`'s root. |
+
+**What it reads.** Every list row `- AC-{n}: <text>` (`*` and `+` bullets too, up to three spaces of indent) outside fenced code and HTML comments, with its number, its text (inline code kept) and its line. A heading, a paragraph or a table row naming `AC-1` is prose about a criterion, not one. An AC number stated on more than one row is listed under `duplicates`; every such row stays in `criteria`.
+
+**Output and exit codes** -- the line `<n> AC row(s), <n> duplicate number(s) -- <source>`, or `0 AC row(s): not verifiable -- <source>` for a body with none (nothing to verify, never "all verified"), then `AC-<n> line <n>: <text>` per row and `DUPLICATE AC-<n> lines <a>, <b>`. `--json`: `{ contract, source, verifiable, criteria, duplicates }` -- `contract` is `nen.issue.criteria/v0.1`, `source` as `body-check`'s, `verifiable` false when there is no AC row, `criteria` each `{ id, number, text, line }`, `duplicates` each `{ id, lines }`. Exit 0 whenever the body was read, whatever it holds; exit 1 when `--ref`'s issue could not be read or carried no body (never zero rows); exit 2 on usage.
+
+**Example**
+
+```bash
+nen issue criteria --ref NN#12 --target o/n
+```
+```text
+2 AC row(s), 0 duplicate number(s) -- o/n#12
+AC-1 line 3: lists rows
+AC-2 line 4: exits 2 unread
+```
+(shape from `src/pr/converge.test.ts`)
 
 <a id="family-idea"></a>
 

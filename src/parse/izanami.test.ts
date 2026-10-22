@@ -340,6 +340,8 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     expect(classifyCommand("nen idea file --target o/r --title x --body-file b.md --dry-run").classification).toBe("read-only");
     expect(classifyCommand("nen issue body-check --body-file b.md --requirements-from c.json").classification).toBe("read-only");
     expect(classifyCommand("nen issue questions --ref NN#1 --target o/r").classification).toBe("read-only");
+    expect(classifyCommand("nen issue criteria --ref NN#1 --target o/r").classification).toBe("read-only");
+    expect(classifyCommand("nen pr converge --target o/r --pr 3").classification).toBe("read-only");
     // No longer always-mutating: past a passthrough '--' it reads as 'issue file' does.
     expect(classifyCommand("nen idea file --target o/r --title x --body-file b.md -- z").classification).toBe(
       classifyCommand("nen issue file --target o/r --title x --body-file b.md -- z").classification,

@@ -1135,6 +1135,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       reconcile: RO("proposes closures for issues a landed PR already closes -- gh reads only"),
       "body-check": RO("checks an issue body against a caller catalogue -- file or gh reads only"),
       questions: RO("counts open and resolved questions in an issue body -- file or gh reads only"),
+      criteria: RO("lists the AC rows of an issue body -- file or gh reads only"),
     },
   },
   label: {
@@ -1178,6 +1179,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       // from this side, so the rows cannot silently go false again no
       // matter which module a refactor touches first.
       fetch: RO("one typed PR snapshot -- gh reads only (its REST reviews call pins --method GET)"),
+      converge: RO("compares closing issues' AC rows with the PR body's verify rows -- gh pr view and gh api issue reads only"),
       "next-blocker": RO("reports the first blocking condition -- reads only (same pinned-GET fetch)"),
       "cascade-main": MUT("merges the trunk into the branch and pushes; --no-push still merges locally (a working-tree/index mutation), so it stays mutating in every spelling"),
       retarget: MUT("gh pr edit --base"),
