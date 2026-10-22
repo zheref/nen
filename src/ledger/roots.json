@@ -1,0 +1,12 @@
+{
+  "$comment": "The ONE root for nen's own durable records under a repository's git common dir (delivery round on zheref/nen#498, reading 7). Every nen ledger that lives in the common dir reads its directory from here: the loop ledger, the stop-answer records and their reserved ids, and the batch-run manifests. The consumer plane's own namespace (for example <common>/hatsu/) stays the consumer's. `legacy` lists the spellings older builds wrote to; each ledger migrates from them once. Data, not a name nen decides with (src/taxonomy-purity.test.ts).",
+  "root": [".nen"],
+  "loop": [".nen", "loop"],
+  "stops": [".nen", "stops"],
+  "stopIds": [".nen", "stop-ids"],
+  "runs": [".nen", "runs"],
+  "legacy": {
+    "loop": [["nen", "loop"]],
+    "runs": [["hatsu", "runs"]]
+  }
+}
