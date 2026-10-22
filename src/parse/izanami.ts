@@ -1045,6 +1045,10 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
         "writes and deletes mirror files in the consumer's declared surfaces unless --dry-run is given",
       ),
       "mirror check": GATED(["--markdown-out"], "writes the drift report to --markdown-out"),
+      // The canon prose verbs (SDD piece N9): pure reads of the checkout, plus
+      // git merge-base/diff/show/ls-files under --base and --leaves.
+      lint: RO("reads the rules contract, the baseline and the canon's Markdown, and under --base git merge-base, diff and show; writes nothing"),
+      "clause check": RO("reads one Markdown file, a base file or git object, and under --leaves git ls-files and diff; writes nothing"),
     },
   },
   changelog: {
@@ -1087,6 +1091,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       write: MUT("commits the index -- git commit -F on a validated message file; a local write, but a write"),
     },
   },
+  decisions: { subcommands: { summary: RO("reads and counts nen/decisions.json; writes nothing") } },
   dev: { subcommands: { test: DEV_FORWARDING_CHECKER, lint: DEV_FORWARDING_CHECKER, replay: DEV_CHECKER } },
   direct: {
     subcommands: {
@@ -1220,6 +1225,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
     subcommands: {
       format: RO("formats the object notation -- pure computation"),
       parse: RO("parses the object notation -- pure computation"),
+      resolve: RO("reads the cited Markdown file under the root; writes nothing"),
     },
   },
   release: {

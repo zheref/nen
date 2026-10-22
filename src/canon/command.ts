@@ -33,12 +33,14 @@ import { assertRepoRoot, looksLikeOwnerSlug } from "../repo/root.js";
 import { loadRepoRegistry, parseRepoRegistry, type RepoRegistry } from "../schema/repos.js";
 import { readSchemaFile, REPOS_FILE } from "../schema/source.js";
 import { commaList } from "../cli/comma.js";
-import { emit, parseCallerToken, requireRepoFlag, requireSubcommand, requireTargetFlag, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
+import { emit, parseCallerToken, refuseExtraPositionals, requireRepoFlag, requireSubcommand, requireTargetFlag, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import { refuse } from "../cli/refusal.js";
 import { containedOn, resolvedOrSelf, samePath } from "./paths.js";
 import { shellSingleQuote } from "../shu/render.js";
 import { parseTarget, TargetError, type Target } from "../github/target.js";
 import { resolveScenario } from "../repo/scenario.js";
+import { canonLint, LintWiringError, renderLint } from "./lint.js";
+import { clauseCheck, ClauseWiringError, renderClauseCheck } from "./clause.js";
 import { canonSurfaceNames, canonSurfaces, type SurfaceRow } from "../surface/rules.js";
 import type { ToolCheckout } from "../schema/repos.js";
 import { SchemaError } from "../schema/errors.js";
@@ -62,6 +64,9 @@ import {
   type SurfaceRendering,
 } from "./mirror.js";
 
+/** The flags only the prose verbs read; every other canon verb refuses them by name. */
+export const PROSE_FLAGS = ["root", "rules", "baseline", "base", "file", "prefix", "leaves", "body-from"] as const;
+
 export const GENERATE_CONTRACT = "nen.canon.mirror.generate/v0.1";
 export const CHECK_CONTRACT = "nen.canon.mirror.check/v0.1";
 export const PIN_CONTRACT = "nen.canon.pin/v0.1";
@@ -83,10 +88,44 @@ const SURFACE_LIST = canonSurfaces()
   })
   .join("\n");
 
-const USAGE = `nen canon -- resolve a repo's handbook set, read its canon pin, or render/check its
-            canon mirror on every surface it uses.
+const USAGE = `nen canon -- resolve a repo's handbook set, read its canon pin, render/check its
+            canon mirror on every surface it uses, or lint its canon prose and clause ids.
 
 usage:
+  nen canon lint --root <checkout> --rules <contract> [--baseline <file>] [--base <ref>] [--json]
+      A canon repository's Markdown held to the caller's rules contract
+      (nen.prose-lint/v0.1; nothing built in): each rule's class picks the
+      check -- by-hand, stale-residue, stale-version, citation, bare-ref,
+      unverified-claim, hedge, adjective, number-not-declared,
+      residue-unfiled, open-question-shape, reading-cited-as-ruled. Fenced code
+      and quoted words are exempt. 'fail' findings count against the
+      shrink-only --baseline (keyed path + rule + normalised text); a row no
+      finding uses is stale, and under --base a row the base lacked is grown;
+      'advisory' findings print and never count. --base <ref> lints only the
+      files changed since git merge-base <ref> HEAD. --repo names the same
+      directory as --root.
+      Exit 0 nothing new, stale or grown; 1 at least one, each printed
+      'path:line · <rule> · text'; 2 wiring (an unreadable or invalid
+      contract, baseline or file, a symlink leaving the root, a failed git
+      read) or a usage error -- never green over a file it could not read.
+      --json: { contract: "nen.canon.lint/v0.1", root, rules, baseline, base,
+      files, exit, counts, findings, advisory, staleBaseline, grownBaseline }.
+
+  nen canon clause check --file <md> --prefix <P> [--base <md> | --base <ref>:<path>]
+                         [--leaves <paths>] [--body-from <file>] [--json]
+      A clause id space held unique: definitions (<a id="p-N"></a>**P-N**, or a
+      column-0 '- **P-N.') are counted, citations never; a duplicate or an
+      anchor/label mismatch exits 1; gaps are a notice; P-2 never matches
+      P-20. --base reports minted, removed and edited clauses. --leaves
+      (comma-separated paths or globs over git ls-files; needs
+      --base <ref>:<path>) lists every file citing a changed clause with no
+      change against <ref> -- exit 1 unless --body-from carries a
+      'no-leaf-change: <reason>' line. Exit 2 on a tooling failure (an
+      unreadable file or base, no definitions at all, a leaf pattern matching
+      nothing, a failed git read) or a usage error.
+      --json: { contract: "nen.canon.clause-check/v0.1", repo, file, prefix,
+      definitions, duplicates, mismatches, gaps, base, leaves, exit }.
+
   nen canon pin --repo <consumer> [--source <owner/name>] [--json]
       The canonical handbooks repository this consumer mirrors and the TAG it
       is pinned to, read from its own nen/repos.json: the 'pinned' field on
@@ -314,7 +353,7 @@ ${SURFACE_LIST}
 export const canonCommand: Command = {
   jsonRefusals: ["resolve"],
   name: "canon",
-  subcommands: ["resolve", "mirror", "pin", "checkout"],
+  subcommands: ["resolve", "mirror", "pin", "checkout", "lint", "clause"],
   summary: "Resolve a repo's handbook set, read its canon pin, or render/check its canon-rule mirror on every surface it uses.",
   usage: USAGE,
   flags: {
@@ -333,6 +372,7 @@ export const canonCommand: Command = {
       "markdown-out",
       "canon-checkout",
       "write",
+      ...PROSE_FLAGS,
     ],
     booleans: ["dry-run"],
   },
@@ -348,7 +388,9 @@ export const canonCommand: Command = {
     "--header-pattern": "the marker is read back by nen itself now; there is no pattern to give. Pass --source and --ref, and 'check' tells stale from hand-edited on its own.",
   },
   run(context: CommandContext): number {
-    const subcommand = requireSubcommand("canon", context.args, ["resolve", "mirror", "pin", "checkout"]);
+    const subcommand = requireSubcommand("canon", context.args, ["resolve", "mirror", "pin", "checkout", "lint", "clause"]);
+    if (subcommand === "lint") return lintVerb(context);
+    if (subcommand === "clause") return clauseVerb(context);
     if (subcommand === "resolve") return resolveVerb(context);
     if (subcommand === "pin") return pinVerb(context);
     if (subcommand === "checkout") return checkoutVerb(context);
@@ -401,7 +443,7 @@ function pinVerb(context: CommandContext): number {
   );
   const write = optionalValue(context, "write");
   if (write !== null) return pinWriteVerb(context, repoFlag, write);
-  refuseForeignFlags(context, "pin", ["canon-checkout", "dry-run"]);
+  refuseForeignFlags(context, "pin", ["canon-checkout", "dry-run", ...PROSE_FLAGS]);
   const root = assertRepoRoot({ repoFlag });
   const sourceFlag = optionalValue(context, "source");
   const registry = readRegistryPins(root);
@@ -472,7 +514,7 @@ function pinWriteVerb(context: CommandContext, repoFlag: string, tag: string): n
   // THE FLAGS ANOTHER VERB READS, refused by name. `--ref` above all: the tag
   // is --write's value, and a second place to say it is a place to disagree.
   refuseForeignFlags(context, "pin --write", [
-    "target", "always-load", "stack-dir", "leaf", "rules-dir", "canon-values", "ref", "scenario", "surfaces", "not-mirrored", "markdown-out",
+    "target", "always-load", "stack-dir", "leaf", "rules-dir", "canon-values", "ref", "scenario", "surfaces", "not-mirrored", "markdown-out", ...PROSE_FLAGS,
   ]);
   const root = assertRepoRoot({ repoFlag });
   // THE GRAMMAR FIRST: a tag that is not tag-shaped is refused without a read.
@@ -854,7 +896,7 @@ function checkoutVerb(context: CommandContext): number {
     `It is the consumer whose ${REPOS_FILE} records the canon pin and declares where a checkout of the canon is found.`,
   );
   refuseForeignFlags(context, "checkout", [
-    "target", "always-load", "stack-dir", "leaf", "rules-dir", "canon-values", "scenario", "surfaces", "not-mirrored", "markdown-out", "dry-run", "write",
+    "target", "always-load", "stack-dir", "leaf", "rules-dir", "canon-values", "scenario", "surfaces", "not-mirrored", "markdown-out", "dry-run", "write", ...PROSE_FLAGS,
   ]);
   const root = assertRepoRoot({ repoFlag });
   let resolution: CheckoutResolution;
@@ -887,7 +929,7 @@ function resolveVerb(context: CommandContext): number {
     context,
     "It is the checkout whose nen/repos.json maps --target to the scenario this handbook set derives from; defaulting to the current directory reported that directory's missing-or-unrelated registry instead of the forgotten flag.",
   );
-  refuseForeignFlags(context, "resolve", ["canon-checkout", "write"]);
+  refuseForeignFlags(context, "resolve", ["canon-checkout", "write", ...PROSE_FLAGS]);
   // The shared --target refusal (Hatsu SDD plan N5): missing OR malformed is
   // exit 2, as on every other verb that takes the flag. A malformed one used
   // to fall into the read below and exit 1.
@@ -1130,7 +1172,7 @@ function mirror(context: CommandContext, mirrorSub: string | undefined): number 
   if (mirrorSub !== "generate" && mirrorSub !== "check") {
     throw new VerbUsageError(`unknown 'canon mirror' subcommand '${mirrorSub ?? "(none)"}'. Try 'generate' or 'check'.`);
   }
-  refuseForeignFlags(context, `mirror ${mirrorSub}`, ["write"]);
+  refuseForeignFlags(context, `mirror ${mirrorSub}`, ["write", ...PROSE_FLAGS]);
   if (mirrorSub === "check" && context.args.booleans.has("dry-run")) {
     throw new VerbUsageError("--dry-run is not read by 'canon mirror check': check writes nothing to begin with. A flag accepted and ignored is worse than one refused.");
   }
@@ -1306,4 +1348,91 @@ function check(context: CommandContext, inputs: MirrorInputs): number {
     lines,
   );
   return drift ? 1 : 0;
+}
+
+// ---------------------------------------------------------------------------
+// The canon prose verbs: `canon lint` and `canon clause check` (SDD piece N9;
+// zheref/nen#481; Hatsu rulings HR-2 and HR-13). Their engines are ./lint.ts
+// and ./clause.ts; this is only the flag boundary.
+// ---------------------------------------------------------------------------
+
+
+/** The mirror/pin/resolve flags, refused by name on the prose verbs. */
+const PIN_AND_MIRROR_FLAGS = [
+  "target", "always-load", "stack-dir", "leaf", "rules-dir", "canon-values", "source", "ref", "scenario", "surfaces", "not-mirrored", "markdown-out", "canon-checkout", "write", "dry-run",
+];
+
+function nonEmpty(context: CommandContext, flag: string): string | null {
+  const value = context.args.values[flag];
+  if (value === undefined) return null;
+  if (value.trim() === "") throw new VerbUsageError(`--${flag} was given an empty value. Omit it, or give it one.`);
+  return value;
+}
+
+/**
+ * `--root <checkout>` (the interim guard's spelling, so a CI step swaps only
+ * the program) or the global `--repo <path>`: the same directory, named
+ * once. Both given and naming different directories is refused.
+ */
+function lintRoot(context: CommandContext): string {
+  const root = nonEmpty(context, "root");
+  const repo = context.repoFlag;
+  if (root !== null && repo !== null && resolve(root) !== resolve(repo)) {
+    throw new VerbUsageError(`--root '${root}' and --repo '${repo}' name different directories; give one.`);
+  }
+  const chosen = root ?? repo;
+  if (chosen === null || chosen.trim() === "") throw new VerbUsageError("--root <checkout> (or --repo <path>) is required: the canon checkout to lint.");
+  return chosen;
+}
+
+function lintVerb(context: CommandContext): number {
+  refuseExtraPositionals(context.args, 2);
+  refuseForeignFlags(context, "lint", [...PIN_AND_MIRROR_FLAGS, "file", "prefix", "leaves", "body-from"]);
+  const root = lintRoot(context);
+  const rules = nonEmpty(context, "rules");
+  if (rules === null) throw new VerbUsageError("--rules <contract> is required: the rules are the caller's data, never built in (e.g. contracts/prose.lint.json).");
+  const baseline = nonEmpty(context, "baseline");
+  const base = nonEmpty(context, "base");
+  if (base !== null && base.startsWith("-")) throw new VerbUsageError(`--base '${base}' starts with '-'; nen will not put it on a git command line.`);
+  try {
+    const { report, rules: ruleList } = canonLint({ root, rules, baseline, base }, context.seams);
+    emit(context.io, context.json, report, renderLint(report, ruleList));
+    return report.exit;
+  } catch (error) {
+    if (error instanceof LintWiringError) {
+      context.io.err(`nen canon lint: ${plainLine(error.message)} -- no verdict: a file the lint could not read is never a file it found clean.`);
+      return 2;
+    }
+    throw error;
+  }
+}
+
+function clauseVerb(context: CommandContext): number {
+  const sub = context.args.positionals[2];
+  if (sub !== "check") throw new VerbUsageError(`'canon clause' needs the subcommand 'check'${sub === undefined ? "" : `, got '${sub}'`}.`);
+  refuseExtraPositionals(context.args, 3);
+  refuseForeignFlags(context, "clause check", [...PIN_AND_MIRROR_FLAGS, "root", "rules", "baseline"]);
+  const repo = assertRepoRoot({ repoFlag: context.repoFlag });
+  const file = nonEmpty(context, "file");
+  if (file === null) throw new VerbUsageError("--file <md> is required: the document that defines the clause ids (e.g. docs/ROSTER.md).");
+  const prefix = nonEmpty(context, "prefix");
+  if (prefix === null) throw new VerbUsageError("--prefix <HR|CON> is required: the clause id prefix to count.");
+  if (!/^[A-Z][A-Z0-9]{0,7}$/.test(prefix)) throw new VerbUsageError(`--prefix '${prefix}' is not an id prefix (upper-case letters and digits, starting with a letter, e.g. HR or CON).`);
+  const base = nonEmpty(context, "base");
+  const leavesRaw = nonEmpty(context, "leaves");
+  const leaves = leavesRaw === null ? null : commaList(leavesRaw);
+  if (leaves !== null && leaves.length === 0) throw new VerbUsageError("--leaves names no path; give a comma-separated list of paths or globs.");
+  const bodyFrom = nonEmpty(context, "body-from");
+  if (bodyFrom !== null && leaves === null) throw new VerbUsageError("--body-from is read only for the leaf obligation's opt-out line, so it needs --leaves.");
+  try {
+    const report = clauseCheck({ repo, file, prefix, base, leaves, bodyFrom }, context.seams);
+    emit(context.io, context.json, report, renderClauseCheck(report));
+    return report.exit;
+  } catch (error) {
+    if (error instanceof ClauseWiringError) {
+      context.io.err(`nen canon clause check: ${plainLine(error.message)} -- a tooling failure, not a finding.`);
+      return 2;
+    }
+    throw error;
+  }
 }
