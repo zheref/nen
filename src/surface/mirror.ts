@@ -593,6 +593,46 @@ interface AgentOutput {
   readonly notes: readonly string[];
 }
 
+/**
+ * The tools that let a persona write. A `tools:` list naming none of them is a
+ * read-only persona (zheref/nen#473). `NotebookEdit` is here beside the three
+ * the issue names because it writes a file too; counting it can only make
+ * FEWER personas read-only, never mark a writer as one.
+ */
+const WRITE_TOOLS: ReadonlySet<string> = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
+
+/**
+ * True when the frontmatter has a `tools` key with at least one tool and none
+ * of WRITE_TOOLS. A persona with no `tools` key inherits every tool, so it is
+ * NOT read-only. Both spellings are read: one comma-joined line
+ * (`tools: Read, Grep`) and a block or flow list. A scoped grant such as
+ * `Bash(git:*)` counts by its tool name.
+ */
+export function isReadOnlyPersona(entries: readonly FrontmatterEntry[]): boolean {
+  const entry = entries.find((candidate): boolean => candidate.key === "tools");
+  if (entry === undefined) return false;
+  const raw = [inlineValue(entry), ...entry.lines.slice(1)].join(",");
+  const names = raw
+    .replace(/[[\]]/g, ",")
+    .split(",")
+    .map((part): string => part.trim().replace(/^-\s*/, "").replace(/^["']|["']$/g, "").replace(/\(.*$/, "").trim())
+    .filter((name): boolean => name !== "");
+  return names.length > 0 && !names.some((name): boolean => WRITE_TOOLS.has(name));
+}
+
+/**
+ * The persona's entries with the surface's read-only key added, where the
+ * surface documents one, the persona is read-only, and the source does not
+ * already set that key (an explicit source value wins either way).
+ */
+function withReadOnlyKey(row: SurfaceRow, entries: readonly FrontmatterEntry[]): readonly FrontmatterEntry[] {
+  const control = row.readOnlyControl;
+  if (control.kind !== "key") return entries;
+  if (entries.some((entry): boolean => entry.key === control.key)) return entries;
+  if (!isReadOnlyPersona(entries)) return entries;
+  return [...entries, { key: control.key, lines: [`${control.key}: ${control.value}`] }];
+}
+
 function agentFiles(options: GenerateOptions, relink: Relink): AgentOutput {
   const row = options.row;
   const rule = row.agents;
@@ -604,6 +644,16 @@ function agentFiles(options: GenerateOptions, relink: Relink): AgentOutput {
   const notes: string[] = [];
   const includes = options.includes ?? [];
   if (options.agents.length === 0 && includes.length === 0) return { files: [], droppedInherit, undocumentedAliases, modelMapped, notes };
+
+  // A surface with no read-only control of its own: say which personas that
+  // leaves unrestricted, so the run can disclose it rather than the prose.
+  if (row.readOnlyControl.kind === "none") {
+    for (const agent of options.agents) {
+      if (isReadOnlyPersona(splitDocument(agent.text).entries)) {
+        notes.push(`${row.surface}: ${agent.name} is read-only at source; ${row.readOnlyControl.reason}`);
+      }
+    }
+  }
 
   /** `model:` through --models, for a persona whose entries the surface reads as frontmatter. */
   const mapped = (agent: SourceAgent, entries: readonly FrontmatterEntry[]): readonly FrontmatterEntry[] => {
@@ -627,7 +677,12 @@ function agentFiles(options: GenerateOptions, relink: Relink): AgentOutput {
           );
         }
       }
-      const front = renderFrontmatter(mapped(agent, document.entries), new Set(rule.keys));
+      const kept = mapped(agent, document.entries);
+      // The empty-block refusal below reads the SOURCE's kept keys: a derived
+      // `readonly` line is not something for the surface to route on, so it
+      // must not rescue a persona that carries nothing else.
+      const sourceFront = renderFrontmatter(kept, new Set(rule.keys));
+      const front = sourceFront === "" ? "" : renderFrontmatter(withReadOnlyKey(row, kept), new Set(rule.keys));
       // A `files` surface reads a persona AS frontmatter-bearing markdown, so a
       // mirror with an EMPTY block cannot be one (zheref/nen#149, review).
       // Emitting it anyway would write a persona file with no frontmatter at

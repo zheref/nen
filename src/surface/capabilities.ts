@@ -67,6 +67,13 @@ export interface SurfaceCapabilities {
   readonly descriptionBudgetSource: string | null;
   /** The shape of the permission pack this binary writes for the surface, or null where it writes none. */
   readonly permissionsShape: string | null;
+  /**
+   * Whether a read-only persona (a `tools` list with no write tool) stays
+   * read-only here, and the page that says so (zheref/nen#473): `honoured`,
+   * `honoured at <placement>; <placement> unverified`, or `none documented`.
+   * ./rules.ts `readOnlyControl` is what the generator does about it.
+   */
+  readonly readOnly: { readonly control: string; readonly source: string };
   readonly source: string;
   readonly caveat: string | null;
 }
@@ -96,6 +103,9 @@ export const CAPABILITIES: readonly SurfaceCapabilities[] = [
     descriptionBudget: 1536,
     descriptionBudgetSource: "documented: https://code.claude.com/docs/en/skills",
     permissionsShape: "claude-settings",
+    // "Tools the subagent can use ... Inherits every tool available to
+    // subagents if omitted." Read 2026-10-22.
+    readOnly: { control: "honoured (the persona's tools list)", source: "https://code.claude.com/docs/en/sub-agents" },
     source: "https://code.claude.com/docs/en/hooks",
     caveat: "a plugin cannot ship permissions (its settings.json carries only agent and subagentStatusLine); the allowlist is merged into the untracked settings.local.json by the consumer's own tooling",
   },
@@ -123,6 +133,7 @@ export const CAPABILITIES: readonly SurfaceCapabilities[] = [
     descriptionBudget: 186,
     descriptionBudgetSource: "measured 2026-09-19, not documented (hardening audit)",
     permissionsShape: "codex-toml",
+    readOnly: { control: "none documented (custom agents inherit the parent sandbox; sandbox_mode in an agent file does not override it)", source: "https://learn.chatgpt.com/docs/agent-configuration/subagents" },
     source: "https://learn.chatgpt.com/docs/hooks",
     caveat: "a project .codex/config.toml loads only for a project the user marked trusted; subagents inherit the parent model unless [agents] default_subagent_model is set; AGENTS.md is read up to project_doc_max_bytes (32768 by default)",
   },
@@ -150,6 +161,7 @@ export const CAPABILITIES: readonly SurfaceCapabilities[] = [
     descriptionBudget: 30,
     descriptionBudgetSource: "measured 2026-09-19, not documented (hardening audit)",
     permissionsShape: "cursor-cli-json",
+    readOnly: { control: "honoured at project placement (.cursor/agents/, readonly: true); plugin placement unverified (forum.cursor.com/t/173787)", source: "https://cursor.com/docs/context/subagents" },
     source: "https://cursor.com/docs/agent/hooks",
     caveat: "a persona whose model is another provider's alias falls back, and a tier alias is not a documented id, so the mirror writes 'inherit' for every persona and reports the tier (modelMapped). A rules file must be .mdc (a plain .md is ignored); the page advises under 500 lines",
   },
@@ -184,6 +196,11 @@ export const CAPABILITIES: readonly SurfaceCapabilities[] = [
     descriptionBudget: null,
     descriptionBudgetSource: null,
     permissionsShape: null,
+    // The page's `tools` row: "Explicit list of tools permitted for this
+    // subagent", with names such as view_file, replace_file_content and
+    // run_command. The mirror carries the source's Claude Code names
+    // (Read, Grep, Bash) unchanged, which the page does not document.
+    readOnly: { control: "unverified (the tools list is carried in Claude Code tool names; the page documents its own, e.g. view_file, replace_file_content)", source: "https://antigravity.google/docs/subagents" },
     source: "https://antigravity.google/docs/hooks",
     caveat: "a rules file is truncated past 24,000 bytes and must open with frontmatter declaring a trigger (always_on | model_decision | glob | manual) or is silently discarded; personas live in .agents/agents/ and skills in .agents/skills/ (.agent/ is the back-compatibility spelling); workflows are deprecated (retired 2026-11-01); no permission pack is written because commandExecutionPolicy: auto would approve arbitrary commands",
   },
@@ -217,6 +234,7 @@ export function renderCapabilities(row: SurfaceCapabilities): string[] {
     `  agent model key:  ${row.agentModelKey ?? "none"}`,
     `  hook events:      ${row.hookEvents.join(", ")}`,
     `  rules file:       ${row.rulesFile ?? "none"}${row.rulesLimit === null ? "" : ` (limit ${row.rulesLimit} bytes)`}`,
+    `  read-only persona: ${row.readOnly.control} (${row.readOnly.source})`,
     `  description budget: ${row.descriptionBudget === null ? "none" : `${row.descriptionBudget} chars (${row.descriptionBudgetSource ?? ""})`}`,
     `  source:           ${row.source}`,
     ...(row.caveat === null ? [] : [`  caveat:           ${row.caveat}`]),

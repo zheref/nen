@@ -82,3 +82,27 @@ describe("nen surface capabilities (zheref/nen#216)", () => {
     expect(bogus.err.join("\n")).toMatch(/unknown surface 'bogus'.*claude-code, codex, cursor, antigravity/);
   });
 });
+
+describe("the read-only persona control per surface (zheref/nen#473)", () => {
+  const control = (surface: string): string => CAPABILITIES.find((row): boolean => row.surface === surface)?.readOnly.control ?? "";
+  it("states each surface's control with a source", () => {
+    expect(control("claude-code")).toMatch(/^honoured/);
+    expect(control("codex")).toMatch(/^none documented/);
+    expect(control("cursor")).toMatch(/^honoured at project placement.*plugin placement unverified/);
+    expect(control("antigravity")).toMatch(/^unverified/);
+    for (const row of CAPABILITIES) expect(row.readOnly.source).toMatch(/^https:\/\//);
+  });
+
+  it("agrees with the generator's row: a surface with no control is the one that reports", () => {
+    for (const row of SURFACES) {
+      const fact = control(row.surface);
+      if (row.readOnlyControl.kind === "none") expect(fact).toMatch(/^none documented/);
+      else expect(fact).not.toMatch(/^none documented/);
+    }
+  });
+
+  it("prints the line in the text rendering", async () => {
+    const result = await capture(["surface", "capabilities", "--surface", "cursor"]);
+    expect(result.out.join("\n")).toContain("read-only persona: honoured at project placement");
+  });
+});
