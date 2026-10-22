@@ -195,6 +195,9 @@ export function formatId(date: string, nn: number): string {
 
 /** Reserve the next free id for `date` by exclusive create; EEXIST moves to the next number. */
 function reserveId(common: string, idsDir: string, date: string): string {
+  // Asked before AND after the mkdir: a `.nen` that is a link out of the common
+  // directory must not have a directory created through it.
+  assertContained(common, idsDir);
   mkdirSync(idsDir, { recursive: true });
   assertContained(common, idsDir);
   for (let nn = highestReserved(idsDir, date) + 1; ; nn += 1) {
@@ -212,6 +215,7 @@ function reserveId(common: string, idsDir: string, date: string): string {
 
 /** Create `<n>.json` for the next free n, never replacing one. */
 function createRecord(common: string, directory: string, build: (n: number) => StopAnswerRecord): { path: string; record: StopAnswerRecord } {
+  assertContained(common, directory);
   mkdirSync(directory, { recursive: true });
   assertContained(common, directory);
   const existing = recordNumbers(directory);

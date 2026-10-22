@@ -173,6 +173,14 @@ describe("nen stop answer --record", () => {
       expect((await run(argv, root)).code, argv.join(" ")).toBe(2);
     }
   });
+  it("refuses a .nen that links out of the common directory, creating nothing through it", async () => {
+    const root = repo();
+    const outside = mkdtempSync(join(tmpdir(), "nen-stop-outside-"));
+    symlinkSync(outside, join(root, ".git", ".nen"));
+    const result = await run([...BASE, "--pick", "A"], root);
+    expect(result.code).toBe(2);
+    expect(readdirSync(outside)).toEqual([]);
+  });
 });
 
 describe("nen stop answer show", () => {
