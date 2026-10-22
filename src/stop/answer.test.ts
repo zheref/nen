@@ -100,6 +100,17 @@ describe("nen stop answer --record", () => {
     expect(record.typed).toBe("Take the  second door, but  keep the tree.\n");
   });
 
+  it("refuses a --typed-file or --question-file that is not valid UTF-8 at exit 2 naming the file, and records nothing", async () => {
+    const root = repo();
+    writeFileSync(join(root, "bad.txt"), Buffer.from([0xff, 0xfe, 0x20, 0x62, 0x61, 0x64]));
+    const typed = await run([...BASE, "--typed-file", "bad.txt"], root);
+    expect(typed.code).toBe(2);
+    expect(typed.err.join("\n")).toMatch(/bad\.txt' is not valid UTF-8/);
+    const question = await run([...BASE.map((arg) => (arg === "q.md" ? "bad.txt" : arg)), "--pick", "A"], root);
+    expect(question.code).toBe(2);
+    expect(existsSync(join(root, ".git", ".nen", "stops"))).toBe(false);
+  });
+
   it("records typed text that is word for word an option label as that pick, text kept", async () => {
     const root = repo();
     expect((await run([...BASE, "--typed-file", "label.txt"], root)).code).toBe(0);

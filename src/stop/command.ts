@@ -100,7 +100,8 @@ one renderer.
                       { contract, who, gate, notified, at }, where 'contract'
                       is '${STOP_MARK_CONTRACT}' -- the marker's own versioned
                       shape, so a hook can tell a future change from a
-                      compatible one. The ONLY form of this verb that writes.
+                      compatible one. The banner form's only write;
+                      'stop answer' is the stop-answer ledger's writer.
   efforts.md | -       A markdown pipe table (header + rows); '-' reads stdin.
   --title <line>      One line naming the stop, carried into the marker for a
                       host notification to show.
@@ -172,7 +173,7 @@ const TEMPLATE_TABLE = [
 
 export const stopCommand: Command = {
   name: "stop",
-  summary: "Render the gate-stop banner and efforts table.",
+  summary: "Render the gate-stop banner and efforts table; record and show stop answers.",
   usage: USAGE,
   // NO "--from" HERE (review finding): it was declared with no reader --
   // `efforts.md | -` is read off the POSITIONAL, so `nen stop --from

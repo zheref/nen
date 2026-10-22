@@ -349,6 +349,25 @@ describe("nen idea file -- the private-name guard (zheref/nen#363)", () => {
     expect(result.err.join("\n")).toMatch(/SKIPPED by --skip-private-name-check/);
   });
 
+  it("--private-names-ignore-file: a hit listed in the file is reported as ignored and the idea is filed; a hit outside it exits 4 and files nothing (zheref/nen#444 AC-2)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-idea-ignore-"));
+    const ignore = join(dir, "ignore.txt");
+    writeFileSync(ignore, "acme/vault\n");
+    const vaultCreated: ScriptedCall[] = [
+      { match: CREATE, result: { stdout: "https://github.com/zheref/nen/issues/5\n" } },
+      { match: "gh api repos/zheref/nen/issues/5", result: { stdout: JSON.stringify({ title: "t", body: "ported from the vault", labels: [{ name: "bankai:severity/high" }] }) } },
+    ];
+    const inside = await capture(filing("ported from the vault", "--private-names-ignore-file", ignore, "--json"), [PUBLIC, FULL_REACH_ROW, LIST, ...vaultCreated], BANKAI_REPO, "scripted");
+    expect(inside.code).toBe(0);
+    expect(inside.calls).toContain(CREATE);
+    const check = (JSON.parse(inside.out.join("\n")) as { privateNameCheck: { result: string; hits: { ignored: boolean }[] } }).privateNameCheck;
+    expect(check.hits.length).toBeGreaterThan(0);
+    expect(check.hits.every((hit) => hit.ignored)).toBe(true);
+    const outside = await capture(filing("about hidden-thing", "--private-names-ignore-file", ignore), [PUBLIC, FULL_REACH_ROW, LIST], BANKAI_REPO, "scripted");
+    expect(outside.code).toBe(4);
+    expect(outside.calls.some((line): boolean => line.startsWith("gh issue create"))).toBe(false);
+  });
+
   it("a missing --private-names-ignore-file is exit 2 before any gh call", async () => {
     const result = await capture(filing("x", "--private-names-ignore-file", "no-such-ignore-file"), [], BANKAI_REPO, "scripted");
     expect(result.code).toBe(2);

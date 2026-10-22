@@ -786,7 +786,7 @@ export const issueCommand: Command = {
   ],
   name: "issue",
   subcommands: ISSUE_SUBCOMMANDS,
-  summary: "Search, guard, file, attach and classify issues.",
+  summary: "Search, guard, file, attach and classify issues; check their shape, questions and criteria.",
   usage: USAGE,
   // The UNION of every subcommand's own spec (ISSUE_SUBCOMMAND_FLAGS above), never a
   // second hand-kept list: a flag the parser accepts but no subcommand

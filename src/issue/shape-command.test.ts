@@ -201,6 +201,15 @@ describe("--title-file on nen issue file and nen idea file (zheref/nen#444)", ()
       expect(result.code).toBe(2);
     });
 
+    it(`${family} file: a --title-file that is not valid UTF-8 is refused at exit 2 naming the file, never filed with U+FFFD in it`, async () => {
+      const dir = scratch({ "body.md": "the body" });
+      writeFileSync(join(dir, "bad.txt"), Buffer.from([0xff, 0xfe, 0x54, 0x69, 0x74, 0x6c, 0x65]));
+      const result = await run(command, filing(family, ["--title-file", join(dir, "bad.txt")], ["--dry-run"]).map((arg) => (arg === "body.md" ? join(dir, "body.md") : arg)), [PRIVATE_TARGET], { repoFlag: BANKAI_REPO });
+      expect(result.code).toBe(2);
+      expect(result.err).toMatch(/bad\.txt' is not valid UTF-8/);
+      expect(result.calls.filter((call) => call.startsWith("gh issue create"))).toEqual([]);
+    });
+
     it(`${family} file: a leading BOM in --title-file is dropped, not sent`, async () => {
       const dir = scratch({ "title.txt": "\uFEFFPlain title\r\n", "body.md": "the body" });
       const result = await run(command, filing(family, ["--title-file", join(dir, "title.txt")], ["--dry-run"]).map((arg) => (arg === "body.md" ? join(dir, "body.md") : arg)), [PRIVATE_TARGET], { repoFlag: BANKAI_REPO, json: true });

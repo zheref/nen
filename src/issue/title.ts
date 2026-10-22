@@ -15,7 +15,7 @@
 // store a different title than the one in the file.
 
 import { VerbUsageError, type CommandContext } from "../cli/command.js";
-import { readTextFile, resolveAgainstRepo } from "../cli/inputs.js";
+import { readVerbatimTextFile, resolveAgainstRepo } from "../cli/inputs.js";
 
 /**
  * The title read from `--title-file`, or `undefined` when the flag was not
@@ -30,7 +30,7 @@ export function readTitleFile(context: CommandContext, root: string): string | u
     throw new VerbUsageError("--title and --title-file are two spellings of ONE input; give exactly one, so the report names where the title came from.");
   }
   if (path === "") throw new VerbUsageError("--title-file needs a path.");
-  const raw = readTextFile(
+  const raw = readVerbatimTextFile(
     resolveAgainstRepo(root, path),
     process.cwd(),
     "--title-file names the title this verb files, read verbatim so no shell ever expands it.",

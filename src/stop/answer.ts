@@ -38,7 +38,7 @@
 import { linkSync, lstatSync, mkdirSync, openSync, closeSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import { emit, VerbUsageError, type CommandContext } from "../cli/command.js";
-import { readTextFile } from "../cli/inputs.js";
+import { readVerbatimTextFile } from "../cli/inputs.js";
 import { realContainment } from "../repo/contain.js";
 import { assertRepoRoot } from "../repo/root.js";
 import { encodeEffortId } from "../usage/ledger.js";
@@ -296,7 +296,7 @@ function recordAnswer(context: CommandContext): number {
   }
 
   const root = assertRepoRoot({ repoFlag: context.repoFlag });
-  const question = readTextFile(questionFile, root, "The question is what this record is about; an unreadable file is refused rather than recorded as an empty question.");
+  const question = readVerbatimTextFile(questionFile, root, "The question is what this record is about; an unreadable file is refused rather than recorded as an empty question.");
   if (question.trim() === "") throw new VerbUsageError(`--question-file ${questionFile} is empty: a record of an answer to no question says nothing.`);
 
   let kind: "picked" | "typed";
@@ -310,7 +310,7 @@ function recordAnswer(context: CommandContext): number {
     pick = pickFlag;
     typed = null;
   } else {
-    typed = readTextFile(typedFile as string, root, "The typed answer is kept verbatim; an unreadable file is refused rather than recorded as no answer.", true);
+    typed = readVerbatimTextFile(typedFile as string, root, "The typed answer is kept verbatim; an unreadable file is refused rather than recorded as no answer.", true);
     if (typed.trim() === "") throw new VerbUsageError(`--typed-file ${String(typedFile)} is empty: an empty reply is not an answer.`);
     const match = options.find((option): boolean => option.label === typed?.trim());
     kind = match === undefined ? "typed" : "picked";
