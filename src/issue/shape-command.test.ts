@@ -45,7 +45,7 @@ const CATALOGUE = JSON.stringify({
 });
 
 const BODY = "## Problem\n\nIt is fast.\n\n## Acceptance criteria\n\n- AC-1: one\n- AC-2: two\n";
-const QUESTIONS = "- OQ-1 (G4): which?\n- ~~OQ-2~~ → A: this\n[NEEDS CLARIFICATION: x]\n";
+const QUESTIONS = "- OQ-1 (G4): which?\n- ~~OQ-2~~ → A: this (2026-10-21, HR-4)\n[NEEDS CLARIFICATION: x]\n";
 
 describe("nen issue body-check", () => {
   it("exits 0 on a body with every section, printing the verdict and the advisory", async () => {

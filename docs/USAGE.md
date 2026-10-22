@@ -922,7 +922,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`pr`](#family-pr) | [`nen pr sections resolve`](#nen-pr-sections-resolve) | resolves a caller-owned section catalogue by kind, family and conditional facts | --catalogue JSON; optional workflow.json pr.sections overrides | yes |
 | [`pr`](#family-pr) | [`nen pr sections family`](#nen-pr-sections-family) | folds taxonomy jobs into the catalogue family with the most jobs, ties by declared precedence | --taxonomy and --catalogue JSON | yes |
 | [`pr`](#family-pr) | [`nen pr fetch`](#nen-pr-fetch) | one typed snapshot of a PR: head sha, mergeability, check rollup, per-commit reviews, review threads, pending review requests | github (gh) | yes |
-| [`pr`](#family-pr) | [`nen pr converge`](#nen-pr-converge) | read-only: compares the AC rows of every issue a PR closes with the PR body's verify rows, per criterion; compares, never decides | github (gh pr view, gh api issue reads) | yes |
+| [`pr`](#family-pr) | [`nen pr converge`](#nen-pr-converge) | read-only: compares the AC rows of every issue a PR closes with the PR body's verify rows, per criterion; the blocking rules are the caller's catalogue (defaults equal Hatsu's) | github (gh pr view, gh api issue reads) | yes |
 | [`pr`](#family-pr) | [`nen pr next-blocker`](#nen-pr-next-blocker) | the first blocking condition, in fixed order (conflict, red check, owed round, unresolved thread, missing body requirement) | nen/gates.json (or --gates), github (gh) | yes |
 | [`pr`](#family-pr) | [`nen pr cascade-main`](#nen-pr-cascade-main) | merges (never rebases) the trunk into the current branch and pushes on a clean merge, or stops there under `--no-push` | git (fetch/merge/push, reaches origin) | yes |
 | [`pr`](#family-pr) | [`nen pr retarget`](#nen-pr-retarget) | gh pr edit --base, for a stacked PR after its predecessor merges | github (gh) | yes |
@@ -2637,12 +2637,12 @@ nen pr fetch --target o/n --pr 9
 
 ### `nen pr converge`
 
-Acceptance-criterion coverage as data (Hatsu's ruling HR-11): compares the criteria every closing issue states with the rows the pull request's verify section carries, and reports each criterion's coverage. **Read-only**, and it **compares two lists and decides nothing**: whether a `partial` may land, or whether an issue that states no criterion blocks anything, is the caller's rule. The exit code says only which facts were found.
+Acceptance-criterion coverage as data (Hatsu's ruling HR-11): compares the criteria every closing issue states with the rows the pull request's verify section carries, and reports each criterion's coverage. **Read-only**. Which words block, which word a `none` row carries and whether evidence is required are the **caller's catalogue** (`--requirements-from`, its `coverage` block); nen's defaults equal Hatsu's current rules (`scripts/pr_criteria_check.mts`), so the verb answers the same with no catalogue. The exit code says exactly which rows block (below).
 
 **Usage**
 
 ```text
-nen pr converge --target <owner/name> --pr <n> [--json]
+nen pr converge --target <owner/name> --pr <n> [--requirements-from <catalogue.json>] [--json]
 ```
 
 **Arguments**
@@ -2651,11 +2651,12 @@ nen pr converge --target <owner/name> --pr <n> [--json]
 |---|---|---|---|
 | `--target <owner/name>` | yes | The repository the pull request lives in. | Missing or malformed exits 2. |
 | `--pr <n>` | yes | The pull-request number. | Missing or not a positive whole number exits 2. |
+| `--requirements-from <path>` | no | The [issue-sections catalogue](#the-issue-sections-catalogue): its acceptance-row prefix and section scope the criteria, and an optional `coverage` block `{ "blocking": [<words>], "none": "<word>", "evidence": "required" \| "optional" }` sets the rules. | Resolves against `--repo`'s root. Absent: `AC` rows anywhere in the issue body, `missing` and `contradicts` block, `unrequested` on `none` rows, evidence required. Unreadable or malformed exits 2. |
 | `--json` | no | The report as one JSON document. | |
 
-Every other flag is refused at exit 2 before any `gh` call. It reads no `--repo`.
+Every other flag is refused at exit 2 before any `gh` call. `--repo` is read only to resolve `--requirements-from`.
 
-**What it reads.** The pull request through `gh pr view <n> --repo <target> --json number,url,headRefOid,body,closingIssuesReferences` -- the `gh pr view` read [`pr fetch`](#nen-pr-fetch) and [`issue open-pr-check`](#nen-issue-open-pr-check) make; `closingIssuesReferences` is GitHub's own list of the issues the PR closes, a body keyword and a sidebar link alike. Each closing issue is read over REST (`gh api repos/<owner/name>/issues/<N>`) in **its own repository**, and its criteria extracted as [`issue criteria`](#nen-issue-criteria) extracts them: every list row `- AC-{n}: <text>` outside fenced code and HTML comments.
+**What it reads.** The pull request through `gh pr view <n> --repo <target> --json number,url,headRefOid,baseRefName,body,closingIssuesReferences` -- the `gh pr view` read [`pr fetch`](#nen-pr-fetch) and [`issue open-pr-check`](#nen-issue-open-pr-check) make; `closingIssuesReferences` is GitHub's own list of the issues the PR closes, a body keyword and a sidebar link alike -- **but only for a PR into the default branch**. When the list is empty, the default branch is read (`gh repo view <target> --json defaultBranchRef`); on any other base GitHub computes no closing references, so the body's own closing keywords (`Closes`/`Fixes`/`Resolves` and their tenses, with `#N`, `owner/name#N` or an issue URL, outside code and comments) name the closing issues instead (`closingSource: "body-keywords"`), and a body naming none there is a blocking row, never "closes no issue". Each closing issue is read over REST (`gh api repos/<owner/name>/issues/<N>`) in **its own repository**, and its criteria extracted as [`issue criteria`](#nen-issue-criteria) extracts them -- the one row grammar, so a list row naming `AC-{n}` in no admitted shape is `unrecognised`.
 
 <a id="the-verify-row-grammar"></a>
 
@@ -2682,9 +2683,11 @@ A table line whose first cell mentions `AC-` and is none of those spellings (`AC
 | `duplicate-rows` | two or more rows name it; nen will not pick one |
 | `not-verifiable` | the closing issue states no AC row: one row for the issue, with a null `id` -- **never a pass** |
 
-Beside the coverage, the row's `word` when exactly one readable row names the criterion. Rows that name a criterion no closing issue states, or name one ambiguously, are **unmatched**; `none` rows are listed as **unrequested** with their word and evidence, and a `problem` when the word is not `unrequested`. A pull request that closes no issue reports `verifiable: false` and no criterion.
+Beside the coverage, the row's `word` when exactly one readable row names the criterion. Rows that name a criterion no closing issue states, or name one ambiguously, are **unmatched**; `none` rows are listed as **unrequested** with their word and evidence, and a `problem` when the word is not the none word or, with evidence required, the evidence says nothing. A pull request that closes no issue reports `verifiable: false` and no criterion.
 
-**Output and exit codes** -- the line `<n> criterion row(s) across <n> closing issue(s), <n> blocking -- <n> covered with evidence, <n> without, <n> missing-row, <n> malformed-row, <n> duplicate-rows, <n> not-verifiable` (or `<owner/name>#<n> closes no issue: no criterion to compare (not verifiable)`), then one `<COVERAGE>  <owner/name>#<N>/<AC-n> <word> (line <n>)` line per criterion and `UNREQUESTED`, `UNMATCHED` and `MALFORMED` lines. `--json`: `{ contract, target, pr, url, headSha, closingIssues, verifiable, criteria, unrequested, unmatched, malformed, counts, blocking }` -- `contract` is `nen.pr.converge/v0.1`; `closingIssues` each `{ issue, criteria, verifiable }` (`issue` is `owner/name#N`, `criteria` the number of AC rows); `verifiable` false when the PR closes no issue or any closing issue states no criterion; `criteria` each `{ issue, id, text, coverage, word, evidence, rows }` (`id` `AC-{n}` or null on `not-verifiable`, `rows` the verify-row line numbers naming it); `unrequested` each `{ line, word, evidence, problem }`; `unmatched` and `malformed` each `{ line, cell, reason }`; `counts` one count per coverage plus `words: { satisfied, partial, missing, contradicts, unrequested }`; `blocking` one `<owner/name>#<N>/<AC-n>: <reason>` string per criterion that sets exit 1. Exit **0** when no criterion blocks (a `not-verifiable` row and a PR closing no issue included -- `verifiable: false` says so); exit **1** when any criterion is `missing-row`, `malformed-row` or `duplicate-rows`, or its row says `missing` or `contradicts`; exit **2** on usage, and when it **could not read**: the pull request, its `body` or `closingIssuesReferences`, a closing reference naming no number and repository (or a repository that is no `owner/name` GitHub could issue -- a `..`, an extra slash -- refused before any read of it), a closing issue or its body, a closing number that names a pull request, or a full page of 100 closing references (the rest unread). "Could not read" is never "nothing to cover": stdout stays empty and stderr names what failed.
+**Output and exit codes** -- the line `<n> criterion row(s) across <n> closing issue(s), <n> blocking -- <n> covered with evidence, <n> without, <n> missing-row, <n> malformed-row, <n> duplicate-rows, <n> not-verifiable` (or `<owner/name>#<n> closes no issue: no criterion to compare (not verifiable)`), then one `<COVERAGE>  <owner/name>#<N>/<AC-n> <word> (line <n>)` line per criterion and `UNRECOGNISED`, `UNREQUESTED`, `UNMATCHED` and `MALFORMED` lines. `--json`: `{ contract, target, pr, url, headSha, base, closingSource, closingIssues, verifiable, criteria, unrequested, unmatched, malformed, counts, blocking }` -- `contract` is `nen.pr.converge/v0.1`; `closingSource` `github`, `body-keywords`, `none-on-non-default-base` or `none`; `closingIssues` each `{ issue, criteria, verifiable, unrecognised }` (`issue` is `owner/name#N`, `criteria` the number of AC rows); `verifiable` false when the PR closes no issue or any closing issue states no criterion; `criteria` each `{ issue, id, text, coverage, word, evidence, rows }` (`id` `AC-{n}` or null on `not-verifiable`, `rows` the verify-row line numbers naming it); `unrequested` each `{ line, word, evidence, problem }`; `unmatched` and `malformed` each `{ line, cell, reason }`; `counts` one count per coverage plus `words: { satisfied, partial, missing, contradicts, unrequested }`; `blocking` one string per row that sets exit 1.
+
+**Which rows block.** Exit **1** on any of: a criterion that is `missing-row`, `malformed-row` or `duplicate-rows`; a criterion whose word is a blocking word (default `missing`, `contradicts`); a criterion row saying the none word (`unrequested`); a criterion `covered-without-evidence` while evidence is required (the default); a closing issue that states no criterion (`not-verifiable` -- never the pass code); a closing issue carrying an `unrecognised` AC row; a `none` row with a problem; an `unmatched` or `malformed` verify row; a non-default base whose body names no closing issue. `partial` with evidence passes. Exit **0** when nothing blocks, a PR into the default branch closing no issue included (`verifiable: false` says so). Exit **1** too when it **could not read**: the pull request, its `body`, `baseRefName` or `closingIssuesReferences`, the default branch, a closing reference naming no number and repository (or a repository that is no `owner/name` GitHub could issue -- a `..`, an extra slash -- refused before any read of it), a closing issue or its body, a closing number that names a pull request, or a full page of 100 closing references (the rest unread); stdout stays empty and stderr names what failed. "Could not read" is never "nothing to cover". Exit **2** on usage and a malformed catalogue.
 
 **Example**
 
@@ -2692,9 +2695,9 @@ Beside the coverage, the row's `word` when exactly one readable row names the cr
 nen pr converge --target o/n --pr 5
 ```
 ```text
-2 criterion row(s) across 1 closing issue(s), 0 blocking -- 1 covered with evidence, 1 without, 0 missing-row, 0 malformed-row, 0 duplicate-rows, 0 not-verifiable
+2 criterion row(s) across 1 closing issue(s), 0 blocking -- 2 covered with evidence, 0 without, 0 missing-row, 0 malformed-row, 0 duplicate-rows, 0 not-verifiable
 COVERED-WITH-EVIDENCE  o/n#12/AC-1 satisfied (line 5)
-COVERED-WITHOUT-EVIDENCE  o/n#12/AC-2 partial (line 6)
+COVERED-WITH-EVIDENCE  o/n#12/AC-2 partial (line 6)
 ```
 (shape from `src/pr/converge.test.ts`; this verb reaches GitHub, so it was not run live here)
 
@@ -9956,7 +9959,7 @@ hold labels: keep-open
 
 ### `nen issue body-check`
 
-The issue-side sibling of [`pr body-check`](#nen-pr-body-check): does one issue body carry every section its kind requires, with the content and the numbered rows those sections promise. **Read-only**, and it never decides what an issue should say: the sections, their content patterns, the row prefixes and the vague-word list are all the caller's catalogue (`--requirements-from`), and with several kinds declared and no `--kind` it refuses rather than picking one. Every miss is reported at once.
+The issue-side sibling of [`pr body-check`](#nen-pr-body-check): does one issue body carry every section its kind requires, with the content and the numbered rows those sections promise. **Read-only**, and it never decides what an issue should say: the sections, their content patterns, the row prefixes and the vague-word list are all the caller's catalogue (`--requirements-from`), and with several kinds declared, no `--kind` and no `common` list it refuses rather than picking one. Every miss is reported at once.
 
 **Usage**
 
@@ -9973,34 +9976,46 @@ nen issue body-check (--body-file <path> | --ref <CODE>#<N> --target <owner/name
 | `--ref <CODE>#<N>` | one of the two | The issue to read the body of. Also `<owner/name>#<N>`, `#<N>` or `<N>`. | Needs `--target`, which is what addresses the API; the `CODE` is echoed in the report and never resolved, and an `owner/name` prefix must name `--target` itself (exit 2 otherwise). A number that names a pull request is refused at exit **2** -- [`pr body-check`](#nen-pr-body-check) reads those. |
 | `--target <owner/name>` | with `--ref` | The repository `--ref` is read from. | Missing or malformed exits 2. |
 | `--requirements-from <path>` | yes | The [issue-sections catalogue](#the-issue-sections-catalogue). | Resolves against `--repo`'s root. Unreadable, not JSON, or malformed exits **2**, naming the file and the field. |
-| `--kind <kind>` | when the catalogue declares more than one kind | Which kind's required sections to check. | An undeclared kind exits 2 naming the declared ones; with one kind declared it may be omitted. |
+| `--kind <kind>` | when the catalogue declares more than one kind and no `common` list | Which kind's required sections to check. | An undeclared kind exits 2 naming the declared ones; with one kind declared it may be omitted, and with a `common` list an omitted kind reads `common`. |
 
 <a id="the-issue-sections-catalogue"></a>
 
-**The issue-sections catalogue.** A JSON object, the caller's data -- nen ships none. Hatsu's `contracts/issue-sections.json` is written in this shape.
+**The issue-sections catalogue.** A JSON object, the caller's data -- nen ships none. nen reads Hatsu's `contracts/issue-sections.json` as it is written (`hatsu.issue-sections/v1`; a copy and Hatsu's five issue templates are held by `src/issue/hatsu-catalogue.test.ts`):
 
 ```json
 {
   "contract": "<the caller's own id, echoed, never interpreted>",
-  "sections": [
-    { "id": "problem", "title": "Problem", "level": 2,
-      "content": [{ "name": "names who is affected", "pattern": "\\b(maintainer|consumer)\\b" }] },
-    { "id": "acceptance", "title": ["Acceptance criteria", "Acceptance"], "level": 2,
-      "rows": { "prefix": "AC", "contiguous": true } },
-    { "id": "success", "title": "Success criteria", "rows": { "prefix": "SC", "measurable": true } }
-  ],
-  "kinds": { "feature": ["problem", "acceptance", "success"], "bug": ["problem", "acceptance"] },
-  "vagueAdjectives": ["fast", "intuitive", "seamless"]
+  "sections": {
+    "problem": { "heading": "Problem" },
+    "acceptance": { "heading": "Acceptance criteria", "rows": "acceptance" },
+    "success": { "heading": "Success criteria", "rows": "success" },
+    "open-questions": { "heading": "Open questions", "rows": "question", "none": true }
+  },
+  "common": ["problem", "acceptance"],
+  "kinds": { "defect": { "template": "...", "required": ["problem", "acceptance", "success", "open-questions"], "optional": [] } },
+  "rows": {
+    "acceptance": { "pattern": "^- AC-([0-9]+): Given .+ When .+ Then .+$", "prefix": "^- AC-" },
+    "success": { "pattern": "^- SC-([0-9]+): (.+)$", "prefix": "^- SC-", "measure": "[0-9]|%" },
+    "question": { "pattern": "^- OQ-([0-9]+) \\(([^()]+)\\): .+$", "prefix": "^- (~~)?OQ-",
+                  "resolvedPattern": "^- ~~OQ-([0-9]+)~~ → A: .+ \\(([0-9]{4}-[0-9]{2}-[0-9]{2}), [^()]+\\)$" }
+  },
+  "noneText": "^-? ?None\\.?$",
+  "vagueAdjectives": ["fast", "intuitive", "seamless"],
+  "technologyTerms": { "words": ["API", "JSON"], "patterns": [{ "id": "flag", "pattern": "(^|\\s)--?[A-Za-z][A-Za-z0-9-]*" }] }
 }
 ```
 
-- `sections[]` -- `id` (unique), `title` (a heading's words or a list of accepted spellings), optional `level` (1-6; when given the heading must be at exactly that level), optional `content` (`{ name, pattern }` pairs, each a regular expression the section's content must match, case-insensitive and multi-line), optional `rows` (`prefix`, a letter then letters and digits; `contiguous` and `measurable` booleans).
-- `kinds` -- kind name to the section ids an issue of that kind must carry; keys beginning `$` are skipped. Every id must be declared under `sections`.
-- `vagueAdjectives` -- optional; words reported as advisories.
+- `sections` -- section id to `{ heading, rows?, none? }`; every heading is read at level 2. `rows` names a `rows` entry; `none: true` lets the section say only `noneText` in place of rows.
+- `common` -- optional; the sections an issue checked with **no `--kind`** must carry (read as the kind `common`).
+- `kinds` -- kind name to `{ required, optional }` section-id lists (`template` and other keys are echoed data nen does not read); keys beginning `$` are skipped. Every id must be declared under `sections`.
+- `rows` -- row key to `{ pattern, prefix, measure?, resolvedPattern? }`: `prefix` names the row id (`^- AC-` is `AC`); a row, read as `- <ID>-<n>: <text>` with its list marker, task-list checkbox and bold id folded, must match `pattern` (or `resolvedPattern`); the text after the id must match `measure`. Rows are numbered 1..n in order. The `acceptance` row's id is the criterion prefix [`issue criteria`](#nen-issue-criteria) and [`pr converge`](#nen-pr-converge) read with the same catalogue; `question`'s two patterns are what [`issue questions`](#nen-issue-questions) reads.
+- `noneText`, `vagueAdjectives`, `technologyTerms` -- optional; vague words anywhere and technology terms on acceptance rows are **advisories**.
 
-**What it reads.** Headings are read as [`pr body-check`](#nen-pr-body-check)'s derived check reads them: a heading inside fenced code or an HTML comment is not a heading, and a section runs to the next heading at its level or higher. A heading matches a title with letter case, whitespace runs and a leading or trailing glyph run (an emoji, `§`) folded. A section is **missing** when no heading matches, **empty** when its heading has no content line under it. A present section is then held to each `content` pattern. A `rows` section's rows are its list items or table rows whose first token is `<prefix>-<n>` (bold, struck and emphasised spellings read), outside fenced and inline code and comments: none at all is a miss; `contiguous` requires `<prefix>-1` to `<prefix>-n` in document order, so a gap, a reorder or a repeated number is a miss at its line; `measurable` requires each row's text after its id to carry a digit or `%`. Each `vagueAdjectives` word found as a whole word outside headings, code and comments is an **advisory** with its line, never a miss.
+nen's older array shape is still read, because its own tests and existing callers use it: `sections` an array of `{ id, title (a string or a list of spellings), level?, content?: [{ name, pattern }], rows?: { prefix, contiguous?, measurable? } }` and `kinds` kind to an array of required section ids. `content` patterns are matched case-insensitively and multi-line against the section's content; `contiguous` requires rows numbered 1..n; `measurable` requires a digit or `%` after the id. Its rows may also be table rows.
 
-**Output and exit codes** -- the verdict line `<ok>/<required> section(s) present for kind '<kind>', <n> miss(es) -- <source>`, then `ok|MISSING|EMPTY  <id> (line <n>)` per section, `MISS <kind> line <n>: <detail>` per content or row miss, and `ADVISORY line <n>: vague '<word>'`. `--json`: `{ contract, source, catalogue: { path, contract }, kind, ok, sections, rows, misses, advisories }` -- `contract` is `nen.issue.body-check/v0.1`; `source` is `{ kind: "file", path }` or `{ kind: "issue", ref, target, number }`; `sections` each `{ id, title, status, line }` (`status` `ok`, `missing` or `empty`, `line` null when missing); `rows` each `{ section, id, number, line }`; `misses` each `{ section, kind, line, detail }` (`kind` one of `missing`, `empty`, `content`, `no-rows`, `row-order`, `row-unmeasurable`); `advisories` each `{ kind: "vague", word, line }`. Exit 0 with no miss (advisories do not count); exit 1 on any miss, and when `--ref`'s issue could not be read or its payload carried no body; exit 2 on usage, a malformed catalogue, an undeclared or unchosen kind, or a pull-request number.
+**What it reads.** Headings are read as [`pr body-check`](#nen-pr-body-check)'s derived check reads them: a heading inside fenced code or an HTML comment is not a heading, and a section runs to the next heading at its level or higher. A heading matches a title with letter case, whitespace runs and a leading or trailing glyph run (an emoji, `§`) folded. A required section is **missing** when no heading matches; any section is **empty** when its heading has no content line under it (a template's comment-only section reads empty). A present section is then held to each `content` pattern and its row rule, outside fenced and inline code and comments: none at all is a miss (`no-rows`) unless the section is a `none` section; a list item that is not a row, a row not in its pattern's shape, or a row naming its id in no admitted shape (a blockquoted one included) is a `row-shape` miss; a gap, a reorder or a repeated number is a `row-order` miss at its line; a row failing its measure is `row-unmeasurable`. Each `vagueAdjectives` word found as a whole word outside headings, code and comments, and each technology term on an acceptance row, is an **advisory** with its line, never a miss.
+
+**Output and exit codes** -- the verdict line `<ok>/<required> section(s) present for kind '<kind>', <n> miss(es) -- <source>`, then `ok|MISSING|EMPTY  <id> (line <n>)` per section, `MISS <kind> line <n>: <detail>` per content or row miss, and `ADVISORY line <n>: vague '<word>'`. `--json`: `{ contract, source, catalogue: { path, contract }, kind, ok, sections, rows, misses, advisories }` -- `contract` is `nen.issue.body-check/v0.1`; `source` is `{ kind: "file", path }` or `{ kind: "issue", ref, target, number }`; `sections` each `{ id, title, status, line }` (`status` `ok`, `missing` or `empty`, `line` null when missing); `rows` each `{ section, id, number, line }`; `misses` each `{ section, kind, line, detail }` (`kind` one of `missing`, `empty`, `content`, `no-rows`, `row-shape`, `row-order`, `row-unmeasurable`); `advisories` each `{ kind, word, line }` (`kind` `vague` or `technology`). Exit 0 with no miss (advisories do not count); exit 1 on any miss, and when `--ref`'s issue could not be read or its payload carried no body; exit 2 on usage, a malformed catalogue, an undeclared kind or (with no `common` list) an unchosen one, or a pull-request number.
 
 **Example**
 
@@ -10024,7 +10039,8 @@ Counts an issue body's unresolved questions -- the one admitted shape for an ope
 **Usage**
 
 ```text
-nen issue questions (--body-file <path> | --ref <CODE>#<N> --target <owner/name>) [--json]
+nen issue questions (--body-file <path> | --ref <CODE>#<N> --target <owner/name>)
+                    [--requirements-from <catalogue.json>] [--json]
 ```
 
 **Arguments**
@@ -10034,15 +10050,16 @@ nen issue questions (--body-file <path> | --ref <CODE>#<N> --target <owner/name>
 | `--body-file <path>` | one of the two | The issue body, read from disk. | As [`issue body-check`](#nen-issue-body-check)'s. |
 | `--ref <CODE>#<N>` | one of the two | The issue to read. | As [`issue body-check`](#nen-issue-body-check)'s: needs `--target`; a pull request is refused at exit 2. |
 | `--target <owner/name>` | with `--ref` | The repository `--ref` is read from. | |
+| `--requirements-from <path>` | no | The [issue-sections catalogue](#the-issue-sections-catalogue) whose `rows.question` `pattern` and `resolvedPattern` replace the two shapes below. | Resolves against `--repo`'s root. Unreadable or malformed exits 2. |
 
-**What it counts**, outside fenced code, inline code and HTML comments:
+**What it counts**, outside fenced code, inline code and HTML comments, with a list item's marker (`-`, `*`, `+`, `1.`, `1)`) and task-list checkbox (`[ ]`, `[x]`) read as `- `:
 
-- **open** -- a list row `- OQ-{n} (<gate>): …`, reported with its number, gate and line;
-- **resolved** -- a list row `- ~~OQ-{n}~~ → A: …` (`->` is read as `→`);
+- **open** -- a list row `- OQ-{n} (<gate>): <question>`, reported with its number, gate and line;
+- **resolved** -- a list row `- ~~OQ-{n}~~ → A: <answer> (<YYYY-MM-DD>, <ruling ref>)` -- exactly Hatsu's `resolvedPattern`; a row lacking its answer, date or ruling reference (or written with `->`) is not resolved;
 - **NEEDS markers** -- `[NEEDS CLARIFICATION: …]` and `[NEEDS <row-id>: …]`, each with its label;
-- **unrecognised** -- a list row whose first token is `OQ-{n}` in neither shape above, listed with its text and counted as neither, so a malformed row is visible rather than lost.
+- **unrecognised** -- any list row naming `OQ-{n}` (a blockquoted one included) in neither shape above, listed with its text and counted as neither, so a malformed row is visible rather than lost.
 
-**Output and exit codes** -- the line `<open> open, <resolved> resolved, <n> [NEEDS] marker(s), <n> unrecognised -- <source>`, then `OPEN`, `RESOLVED`, `NEEDS` and `UNRECOGNISED` rows with their lines. `--json`: `{ contract, source, counts: { open, resolved, needsMarkers, unrecognised }, open, resolved, needsMarkers, unrecognised }` -- `contract` is `nen.issue.questions/v0.1`, `source` as `body-check`'s, `open` each `{ id, number, gate, line }`, `resolved` each `{ id, number, line }`, `needsMarkers` each `{ label, line }`, `unrecognised` each `{ line, text }`. Exit 0 whenever the body was read, whatever the counts; exit 1 when `--ref`'s issue could not be read or carried no body (never zero counts); exit 2 on usage.
+**Output and exit codes** -- the line `<open> open, <resolved> resolved, <n> [NEEDS] marker(s), <n> unrecognised -- <source>`, then `OPEN`, `RESOLVED`, `NEEDS` and `UNRECOGNISED` rows with their lines. `--json`: `{ contract, source, counts: { open, resolved, needsMarkers, unrecognised }, open, resolved, needsMarkers, unrecognised }` -- `contract` is `nen.issue.questions/v0.1`, `source` as `body-check`'s, `open` each `{ id, number, gate, line }`, `resolved` each `{ id, number, line }`, `needsMarkers` each `{ label, line }`, `unrecognised` each `{ line, text }`. Exit 0 whenever the body was read, whatever the counts; exit 1 when `--ref`'s issue could not be read or carried no body (never zero counts); exit 2 on usage or a malformed catalogue.
 
 **Example**
 
@@ -10064,7 +10081,8 @@ Lists the acceptance criteria an issue body states (Hatsu's ruling HR-11) -- the
 **Usage**
 
 ```text
-nen issue criteria (--ref <CODE>#<N> --target <owner/name> | --body-file <path>) [--json]
+nen issue criteria (--ref <CODE>#<N> --target <owner/name> | --body-file <path>)
+                   [--requirements-from <catalogue.json>] [--json]
 ```
 
 **Arguments**
@@ -10074,10 +10092,11 @@ nen issue criteria (--ref <CODE>#<N> --target <owner/name> | --body-file <path>)
 | `--ref <CODE>#<N>` | one of the two | The issue to read. | As [`issue body-check`](#nen-issue-body-check)'s: needs `--target`; the `CODE` is echoed, never resolved; a pull request is refused at exit 2. |
 | `--target <owner/name>` | with `--ref` | The repository `--ref` is read from. | |
 | `--body-file <path>` | one of the two | The issue body, read from disk. | As [`issue body-check`](#nen-issue-body-check)'s; resolves against `--repo`'s root. |
+| `--requirements-from <path>` | no | The [issue-sections catalogue](#the-issue-sections-catalogue): the criterion prefix is its `rows.acceptance` id, and rows are read inside its acceptance section(s) only, as `issue body-check` reads them. | Absent: `AC` rows anywhere in the body. Unreadable or malformed exits 2. |
 
-**What it reads.** Every list row `- AC-{n}: <text>` (`*` and `+` bullets too, up to three spaces of indent) outside fenced code and HTML comments, with its number, its text (inline code kept) and its line. A heading, a paragraph or a table row naming `AC-1` is prose about a criterion, not one. An AC number stated on more than one row is listed under `duplicates`; every such row stays in `criteria`.
+**What it reads.** The one row grammar `issue body-check`, `issue questions` and `pr converge` share: every list row `- AC-{n}: <text>` (`*`, `+`, `1.` and `1)` bullets, up to three spaces of indent, a task-list checkbox `[ ]`/`[x]`, and a bold `**AC-{n}**` read) outside fenced code and HTML comments, with its number, its text (inline code kept) and its line. A list row whose first token is `AC-{n}` in no admitted shape (no colon, say), or one inside a blockquote, is **unrecognised**: listed, never a criterion and never dropped. A heading, a paragraph or a table row naming `AC-1` is prose about a criterion, not one. An AC number stated on more than one row is listed under `duplicates`; every such row stays in `criteria`.
 
-**Output and exit codes** -- the line `<n> AC row(s), <n> duplicate number(s) -- <source>`, or `0 AC row(s): not verifiable -- <source>` for a body with none (nothing to verify, never "all verified"), then `AC-<n> line <n>: <text>` per row and `DUPLICATE AC-<n> lines <a>, <b>`. `--json`: `{ contract, source, verifiable, criteria, duplicates }` -- `contract` is `nen.issue.criteria/v0.1`, `source` as `body-check`'s, `verifiable` false when there is no AC row, `criteria` each `{ id, number, text, line }`, `duplicates` each `{ id, lines }`. Exit 0 whenever the body was read, whatever it holds; exit 1 when `--ref`'s issue could not be read or carried no body (never zero rows); exit 2 on usage.
+**Output and exit codes** -- the line `<n> AC row(s), <n> duplicate number(s) -- <source>`, or `0 AC row(s): not verifiable -- <source>` for a body with none (nothing to verify, never "all verified"), then `AC-<n> line <n>: <text>` per row, `DUPLICATE AC-<n> lines <a>, <b>` and `UNRECOGNISED line <n>: <text>`. `--json`: `{ contract, source, verifiable, criteria, duplicates, unrecognised }` -- `contract` is `nen.issue.criteria/v0.1`, `source` as `body-check`'s, `verifiable` false when there is no AC row, `criteria` each `{ id, number, text, line }`, `duplicates` each `{ id, lines }`, `unrecognised` each `{ line, text }`. Exit 0 whenever the body was read, whatever it holds; exit 1 when `--ref`'s issue could not be read or carried no body (never zero rows); exit 2 on usage or a malformed catalogue.
 
 **Example**
 

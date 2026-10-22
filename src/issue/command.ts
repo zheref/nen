@@ -84,6 +84,7 @@ import {
   ISSUE_BODY_CHECK_CONTRACT,
   ISSUE_QUESTIONS_CONTRACT,
   parseCatalogue,
+  type IssueSectionsCatalogue,
   selectKind,
 } from "./shape.js";
 import { readTitleFile } from "./title.js";
@@ -164,9 +165,9 @@ export const ISSUE_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   // The two issue-shape reads (./shape.ts): one body, from a file or from the
   // issue itself, and nothing written either way.
   "body-check": { values: ["body-file", "ref", "target", "requirements-from", "kind"] },
-  questions: { values: ["body-file", "ref", "target"] },
+  questions: { values: ["body-file", "ref", "target", "requirements-from"] },
   // The AC rows of one issue body (./criteria.ts), read-only like the two above.
-  criteria: { values: ["body-file", "ref", "target"] },
+  criteria: { values: ["body-file", "ref", "target", "requirements-from"] },
 };
 
 /**
@@ -716,45 +717,63 @@ usage:
 
   nen issue body-check (--body-file <path> | --ref <CODE>#<N> --target <owner/name>)
                        --requirements-from <catalogue.json> [--kind <kind>]
-      Read-only. Checks one issue body against the CALLER's section catalogue
-      (sections with heading titles, optional level, content patterns and a
-      row rule; kinds mapping to required section ids; optional
-      vagueAdjectives -- docs/USAGE.md, "The issue-sections catalogue").
-      Reports every miss at once: a section missing or empty, a content
-      pattern not matched, a row section with no <PREFIX>-{n} row, rows not
-      numbered 1..n in order (rows.contiguous), a row stating no number or
-      percentage (rows.measurable). Vague adjectives are advisories, never a
-      miss. With several kinds and no --kind it refuses (exit 2): nen will not
-      pick a kind. --ref reads the issue from --target; its CODE is echoed,
-      never resolved, and a number naming a pull request is refused (exit 2).
-      Exits: 0 no miss, 1 a miss or an unreadable issue, 2 usage or a
-      malformed catalogue. --json: '{ contract: "nen.issue.body-check/v0.1",
-      source, catalogue: { path, contract }, kind, ok, sections: [{ id,
-      title, status, line }], rows: [{ section, id, number, line }], misses:
-      [{ section, kind, line, detail }], advisories: [{ kind, word, line }] }'.
+      Read-only. Checks one issue body against the CALLER's section catalogue,
+      in the v1 object shape (sections an object of { heading,
+      rows, none }; kinds.<kind> { required, optional }; common, the sections
+      checked with no --kind; top-level rows with pattern, prefix, measure,
+      resolvedPattern; noneText; vagueAdjectives; technologyTerms) or nen's
+      older array shape -- docs/USAGE.md, "The issue-sections catalogue".
+      Reports every miss at once: a required section missing, a section
+      present and empty, a content pattern not matched, a row section with no
+      <PREFIX>-{n} row, a row not in its pattern's shape or naming its id in no
+      admitted shape (row-shape), rows not numbered 1..n in order, a row whose
+      text fails its measure. A none section may say only noneText. Vague
+      adjectives, and technology terms on acceptance rows, are advisories,
+      never a miss. With several kinds, no --kind and no common list it
+      refuses (exit 2): nen will not pick a kind. --ref reads the issue from
+      --target; its CODE is echoed, never resolved, and a number naming a pull
+      request is refused (exit 2). Exits: 0 no miss, 1 a miss or an unreadable
+      issue, 2 usage or a malformed catalogue. --json: '{ contract:
+      "nen.issue.body-check/v0.1", source, catalogue: { path, contract },
+      kind, ok, sections: [{ id, title, status, line }], rows: [{ section,
+      id, number, line }], misses: [{ section, kind, line, detail }],
+      advisories: [{ kind, word, line }] }'.
 
   nen issue questions (--body-file <path> | --ref <CODE>#<N> --target <owner/name>)
-      Read-only. Counts open questions ('- OQ-{n} (<gate>): ...'), resolved
-      ones ('- ~~OQ-{n}~~ → A: ...', '->' also read) and [NEEDS ...] markers
-      ('[NEEDS CLARIFICATION: ...]', '[NEEDS <row-id>: ...]'), outside fenced
-      code, inline code and comments. A list row naming OQ-{n} in neither
-      shape is listed as unrecognised, never counted as either. It counts and
+                      [--requirements-from <catalogue.json>]
+      Read-only. Counts open questions ('- OQ-{n} (<gate>): <question>'),
+      resolved ones ('- ~~OQ-{n}~~ → A: <answer> (<YYYY-MM-DD>, <ruling
+      ref>)') and [NEEDS ...] markers ('[NEEDS CLARIFICATION: ...]', '[NEEDS
+      <row-id>: ...]'), outside fenced code, inline code and comments; a
+      task-list checkbox before the id is read. --requirements-from reads the
+      two row patterns from the catalogue's rows.question instead. Any list
+      row naming OQ-{n} -- a blockquoted one included -- in neither shape is
+      listed as unrecognised, never counted as either: a resolved row lacking
+      its answer, date or ruling reference is unrecognised. It counts and
       never decides: exit 0 whenever the body was read, 1 when the issue could
-      not be read, 2 usage. --json: '{ contract: "nen.issue.questions/v0.1",
-      source, counts: { open, resolved, needsMarkers, unrecognised }, open:
-      [{ id, number, gate, line }], resolved: [{ id, number, line }],
-      needsMarkers: [{ label, line }], unrecognised: [{ line, text }] }'.
+      not be read, 2 usage or a malformed catalogue. --json: '{ contract:
+      "nen.issue.questions/v0.1", source, counts: { open, resolved,
+      needsMarkers, unrecognised }, open: [{ id, number, gate, line }],
+      resolved: [{ id, number, line }], needsMarkers: [{ label, line }],
+      unrecognised: [{ line, text }] }'.
 
   nen issue criteria (--ref <CODE>#<N> --target <owner/name> | --body-file <path>)
+                     [--requirements-from <catalogue.json>]
       Read-only. Lists the acceptance criteria an issue body states: every
-      list row '- AC-{n}: <text>' outside fenced code and comments, with its
-      number, text and line, and any AC number stated twice. A body with no
-      AC row is reported not verifiable -- nothing to verify, never "all
-      verified". 'nen pr converge' compares these rows with a PR's verify
-      rows. Exits: 0 whenever the body was read, 1 when the issue could not
-      be read or carried no body, 2 usage. --json: '{ contract:
-      "nen.issue.criteria/v0.1", source, verifiable, criteria: [{ id, number,
-      text, line }], duplicates: [{ id, lines }] }'.`;
+      list row '- AC-{n}: <text>' ('*', '+', '1.' and '1)' bullets, a
+      task-list checkbox and a bold id read) outside fenced code and comments,
+      with its number, text and line, and any AC number stated twice. A list
+      row naming AC-{n} in no admitted shape, or inside a blockquote, is
+      unrecognised. --requirements-from takes the prefix from the catalogue's
+      acceptance rows and reads them inside its acceptance section only, as
+      'issue body-check' does; with none, AC rows anywhere in the body. A
+      body with no AC row is reported not verifiable -- nothing to verify,
+      never "all verified". 'nen pr converge' compares these rows with a PR's
+      verify rows. Exits: 0 whenever the body was read, 1 when the issue could
+      not be read or carried no body, 2 usage or a malformed catalogue.
+      --json: '{ contract: "nen.issue.criteria/v0.1", source, verifiable,
+      criteria: [{ id, number, text, line }], duplicates: [{ id, lines }],
+      unrecognised: [{ line, text }] }'.`;
 
 export const issueCommand: Command = {
   jsonRefusals: ["file"],
@@ -2273,9 +2292,23 @@ function issueBodyCheck(context: CommandContext): number {
   return report.ok ? 0 : 1;
 }
 
+/** The caller's catalogue when `--requirements-from` is given (questions and criteria read its row grammar), else null. */
+function optionalCatalogue(context: CommandContext): IssueSectionsCatalogue | null {
+  const from = context.args.values["requirements-from"];
+  if (from === undefined) return null;
+  if (from === "") throw new VerbUsageError("--requirements-from names the issue-sections catalogue; it cannot be empty.");
+  try {
+    return parseCatalogue(readJsonFile<unknown>(resolveAgainstRepo(resolveRepoRoot({ repoFlag: context.repoFlag }), from), process.cwd(), "--requirements-from is the catalogue the row grammar is read from."));
+  } catch (error) {
+    if (error instanceof IssueShapeError) throw new VerbUsageError(plainLine(`'${from}': ${error.message}`));
+    throw error;
+  }
+}
+
 function issueQuestions(context: CommandContext): number {
+  const catalogue = optionalCatalogue(context);
   const { body, source } = readShapeBody(context, "questions");
-  const report = countQuestions(body);
+  const report = countQuestions(body, catalogue?.questions ?? undefined);
   const lines = [
     `${report.counts.open} open, ${report.counts.resolved} resolved, ${report.counts.needsMarkers} [NEEDS] marker(s), ${report.counts.unrecognised} unrecognised -- ${describeSource(source)}`,
     ...report.open.map((row): string => `OPEN      ${row.id} (${row.gate}) line ${row.line}`),
@@ -2288,14 +2321,16 @@ function issueQuestions(context: CommandContext): number {
 }
 
 function issueCriteria(context: CommandContext): number {
+  const catalogue = optionalCatalogue(context);
   const { body, source } = readShapeBody(context, "criteria");
-  const report = extractCriteria(body);
+  const report = extractCriteria(body, catalogue);
   const lines = [
     report.verifiable
       ? `${report.criteria.length} AC row(s), ${report.duplicates.length} duplicate number(s) -- ${describeSource(source)}`
       : `0 AC row(s): not verifiable -- ${describeSource(source)}`,
     ...report.criteria.map((criterion): string => `${criterion.id} line ${criterion.line}: ${criterion.text}`),
     ...report.duplicates.map((duplicate): string => `DUPLICATE ${duplicate.id} lines ${duplicate.lines.join(", ")}`),
+    ...report.unrecognised.map((row): string => `UNRECOGNISED line ${row.line}: ${row.text}`),
   ].map(plainLine);
   emit(context.io, context.json, { contract: ISSUE_CRITERIA_CONTRACT, source, ...report }, lines);
   return 0;

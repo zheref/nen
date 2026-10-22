@@ -3,22 +3,23 @@
 // those rows against a pull request body's verify rows. Behind
 // `nen issue criteria` and `nen pr converge`.
 //
-// TWO LISTS COMPARED, NOTHING DECIDED. The issue's `- AC-{n}: ...` rows are one
-// list; the PR body's `| <criterion> | <word> | <evidence> |` rows are the
-// other. Each criterion is reported with the row that names it (or the lack of
-// one), the vocabulary word that row carries and whether it carries evidence.
-// Whether a `partial` is acceptable, or whether a PR may land with an issue
-// that states no criterion, is the caller's rule. The exit code only says
-// which of the facts below were found.
+// TWO LISTS COMPARED, BY THE CALLER'S RULES. The issue's `- AC-{n}: ...` rows
+// are one list; the PR body's `| <criterion> | <word> | <evidence> |` rows are
+// the other. Each criterion is reported with the row that names it (or the
+// lack of one), the vocabulary word that row carries and whether it carries
+// evidence. Which words block, which word a `none` row says and whether
+// evidence is required are the caller's catalogue's (`CoveragePolicy`); nen's
+// defaults equal Hatsu's interim guard (scripts/pr_criteria_check.mts), which
+// Hatsu retires at its repin (delivery round on zheref/nen#498, reading 3).
 //
 // WHAT IS NEVER A PASS. An issue that carries no AC row yields a
-// `not-verifiable` row -- there was nothing to compare, which is not the same
-// as everything being covered -- and a pull request that closes no issue
-// reports `verifiable: false`. A row nen cannot read (an unknown word, the
+// `not-verifiable` row, which blocks -- there was nothing to compare, which is
+// not the same as everything being covered -- and a pull request that closes
+// no issue reports `verifiable: false`. A row nen cannot read (an unknown word, the
 // wrong number of cells) is `malformed-row`, never skipped, and two rows for
 // one criterion are `duplicate-rows`: nen will not pick one.
 
-import { maskedLines } from "./shape.js";
+import { DEFAULT_CRITERIA_PREFIX, maskedLines, readIdRows, sectionLines, type IssueSectionsCatalogue } from "./shape.js";
 
 /** The `--json` contract of `nen issue criteria`. */
 export const ISSUE_CRITERIA_CONTRACT = "nen.issue.criteria/v0.1";
@@ -40,30 +41,34 @@ export interface CriteriaReport {
   readonly criteria: readonly Criterion[];
   /** An AC number stated on more than one row, with every line; each row is still listed in `criteria`. */
   readonly duplicates: readonly { readonly id: string; readonly lines: readonly number[] }[];
+  /** List rows whose first token is `AC-{n}` in no admitted shape (or inside a blockquote): never dropped, never a criterion. */
+  readonly unrecognised: readonly { readonly line: number; readonly text: string }[];
 }
 
-/** A list row whose first token is `AC-{n}` followed by a colon: `- AC-3: text`. */
-const AC_ROW = /^\s{0,3}[-*+]\s+AC-(\d{1,9})\s*:\s*(.*)$/;
-
 /**
- * Every `- AC-{n}: …` row of an issue body, in document order, outside fenced
- * code and HTML comments. Nothing else is a criterion: a heading, a paragraph
- * or a table row naming AC-1 is prose about it.
+ * Every acceptance-criterion row of an issue body, in document order, outside
+ * fenced code and HTML comments, read in ./shape.ts's one id-row grammar
+ * (`readIdRows`): a list item -- `-`, `*`, `+`, `1.`, `1)`, a task-list
+ * checkbox allowed -- whose first token is `<PREFIX>-{n}` and a colon. With a
+ * catalogue the prefix is the catalogue's acceptance-row prefix and rows are
+ * read inside its acceptance section(s) only, exactly as `issue body-check`
+ * reads them; with none the prefix is `AC` and the whole body is read. A list
+ * row naming the id in no admitted shape is `unrecognised`.
  */
-export function extractCriteria(body: string): CriteriaReport {
-  const criteria: Criterion[] = [];
-  for (const line of maskedLines(body, { keepInlineCode: true })) {
-    const match = AC_ROW.exec(line.text);
-    if (match === null) continue;
-    const number = Number(match[1]);
-    criteria.push({ id: `AC-${number}`, number, text: (match[2] as string).trim(), line: line.line });
-  }
+export function extractCriteria(body: string, catalogue: IssueSectionsCatalogue | null = null): CriteriaReport {
+  const prefix = catalogue?.criteriaPrefix ?? DEFAULT_CRITERIA_PREFIX;
+  const scope =
+    catalogue === null || catalogue.criteriaSections.length === 0
+      ? maskedLines(body, { keepInlineCode: true })
+      : sectionLines(body, catalogue, catalogue.criteriaSections, { keepInlineCode: true });
+  const read = readIdRows(scope, prefix);
+  const criteria: Criterion[] = read.rows.map((row): Criterion => ({ id: `${prefix}-${row.number}`, number: row.number, text: row.text, line: row.line }));
   const lines = new Map<string, number[]>();
   for (const criterion of criteria) lines.set(criterion.id, [...(lines.get(criterion.id) ?? []), criterion.line]);
   const duplicates = [...lines.entries()]
     .filter(([, at]): boolean => at.length > 1)
     .map(([id, at]): { id: string; lines: number[] } => ({ id, lines: at }));
-  return { verifiable: criteria.length > 0, criteria, duplicates };
+  return { verifiable: criteria.length > 0, criteria, duplicates, unrecognised: read.unrecognised };
 }
 
 // --- the PR side: `| <criterion> | <word> | <evidence> |` --------------------
@@ -227,13 +232,47 @@ export interface ConvergeReport {
   /** Rows whose first cell mentions AC- and names no criterion. */
   readonly malformed: readonly UnmatchedRow[];
   readonly counts: Readonly<Record<Coverage, number>> & { readonly words: Readonly<Record<CoverageWord, number>> };
-  /** `<issue>/<id>: <reason>` for every criterion that sets exit 1. */
+  /** One line per row that sets exit 1: a criterion, an unrecognised issue row, a none row with a problem, an unmatched or malformed verify row. */
   readonly blocking: readonly string[];
 }
 
-/** The coverages and words that make `nen pr converge` exit 1. */
-const BLOCKING_COVERAGE: ReadonlySet<Coverage> = new Set(["missing-row", "malformed-row", "duplicate-rows"]);
-const BLOCKING_WORDS: ReadonlySet<CoverageWord> = new Set(["missing", "contradicts"]);
+/**
+ * The caller's coverage rules: which words block, which word a `none` row
+ * carries, and whether a row's evidence is required. They are the caller's
+ * catalogue's (`--requirements-from`, its `coverage` block); nen's defaults
+ * equal Hatsu's current rules (scripts/pr_criteria_check.mts), so the verb
+ * behaves the same with no catalogue.
+ */
+export interface CoveragePolicy {
+  readonly blocking: readonly CoverageWord[];
+  readonly noneWord: CoverageWord;
+  readonly evidenceRequired: boolean;
+}
+
+export const DEFAULT_COVERAGE_POLICY: CoveragePolicy = { blocking: ["missing", "contradicts"], noneWord: "unrequested", evidenceRequired: true };
+
+/** A catalogue's `coverage` block over the defaults; refuses (throws Error with the field) rather than skipping. */
+export function readCoveragePolicy(raw: unknown): CoveragePolicy {
+  if (raw === undefined) return DEFAULT_COVERAGE_POLICY;
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new Error("'coverage', when given, is an object of { blocking, none, evidence }.");
+  const entry = raw as Record<string, unknown>;
+  const word = (value: unknown, where: string): CoverageWord => {
+    if (typeof value !== "string" || !(COVERAGE_WORDS as readonly string[]).includes(value)) throw new Error(`${where} '${String(value)}' is not one of ${COVERAGE_WORDS.join(", ")}.`);
+    return value as CoverageWord;
+  };
+  const blocking = entry["blocking"] === undefined ? DEFAULT_COVERAGE_POLICY.blocking : Array.isArray(entry["blocking"]) ? entry["blocking"].map((item): CoverageWord => word(item, "coverage.blocking")) : null;
+  if (blocking === null) throw new Error("coverage.blocking is not an array of coverage words.");
+  const evidence = entry["evidence"];
+  if (evidence !== undefined && evidence !== "required" && evidence !== "optional") throw new Error("coverage.evidence is 'required' or 'optional'.");
+  return {
+    blocking,
+    noneWord: entry["none"] === undefined ? DEFAULT_COVERAGE_POLICY.noneWord : word(entry["none"], "coverage.none"),
+    evidenceRequired: evidence === undefined ? DEFAULT_COVERAGE_POLICY.evidenceRequired : evidence === "required",
+  };
+}
+
+/** The coverages that make `nen pr converge` exit 1 whatever the policy says. */
+const BLOCKING_COVERAGE: ReadonlySet<Coverage> = new Set(["missing-row", "malformed-row", "duplicate-rows", "not-verifiable"]);
 
 /**
  * Which closing issues a row's criterion can name. A bare `AC-{n}` names every
@@ -254,7 +293,7 @@ function candidates(criterion: RowCriterion, issues: readonly ClosingIssue[]): C
 }
 
 /** Compare the closing issues' criteria with the PR body's verify rows. */
-export function converge(issues: readonly ClosingIssue[], prBody: string): ConvergeReport {
+export function converge(issues: readonly ClosingIssue[], prBody: string, policy: CoveragePolicy = DEFAULT_COVERAGE_POLICY): ConvergeReport {
   const rows = readVerifyRows(prBody);
   const byKey = new Map<string, VerifyRow[]>();
   const unrequested: ConvergeReport["unrequested"][number][] = [];
@@ -267,7 +306,13 @@ export function converge(issues: readonly ClosingIssue[], prBody: string): Conve
       continue;
     }
     if (row.criterion.kind === "none") {
-      const problem = row.problem ?? (row.word === "unrequested" ? null : `a none row says unrequested, not '${row.word}': it names no criterion to be ${row.word}`);
+      const problem =
+        row.problem ??
+        (row.word !== policy.noneWord
+          ? `a none row says ${policy.noneWord}, not '${row.word}': it names no criterion to be ${row.word}`
+          : policy.evidenceRequired && !hasEvidence(row.evidence)
+            ? "the none row carries no evidence (empty, a dash or a <placeholder>)"
+            : null);
       unrequested.push({ line: row.line, word: row.word, evidence: row.evidence, problem });
       continue;
     }
@@ -326,13 +371,22 @@ export function converge(issues: readonly ClosingIssue[], prBody: string): Conve
   };
   const words: Record<CoverageWord, number> = { satisfied: 0, partial: 0, missing: 0, contradicts: 0, unrequested: 0 };
   const blocking: string[] = [];
+  const blockingWords = new Set<CoverageWord>(policy.blocking);
   for (const entry of criteria) {
     coverageCounts[entry.coverage] += 1;
     if (entry.word !== null) words[entry.word] += 1;
     const where = `${entry.issue}/${entry.id ?? "-"}`;
-    if (BLOCKING_COVERAGE.has(entry.coverage)) blocking.push(`${where}: ${entry.coverage}`);
-    else if (entry.word !== null && BLOCKING_WORDS.has(entry.word)) blocking.push(`${where}: ${entry.word}`);
+    if (BLOCKING_COVERAGE.has(entry.coverage)) blocking.push(`${where}: ${entry.coverage === "not-verifiable" ? "not-verifiable (the issue states no criterion)" : entry.coverage}`);
+    else if (entry.word !== null && blockingWords.has(entry.word)) blocking.push(`${where}: ${entry.word}`);
+    else if (entry.word === policy.noneWord) blocking.push(`${where}: ${entry.word} on a criterion (only a none row says ${policy.noneWord})`);
+    else if (entry.coverage === "covered-without-evidence" && policy.evidenceRequired) blocking.push(`${where}: no evidence`);
   }
+  for (const issue of issues) {
+    for (const row of issue.report.unrecognised) blocking.push(`${issue.target}#${issue.number}: unrecognised criterion row at line ${row.line}`);
+  }
+  for (const row of unrequested) if (row.problem !== null) blocking.push(`none row line ${row.line}: ${row.problem}`);
+  for (const row of unmatched) blocking.push(`row line ${row.line} '${row.cell}': unmatched -- ${row.reason}`);
+  for (const row of malformed) blocking.push(`row line ${row.line}: malformed -- ${row.reason}`);
   return {
     verifiable: issues.length > 0 && issues.every((issue): boolean => issue.report.verifiable),
     criteria,

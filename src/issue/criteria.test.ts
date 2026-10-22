@@ -33,7 +33,7 @@ describe("extractCriteria", () => {
   });
 
   it("reports a body with no AC row as not verifiable, and a repeated number as a duplicate", () => {
-    expect(extractCriteria("## Problem\n\nNo criteria here.\n")).toEqual({ verifiable: false, criteria: [], duplicates: [] });
+    expect(extractCriteria("## Problem\n\nNo criteria here.\n")).toEqual({ verifiable: false, criteria: [], duplicates: [], unrecognised: [] });
     const twice = extractCriteria("- AC-1: a\n* AC-1: b\n");
     expect(twice.criteria).toHaveLength(2);
     expect(twice.duplicates).toEqual([{ id: "AC-1", lines: [1, 2] }]);
@@ -82,7 +82,9 @@ describe("converge", () => {
       ["AC-1", "covered-with-evidence", "satisfied", [1]],
       ["AC-2", "covered-without-evidence", "partial", [2]],
     ]);
-    expect(report.blocking).toEqual([]);
+    // Evidence is required by default (Hatsu's rule): the empty cell blocks.
+    expect(report.blocking).toEqual(["o/n#12/AC-2: no evidence"]);
+    expect(converge([issue(ISSUE)], "| AC-1 | satisfied | t1 |\n| AC-2 | partial | |\n", { blocking: ["missing", "contradicts"], noneWord: "unrequested", evidenceRequired: false }).blocking).toEqual([]);
     expect(report.counts.words.partial).toBe(1);
   });
 
@@ -106,7 +108,7 @@ describe("converge", () => {
     const report = converge([issue("No criteria.", 13)], "");
     expect(report.criteria).toEqual([{ issue: "o/n#13", id: null, text: null, coverage: "not-verifiable", word: null, evidence: null, rows: [] }]);
     expect(report.verifiable).toBe(false);
-    expect(report.blocking).toEqual([]);
+    expect(report.blocking).toEqual(["o/n#13/-: not-verifiable (the issue states no criterion)"]);
     expect(converge([], "| AC-1 | satisfied | x |").verifiable).toBe(false);
   });
 
@@ -114,9 +116,13 @@ describe("converge", () => {
     const issues = [issue("- AC-1: a\n", 12), issue("- AC-1: b\n", 14, "o/other")];
     const bare = converge(issues, "| AC-1 | satisfied | x |\n");
     expect(bare.unmatched).toEqual([{ line: 1, cell: "AC-1", reason: "ambiguous: o/n#12 and o/other#14 each state AC-1; write <CODE>#<N>/AC-<n>" }]);
-    expect(bare.blocking).toEqual(["o/n#12/AC-1: missing-row", "o/other#14/AC-1: missing-row"]);
+    expect(bare.blocking).toEqual([
+      "o/n#12/AC-1: missing-row",
+      "o/other#14/AC-1: missing-row",
+      "row line 1 'AC-1': unmatched -- ambiguous: o/n#12 and o/other#14 each state AC-1; write <CODE>#<N>/AC-<n>",
+    ]);
     const qualified = converge(issues, "| NN#12/AC-1 | satisfied | x |\n| o/other#14/AC-1 | satisfied | y |\n| o/n#14/AC-1 | satisfied | z |\n");
-    expect(qualified.blocking).toEqual([]);
+    expect(qualified.blocking).toEqual(["row line 3 'o/n#14/AC-1': unmatched -- no closing issue states this criterion"]);
     expect(qualified.unmatched).toEqual([{ line: 3, cell: "o/n#14/AC-1", reason: "no closing issue states this criterion" }]);
   });
 
@@ -128,6 +134,30 @@ describe("converge", () => {
     ]);
     expect(report.unmatched.map((row) => row.cell)).toEqual(["AC-9"]);
     expect(report.malformed.map((row) => row.line)).toEqual([4]);
-    expect(report.blocking).toEqual([]);
+    expect(report.blocking).toEqual([
+      "none row line 5: a none row says unrequested, not 'satisfied': it names no criterion to be satisfied",
+      "row line 3 'AC-9': unmatched -- no closing issue states this criterion",
+      "row line 4: malformed -- 'AC-x' is not a criterion: write AC-<n>, <CODE>#<N>/AC-<n>, <owner/name>#<N>/AC-<n> or none",
+    ]);
+  });
+});
+
+describe("the one AC row grammar (delivery round on #498, readings 2 and 21)", () => {
+  it("admits checkbox, numbered, starred and bold rows, and lists a row naming AC-n in no admitted shape as unrecognised", () => {
+    const report = extractCriteria(["- [ ] AC-1: a", "- [x] AC-2: b", "1. AC-3: c", "* **AC-4**: d", "- AC-5 no colon", "> - AC-6: quoted"].join("\n"));
+    expect(report.criteria.map((row) => row.id)).toEqual(["AC-1", "AC-2", "AC-3", "AC-4"]);
+    expect(report.unrecognised.map((row) => row.line)).toEqual([5, 6]);
+  });
+
+  it("reads criteria inside the catalogue's acceptance section only, with the catalogue's prefix", async () => {
+    const { parseCatalogue } = await import("./shape.js");
+    const catalogue = parseCatalogue({
+      sections: { acceptance: { heading: "Acceptance criteria", rows: "acceptance" }, notes: { heading: "Plan notes" } },
+      kinds: { k: { required: ["acceptance"], optional: ["notes"] } },
+      rows: { acceptance: { pattern: "^- CR-([0-9]+): .+$", prefix: "^- CR-" } },
+    });
+    const body = "## Acceptance criteria\n\n- CR-1: one\n\n## Plan notes\n\n- CR-2: not a criterion here\n- AC-1: nor this\n";
+    const report = extractCriteria(body, catalogue);
+    expect(report.criteria.map((row) => row.id)).toEqual(["CR-1"]);
   });
 });

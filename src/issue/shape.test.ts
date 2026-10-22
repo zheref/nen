@@ -140,13 +140,14 @@ describe("countQuestions -- counts, never decides", () => {
       [
         "## Open questions",
         "- OQ-1 (G4): which store? [NEEDS CLARIFICATION: store]",
-        "- ~~OQ-2~~ → A: the local one",
+        "- ~~OQ-2~~ → A: the local one (2026-10-20, HR-4)",
         "- ~~OQ-3~~ -> A: none",
         "* OQ-4 (G5): who owns it?",
         "Prose naming [NEEDS HR-4: question] inline.",
       ].join("\n"),
     );
-    expect(report.counts).toEqual({ open: 2, resolved: 2, needsMarkers: 2, unrecognised: 0 });
+    expect(report.counts).toEqual({ open: 2, resolved: 1, needsMarkers: 2, unrecognised: 1 });
+    expect(report.unrecognised.map((row) => row.line)).toEqual([4]);
     expect(report.open).toEqual([
       { id: "OQ-1", number: 1, gate: "G4", line: 2 },
       { id: "OQ-4", number: 4, gate: "G5", line: 5 },
@@ -169,5 +170,25 @@ describe("countQuestions -- counts, never decides", () => {
 
   it("reads an empty body as zero of everything", () => {
     expect(countQuestions("").counts).toEqual({ open: 0, resolved: 0, needsMarkers: 0, unrecognised: 0 });
+  });
+});
+
+describe("countQuestions -- the one row grammar (delivery round on #498, readings 1 and 21)", () => {
+  it("reads a task-list checkbox row, and lists a blockquoted OQ row as unrecognised", () => {
+    const report = countQuestions(["## Open questions", "", "- [ ] OQ-1 (G5): which base wins?", "> - OQ-2 (G5): quoted row", "- [x] ~~OQ-3~~ → A: main (2026-10-21, HR-9)"].join("\n"));
+    expect(report.counts).toEqual({ open: 1, resolved: 1, needsMarkers: 0, unrecognised: 1 });
+    expect(report.open).toEqual([{ id: "OQ-1", number: 1, gate: "G5", line: 3 }]);
+    expect(report.unrecognised).toEqual([{ line: 4, text: "> - OQ-2 (G5): quoted row" }]);
+  });
+
+  it("never counts a resolved row lacking its answer, date or ruling reference as resolved", () => {
+    const report = countQuestions(["- ~~OQ-1~~ → A:", "- ~~OQ-2~~ → A: yes", "- ~~OQ-3~~ → A: yes (2026-10-21)", "- OQ-4 (G4): "].join("\n"));
+    expect(report.counts).toEqual({ open: 0, resolved: 0, needsMarkers: 0, unrecognised: 4 });
+  });
+
+  it("reads the caller's own grammar when one is given", () => {
+    const report = countQuestions("- Q-1 [G4] which?\n", { pattern: "^- Q-([0-9]+) \\[([^\\]]+)\\] .+$", resolvedPattern: "^- done Q-([0-9]+)$" });
+    expect(report.counts).toEqual({ open: 1, resolved: 0, needsMarkers: 0, unrecognised: 0 });
+    expect(report.open[0]?.gate).toBe("G4");
   });
 });
