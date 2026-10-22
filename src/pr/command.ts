@@ -69,6 +69,8 @@ import { computeStaleness, type VerifiedWake } from "./staleness.js";
 import { nextBlocker } from "./blocker.js";
 import { cascadeMain } from "./cascade.js";
 import { fetchPullRequest, type PrSnapshot } from "./fetch.js";
+import { ConvergeReadError, readConvergeInput } from "./converge.js";
+import { converge, PR_CONVERGE_CONTRACT } from "../issue/criteria.js";
 import { retarget } from "./retarget.js";
 import { requestReviews } from "./reviewers.js";
 import {
@@ -154,6 +156,7 @@ nen pr body-check --body-from <path> [--requirements-from <path> | --base <ref>]
 nen pr sections resolve --catalogue <path> --kind <kind> --family <family> [--with a,b] [--overrides <workflow.json>] [--json]
 nen pr sections family --taxonomy <path> --catalogue <path> --jobs <a,b> [--json]
 nen pr fetch --target <owner/name> --pr <n>
+nen pr converge --target <owner/name> --pr <n> [--json]
 nen pr next-blocker --target <owner/name> --pr <n> --repo <path> [--reviewers a,b] [--policy bounded|strict] [--delivery-pr] [--gates <path>]
 nen pr cascade-main --repo <path> [--trunk main] [--no-push]
 nen pr retarget --target <owner/name> --pr <n> --base <branch>
@@ -396,6 +399,27 @@ fetch:
   One typed snapshot: head SHA, mergeability, the check rollup, reviews
   PER COMMIT, review threads with resolution state, pending review
   requests.
+
+converge:
+  Read-only. Compares the acceptance criteria of every issue the PR closes
+  (GitHub's closingIssuesReferences; each issue's '- AC-{n}: ...' rows, as
+  'nen issue criteria' reads them) with the PR body's verify rows
+  '| <criterion> | <word> | <evidence> |', where <criterion> is AC-{n},
+  <CODE>#<N>/AC-{n}, <owner/name>#<N>/AC-{n}, #<N>/AC-{n} or none, and
+  <word> is satisfied, partial, missing, contradicts or unrequested.
+  Reports per criterion: covered-with-evidence, covered-without-evidence,
+  missing-row, malformed-row, duplicate-rows, and the row's word; an issue
+  with no AC row is one not-verifiable row, never a pass. A bare AC-{n}
+  that two closing issues state is ambiguous and matches neither. It
+  compares two lists and decides nothing. Exits: 0 no criterion blocking,
+  1 a missing-row, malformed-row or duplicate-rows criterion or a row
+  saying missing or contradicts, 2 usage or a read that did not finish
+  (the PR, a closing issue, a full page of 100 closing references).
+  --json: '{ contract: "nen.pr.converge/v0.1", target, pr, url, headSha,
+  verifiable, closingIssues: [{ issue, criteria, verifiable }], criteria:
+  [{ issue, id, text, coverage, word, evidence, rows }], unrequested:
+  [{ line, word, evidence, problem }], unmatched: [{ line, cell, reason }],
+  malformed: [{ line, cell, reason }], counts, blocking }'.
 
 next-blocker:
   The FIRST blocking condition, fixed order: conflict -> red required
@@ -1041,6 +1065,7 @@ export const PR_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   "body-check": { values: ["body-from", "requirements-from", "base", "max", "prose-budget"], booleans: ["exact"] },
   sections: { values: ["catalogue", "kind", "family", "with", "overrides", "taxonomy", "jobs"] },
   fetch: { values: ["target", "pr"] },
+  converge: { values: ["target", "pr"] },
   "next-blocker": { values: ["target", "pr", "reviewers", "gates", "policy"], booleans: ["delivery-pr"] },
   "cascade-main": { values: ["trunk"], booleans: ["no-push"] },
   retarget: { values: ["target", "pr", "base"] },
@@ -1148,6 +1173,7 @@ const TOKEN_ENV_ADVICE: Readonly<Record<string, string>> = {
   sections: "sections reads local JSON files only and calls no GitHub API.",
   "body-check": "body-check reads local files and git only and calls no GitHub API, so there is no credential to name.",
   fetch: `fetch ${GH_RESOLVES}`,
+  converge: `converge ${GH_RESOLVES}`,
   "next-blocker": `next-blocker ${GH_RESOLVES}`,
   "cascade-main": "cascade-main fetches and pushes on git's own credential and calls no GitHub API.",
   retarget: `retarget ${GH_RESOLVES}`,
@@ -1257,6 +1283,8 @@ export const prCommand: Command = {
         return sectionsCommand(context);
       case "fetch":
         return fetch(context);
+      case "converge":
+        return convergeVerb(context);
       case "next-blocker":
         return blocker(context);
       case "cascade-main":
@@ -1301,6 +1329,55 @@ function fetch(context: CommandContext): number {
   }
   printSnapshot(context, snapshot);
   return 0;
+}
+
+/**
+ * `nen pr converge`: the closing issues' criteria against the PR body's
+ * verify rows (../issue/criteria.ts). A read that did not finish is exit 2,
+ * reported on stderr: "could not read" is never "nothing to cover".
+ */
+function convergeVerb(context: CommandContext): number {
+  const target = requireTarget(context);
+  const prNumber = requirePr(context);
+  let input;
+  try {
+    input = readConvergeInput(context.seams, target, prNumber);
+  } catch (error) {
+    if (!(error instanceof ConvergeReadError)) throw error;
+    context.io.err(plainLine(`nen pr converge: ${error.message}`));
+    return 2;
+  }
+  const report = converge(input.issues, input.body);
+  const closingIssues = input.issues.map((issue) => ({
+    issue: `${issue.target}#${issue.number}`,
+    criteria: issue.report.criteria.length,
+    verifiable: issue.report.verifiable,
+  }));
+  const counts = report.counts;
+  const head =
+    input.issues.length === 0
+      ? `${target.slug}#${prNumber} closes no issue: no criterion to compare (not verifiable)`
+      : `${report.criteria.length} criterion row(s) across ${input.issues.length} closing issue(s), ${report.blocking.length} blocking -- ` +
+        `${counts["covered-with-evidence"]} covered with evidence, ${counts["covered-without-evidence"]} without, ${counts["missing-row"]} missing-row, ` +
+        `${counts["malformed-row"]} malformed-row, ${counts["duplicate-rows"]} duplicate-rows, ${counts["not-verifiable"]} not-verifiable`;
+  const lines = [
+    head,
+    ...report.criteria.map(
+      (entry): string =>
+        `${entry.coverage.toUpperCase()}  ${entry.issue}/${entry.id ?? "(no AC row)"}` +
+        `${entry.word === null ? "" : ` ${entry.word}`}${entry.rows.length === 0 ? "" : ` (line ${entry.rows.join(", ")})`}`,
+    ),
+    ...report.unrequested.map((row): string => `UNREQUESTED line ${row.line}: ${row.word ?? "?"}${row.problem === null ? "" : ` -- ${row.problem}`}`),
+    ...report.unmatched.map((row): string => `UNMATCHED line ${row.line} '${row.cell}': ${row.reason}`),
+    ...report.malformed.map((row): string => `MALFORMED line ${row.line}: ${row.reason}`),
+  ].map(plainLine);
+  emit(
+    context.io,
+    context.json,
+    { contract: PR_CONVERGE_CONTRACT, target: target.slug, pr: prNumber, url: input.url, headSha: input.headSha, closingIssues, ...report },
+    lines,
+  );
+  return report.blocking.length > 0 ? 1 : 0;
 }
 
 function blocker(context: CommandContext): number {

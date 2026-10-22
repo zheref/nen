@@ -454,7 +454,7 @@ it stays pending and holds every pull request's checks with it.
 `nen --help` lists every command family (44); each
 family's own `--help` (`nen pr --help`, `nen board --help`, ...) documents
 its verbs and flags in full. [`docs/USAGE.md`](docs/USAGE.md) documents all
-149 verbs outside the binary — each one's purpose, arguments, exit codes and
+151 verbs outside the binary — each one's purpose, arguments, exit codes and
 `--json` shape — plus the conventions they share and the developer workflows
 they compose into. The families group roughly as:
 

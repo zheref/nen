@@ -1810,6 +1810,7 @@ describe("nen issue -- foreign flags derived from each subcommand's own spec (ro
     reconcile: ["--target", "o/n"],
     "body-check": ["--body-file", "b.md", "--requirements-from", "c.json"],
     questions: ["--body-file", "b.md"],
+    criteria: ["--body-file", "b.md"],
   };
 
   const valueFlags = new Set(ISSUE_FLAGS.values ?? []);
@@ -1970,11 +1971,11 @@ describe("nen issue -- foreign flags derived from each subcommand's own spec (ro
   // could not hold at all -- and four render as a sentence rather than a chain
   // of "and"s, because a refusal a caller does not read is a refusal they route
   // around.
-  it("names all five owners of --body-file, and conjoins the five owners of --dry-run", async () => {
+  it("names all six owners of --body-file, and conjoins the five owners of --dry-run", async () => {
     const three = await capture(["issue", "search", "--target", "o/n", "--body-file", "b.md"], []);
     expect(three.code).toBe(2);
     expect(three.err.join("\n")).toContain(
-      "It belongs to 'issue file', 'issue comment', 'issue edit-body', 'issue body-check' and 'issue questions'.",
+      "It belongs to 'issue file', 'issue comment', 'issue edit-body', 'issue body-check', 'issue questions' and 'issue criteria'.",
     );
 
     const five = await capture(["issue", "search", "--target", "o/n", "--dry-run"], []);
