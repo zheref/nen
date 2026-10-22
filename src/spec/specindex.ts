@@ -15,8 +15,8 @@
 // the grammar every other spec verb uses. A folder with no readable spec.md is
 // an error row, and the file is not written over it.
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { join, relative, isAbsolute } from "node:path";
 import { markersIn, proseLines } from "./lines.js";
 import { matchFolder, type SpecLayout } from "./layout.js";
 import { sha256 } from "./check.js";
@@ -124,20 +124,25 @@ export function indexState(existing: string | null, generated: string): IndexSta
 
 export function specIndex(repo: string, layout: SpecLayout, options: { readonly write: boolean; readonly dryRun: boolean }): SpecIndexReport {
   const { rows, ignored } = readRows(repo, layout);
-  const relative = `${layout.root}/INDEX.md`;
-  const path = join(repo, relative);
+  const relativePath = `${layout.root}/INDEX.md`;
+  const path = join(repo, relativePath);
   let existing: string | null = null;
-  if (existsSync(path)) existing = readFileSync(path, "utf8");
+  if (lstatSync(path, { throwIfNoEntry: false })?.isFile() === true) existing = readFileSync(path, "utf8");
+  else if (lstatSync(path, { throwIfNoEntry: false }) !== undefined) throw new Error(`${relativePath} is not a regular file (a link or a directory); nen reads and writes no index through one`);
   const generated = renderIndexFile(rows);
   const state = indexState(existing, generated);
-  const base = { contract: SPEC_INDEX_CONTRACT, repo, layout: layout.pattern, path: relative, rows, ignored, state };
+  const base = { contract: SPEC_INDEX_CONTRACT, repo, layout: layout.pattern, path: relativePath, rows, ignored, state };
   const errors = rows.filter((row): boolean => row.error !== null);
   if (!options.write) return { ...base, action: "none", reason: null };
   if (errors.length > 0) return { ...base, action: "refused", reason: `${errors.length} folder(s) have no readable spec.md; the index is not written over a folder it cannot read` };
-  if (state === "hand-edited") return { ...base, action: "refused", reason: `${relative} was edited by hand (its body does not hash to its marker, or it has none); nen will not overwrite an edit it cannot judge` };
+  if (state === "hand-edited") return { ...base, action: "refused", reason: `${relativePath} was edited by hand (its body does not hash to its marker, or it has none); nen will not overwrite an edit it cannot judge` };
   if (state === "current") return { ...base, action: "none", reason: null };
+  // THE WRITE STAYS IN THE REPOSITORY: a root that is a link out would carry
+  // it elsewhere, so it is refused rather than followed (an INDEX.md that is
+  // a link was already refused at the read above).
+  const inside = relative(realpathSync(repo), realpathSync(join(repo, layout.root)));
+  if (inside === "" || inside.startsWith("..") || isAbsolute(inside)) return { ...base, action: "refused", reason: `${layout.root}/ resolves outside --repo; nen writes no index through a link` };
   if (options.dryRun) return { ...base, action: "would-write", reason: null };
-  mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, generated);
   return { ...base, action: "written", reason: null };
 }

@@ -30,7 +30,7 @@ describe("nen spec number", () => {
     expect(run.code).toBe(0);
     const report = run.json();
     expect(Object.keys(report)).toEqual(["contract", "repo", "target", "layout", "base", "baseSource", "baseSha", "openPrs", "taken", "collisions", "next", "reason"]);
-    expect(report).toMatchObject({ contract: "nen.spec.number/v0.1", target: SLUG, base: "main", baseSource: "default (no nen/workflow.json)", baseSha: SHA, openPrs: 2, collisions: [], next: "006", reason: null });
+    expect(report).toMatchObject({ contract: "nen.spec.number/v0.1", target: SLUG, base: "main", baseSource: "default: no nen/workflow.json", baseSha: SHA, openPrs: 2, collisions: [], next: "006", reason: null });
     expect(report["taken"]).toEqual([
       { nnn: "001", slug: "sample-feature", folder: "specs/001-sample-feature", source: "base", pr: null },
       { nnn: "002", slug: "other-feature", folder: "specs/002-other-feature", source: "base", pr: null },
@@ -62,6 +62,7 @@ describe("nen spec number", () => {
     ["a gh failure", { prResult: fail("HTTP 401") }, "HTTP 401"],
     ["gh text that is not JSON", { prResult: ok("nope") }, "not JSON"],
     ["a PR with no files list", { prs: [{ number: 3 }] }, "no number or no files"],
+    ["a PR at gh's file page size", { prs: [{ number: 9, files: Array.from({ length: 100 }, (_, index) => ({ path: `docs/${index}.md` })) }] }, "would be unread"],
     ["a list at the limit", { prs: Array.from({ length: 500 }, (_, index) => ({ number: index, files: [] })) }, "some may be unread"],
   ])("exits 1 on %s -- never 'no folders'", async (_name, options, words) => {
     const run = await spec(["number", "--layout", "specs/{nnn}-{slug}"], fixtureCopy(), new ScriptedSeams(script(options as Parameters<typeof script>[0])));

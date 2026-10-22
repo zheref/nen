@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedSeams } from "../seam/scripted.js";
 import { INDEX_MARKER_PREFIX, indexState, renderIndexFile } from "./specindex.js";
@@ -73,6 +74,26 @@ describe("nen spec index", () => {
     const missing = await spec(["index"], repo, seams());
     expect(missing.code).toBe(1);
     expect(missing.err.join("\n")).toContain("specs/ does not exist");
+  });
+
+  it.skipIf(process.platform === "win32")("writes no index through a link: an INDEX.md link is refused, a root linked out of --repo too", async () => {
+    const repo = fixtureCopy();
+    const elsewhere = join(mkdtempSync(join(tmpdir(), "nen-spec-elsewhere-")), "target.md");
+    writeFileSync(elsewhere, "outside\n");
+    symlinkSync(elsewhere, index(repo));
+    const linked = await spec(["index", "--write"], repo, seams());
+    expect(linked.code).toBe(1);
+    expect(linked.err.join("\n")).toContain("is not a regular file");
+    expect(readFileSync(elsewhere, "utf8")).toBe("outside\n");
+    const other = fixtureCopy();
+    const outside = mkdtempSync(join(tmpdir(), "nen-spec-outside-"));
+    cpSync(join(other, "specs"), join(outside, "specs"), { recursive: true });
+    rmSync(join(other, "specs"), { recursive: true });
+    symlinkSync(join(outside, "specs"), join(other, "specs"));
+    const out = await spec(["index", "--write"], other, seams(), true);
+    expect(out.code).toBe(1);
+    expect(out.json()["action"]).toBe("refused");
+    expect(existsSync(join(outside, "specs", "INDEX.md"))).toBe(false);
   });
 
   it.each([

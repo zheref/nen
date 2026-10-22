@@ -53,6 +53,8 @@ export class SpecNumberReadError extends Error {
 }
 
 const OPEN_PR_LIMIT = 500;
+/** The most files `gh pr list --json files` returns for one PR. */
+export const PR_FILES_PAGE = 100;
 
 export function prListArgv(target: Target): readonly string[] {
   return ["pr", "list", "--repo", target.slug, "--state", "open", "--limit", String(OPEN_PR_LIMIT), "--json", "number,files"];
@@ -98,6 +100,9 @@ export function readPrFolders(seams: Seams, target: Target, layout: SpecLayout):
   const folders: TakenFolder[] = [];
   for (const entry of raw as { number?: unknown; files?: unknown }[]) {
     if (typeof entry?.number !== "number" || !Array.isArray(entry.files)) throw new SpecNumberReadError("an open PR in gh's answer carries no number or no files list");
+    // gh reads at most PR_FILES_PAGE files per PR in this listing; a PR at
+    // that count may hold a folder past it, so it is unread, not empty.
+    if (entry.files.length >= PR_FILES_PAGE) throw new SpecNumberReadError(`PR #${entry.number} lists ${entry.files.length} files, the most gh pr list returns; a folder past them would be unread, so no number is computed`);
     const names = new Set<string>();
     for (const file of entry.files as { path?: unknown }[]) {
       if (typeof file?.path !== "string") throw new SpecNumberReadError(`a file of PR #${entry.number} carries no path`);

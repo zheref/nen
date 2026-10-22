@@ -11040,7 +11040,8 @@ collision. `--json` top-level keys: `contract` (`nen.spec.number/v0.1`),
 `taken` (`{ nnn, slug, folder, source: "base"|"pr", pr }` each), `collisions`,
 `next` (null once `999` is taken), `reason`. Exit 0 with a next number and no
 collision; exit 1 when `origin/<base>` does not resolve, `gh` fails or answers
-something unreadable, the open-PR list reaches its 500 limit (some may be
+something unreadable, the open-PR list reaches its 500 limit or one PR lists
+100 files (the most `gh pr list` returns per PR — either may leave a folder
 unread), two folders claim one `{nnn}`, or no next number exists; exit 2 on a
 missing or malformed flag, or another verb's flag.
 
@@ -11051,7 +11052,7 @@ nen spec number --repo . --layout 'specs/{nnn}-{slug}'
 ```
 ```text
 next: 006
-layout specs/{nnn}-{slug} · base origin/main (default (no nen/workflow.json)) at aaaaaaaaaaaa · 2 open PR(s) on fixture-owner/fixture-spec
+layout specs/{nnn}-{slug} · base origin/main (default: no nen/workflow.json) at aaaaaaaaaaaa · 2 open PR(s) on fixture-owner/fixture-spec
   001 specs/001-sample-feature on base
   002 specs/002-other-feature on base
   002 specs/002-other-feature reserved by #42
@@ -11155,7 +11156,7 @@ citation `unresolved-member` with the reason — never another checkout, never
 a clone.
 
 The **excerpt** is lines `l1..l2` of the file at the sha, each ending in a
-newline. With `--verify-excerpt` its sha256 is compared with the row of
+newline, a CRLF read as LF. With `--verify-excerpt` its sha256 is compared with the row of
 `capture/<CODE>/inventory.json` (`{ rows: [{ path, lines: "l1-l2" | [l1, l2],
 sha, excerptSha256? }] }`, sha matched as a prefix either way) that carries
 one; a citation with no row, or a row with no hash, is reported and is not a
@@ -11242,7 +11243,9 @@ keys: `contract` (`nen.spec.index/v0.1`), `repo`, `layout`, `path`, `rows`
 `ignored`, `state` (`current` \| `stale` \| `hand-edited` \| `absent`),
 `action` (`none` \| `written` \| `would-write` \| `refused`), `reason`.
 Without `--write`, exit 0 only when the file is `current`; with it, exit 0
-unless refused. Exit 1 too when any folder's `spec.md` could not be read;
+unless refused. Exit 1 too when any folder's `spec.md` could not be read or
+`INDEX.md` is not a regular file (a link is never read or written through; a
+root that resolves outside `--repo` refuses `--write`);
 exit 2 on a usage error.
 
 **Example**

@@ -120,7 +120,7 @@ function runNumber(context: CommandContext, repo: string): number {
   if (base === undefined) {
     const workflow = loadWorkflow(repo);
     base = workflow.present ? workflow.workflow.branch.base : "main";
-    baseSource = workflow.present ? "nen/workflow.json branch.base" : "default (no nen/workflow.json)";
+    baseSource = workflow.present ? "nen/workflow.json branch.base" : "default: no nen/workflow.json";
   }
   if (!/^[A-Za-z0-9._/-]+$/.test(base) || base.startsWith("-") || base.includes("..")) throw new VerbUsageError(`--base '${base}' is not a branch name nen will put in a ref.`);
   const raw = context.args.values["target"];
