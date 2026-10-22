@@ -237,6 +237,15 @@ describe("ensure parity — trunk, durable markers, exact PR keys and other work
 });
 
 describe("command contract and recovery authority", () => {
+  it.each([false, true])("malformed ensure policy exits 2 with existing ledger=%s", async (existing): Promise<void> => {
+    const o = fixture(); if (existing) act(o, "init");
+    const before = existing ? bytes(o) : null;
+    policy(o.root, { alpha: -1 });
+    const result = await cli(o, ["ensure", "--branch", o.branch]);
+    expect(result.code).toBe(2); expect(result.err).toContain("budget");
+    if (existing) expect(bytes(o)).toBe(before);
+    else expect(existsSync(join(o.root, ".nen", "hanten"))).toBe(false);
+  });
   it.each(["zero", "0", "-1", "1.5", "9007199254740992"])("rejects PR %s before writing", async (pr): Promise<void> => {
     const o = fixture(); expect((await cli(o, ["init", "--branch", o.branch, "--pr", pr])).code).toBe(2);
   });
@@ -282,13 +291,15 @@ describe("command contract and recovery authority", () => {
   });
 });
 
-// Separate processes exercise the same shipped module via the pinned TS
-// transpiler; no bun executable is required by the Node-based vitest runner.
-function child(o: CycleOptions, action: string, args: object = {}, delay = 0): Promise<string> {
+// Separate Bun processes exercise the shipped TS modules. Bun is this lane's
+// declared runtime; no undeclared minimum Node version is needed.
+function child(o: CycleOptions, action: string, args: object = {}): Promise<string> {
   const module = new URL("./ledger.ts", import.meta.url).href;
-  const program = `const ts=require('typescript'),fs=require('fs'),{pathToFileURL}=require('url'); require('module').registerHooks({resolve(s,c,n){try{return n(s,c)}catch(e){if(s.endsWith('.js'))return n(s.slice(0,-3)+'.ts',c);throw e}},load(u,c,n){if(u.endsWith('.ts'))return {format:'module',shortCircuit:true,source:ts.transpileModule(fs.readFileSync(new URL(u),'utf8'),{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022}}).outputText};return n(u,c)}}); (async()=>{const m=await import(${JSON.stringify(module)}),e=await import(${JSON.stringify(new URL("../seam/exec.ts", import.meta.url).href)});const o={root:${JSON.stringify(o.root)},branch:${JSON.stringify(o.branch)},seams:e.defaultSeams()};${delay ? `await new Promise(r=>setTimeout(r,${delay}));` : ""}console.log(JSON.stringify(${action === "ensure" ? "m.ensureCycle(o)" : `m.runCycle(o,${JSON.stringify(action)},${JSON.stringify(args)})`}))})().catch(e=>{console.error(e);process.exitCode=1});`;
+  const seamsModule = new URL("../seam/exec.ts", import.meta.url).href;
+  const call = action === "ensure" ? "m.ensureCycle(o)" : `m.runCycle(o,${JSON.stringify(action)},${JSON.stringify(args)})`;
+  const program = `const m=await import(${JSON.stringify(module)}); const e=await import(${JSON.stringify(seamsModule)}); const o={root:${JSON.stringify(o.root)},branch:${JSON.stringify(o.branch)},seams:e.defaultSeams()};console.log(JSON.stringify(${call}));`;
   return new Promise((ok, fail): void => {
-    const p = spawn(process.execPath, ["-e", program], { cwd: process.cwd() }); let out = "", err = "";
+    const p = spawn("bun", ["--eval", program], { cwd: process.cwd() }); let out = "", err = "";
     p.stdout.on("data", (s): void => { out += String(s); }); p.stderr.on("data", (s): void => { err += String(s); });
     p.on("error", fail); p.on("exit", (code): void => { if (code === 0) ok(out); else fail(new Error(err)); });
   });

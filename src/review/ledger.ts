@@ -51,12 +51,15 @@ function integer(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
-export function readBudgets(root: string): Budgets {
-  let loaded: ReturnType<typeof loadWorkflow>;
-  try { loaded = loadWorkflow(root); } catch (error) {
+function workflowAt(root: string): ReturnType<typeof loadWorkflow> {
+  try { return loadWorkflow(root); } catch (error) {
     if (error instanceof SchemaError) throw new VerbUsageError(error.message);
     throw error;
   }
+}
+
+export function readBudgets(root: string): Budgets {
+  const loaded = workflowAt(root);
   const budgets: Budgets = Object.create(null) as Budgets;
   const sources: Record<string, string[]> = Object.create(null) as Record<string, string[]>;
   for (const [scope, row] of Object.entries(loaded.workflow.review.scopes)) {
@@ -211,8 +214,9 @@ function locked<T>(options: CycleOptions, body: () => T): T {
 }
 function trunk(options: CycleOptions): string {
   if (options.base?.trim()) return options.base.trim();
-  const base = loadWorkflow(options.root).workflow.branch.base;
-  const raw = loadWorkflow(options.root).raw;
+  const loaded = workflowAt(options.root);
+  const base = loaded.workflow.branch.base;
+  const raw = loaded.raw;
   if (object(raw["branch"]) && typeof raw["branch"]["base"] === "string") return base;
   const remote = git(options, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"])?.trim();
   return remote?.startsWith("origin/") && remote !== "origin/" ? remote.slice(7) : "main";
