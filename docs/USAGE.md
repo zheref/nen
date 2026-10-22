@@ -437,6 +437,7 @@ verb does by default:
 | [`scaffold new`](#nen-scaffold-new) | no | `--dry-run` | prints the tree it would write. Even the bare form spawns nothing at all: **every post-step is printed and none is run**, the toolchain check included |
 | [`pr retarget`](#nen-pr-retarget), [`run rerun-failed`](#nen-run-rerun-failed) | no | `--dry-run` | print the one `gh` call as `would run:` and spawn **nothing** — not even a read, so the preview needs no token (Hatsu SDD plan N6). izanami still classifies both **mutating** in every spelling, fail-closed |
 | [`pr cascade-main`](#nen-pr-cascade-main) | no | `--dry-run` | prints `git fetch`, `git merge --no-edit` and (unless `--no-push`) `git push` as `would run:` and spawns **nothing**, so whether the merge would conflict is not known. `--no-push` alone is not a preview: it still merges. izanami keeps the verb **mutating** in every spelling, the dry form included |
+| [`spec index`](#nen-spec-index) | yes | `--write` | then `--dry-run` with it. Without `--write` nothing is written and the verb reports whether `<root>/INDEX.md` is current; `--write --dry-run` reports the regeneration and writes nothing. izanami's table classifies `--write` **mutating** and the other forms **read-only** |
 | [`run start`](#nen-run-start), [`run append`](#nen-run-append), [`run park`](#nen-run-park) | no | `--dry-run` | write the run manifest under the git common dir; the dry form reads it (and asks git for the common dir; `append` also reads the PR) and reports the outcome it would write, writing nothing. izanami's table classifies the bare forms **mutating** and the dry forms **read-only**; `run verify`, `run budget`, [`wc overlap`](#nen-wc-overlap), [`stage check`](#nen-stage-check) and `loop slots --from-run` are **read-only** |
 | [`pr edit-body`](#nen-pr-edit-body) | no | `--dry-run` | **still reads GitHub** to certify the number reads as a pull request, and runs the [private-name guard](#the-private-name-guard) ([#363](https://github.com/zheref/nen/issues/363)), before printing the byte count and first/last line |
 | [`pr mark-ready`](#nen-pr-mark-ready) | no | `--dry-run` | **still reads GitHub** — the one GraphQL read that certifies the number, its state and its head — so every refusal (not a PR, closed/merged, head mismatch, already ready) answers exactly as the real run would; prints the `markPullRequestReadyForReview` argv and sends nothing |
@@ -11480,17 +11481,29 @@ A folder's `spec.md` (with `--folder`) or `.specify/memory/constitution.md`
 (with `--constitution`) held to **citation-or-marker**, plus the passes of
 Spec Kit's analyze that need no judgement. In a folder, the held lines are
 every line that **defines** an `FR-<n>`, `SC-<n>` or `US-<n>` (a list item or
-bold lead `**FR-001**:`) and every `User Story <n>` heading; in the
-constitution, every list item under a heading naming *Product rules*.
+bold lead `**FR-001**:`) and every story heading -- `User Story <n>` (the
+pinned Spec Kit template) or `US-<n>` (Hatsu's id grammar), whose annotation
+may sit inside its `(Priority: …)` field; in the constitution, every list item
+under a heading naming *Product rules*. Two more trailing forms, written by
+later phases (Hatsu's `docs/config/spec-repo.md` § Citations and markers), are
+read: `[ruled: CL-<n>]`, an answered clarification in place of the marker it
+settled -- a **closing** annotation, counted `ruled`, never `uncited` -- and
+`[STALE @ <sha>]`, peeled off the citation it sits beside and counted `stale`.
+`spec.md`, `tasks.md`, the folder and the constitution are each resolved
+through symlinks and refused at **exit 2** when one leaves `--repo`, as
+[`canon lint`](#nen-canon-lint) refuses a link out of its root.
 
 | Rule | Severity | Fires on |
 |---|---|---|
-| `uncited` | CRITICAL | a held line ending in neither a citation nor a marker |
+| `uncited` | CRITICAL | a held line ending in neither a citation, a marker nor `[ruled: CL-<n>]` |
+| `no-held-lines` | CRITICAL | a folder whose `spec.md` defines no FR, SC or story line: held to nothing, never clean |
+| `unclosed-fence` | CRITICAL | a fenced block that never closes, so every line after it was read as source data |
 | `malformed-citation` | CRITICAL | a trailing `[src: …]` that is not the shape above, or a range with `l2 < l1` |
 | `inferred-tier` | CRITICAL | an `inferred` citation on an SC line, or on an FR line containing `MUST` |
 | `duplicate-id` | CRITICAL | an FR, SC or US id defined twice |
 | `task-cites-unknown-fr` | CRITICAL | a `tasks.md` task line citing an FR `spec.md` never defines |
 | `several-markers` · `cited-and-marked` | HIGH | more than one marker, or a citation and a marker, on one line |
+| `stale-without-citation` | HIGH | a `[STALE @ <sha>]` beside no citation (it is a citation's companion) |
 | `placeholder` | HIGH | `$ARGUMENTS`, `[###-feature-name]`, an all-caps bracket token (`[DATE]`, `[FEATURE NAME]`; the three markers, `[STALE]`, `[P]`, `[X]`, `[US<n>]`, `[T<n>]` exempt), `TODO`, `TBD`, `FIXME` |
 | `fr-without-task` | HIGH | an FR no `tasks.md` task line cites (only when `tasks.md` exists) |
 | `no-version-line` | HIGH | a constitution with no `**Version**:` line |

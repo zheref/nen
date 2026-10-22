@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedSeams } from "../seam/scripted.js";
 import { categoryOf, CLARIFY_TAXONOMY, parseVocabulary, type Finding } from "./check.js";
@@ -15,7 +16,7 @@ describe("nen spec check --folder", () => {
     const report = run.json();
     expect(report["contract"]).toBe("nen.spec.check/v0.1");
     expect(Object.keys(report)).toEqual(["contract", "repo", "mode", "path", "files", "vocabulary", "requirements", "markers", "open", "ranked", "tasks", "findings", "counts"]);
-    expect(report["requirements"]).toEqual({ total: 9, cited: 4, marked: 4, FR: 5, SC: 2, US: 2 });
+    expect(report["requirements"]).toEqual({ total: 9, cited: 4, marked: 4, ruled: 0, stale: 0, FR: 5, SC: 2, US: 2 });
     expect(report["markers"]).toEqual({ needsClarification: 2, needsRuling: 2, unverified: 2, total: 6 });
     expect(report["tasks"]).toBe("checked");
     expect(rules(report["findings"])).toEqual([
@@ -151,3 +152,49 @@ describe("check helpers", () => {
     expect(parseVocabulary("# c\r\n fast \n\nfast\nrobust\n")).toEqual(["fast", "robust"]);
   });
 });
+
+describe("nen spec check against Hatsu's spec grammar (delivery round on #498, readings 8, 17, 26)", () => {
+  const HATSU = join(process.cwd(), "src", "spec", "fixtures", "hatsu-spec-family");
+
+  it("passes a copy of Hatsu's fixture spec at exit 0 with zero CRITICAL: [ruled: CL-nnn], [STALE @ sha] and a US-n heading all read", async () => {
+    const run = await spec(["check", "--folder", "specs/001-fixture-capability"], HATSU, seams(), true);
+    expect(run.err).toEqual([]);
+    expect(run.code).toBe(0);
+    const report = run.json();
+    expect(report["requirements"]).toEqual({ total: 6, cited: 2, marked: 3, ruled: 1, stale: 1, FR: 4, SC: 1, US: 1 });
+    expect((report["counts"] as Record<string, number>)["CRITICAL"]).toBe(0);
+  });
+
+  it("is exit 1 with a no-held-lines finding for a spec.md that defines nothing, and flags an unclosed fence", async () => {
+    const repo = fixtureCopy();
+    mkdirSync(join(repo, "specs", "005-empty"), { recursive: true });
+    writeFileSync(join(repo, "specs", "005-empty", "spec.md"), "");
+    const empty = await spec(["check", "--folder", "specs/005-empty"], repo, seams(), true);
+    expect(empty.code).toBe(1);
+    expect(rules(empty.json()["findings"])).toContain("CRITICAL no-held-lines spec.md:-");
+    mkdirSync(join(repo, "specs", "006-fence"), { recursive: true });
+    writeFileSync(join(repo, "specs", "006-fence", "spec.md"), "- **FR-001**: a. [UNVERIFIED]\n\n```\n- **FR-002**: hidden\n");
+    const fence = await spec(["check", "--folder", "specs/006-fence"], repo, seams(), true);
+    expect(fence.code).toBe(1);
+    expect(rules(fence.json()["findings"])).toContain("CRITICAL unclosed-fence spec.md:3");
+  });
+
+  it("refuses at exit 2 a spec.md or tasks.md that resolves outside --repo", async () => {
+    const repo = fixtureCopy();
+    const outside = mkdtempSync(join(tmpdir(), "nen-spec-outside-"));
+    writeFileSync(join(outside, "outside-spec.md"), "- **FR-001**: outside. [UNVERIFIED]\n");
+    mkdirSync(join(repo, "specs", "003-x"), { recursive: true });
+    symlinkSync(join(outside, "outside-spec.md"), join(repo, "specs", "003-x", "spec.md"));
+    const run = await spec(["check", "--folder", "specs/003-x"], repo, seams());
+    expect(run.code).toBe(2);
+    expect(run.err.join("\n")).toMatch(/outside --repo/);
+    const index = await spec(["index"], repo, seams());
+    expect(index.code).toBe(2);
+    mkdirSync(join(repo, "specs", "004-y"), { recursive: true });
+    writeFileSync(join(repo, "specs", "004-y", "spec.md"), "- **FR-001**: in. [UNVERIFIED]\n");
+    writeFileSync(join(outside, "tasks.md"), "- [ ] T001 FR-001\n");
+    symlinkSync(join(outside, "tasks.md"), join(repo, "specs", "004-y", "tasks.md"));
+    expect((await spec(["check", "--folder", "specs/004-y"], repo, seams())).code).toBe(2);
+  });
+});
+

@@ -18,6 +18,7 @@
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, isAbsolute } from "node:path";
 import { markersIn, proseLines } from "./lines.js";
+import { assertInsideRepo } from "./check.js";
 import { matchFolder, type SpecLayout } from "./layout.js";
 import { sha256 } from "./check.js";
 
@@ -79,6 +80,11 @@ export function readRows(repo: string, layout: SpecLayout): { rows: IndexRow[]; 
       continue;
     }
     const specPath = join(rootPath, entry.name, "spec.md");
+    // A spec.md (or a folder) that resolves outside --repo is refused, the
+    // whole index with it: a title read from a file git would not commit is
+    // not this repository's (exit 2).
+    assertInsideRepo(repo, join(rootPath, entry.name), folder);
+    if (existsSync(specPath)) assertInsideRepo(repo, specPath, `${folder}/spec.md`);
     let text: string | null = null;
     let error: string | null = null;
     try {

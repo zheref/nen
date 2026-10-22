@@ -17,7 +17,7 @@ import { parseTarget, targetFromRemote, TargetError, type Target } from "../gith
 import { resolveRepoRoot } from "../repo/root.js";
 import { loadWorkflow } from "../schema/workflow.js";
 import { checkRelativePath, parseLayout } from "./layout.js";
-import { checkSpec, CONSTITUTION_PATH, parseVocabulary, renderSpecCheck, SpecReadError } from "./check.js";
+import { checkSpec, CONSTITUTION_PATH, parseVocabulary, renderSpecCheck, SpecContainmentError, SpecReadError } from "./check.js";
 import { citeCheck, parseCheckouts, renderCiteCheck } from "./citecheck.js";
 import { computeNext, readBaseFolders, readPrFolders, renderSpecNumber, SPEC_NUMBER_CONTRACT, type SpecNumberReport } from "./number.js";
 import { renderSpecIndex, specIndex } from "./specindex.js";
@@ -42,14 +42,19 @@ number      The next free {nnn}: the highest taken on origin/<base> (as last
             --base defaults to nen/workflow.json branch.base, else main;
             --target to the checkout's origin. Exit 1 when the base or the
             PR list could not be read, or when two folders claim one {nnn}.
-check       Every FR, SC and User Story line (a constitution: every list item
-            under a 'Product rules' heading) ends in
+check       Every FR, SC and story line (User Story n or US-n; a
+            constitution: every list item under a 'Product rules' heading)
+            ends in
               [src: <CODE>:<path>:<l1>-<l2> @ <sha> · declared|observed|inferred]
             or exactly one of [NEEDS CLARIFICATION: …] · [NEEDS RULING] ·
-            [UNVERIFIED]. Also: duplicate ids, placeholders, an inferred tier
-            inside a MUST or an SC, FR<->task both ways when tasks.md exists,
-            and the caller's --vocabulary terms (one per line). Fenced
-            blocks are source data and never read. CRITICAL findings exit 1.
+            [UNVERIFIED], or the closing [ruled: CL-nnn]; a trailing
+            [STALE @ <sha>] beside a citation is counted stale. Also: duplicate
+            ids, placeholders, an inferred tier inside a MUST or an SC,
+            FR<->task both ways when tasks.md exists, the caller's
+            --vocabulary terms (one per line), a spec.md holding no line at
+            all, and an unclosed fence. Fenced blocks are source data and
+            never read. CRITICAL findings exit 1; a spec file that resolves
+            outside --repo exits 2.
   --markers   List every open marker; --rank orders the clarifications by
               Spec Kit clarify's taxonomy (category from the section heading,
               then line); --max <n> caps the ranked list.
@@ -162,6 +167,7 @@ function runCheck(context: CommandContext, repo: string): number {
     emit(context.io, context.json, report, renderSpecCheck(report));
     return report.counts.CRITICAL > 0 ? 1 : 0;
   } catch (error) {
+    if (error instanceof SpecContainmentError) throw new VerbUsageError(error.message);
     if (error instanceof SpecReadError) throw new Error(error.message);
     throw error;
   }
@@ -184,7 +190,13 @@ function runIndex(context: CommandContext, repo: string): number {
   const write = context.args.booleans.has("write");
   const dryRun = context.args.booleans.has("dry-run");
   if (dryRun && !write) throw new VerbUsageError("--dry-run qualifies --write; without --write nothing is written anyway.");
-  const report = specIndex(repo, layout, { write, dryRun });
+  let report;
+  try {
+    report = specIndex(repo, layout, { write, dryRun });
+  } catch (error) {
+    if (error instanceof SpecContainmentError) throw new VerbUsageError(error.message);
+    throw error;
+  }
   emit(context.io, context.json, report, renderSpecIndex(report));
   if (report.rows.some((row): boolean => row.error !== null)) return 1;
   if (write) return report.action === "refused" ? 1 : 0;

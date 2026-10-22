@@ -90,9 +90,10 @@ describe("nen spec index", () => {
     cpSync(join(other, "specs"), join(outside, "specs"), { recursive: true });
     rmSync(join(other, "specs"), { recursive: true });
     symlinkSync(join(outside, "specs"), join(other, "specs"));
-    const out = await spec(["index", "--write"], other, seams(), true);
-    expect(out.code).toBe(1);
-    expect(out.json()["action"]).toBe("refused");
+    // A root linked out of --repo resolves every folder outside it: refused at exit 2 before anything is read or written.
+    const out = await spec(["index", "--write"], other, seams());
+    expect(out.code).toBe(2);
+    expect(out.err.join("\n")).toMatch(/outside --repo/);
     expect(existsSync(join(outside, "specs", "INDEX.md"))).toBe(false);
   });
 

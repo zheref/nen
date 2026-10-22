@@ -32,7 +32,19 @@ describe("citations and markers", () => {
     expect(mixed.markers.map((marker) => marker.kind)).toEqual(["needs-ruling", "unverified"]);
     expect(trailingAnnotation("x [src: nope]").malformed).toEqual(["[src: nope]"]);
     expect(trailingAnnotation("x [NEEDS CLARIFICATION: ]").malformed).toEqual(["[NEEDS CLARIFICATION: ]"]);
-    expect(trailingAnnotation(`x ${CITE} trailing words`)).toEqual({ citations: [], markers: [], malformed: [] });
+    expect(trailingAnnotation(`x ${CITE} trailing words`)).toEqual({ citations: [], markers: [], malformed: [], ruled: [], stale: [] });
+  });
+
+  it("reads [ruled: CL-nnn] as a closing annotation and peels a trailing [STALE @ <sha>] off a citation", () => {
+    const ruled = trailingAnnotation("- **FR-002**: kept across a restart. [ruled: CL-001]");
+    expect(ruled).toMatchObject({ ruled: ["CL-001"], citations: [], markers: [], malformed: [] });
+    const stale = trailingAnnotation(`- **FR-004**: removed. ${CITE} [STALE @ 0000000000000000000000000000000000000000]`);
+    expect(stale.citations).toHaveLength(1);
+    expect(stale.stale).toEqual(["[STALE @ 0000000000000000000000000000000000000000]"]);
+  });
+
+  it("reads a US-<n> story heading (Hatsu's id grammar) beside User Story <n>", () => {
+    expect(requirementOf("### US-1 — A user opens the fixture list (Priority: [NEEDS RULING])")).toEqual({ kind: "US", id: "US-1" });
   });
 
   it("finds markers and citations anywhere on a line", () => {

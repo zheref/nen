@@ -9,6 +9,14 @@
 //   [src: <CODE>:<path>:<l1>-<l2> @ <sha> · declared|observed|inferred]
 //   [NEEDS CLARIFICATION: <question>] · [NEEDS RULING] · [UNVERIFIED]
 //
+// and the two forms later phases write (Hatsu's docs/config/spec-repo.md §
+// Citations and markers): `[ruled: CL-nnn]`, an answered clarification in
+// place of the marker it settled -- a CLOSING annotation, neither open nor
+// uncited -- and `[STALE @ <old sha>]`, written by recapture beside a citation
+// whose range moved: a trailing COMPANION of the citation, counted as stale,
+// never read as the line's own annotation (delivery round on zheref/nen#498,
+// reading 8).
+//
 // FENCED BLOCKS ARE SOURCE DATA (SEC-15), so nothing inside one is a
 // requirement, a citation, a marker or a placeholder: issue and PR text quoted
 // into a spec lives there precisely so it is never read as the spec's own.
@@ -38,6 +46,10 @@ export interface Annotation {
   readonly markers: readonly Marker[];
   /** `[src: ...]` brackets that did not parse as a citation, verbatim. */
   readonly malformed: readonly string[];
+  /** `[ruled: CL-nnn]` closing annotations: the clarification ids that settled the line. */
+  readonly ruled: readonly string[];
+  /** `[STALE @ <sha>]` companions, verbatim. */
+  readonly stale: readonly string[];
 }
 
 export interface SourceLine {
@@ -50,9 +62,32 @@ export interface SourceLine {
 }
 
 const CITATION = /^\[src: ([A-Z][A-Z0-9]{1,7}):([^\s\]]+?):(\d+)-(\d+) @ ([0-9a-f]{7,40}) · (declared|observed|inferred)\]$/;
-const TRAILING = /\s*(\[src:[^\]]*\]|\[NEEDS CLARIFICATION:[^\]]*\]|\[NEEDS RULING\]|\[UNVERIFIED\])\s*$/;
+const TRAILING = /\s*(\[src:[^\]]*\]|\[NEEDS CLARIFICATION:[^\]]*\]|\[NEEDS RULING\]|\[UNVERIFIED\]|\[ruled: CL-\d+\]|\[STALE @ [0-9a-f]{7,40}\])\s*$/;
+const RULED = /^\[ruled: (CL-\d+)\]$/;
+const STALE = /^\[STALE @ [0-9a-f]{7,40}\]$/;
 const FENCE = /^\s{0,3}(`{3,}|~{3,})/;
 const HEADING = /^(#{1,6})\s+(.*?)\s*#*\s*$/;
+
+/** The 1-based line of a fence opener that never closes before the end of the text, or null. */
+export function unclosedFence(text: string): number | null {
+  let fence: string | null = null;
+  let at: number | null = null;
+  text.replace(/\r\n/g, "\n").split("\n").forEach((line, index): void => {
+    const opener = FENCE.exec(line);
+    if (fence !== null) {
+      if (opener !== null && (opener[1] as string)[0] === fence[0] && (opener[1] as string).length >= fence.length && line.trim() === (opener[1] as string)) {
+        fence = null;
+        at = null;
+      }
+      return;
+    }
+    if (opener !== null) {
+      fence = opener[1] as string;
+      at = index + 1;
+    }
+  });
+  return at;
+}
 
 /** Every line outside a fenced block, with the heading it sits under. */
 export function proseLines(text: string): SourceLine[] {
@@ -109,12 +144,23 @@ export function trailingAnnotation(line: string): Annotation {
   const citations: Citation[] = [];
   const markers: Marker[] = [];
   const malformed: string[] = [];
+  const ruled: string[] = [];
+  const stale: string[] = [];
   let rest = line;
   for (;;) {
     const match = TRAILING.exec(rest);
     if (match === null) break;
     const token = match[1] as string;
     rest = rest.slice(0, match.index);
+    const settled = RULED.exec(token);
+    if (settled !== null) {
+      ruled.unshift(settled[1] as string);
+      continue;
+    }
+    if (STALE.test(token)) {
+      stale.unshift(token);
+      continue;
+    }
     if (token.startsWith("[src:")) {
       const citation = parseCitation(token);
       if (citation === null) malformed.unshift(token);
@@ -125,7 +171,7 @@ export function trailingAnnotation(line: string): Annotation {
     if (marker === null) malformed.unshift(token);
     else markers.unshift(marker);
   }
-  return { citations, markers, malformed };
+  return { citations, markers, malformed, ruled, stale };
 }
 
 const MARKER_ANYWHERE = /\[NEEDS CLARIFICATION:[^\]]*\]|\[NEEDS RULING\]|\[UNVERIFIED\]/g;
@@ -151,12 +197,13 @@ export interface Requirement {
 }
 
 const DEFINITION = /^\s*(?:[-*+]\s+|\d+\.\s+)?(?:\*\*)?(FR|SC|US)-(\d+)(?:\*\*)?\s*[:.–—-]/;
-const STORY_HEADING = /^#{1,6}\s+User Story\s+(\d+)\b/i;
+/** `### User Story 1 - ...` (the pinned Spec Kit template) or `### US-1 — ...` (Hatsu's id grammar). */
+const STORY_HEADING = /^#{1,6}\s+(?:User Story\s+(\d+)\b|US-(\d+)\b)/i;
 
 /** The requirement a line DEFINES (not merely mentions), or null. */
 export function requirementOf(line: string): Requirement | null {
   const story = STORY_HEADING.exec(line);
-  if (story !== null) return { kind: "US", id: `US-${story[1] as string}` };
+  if (story !== null) return { kind: "US", id: `US-${(story[1] ?? story[2]) as string}` };
   const definition = DEFINITION.exec(line);
   if (definition === null) return null;
   return { kind: definition[1] as RequirementKind, id: `${definition[1] as string}-${definition[2] as string}` };

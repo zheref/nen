@@ -17,9 +17,9 @@
 // default it may take.
 
 import { createHash } from "node:crypto";
-import { readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
-import { markersIn, proseLines, requirementOf, trailingAnnotation, type MarkerKind, type SourceLine } from "./lines.js";
+import { readFileSync, realpathSync, statSync } from "node:fs";
+import { isAbsolute, join, relative } from "node:path";
+import { citationsIn, markersIn, proseLines, requirementOf, trailingAnnotation, unclosedFence, type MarkerKind, type SourceLine } from "./lines.js";
 
 export const SPEC_CHECK_CONTRACT = "nen.spec.check/v0.1";
 
@@ -91,7 +91,7 @@ export interface SpecCheckReport {
   readonly path: string;
   readonly files: readonly string[];
   readonly vocabulary: string | null;
-  readonly requirements: { readonly total: number; readonly cited: number; readonly marked: number; readonly FR: number; readonly SC: number; readonly US: number };
+  readonly requirements: { readonly total: number; readonly cited: number; readonly marked: number; readonly ruled: number; readonly stale: number; readonly FR: number; readonly SC: number; readonly US: number };
   readonly markers: { readonly needsClarification: number; readonly needsRuling: number; readonly unverified: number; readonly total: number };
   /** Every open marker in line order, with --markers; null otherwise. */
   readonly open: readonly OpenMarker[] | null;
@@ -120,6 +120,34 @@ export class SpecReadError extends Error {
   }
 }
 
+/** A spec file that resolves outside --repo (a symlink out of the root): a usage refusal, exit 2. */
+export class SpecContainmentError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SpecContainmentError";
+  }
+}
+
+/**
+ * Refuse a path that resolves outside `repo` (as `canon lint` refuses a link
+ * leaving its root): a verdict computed from a file outside the spec
+ * repository would be a verdict about something git never commits.
+ */
+export function assertInsideRepo(repo: string, absolute: string, shown: string): void {
+  let real: string;
+  let root: string;
+  try {
+    real = realpathSync(absolute);
+    root = realpathSync(repo);
+  } catch {
+    return;
+  }
+  const rel = relative(root, real);
+  if (rel === ".." || rel.startsWith(`..${"/"}`) || rel.startsWith("..\\") || isAbsolute(rel)) {
+    throw new SpecContainmentError(`${shown} resolves to ${real}, outside --repo (${root}); a symlink that leaves the spec repository is refused, never read.`);
+  }
+}
+
 export const CONSTITUTION_PATH = ".specify/memory/constitution.md";
 
 /** A caller's term list: one term per line, `#` lines and blanks skipped. */
@@ -127,8 +155,9 @@ export function parseVocabulary(text: string): string[] {
   return [...new Set(text.replace(/\r\n/g, "\n").split("\n").map((line): string => line.trim()).filter((line): boolean => line !== "" && !line.startsWith("#")))];
 }
 
-function readText(repo: string, relative: string): string | null {
-  const absolute = join(repo, relative);
+function readText(repo: string, file: string): string | null {
+  const relative = file;
+  const absolute = join(repo, file);
   let isFile: boolean;
   try {
     isFile = statSync(absolute).isFile();
@@ -137,6 +166,7 @@ function readText(repo: string, relative: string): string | null {
     throw new SpecReadError(`could not read ${relative}: ${(error as Error).message}`);
   }
   if (!isFile) throw new SpecReadError(`${relative} is not a file`);
+  assertInsideRepo(repo, absolute, relative);
   try {
     return readFileSync(absolute, "utf8");
   } catch (error) {
@@ -202,6 +232,7 @@ export function checkSpec(input: CheckInput): SpecCheckReport {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new SpecReadError(`could not read ${input.path}: ${(error as Error).message}`);
     }
     if (!isDir) throw new SpecReadError(`${input.path} is not a folder under --repo`);
+    assertInsideRepo(input.repo, join(input.repo, input.path), input.path);
   }
   const text = readText(input.repo, mainFile);
   if (text === null) throw new SpecReadError(`${mainFile} does not exist; there is nothing to check, which is not the same as nothing found`);
@@ -218,9 +249,23 @@ export function checkSpec(input: CheckInput): SpecCheckReport {
       : productRuleLines(lines).map((line) => ({ line, kind: "RULE" as const, id: null }));
   let cited = 0;
   let marked = 0;
+  let ruledCount = 0;
+  let staleCount = 0;
   const seen = new Map<string, number>();
   for (const { line, kind, id } of held) {
-    const annotation = trailingAnnotation(line.text);
+    let annotation = trailingAnnotation(line.text);
+    // A STORY HEADING MAY CARRY ITS ANNOTATION IN ITS PRIORITY FIELD --
+    // `### US-1 — Title (Priority: [NEEDS RULING])`, Hatsu's spelling -- so a
+    // heading with no trailing group is read for one anywhere on it.
+    if (kind === "US" && annotation.citations.length === 0 && annotation.markers.length === 0 && annotation.malformed.length === 0 && annotation.ruled.length === 0) {
+      const inline = citationsIn(line.text);
+      annotation = {
+        ...annotation,
+        citations: inline.flatMap((entry) => (entry.citation === null ? [] : [entry.citation])),
+        malformed: inline.flatMap((entry) => (entry.citation === null ? [entry.text] : [])),
+        markers: markersIn(line.text),
+      };
+    }
     const label = id ?? "product rule";
     for (const bad of annotation.malformed) {
       add("CRITICAL", "malformed-citation", mainFile, line.number, `${label} ends in '${bad}', which is not '[src: <CODE>:<path>:<l1>-<l2> @ <sha> · declared|observed|inferred]' or a marker`);
@@ -228,13 +273,18 @@ export function checkSpec(input: CheckInput): SpecCheckReport {
     for (const citation of annotation.citations) {
       if (citation.l1 < 1 || citation.l2 < citation.l1) add("CRITICAL", "malformed-citation", mainFile, line.number, `${label} cites lines ${citation.l1}-${citation.l2}, which is not a range`);
     }
-    if (annotation.citations.length === 0 && annotation.markers.length === 0 && annotation.malformed.length === 0) {
-      add("CRITICAL", "uncited", mainFile, line.number, `${label} ends in neither a [src:] citation nor one of [NEEDS CLARIFICATION: …] · [NEEDS RULING] · [UNVERIFIED]`);
+    if (annotation.citations.length === 0 && annotation.markers.length === 0 && annotation.malformed.length === 0 && annotation.ruled.length === 0) {
+      add("CRITICAL", "uncited", mainFile, line.number, `${label} ends in neither a [src:] citation nor one of [NEEDS CLARIFICATION: …] · [NEEDS RULING] · [UNVERIFIED] · [ruled: CL-nnn]`);
+    }
+    if (annotation.stale.length > 0) {
+      staleCount += 1;
+      if (annotation.citations.length === 0) add("HIGH", "stale-without-citation", mainFile, line.number, `${label} carries ${annotation.stale[0] as string} beside no citation; a STALE note is a citation's companion`);
     }
     if (annotation.markers.length > 1) add("HIGH", "several-markers", mainFile, line.number, `${label} ends in ${annotation.markers.length} markers; a line carries exactly one`);
     if (annotation.markers.length > 0 && annotation.citations.length > 0) add("HIGH", "cited-and-marked", mainFile, line.number, `${label} ends in both a citation and a marker; it is one or the other`);
     if (annotation.citations.length > 0) cited += 1;
     else if (annotation.markers.length > 0) marked += 1;
+    else if (annotation.ruled.length > 0) ruledCount += 1;
     const inferred = annotation.citations.some((citation): boolean => citation.tier === "inferred");
     if (inferred && (kind === "SC" || (kind === "FR" && /\bMUST\b/.test(line.text)))) {
       add("CRITICAL", "inferred-tier", mainFile, line.number, `${label} rests on an inferred citation inside ${kind === "SC" ? "a success criterion" : "a MUST"}; an inferred row lives in research.md until a test or a ruling promotes it`);
@@ -267,6 +317,14 @@ export function checkSpec(input: CheckInput): SpecCheckReport {
       }
     }
   }
+  // NOTHING HELD IS NEVER CLEAN (Phinks, delivery round on zheref/nen#498): a
+  // folder whose spec.md defines no FR, SC or story line was held to nothing,
+  // and a fence that runs to the end of the file hid the rest of it.
+  if (input.mode === "folder" && held.length === 0) {
+    add("CRITICAL", "no-held-lines", mainFile, null, "spec.md defines no FR-###, SC-### or story line (User Story n / US-n), so nothing was held to citation-or-marker; an empty check is not a passing one");
+  }
+  const openFence = unclosedFence(text);
+  if (openFence !== null) add("CRITICAL", "unclosed-fence", mainFile, openFence, "a fenced block opened here never closes, so every line after it was read as source data and held to nothing");
   if (input.mode === "constitution") {
     if (!lines.some((line): boolean => /\*\*Version\*\*\s*:/.test(line.text))) add("HIGH", "no-version-line", mainFile, null, "the constitution carries no '**Version**:' line");
     if (held.length === 0) add("LOW", "no-product-rules", mainFile, null, "no list item sits under a 'Product rules' heading, so no rule was held to citation-or-marker");
@@ -315,6 +373,8 @@ export function checkSpec(input: CheckInput): SpecCheckReport {
       total: held.length,
       cited,
       marked,
+      ruled: ruledCount,
+      stale: staleCount,
       FR: held.filter((entry): boolean => entry.kind === "FR").length,
       SC: held.filter((entry): boolean => entry.kind === "SC").length,
       US: held.filter((entry): boolean => entry.kind === "US").length,
@@ -335,7 +395,7 @@ export function checkSpec(input: CheckInput): SpecCheckReport {
 
 export function renderSpecCheck(report: SpecCheckReport): string[] {
   const lines = [
-    `${report.mode} ${report.path}: ${report.requirements.total} requirement line(s) -- ${report.requirements.cited} cited, ${report.requirements.marked} marked (FR ${report.requirements.FR} · SC ${report.requirements.SC} · US ${report.requirements.US})`,
+    `${report.mode} ${report.path}: ${report.requirements.total} requirement line(s) -- ${report.requirements.cited} cited, ${report.requirements.marked} marked, ${report.requirements.ruled} ruled, ${report.requirements.stale} stale (FR ${report.requirements.FR} · SC ${report.requirements.SC} · US ${report.requirements.US})`,
     `markers: ${report.markers.total} open -- ${report.markers.needsClarification} needs-clarification · ${report.markers.needsRuling} needs-ruling · ${report.markers.unverified} unverified`,
     `tasks: ${report.tasks} · vocabulary: ${report.vocabulary ?? "not supplied (vague-term pass not run)"}`,
     `findings: ${SEVERITIES.map((severity): string => `${report.counts[severity]} ${severity}`).join(" · ")}`,
