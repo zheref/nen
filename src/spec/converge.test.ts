@@ -45,7 +45,7 @@ function inventoryAt(sha: string, rows: readonly Record<string, unknown>[] = [])
   return file;
 }
 
-const run = (w: World, inventory: string, ...extra: string[]): Promise<Captured> => spec(["converge", "--folder", w.folder, "--inventory", inventory, "--code", "FX", "--checkouts", w.checkouts, "--date", "2026-10-23", ...extra], w.spec, defaultSeams(), true);
+const run = (w: World, inventory: string, ...extra: string[]): Promise<Captured> => spec(["converge", "--folder", w.folder, "--inventory", inventory, "--code", "FX", "--checkouts", w.checkouts, ...(extra.includes("--date") ? [] : ["--date", "2026-10-23"]), ...extra], w.spec, defaultSeams(), true);
 const read = (w: World, name: string): string => readFileSync(join(w.spec, w.folder, name), "utf8");
 
 describe("nen spec converge", () => {
@@ -85,7 +85,7 @@ describe("nen spec converge", () => {
   });
 
   it("only appends under --write, and a second run on the same inputs changes zero bytes", async () => {
-    const w = world("# Tasks\n\n## Phase 1: Setup\n\n- [x] T001 Build the list for FR-001\n");
+    const w = world("# Tasks\n\n## Phase 1: Setup\n\n- [x] T001 [US1] Build the list for FR-001\n");
     const next = commit(w.member, { "app/List.kt": `new 1\n${numbered("list", 30)}` });
     const inventory = inventoryAt(next);
     const specBefore = read(w, "spec.md");
@@ -99,12 +99,17 @@ describe("nen spec converge", () => {
     const tasks1 = read(w, "tasks.md");
     const short = w.first.slice(0, 10);
     expect(spec1).toBe(specBefore.replace(`@ ${short} · observed]`, `@ ${short} · observed] [STALE @ ${short}]`));
-    expect(tasks1).toBe(`# Tasks\n\n## Phase 1: Setup\n\n- [x] T001 Build the list for FR-001\n\n## Phase 2: Convergence 2026-10-23 @ ${next.slice(0, 12)}\n\n- [ ] T002 [partial] FR-001 — 1 moved at ${next.slice(0, 12)}\n`);
+    expect(tasks1).toBe(`# Tasks\n\n## Phase 1: Setup\n\n- [x] T001 [US1] Build the list for FR-001\n\n## Phase 2: Convergence 2026-10-23\n\nInventory: FX @ ${next.slice(0, 12)}\n\n- [ ] T002 [US1] [platform:FX] [partial] FR-001 — 1 moved at ${next.slice(0, 12)}\n`);
     const second = await run(w, inventory, "--write");
     expect(second.json()).toMatchObject({ action: "none", writes: [] });
     expect((second.json()["citations"] as { marked: boolean }[])[0]?.marked).toBe(true);
     expect(read(w, "spec.md")).toBe(spec1);
     expect(read(w, "tasks.md")).toBe(tasks1);
+    // A later commit changes the cited bytes: the class moves partial -> contradicts, and the new row supersedes T002.
+    const later = commit(w.member, { "app/List.kt": `new 1\n${numbered("list", 30).replace("list 11\n", "list eleven\n")}` });
+    const third = await run(w, inventoryAt(later), "--write", "--date", "2026-10-24");
+    expect(third.json()["action"]).toBe("written");
+    expect(read(w, "tasks.md")).toBe(`${tasks1}\n## Phase 3: Convergence 2026-10-24\n\nInventory: FX @ ${later.slice(0, 12)}\n\n- [ ] T003 [US1] [platform:FX] [contradicts] FR-001 — ${(third.json()["gaps"] as { detail: string }[])[0]?.detail ?? ""} · supersedes T002\n`);
     const check = await spec(["check", "--folder", w.folder], w.spec, defaultSeams(), true);
     expect((check.json()["findings"] as { rule: string }[]).map((finding) => finding.rule)).not.toContain("stale-without-citation");
   });

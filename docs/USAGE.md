@@ -11867,13 +11867,19 @@ requirement with a gap is listed under `claims` and closes nothing.
 `--write` appends **two things and nothing else**: a `[STALE @ <cited sha>]`
 companion right after each moved, changed or vanished citation — the sentence
 and its citation stay byte for byte, and [`spec check`](#nen-spec-check) reads
-the companion as stale — and one `## Phase <N>: Convergence <date> @ <sha12>`
-section at the end of `tasks.md` (created when absent), one open task per gap,
-numbered after the highest `T<nnn>` already there. It never renumbers, never
-deletes, never writes a `supersedes` line (a reversal needs a new id with new
-words, which are the author's). A **second run on the same inputs finds its
-companions and its phase and changes zero bytes**; a folder with no gap is
-left byte-identical.
+the companion as stale — and one `## Phase <N>: Convergence <date>` section
+(SP-9's heading) at the end of `tasks.md` (created when absent). Its first
+body line, `Inventory: <CODE> @ <sha12>`, records the commit read and is the
+key a rerun finds. Then one open task per gap, numbered after the highest
+`T<nnn>` already there, tagged with the requirement's story (`[US<k>]`, from a
+task already naming it) and the member's platform (`[platform:<p>]`, from
+`families[].members[].platform`, else the code), so
+[`spec tasks groups`](#nen-spec-tasks-groups) files it in a story group. When a
+requirement's gap class differs from the last finding recorded for it in an
+earlier convergence row, the new row ends `· supersedes T<nnn>` (SP-10's
+reversal line, computed from the two rows). It never renumbers and never
+deletes. A **second run on the same inputs finds its companions and its phase
+and changes zero bytes**; a folder with no gap is left byte-identical.
 
 **Usage**
 
@@ -11920,7 +11926,7 @@ gaps: specs/007-converge against FX fixture-owner/fixture-app @ 0123456789ab -- 
   unrequested: not computed -- capture/FX/inventory.json does not exist, so there is no earlier capture to tell new rows from old ones
   claim tasks.md:5 ticks FR-001 -- a tick is not evidence; the gap stands
   wrote specs/007-converge/spec.md:3 [STALE @ aaaaaaaaaa]
-  wrote specs/007-converge/tasks.md ## Phase 2: Convergence 2026-10-23 @ 0123456789ab
+  wrote specs/007-converge/tasks.md ## Phase 2: Convergence 2026-10-23
 ```
 (exit 1; the shape of `src/spec/converge.test.ts`, which builds a member
 repository with two commits)
