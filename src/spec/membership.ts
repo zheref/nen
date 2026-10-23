@@ -261,7 +261,7 @@ function gradle(tree: MemberTree, cwd: string): Membership {
   const text = (tree.read(settings) ?? "").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
   if (/\bprojectDir\b/.test(text)) unread.push({ path: settings, reason: "sets a projectDir; nen reads the include list's default module paths only, so a relocated module is not read" });
   const modules = new Set<string>();
-  for (const call of text.matchAll(/\binclude\s*\(?([^)\n]*)\)?/g)) {
+  for (const call of text.matchAll(/\binclude(?![A-Za-z])\s*\(?([^)\n]*)\)?/g)) {
     for (const name of (call[1] as string).matchAll(/["']:?([A-Za-z0-9_.:-]+)["']/g)) modules.add((name[1] as string).replace(/:/g, "/"));
   }
   if (modules.size === 0) unread.push({ path: settings, reason: "includes no module" });
