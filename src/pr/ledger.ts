@@ -21,9 +21,11 @@
 // edited by hand after it was posted reads as `could-not-read` (edited), by
 // name. A one-line summary follows, then the document in a ```json fence.
 //
-// WHOSE COMMENT IS READ (SEC-15). Only one the AUTHENTICATED login wrote: a
-// marked comment by anyone else is counted (`foreign`) and never parsed as the
-// record (AC-7). Read-back text is data -- it is parsed as JSON and checked
+// WHOSE COMMENT IS READ (SEC-15). Only one the AUTHENTICATED login wrote AND
+// that nobody else edited (GitHub's `editor`): a marked comment by anyone
+// else, or edited by anyone else, is counted (`foreign`) and never parsed as
+// the record (AC-7). The digest is unkeyed, so it catches an accidental edit;
+// the editor check is what refuses a deliberate one. Read-back text is data -- it is parsed as JSON and checked
 // against the contract, never executed or rendered.
 
 import { createHash } from "node:crypto";
@@ -167,9 +169,18 @@ function ghJson(seams: Seams, args: readonly string[], what: string): unknown {
   }
 }
 
-/** The authenticated login -- the only author whose marked comment is the record. */
+/**
+ * The authenticated login -- the only author whose marked comment is the
+ * record. An Actions installation token cannot read `user`; the caller there
+ * names its own login with --login (Nobunaga on #518).
+ */
 export function readLogin(seams: Seams): string {
-  const user = ghJson(seams, ["api", "user"], "the authenticated login") as { login?: unknown } | null;
+  let user: { login?: unknown } | null;
+  try {
+    user = ghJson(seams, ["api", "user"], "the authenticated login") as { login?: unknown } | null;
+  } catch (error) {
+    throw new LedgerReadError(`${error instanceof Error ? error.message : String(error)} A token that cannot read 'user' (an Actions installation token) names its own login with --login <name>.`);
+  }
   if (typeof user?.login !== "string" || user.login === "") throw new LedgerReadError("could not read the authenticated login: gh's answer names none.");
   return user.login;
 }
@@ -183,25 +194,52 @@ export function readPrHead(seams: Seams, target: Target, pr: number): string {
 
 export interface PrComment {
   readonly id: number;
+  /** The comment's author. */
   readonly login: string;
+  /** Who last edited it, or null when nobody has (GitHub's `editor`). */
+  readonly editor: string | null;
   readonly body: string;
   readonly url: string;
 }
 
-/** Every conversation comment on the PR, page by page to the end. A short page ends it; a failed page is a read error. */
+/**
+ * The GraphQL read of a PR's conversation comments: the REST list names the
+ * AUTHOR only, and anyone with write access may edit another user's comment
+ * (Feitan on #518, SEC-7), so the EDITOR is read too.
+ */
+export const COMMENTS_QUERY = "query($owner:String!,$name:String!,$number:Int!,$after:String){repository(owner:$owner,name:$name){pullRequest(number:$number){comments(first:100,after:$after){pageInfo{hasNextPage endCursor}nodes{databaseId url body author{login} editor{login}}}}}}";
+
+/** One page's argv; `after` is the previous page's end cursor. */
+export function commentsArgv(target: Target, pr: number, after: string | null): readonly string[] {
+  return ["api", "graphql", "-f", `query=${COMMENTS_QUERY}`, "-F", `owner=${target.owner}`, "-F", `name=${target.repo}`, "-F", `number=${pr}`, ...(after === null ? [] : ["-f", `after=${after}`])];
+}
+
+/** Every conversation comment on the PR, with author and editor, page by page to the end. A failed page is a read error. */
 export function listComments(seams: Seams, target: Target, pr: number, maxPages = 100): readonly PrComment[] {
   const comments: PrComment[] = [];
+  let after: string | null = null;
   for (let page = 1; page <= maxPages; page += 1) {
-    const raw = ghJson(seams, ["api", `repos/${target.slug}/issues/${pr}/comments?per_page=100&page=${page}`], `${target.slug}#${pr}'s comments (page ${page})`);
-    if (!Array.isArray(raw)) throw new LedgerReadError(`could not read ${target.slug}#${pr}'s comments: page ${page} is not a list.`);
-    for (const entry of raw as Record<string, unknown>[]) {
-      const login = (entry["user"] as { login?: unknown } | null)?.login;
-      if (typeof entry["id"] !== "number" || typeof entry["body"] !== "string" || typeof login !== "string") continue;
-      comments.push({ id: entry["id"], login, body: entry["body"], url: typeof entry["html_url"] === "string" ? entry["html_url"] : "" });
+    const raw = ghJson(seams, commentsArgv(target, pr, after), `${target.slug}#${pr}'s comments (page ${page})`) as {
+      data?: { repository?: { pullRequest?: { comments?: { pageInfo?: { hasNextPage?: unknown; endCursor?: unknown }; nodes?: unknown } } | null } | null };
+    } | null;
+    const connection = raw?.data?.repository?.pullRequest?.comments;
+    if (connection === undefined || !Array.isArray(connection.nodes)) throw new LedgerReadError(`could not read ${target.slug}#${pr}'s comments: page ${page} is not a comment list (is it a pull request?).`);
+    for (const node of connection.nodes as Record<string, unknown>[]) {
+      const login = (node["author"] as { login?: unknown } | null)?.login;
+      const editor = (node["editor"] as { login?: unknown } | null)?.login;
+      if (typeof node["databaseId"] !== "number" || typeof node["body"] !== "string" || typeof login !== "string") continue;
+      comments.push({ id: node["databaseId"], login, editor: typeof editor === "string" ? editor : null, body: node["body"], url: typeof node["url"] === "string" ? node["url"] : "" });
     }
-    if (raw.length < 100) return comments;
+    if (connection.pageInfo?.hasNextPage !== true) return comments;
+    if (typeof connection.pageInfo.endCursor !== "string") throw new LedgerReadError(`could not read ${target.slug}#${pr}'s comments: page ${page} names no cursor for the next.`);
+    after = connection.pageInfo.endCursor;
   }
   throw new LedgerReadError(`${target.slug}#${pr} has more than ${maxPages * 100} comments; nen stopped rather than read a partial list as the whole.`);
+}
+
+/** True when `login` authored the comment AND nobody else edited it -- the only comment that is the record. */
+export function isOwn(comment: PrComment, login: string): boolean {
+  return comment.login === login && (comment.editor === null || comment.editor === login);
 }
 
 /** The argv of a post (new comment) or an edit (the existing one); the body travels on stdin as `{ "body": ... }`. */

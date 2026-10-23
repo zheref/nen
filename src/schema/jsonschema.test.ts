@@ -24,6 +24,12 @@ describe("the JSON Schema subset validator (zheref/nen#510)", () => {
     expect(violations.map((v) => v.pointer)).toContain("/findings/0/disposition/state");
   });
 
+  it("follows a $ref through subschema positions only", () => {
+    const schema = { $defs: { a: { properties: { b: { type: "string" } } } }, properties: { x: { $ref: "#/$defs/a/properties/b" } } };
+    expect(validateJsonSchema(schema, { x: "ok" })).toEqual([]);
+    expect(validateJsonSchema(schema, { x: 1 })[0]).toMatchObject({ pointer: "/x", keyword: "type" });
+  });
+
   it("follows local $ref, required, minLength, pattern, minimum, items, anyOf, oneOf, not, additionalProperties", () => {
     const schema = {
       $defs: { name: { type: "string", minLength: 2, pattern: "^[a-z]+$" } },
@@ -53,6 +59,25 @@ describe("the JSON Schema subset validator (zheref/nen#510)", () => {
     [{ type: "thing" }, /not a JSON Schema type/],
     [{ pattern: "(" }, /does not compile/],
     [{ anyOf: [] }, /non-empty array/],
+    [{ required: "id" }, /required must be an array of distinct strings/],
+    [{ required: ["a", "a"] }, /required must be an array of distinct strings/],
+    [{ enum: "a" }, /enum must be a non-empty array/],
+    [{ enum: [] }, /enum must be a non-empty array/],
+    [{ properties: [] }, /properties must be an object of schemas/],
+    [{ properties: "oops" }, /properties must be an object of schemas/],
+    [{ $defs: [] }, /\$defs must be an object of schemas/],
+    [{ minLength: "3" }, /minLength must be a non-negative integer/],
+    [{ maxLength: -1 }, /maxLength must be a non-negative integer/],
+    [{ minItems: 1.5 }, /minItems must be a non-negative integer/],
+    [{ maxItems: "2" }, /maxItems must be a non-negative integer/],
+    [{ minimum: "5" }, /minimum must be a number/],
+    [{ maximum: null }, /maximum must be a number/],
+    [{ type: [] }, /at least one type/],
+    [{ items: [{ type: "string" }] }, /must be an object or a boolean/],
+    [{ properties: { n: { minLength: "3" } } }, /minLength must be a non-negative integer/],
+    [{ examples: [{ format: "x" }], $ref: "#/examples/0" }, /not a subschema position/],
+    [{ $comment: "x", $ref: "#/$comment" }, /not a subschema position/],
+    [{ $ref: "#/%E0" }, /does not decode/],
   ])("refuses a schema it cannot honour %#, rather than skipping the keyword", (schema, message) => {
     expect(() => validateJsonSchema(schema, {})).toThrow(UnsupportedSchemaError);
     expect(() => validateJsonSchema(schema, {})).toThrow(message);

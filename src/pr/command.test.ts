@@ -3193,7 +3193,7 @@ describe("the family's one flag guard (zheref/nen#351)", () => {
       threads: { values: ["target", "pr", "thread", "body-file", "from", "private-names-ignore-file"], booleans: ["dry-run", "skip-private-name-check", "allow-all-ignored"] },
       open: { values: ["target", "base", "title-file", "body-file", "head", "assignee", "private-names-ignore-file"], booleans: ["draft", "dry-run", "skip-private-name-check", "allow-all-ignored"] },
       merge: { values: ["requirements-from", "require-head"], booleans: ["release-unit", "delivery", "run"] },
-      ledger: { values: ["target", "pr", "effort", "findings", "findings-schema", "private-names-ignore-file"], booleans: ["dry-run", "skip-private-name-check", "allow-all-ignored", "restore"], lists: ["proof"] },
+      ledger: { values: ["target", "pr", "effort", "findings", "findings-schema", "login", "private-names-ignore-file"], booleans: ["dry-run", "skip-private-name-check", "allow-all-ignored", "restore"], lists: ["proof"] },
     });
     const threadsRow = PR_SUBCOMMAND_FLAGS["threads"] ?? {};
     const own = new Set([...(threadsRow.values ?? []), ...(threadsRow.booleans ?? [])].filter((flag): boolean => flag !== "target" && flag !== "pr"));

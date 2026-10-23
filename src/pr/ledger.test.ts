@@ -10,7 +10,9 @@ import { runFamily, type Io } from "../index.js";
 import { withPrivateTarget } from "../issue/privacy.testkit.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import { prCommand } from "./command.js";
-import { renderComment, type LedgerSlice } from "./ledger.js";
+import { commentsArgv, renderComment, type LedgerSlice } from "./ledger.js";
+
+const TARGET = { owner: "zheref", repo: "nen", slug: "zheref/nen" };
 
 const HEAD = "a".repeat(40);
 const MOVED = "b".repeat(40);
@@ -27,9 +29,13 @@ function effortRepo(): string {
 
 const pull = (head = HEAD): ScriptedCall => ({ match: "gh api repos/zheref/nen/pulls/7", result: { stdout: JSON.stringify({ number: 7, head: { sha: head } }) } });
 const me: ScriptedCall = { match: "gh api user", result: { stdout: JSON.stringify({ login: "maintainer" }) } };
-const comments = (rows: readonly { id: number; login: string; body: string }[]): ScriptedCall => ({
-  match: "gh api repos/zheref/nen/issues/7/comments?per_page=100&page=1",
-  result: { stdout: JSON.stringify(rows.map((row) => ({ id: row.id, user: { login: row.login }, body: row.body, html_url: `https://github.com/zheref/nen/pull/7#issuecomment-${row.id}` }))) },
+const comments = (rows: readonly { id: number; login: string; body: string; editor?: string }[]): ScriptedCall => ({
+  match: ["gh", ...commentsArgv(TARGET, 7, null)].join(" "),
+  result: {
+    stdout: JSON.stringify({
+      data: { repository: { pullRequest: { comments: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: rows.map((row) => ({ databaseId: row.id, author: { login: row.login }, editor: row.editor === undefined ? null : { login: row.editor }, body: row.body, url: `https://github.com/zheref/nen/pull/7#issuecomment-${row.id}` })) } } } },
+    }),
+  },
 });
 const created: ScriptedCall = { match: "gh api -X POST repos/zheref/nen/issues/7/comments --input -", result: { stdout: JSON.stringify({ html_url: "https://github.com/zheref/nen/pull/7#issuecomment-900" }) } };
 const edited = (id: number): ScriptedCall => ({ match: `gh api -X PATCH repos/zheref/nen/issues/comments/${id} --input -`, result: { stdout: JSON.stringify({ html_url: `https://github.com/zheref/nen/pull/7#issuecomment-${id}` }) } });
@@ -180,5 +186,56 @@ describe("nen pr ledger read (zheref/nen#510)", () => {
     expect(refused.code).toBe(1);
     expect(refused.err).toMatch(/disagrees with the slice/);
     expect((JSON.parse(readFileSync(path, "utf8")) as { phases: unknown[] }).phases).toEqual([]);
+  });
+});
+
+describe("settle round on #518 (Feitan 1, 2, 5; Nobunaga 9, 10)", () => {
+  it("SEC-1: refuses a slice that carries a credential's shape, naming the field and never the value", async () => {
+    const root = effortRepo();
+    // built at runtime from a placeholder, so no literal token sits in the repository
+    const token = ["gh", "p_", "Z".repeat(4), "9".repeat(32)].join("");
+    writeFileSync(join(root, "findings.json"), JSON.stringify({ evidence: `curl -H "Authorization: ${token}"` }));
+    writeFileSync(join(root, "open.schema.json"), JSON.stringify({ type: "object" }));
+    const result = await run([...POST, "--findings", "findings.json", "--findings-schema", "open.schema.json", "--dry-run"], root, [pull(), me, comments([])]);
+    expect(result.code).toBe(1);
+    expect(result.err).toMatch(/findings\.document: GitHub token/);
+    expect(result.err).not.toContain(token);
+    expect(result.out).not.toContain(token);
+  });
+
+  it("SEC-7: a marked comment of ours edited by another login is foreign on read and refused on post", async () => {
+    const root = effortRepo();
+    const body = renderComment(sliceFor());
+    const read = await run([...READ, "--json"], root, [pull(), me, comments([{ id: 55, login: "maintainer", editor: "intruder", body }])]);
+    expect(read.code).toBe(1);
+    expect(JSON.parse(read.out)).toMatchObject({ verdict: "could-not-read", foreign: 1 });
+    const post = await run(POST, root, [pull(), me, comments([{ id: 55, login: "maintainer", editor: "intruder", body }])]);
+    expect(post.code).toBe(1);
+    expect(post.err).toMatch(/last edited by intruder/);
+  });
+
+  it("SEC-8: step argv names the repository as '.', and a --proof outside the repository is refused", async () => {
+    const root = effortRepo();
+    writeFileSync(join(root, ".nen", "phases", "HA%2F12.json"), JSON.stringify({ contract: "nen.phase.ledger/v0.1", effort: "HA/12", phases: [{ ...PHASE, steps: [{ verb: "build", argv: `bun ${root}/src/index.ts`, exitCode: 0, durationMs: 1, stalled: false }] }] }));
+    const result = await run([...POST, "--dry-run", "--json"], root, [pull(), me, comments([])]);
+    const slice = (JSON.parse(result.out) as { slice: LedgerSlice }).slice;
+    expect(slice.phases[0]?.steps?.[0]?.argv).toBe("bun ./src/index.ts");
+    const outside = join(mkdtempSync(join(tmpdir(), "nen-pr-ledger-out-")), "p.json");
+    writeFileSync(outside, "{}");
+    expect((await run([...POST, "--proof", outside], root, [])).code).toBe(2);
+  });
+
+  it("--login names the poster when the token cannot read 'user'", async () => {
+    const root = effortRepo();
+    const result = await run([...READ, "--login", "app[bot]", "--json"], root, [pull(), comments([{ id: 55, login: "app[bot]", body: renderComment(sliceFor()) }])]);
+    expect(result.code).toBe(0);
+    expect(result.seams.calls.some((call) => call.args.join(" ") === "api user")).toBe(false);
+  });
+
+  it("--restore on a stale slice restores and says the exit is 1 because it is stale", async () => {
+    const fresh = mkdtempSync(join(tmpdir(), "nen-pr-ledger-stale-"));
+    const result = await run([...READ, "--restore"], fresh, [pull(MOVED), me, comments([{ id: 55, login: "maintainer", body: renderComment(sliceFor()) }])]);
+    expect(result.code).toBe(1);
+    expect(result.out).toMatch(/restored: .*from a STALE slice/);
   });
 });

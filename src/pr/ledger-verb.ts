@@ -18,7 +18,8 @@
 // the slice's phases as the effort's phase ledger when there is none; a local
 // ledger that disagrees is refused naming both.
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { isAbsolute, relative, sep } from "node:path";
 import { emit, VerbUsageError, type CommandContext } from "../cli/command.js";
 import { readTextFile, resolveAgainstRepo } from "../cli/inputs.js";
 import type { Target } from "../github/target.js";
@@ -26,7 +27,8 @@ import { blockingExit, blocksWrite } from "../issue/privacy.js";
 import { guardPrivateNames, PRIVATE_NAME_FLAGS, readIgnoreFlag } from "../issue/privacyguard.js";
 import { assertEffortId } from "../ledger/effort.js";
 import { legacyLine, locateEffortLedger, resolveEffortHome } from "../ledger/home.js";
-import { PHASE_CONTRACT, readLedger, withLedgerLock, writeLedger } from "../phase/ledger.js";
+import { PHASE_CONTRACT, readLedger, withLedgerLock, writeLedger, type PhaseEntry } from "../phase/ledger.js";
+import { scanContentSecrets } from "../security/secrets.js";
 import { resolveRepoRoot } from "../repo/root.js";
 import { UnsupportedSchemaError, validateJsonSchema } from "../schema/jsonschema.js";
 import { totalsOf } from "../usage/command.js";
@@ -34,6 +36,7 @@ import { readUsageLedger } from "../usage/ledger.js";
 import {
   GITHUB_COMMENT_LIMIT,
   isMarkedFor,
+  isOwn,
   LedgerReadError,
   listComments,
   parseComment,
@@ -51,11 +54,21 @@ import {
 export const LEDGER_ACTIONS = ["post", "read"] as const;
 /** The flags each action reads beyond --target, --pr and --effort. */
 export const LEDGER_ACTION_FLAGS: Readonly<Record<(typeof LEDGER_ACTIONS)[number], { values: readonly string[]; booleans: readonly string[]; lists: readonly string[] }>> = {
-  post: { values: ["findings", "findings-schema", ...PRIVATE_NAME_FLAGS.values], booleans: ["dry-run", ...PRIVATE_NAME_FLAGS.booleans], lists: ["proof"] },
-  read: { values: [], booleans: ["restore"], lists: [] },
+  post: { values: ["findings", "findings-schema", "login", ...PRIVATE_NAME_FLAGS.values], booleans: ["dry-run", ...PRIVATE_NAME_FLAGS.booleans], lists: ["proof"] },
+  read: { values: ["login"], booleans: ["restore"], lists: [] },
 };
 
 export type ReadVerdict = "ok" | "stale" | "could-not-read";
+
+/** --login when given (a token that cannot read `user`), else the authenticated login. */
+function loginFor(context: CommandContext): string {
+  const flag = context.args.values["login"];
+  if (flag !== undefined) {
+    if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?$/.test(flag)) throw new VerbUsageError(`--login '${flag}' is not a GitHub login.`);
+    return flag;
+  }
+  return readLogin(context.seams);
+}
 
 export function ledgerVerb(context: CommandContext, target: Target, pr: number): number {
   const action = context.args.positionals[2];
@@ -114,16 +127,49 @@ class FindingsInvalid extends Error {
 }
 
 function readProof(context: CommandContext, root: string): readonly ProofEntry[] {
-  return (context.args.lists["proof"] ?? []).map((path): ProofEntry => {
-    const full = resolveAgainstRepo(root, path);
+  return (context.args.lists["proof"] ?? []).map((given): ProofEntry => {
+    const full = resolveAgainstRepo(root, given);
+    // REPO-RELATIVE ONLY (Feitan on #518, SEC-8): an absolute path names the
+    // machine's layout (the home directory's user) on a PR anyone may read.
+    const path = relative(root, full).split(sep).join("/");
+    if (path === "" || path.startsWith("..") || isAbsolute(path)) throw new VerbUsageError(`--proof '${given}' is outside --repo; a proof index names files in the repository, as repository-relative paths.`);
     let bytes: Buffer;
     try {
       bytes = readFileSync(full);
     } catch (error) {
-      throw new VerbUsageError(`--proof '${path}' could not be read (${(error as NodeJS.ErrnoException).code ?? String(error)}); a proof index names files that exist.`);
+      throw new VerbUsageError(`--proof '${given}' could not be read (${(error as NodeJS.ErrnoException).code ?? String(error)}); a proof index names files that exist.`);
     }
     return { path, sha256: sha256Hex(bytes), bytes: bytes.length };
   });
+}
+
+/** Every credential shape in the slice, by field (../security/secrets.ts's scanner). */
+function secretHits(slice: LedgerSlice): readonly { field: string; shapes: readonly string[] }[] {
+  const fields: { field: string; text: string }[] = [{ field: "effort", text: slice.effort }];
+  slice.phases.forEach((phase, index): void => {
+    if (phase.note !== null) fields.push({ field: `phases[${index}].note`, text: phase.note });
+    (phase.steps ?? []).forEach((step, at): void => { fields.push({ field: `phases[${index}].steps[${at}].argv`, text: step.argv }); });
+  });
+  if (slice.findings !== null) fields.push({ field: "findings.document", text: JSON.stringify(slice.findings.document) });
+  slice.proof.forEach((entry, index): void => { fields.push({ field: `proof[${index}].path`, text: entry.path }); });
+  return fields.map(({ field, text }) => ({ field, shapes: scanContentSecrets(text) })).filter((hit): boolean => hit.shapes.length > 0);
+}
+
+/** Step argv and notes with the repository root spelt `.` (SEC-8): the comment names no machine's layout. */
+function relativisePhases(phases: readonly PhaseEntry[], root: string): readonly PhaseEntry[] {
+  const roots = [root];
+  try {
+    const real = realpathSync(root);
+    if (real !== root) roots.push(real);
+  } catch {
+    // the root that was resolved is the only spelling there is
+  }
+  const strip = (text: string): string => roots.reduce((out, prefix): string => out.split(prefix).join("."), text);
+  return phases.map((phase): PhaseEntry => ({
+    ...phase,
+    note: phase.note === null ? null : strip(phase.note),
+    ...(phase.steps === undefined ? {} : { steps: phase.steps.map((step) => ({ ...step, argv: strip(step.argv) })) }),
+  }));
 }
 
 function post(context: CommandContext, target: Target, pr: number, effort: string): number {
@@ -146,15 +192,19 @@ function post(context: CommandContext, target: Target, pr: number, effort: strin
     const line = legacyLine(located);
     if (line !== null) context.io.err(`nen pr ledger post: ${line}`);
   }
-  const phases = readLedger(phaseLocated.path, effort).phases;
+  const phases = relativisePhases(readLedger(phaseLocated.path, effort).phases, root);
   const usage = readUsageLedger(usageLocated.path, effort);
   let head: string;
   let login: string;
   let existing: { id: number; body: string; url: string } | null;
   try {
     head = readPrHead(context.seams, target, pr);
-    login = readLogin(context.seams);
+    login = loginFor(context);
     const mine = listComments(context.seams, target, pr).filter((comment): boolean => isMarkedFor(comment.body, effort) && comment.login === login);
+    const tampered = mine.filter((comment): boolean => !isOwn(comment, login));
+    if (tampered.length > 0) {
+      throw new LedgerReadError(`${tampered.map((c): string => c.url).join(", ")}: this login's ledger comment for effort '${effort}' was last edited by ${tampered.map((c): string => c.editor ?? "?").join(", ")}; nen will not edit over another login's edit. Delete it and post again.`);
+    }
     if (mine.length > 1) {
       throw new LedgerReadError(`${target.slug}#${pr} carries ${mine.length} ledger comments for effort '${effort}' by ${login} (${mine.map((c): string => c.url).join(", ")}); nen will not choose which is the record. Delete all but one and post again.`);
     }
@@ -180,6 +230,15 @@ function post(context: CommandContext, target: Target, pr: number, effort: strin
   if (size > GITHUB_COMMENT_LIMIT) {
     context.io.err(`nen pr ledger post: the slice renders to ${size} characters, over GitHub's ${GITHUB_COMMENT_LIMIT}-character comment limit; it is never truncated, so nothing was posted. Post fewer --proof files or a smaller findings file.`);
     emit(context.io, context.json, { contract: PR_LEDGER_CONTRACT, verdict: "too-large", posted: false, size, limit: GITHUB_COMMENT_LIMIT }, []);
+    return 1;
+  }
+  // NO CREDENTIAL'S SHAPE REACHES THE PR (Feitan on #518, SEC-1): the findings,
+  // every phase note and step argv, and the proof paths are scanned, and a hit
+  // refuses the post naming the shape and the field -- never the value.
+  const secrets = secretHits(slice);
+  if (secrets.length > 0) {
+    context.io.err(`nen pr ledger post: the slice carries a credential's shape (${secrets.map((hit): string => `${hit.field}: ${hit.shapes.join(", ")}`).join("; ")}; values redacted); it would be posted to the PR, so nothing was posted.`);
+    emit(context.io, context.json, { contract: PR_LEDGER_CONTRACT, verdict: "secret-shape", posted: false, secrets }, []);
     return 1;
   }
   const guard = guardPrivateNames(context, target, [{ field: "body", text: body }], ignore, "nen pr ledger post");
@@ -224,13 +283,13 @@ function read(context: CommandContext, target: Target, pr: number, effort: strin
   let marked;
   try {
     head = readPrHead(context.seams, target, pr);
-    login = readLogin(context.seams);
+    login = loginFor(context);
     marked = listComments(context.seams, target, pr).filter((comment): boolean => isMarkedFor(comment.body, effort));
   } catch (error) {
     if (!(error instanceof LedgerReadError)) throw error;
     return refuse(error.message);
   }
-  const mine = marked.filter((comment): boolean => comment.login === login);
+  const mine = marked.filter((comment): boolean => isOwn(comment, login));
   const foreign = marked.length - mine.length;
   if (mine.length === 0) return refuse(`${target.slug}#${pr} carries no ledger comment for effort '${effort}' by ${login}${foreign === 0 ? "" : ` (${foreign} by another login, not read)`}.`, { login, foreign });
   if (mine.length > 1) return refuse(`${target.slug}#${pr} carries ${mine.length} ledger comments for effort '${effort}' by ${login}; nen will not choose which is the record.`, { login, foreign });
@@ -262,7 +321,7 @@ function read(context: CommandContext, target: Target, pr: number, effort: strin
       return 1;
     }
     restored = { path: located.path, outcome };
-    lines.push(`${outcome}: ${located.path}`);
+    lines.push(`${outcome}: ${located.path}${verdict === "stale" ? " (from a STALE slice: the phases were restored, and the exit is 1 because the PR moved on since they were posted)" : ""}`);
   }
   emit(context.io, context.json, { contract: PR_LEDGER_CONTRACT, verdict, login, foreign, url: comment.url, slice: parsed.slice, restored }, lines);
   return verdict === "ok" ? 0 : 1;

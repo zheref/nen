@@ -43,20 +43,82 @@ const TYPES = new Set(["null", "boolean", "object", "array", "number", "integer"
 const escape = (token: string): string => token.replace(/~/g, "~0").replace(/\//g, "~1");
 const unescape = (token: string): string => token.replace(/~1/g, "/").replace(/~0/g, "~");
 
-/** Resolve a local `#...` pointer in `root`, or throw UnsupportedSchemaError. */
+/** Keywords whose value is ONE subschema, and those whose value is a map or an array of subschemas. */
+const SUBSCHEMA = new Set(["items", "not", "if", "then", "else", "additionalProperties"]);
+const SUBSCHEMA_MAP = new Set(["properties", "$defs", "definitions"]);
+const SUBSCHEMA_LIST = new Set(["allOf", "anyOf", "oneOf"]);
+
+/**
+ * Resolve a local `#...` pointer in `root`, or throw UnsupportedSchemaError.
+ *
+ * A TARGET MUST BE A SCHEMA THE WALK VISITS (Feitan and Nobunaga on #518): each
+ * step of the pointer must go through a subschema position -- `$defs/<name>`,
+ * `definitions/<name>`, `properties/<name>`, `items`, `not`, `if`, `then`,
+ * `else`, `additionalProperties`, `allOf|anyOf|oneOf/<index>` -- so a `$ref`
+ * into an annotation (`#/examples/0`, `#/$comment`) is refused rather than
+ * evaluated as a schema nobody checked. A pointer that does not decode is the
+ * same refusal (exit 2), never a raw URIError.
+ */
 function resolveRef(root: unknown, ref: string, at: string): { schema: unknown; pointer: string } {
   if (!ref.startsWith("#")) throw new UnsupportedSchemaError(`${at}: $ref '${ref}' is not a local pointer ('#/...'); only references inside the supplied schema are followed.`);
   const path = ref.slice(1);
   let node: unknown = root;
   if (path !== "") {
     if (!path.startsWith("/")) throw new UnsupportedSchemaError(`${at}: $ref '${ref}' is not a JSON pointer.`);
-    for (const raw of path.slice(1).split("/")) {
-      const key = unescape(decodeURIComponent(raw));
+    const tokens = path.slice(1).split("/").map((raw): string => {
+      try {
+        return unescape(decodeURIComponent(raw));
+      } catch {
+        throw new UnsupportedSchemaError(`${at}: $ref '${ref}' does not decode as a JSON pointer.`);
+      }
+    });
+    for (let index = 0; index < tokens.length; index += 1) {
+      const key = tokens[index] as string;
+      const isSchemaStep = SUBSCHEMA.has(key);
+      const isKeyedStep = SUBSCHEMA_MAP.has(key) || SUBSCHEMA_LIST.has(key);
+      if (!isSchemaStep && !isKeyedStep) throw new UnsupportedSchemaError(`${at}: $ref '${ref}' points through '${key}', which is not a subschema position; a $ref must name a schema this validator checks ($defs, definitions, properties, items, ...).`);
       if (typeof node !== "object" || node === null || !Object.hasOwn(node, key)) throw new UnsupportedSchemaError(`${at}: $ref '${ref}' resolves to nothing.`);
       node = (node as Record<string, unknown>)[key];
+      if (isKeyedStep) {
+        index += 1;
+        const name = tokens[index];
+        if (name === undefined || typeof node !== "object" || node === null || !Object.hasOwn(node, name)) throw new UnsupportedSchemaError(`${at}: $ref '${ref}' resolves to nothing.`);
+        node = (node as Record<string, unknown>)[name];
+      }
     }
   }
   return { schema: node, pointer: path };
+}
+
+const isCount = (value: unknown): boolean => typeof value === "number" && Number.isInteger(value) && value >= 0;
+
+/** Why a supported keyword's VALUE is malformed, or null (draft 2020-12's own value rules). */
+function valueProblem(key: string, value: unknown): string | null {
+  switch (key) {
+    case "required":
+      return Array.isArray(value) && value.every((item): boolean => typeof item === "string") && new Set(value).size === value.length ? null : "required must be an array of distinct strings";
+    case "enum":
+      return Array.isArray(value) && value.length > 0 ? null : "enum must be a non-empty array";
+    case "properties":
+    case "$defs":
+    case "definitions":
+      return typeof value === "object" && value !== null && !Array.isArray(value) ? null : `${key} must be an object of schemas`;
+    case "minItems":
+    case "maxItems":
+    case "minLength":
+    case "maxLength":
+      return isCount(value) ? null : `${key} must be a non-negative integer`;
+    case "minimum":
+    case "maximum":
+      return typeof value === "number" && Number.isFinite(value) ? null : `${key} must be a number`;
+    case "type": {
+      const types = Array.isArray(value) ? value : [value];
+      if (types.length === 0) return "type must name at least one type";
+      return types.every((type): boolean => typeof type === "string" && TYPES.has(type)) ? null : `'${JSON.stringify(value)}' is not a JSON Schema type`;
+    }
+    default:
+      return null;
+  }
 }
 
 /** Walk the schema once, refusing every keyword this validator does not assert or ignore. */
@@ -70,16 +132,18 @@ export function assertSupportedSchema(root: unknown): void {
     for (const [key, value] of Object.entries(schema as Record<string, unknown>)) {
       const here = `${at}/${escape(key)}`;
       if (ANNOTATIONS.has(key)) {
-        if ((key === "$defs" || key === "definitions") && typeof value === "object" && value !== null) {
+        if (key === "$defs" || key === "definitions") {
+        const problem = valueProblem(key, value);
+        if (problem !== null) throw new UnsupportedSchemaError(`${here}: ${problem}.`);
           for (const [name, sub] of Object.entries(value as Record<string, unknown>)) walk(sub, `${here}/${escape(name)}`);
         }
         continue;
       }
       if (!ASSERTIONS.has(key)) throw new UnsupportedSchemaError(`${here}: keyword '${key}' is not one this validator asserts; refused rather than skipped, since a skipped keyword is a rule nobody enforces.`);
-      if (key === "type") {
-        const types = Array.isArray(value) ? value : [value];
-        for (const type of types) if (typeof type !== "string" || !TYPES.has(type)) throw new UnsupportedSchemaError(`${here}: '${String(type)}' is not a JSON Schema type.`);
-      }
+      // A KEYWORD WITH A MALFORMED VALUE IS REFUSED TOO (Nobunaga and Feitan on
+      // #518): `required: "id"` or `enum: "a"` would otherwise assert nothing.
+      const problem = valueProblem(key, value);
+      if (problem !== null) throw new UnsupportedSchemaError(`${here}: ${problem}.`);
       if (key === "pattern") {
         if (typeof value !== "string") throw new UnsupportedSchemaError(`${here}: pattern must be a string.`);
         try {

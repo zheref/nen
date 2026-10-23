@@ -191,8 +191,8 @@ PRIVATE-NAME FLAGS (zheref/nen#363): [--skip-private-name-check]
   stdin ('--body-file -'), never the path.
 nen pr merge <n|owner/name#n|CODE#n> --release-unit --requirements-from <path> --repo <path> [--run] [--json]
 nen pr merge <n|owner/name#n|CODE#n> --delivery --requirements-from <path> --repo <path> [--require-head <sha>] [--run] [--json]
-nen pr ledger post --target <owner/name> --pr <n> --effort <id> [--findings <path> --findings-schema <path>] [--proof <path>]... [--dry-run] [--repo <path>] [--json] [PRIVATE-NAME FLAGS]
-nen pr ledger read --target <owner/name> --pr <n> --effort <id> [--restore] [--repo <path>] [--json]
+nen pr ledger post --target <owner/name> --pr <n> --effort <id> [--findings <path> --findings-schema <path>] [--proof <path>]... [--login <name>] [--dry-run] [--repo <path>] [--json] [PRIVATE-NAME FLAGS]
+nen pr ledger read --target <owner/name> --pr <n> --effort <id> [--restore] [--login <name>] [--repo <path>] [--json]
 
 Flags are PER SUBCOMMAND (zheref/nen#351). Every subcommand refuses, at exit
 2 and before any gh call, each flag it does not read -- another
@@ -709,23 +709,29 @@ ledger:
   The phases and usage come from the effort's durable ledgers
   (<git-common-dir>/.nen/phases|usage/).
   post: validates --findings against --findings-schema (the caller's own JSON
-    Schema; nen carries no consumer's contract; a keyword nen does not assert
-    is refused, exit 2), hashes each --proof file, runs the private-name
-    guard, then posts a new comment, or EDITS this login's one marked comment
-    for the effort in place. Verdicts: posted | updated | unchanged (the same
+    Schema; nen carries no consumer's contract; a keyword nen does not assert,
+    a supported keyword with a malformed value, or a $ref outside subschema
+    positions is refused, exit 2), hashes each --proof file (repo-relative;
+    outside --repo is exit 2), writes the repository root as '.' in notes and
+    step argv, refuses a credential's shape anywhere in the slice
+    (secret-shape, exit 1, the field named), runs the private-name guard,
+    then posts a new comment, or EDITS this login's one marked comment for
+    the effort in place. The comment is as visible as the PR. Verdicts: posted | updated | unchanged (the same
     bytes are already there) | dry-run (prints the gh call and the body,
     writes nothing) | findings-invalid (exit 1, the first failing JSON pointer
     named, nothing posted) | too-large (exit 1: over GitHub's ${GITHUB_COMMENT_LIMIT}-
     character limit, both sizes named, never truncated) | refused (exit 4,
     the private-name guard). Two marked comments by this login is exit 1.
-  read: the one marked comment the AUTHENTICATED login wrote for the effort;
-    marked comments by any other login are counted (foreign: n) and never
-    read. Verdicts: ok (exit 0: its head is the PR's head) | stale (exit 1:
+  read: the one marked comment the AUTHENTICATED login (or --login, for a
+    token that cannot read 'user') wrote for the effort AND nobody else
+    edited; marked comments by any other author or editor are counted
+    (foreign: n) and never read. Verdicts: ok (exit 0: its head is the PR's head) | stale (exit 1:
     the PR moved on) | could-not-read (exit 1: none, two, edited -- the
     digest does not match -- or not this contract). --restore writes the
     slice's phases as the effort's phase ledger when there is none
     ('restored'), 'unchanged' when it agrees, and refuses (exit 1, nothing
-    overwritten) one that disagrees, naming both.
+    overwritten) one that disagrees, naming both. A stale slice IS restored
+    and still exits 1.
   --json: { contract, verdict, ... } (post: posted, url, size, slice,
   privateNameCheck; read: login, foreign, url, slice, restored).
 

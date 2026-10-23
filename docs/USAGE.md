@@ -984,7 +984,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`pr`](#family-pr) | [`nen pr mark-ready`](#nen-pr-mark-ready) | moves ONE existing draft pull request out of draft through GitHub's `markPullRequestReadyForReview` mutation, after certifying it is an open PR at the pinned head, and reports success only on a not-draft read back — never the CON-32 verdict, which stays `pr ready`'s | github (gh api graphql: one certifying read; the mutation and a read back unless --dry-run) | yes |
 | [`pr`](#family-pr) | [`nen pr threads`](#nen-pr-threads) | a pull request's review threads: list them all (paginated to completion, with path, line, author, first comment and url), reply to one, resolve one, or settle a batch from one file | github (gh api graphql: one read walk; one mutation for reply/resolve, one reply and one resolve per entry for settle, unless --dry-run) | yes |
 | [`pr`](#family-pr) | [`nen pr open`](#nen-pr-open) | open exactly one pull request from a head the remote already holds at the local sha, refusing an unpushed head at exit 2; one already open for the head against the same base is returned as `opened: existing` at exit 0, against another base at exit 1 | git (symbolic-ref, rev-parse, ls-remote), github (gh pr list always; gh pr create unless --dry-run) | yes |
-| [`pr`](#family-pr) | [`nen pr ledger`](#nen-pr-ledger) | post an effort's ledger slice (phases, usage totals, schema-checked findings, proof index; `nen.pr.ledger/v0.1`) as ONE PR comment, edited in place on a re-post; read it back from the authenticated login's comment only (`ok` / `stale` / `could-not-read`), and `--restore` the phase ledger on a fresh clone | github (gh api pulls, user, issues/comments; POST or PATCH a comment unless --dry-run), `<git-common-dir>/.nen/phases|usage/`, the --findings, --findings-schema and --proof files | yes |
+| [`pr`](#family-pr) | [`nen pr ledger`](#nen-pr-ledger) | post an effort's ledger slice (phases, usage totals, schema-checked findings, proof index; `nen.pr.ledger/v0.1`) as ONE PR comment, edited in place on a re-post; read it back from the authenticated login's comment only (`ok` / `stale` / `could-not-read`), and `--restore` the phase ledger on a fresh clone | github (gh api pulls, user, graphql comments with author and editor; POST or PATCH a comment unless --dry-run), `<git-common-dir>/.nen/phases|usage/`, the --findings, --findings-schema and --proof files | yes |
 | [`pr`](#family-pr) | [`nen pr merge`](#nen-pr-merge) | the bounded merge, two forms. `--release-unit`: `pr ready` (in-process) + head pin + `pr body-check` (live body, one fetch) + `release unit-check` (policy from the PR's base) + whose-pr. `--delivery`: a run's own PR into a non-main, unprotected base — a protected base is refused by ruling (exit 2), then base + `pr ready` + head pin + `pr body-check` + whose-pr (viewer and run-form head). Every gate must pass; `gh pr merge --merge --match-head-commit` only under `--run` | github (gh pr view, gh repo view, gh pr list, gh api contents/trees/user/branches/rules, gh pr merge unless plan-only), nen/gates.json, nen/workflow.json, nen/repos.json (a `CODE#n` ref) | yes |
 | [`gate`](#family-gate) | [`nen gate derive`](#nen-gate-derive) | derive G2 vs G4 from a changed-file set against two caller-supplied path sets | git diff (for --range), no schema file -- path sets are flags | yes |
 | [`split`](#family-split) | [`nen split verify`](#nen-split-verify) | prove the union of per-axis branch diffs equals one original diff | caller-supplied --original/--branches diff files, no git/gh | yes |
@@ -3717,12 +3717,20 @@ model, both read from the [durable home](#effort-ids-and-the-ledgers-durable-hom
 comment is the marker line `<!-- nen:ledger effort=<encoded id> sha256=<digest> -->` (the digest is of the
 fenced JSON text), a one-line summary, and the document in a ```` ```json ```` fence.
 
+**What the comment carries, and who sees it** (SEC-8). Everyone who can read the pull request reads the
+comment, so on a public repository it is public. It carries the effort id, the PR's head commit, every
+phase entry (name, instants, duration, exit, surface, model alias, dial, note, and each `nen shu` step's
+argv), the usage ledger's token and minute totals per surface and model, the findings document verbatim,
+and each proof file's repository-relative path, sha256 and size. The repository root inside a note or a
+step argv is written `.`, so no absolute local path (and no home-directory user name) reaches it. A
+credential's shape anywhere in the findings, a note, a step argv or a proof path refuses the post.
+
 **Usage**
 
 ```text
 nen pr ledger post --target <owner/name> --pr <n> --effort <id> [--findings <path> --findings-schema <path>]
-                   [--proof <path>]... [--dry-run] [--repo <path>] [--json] [PRIVATE-NAME FLAGS]
-nen pr ledger read --target <owner/name> --pr <n> --effort <id> [--restore] [--repo <path>] [--json]
+                   [--proof <path>]... [--login <name>] [--dry-run] [--repo <path>] [--json] [PRIVATE-NAME FLAGS]
+nen pr ledger read --target <owner/name> --pr <n> --effort <id> [--restore] [--login <name>] [--repo <path>] [--json]
 ```
 
 **Arguments**
@@ -3733,23 +3741,27 @@ nen pr ledger read --target <owner/name> --pr <n> --effort <id> [--restore] [--r
 | `--pr <n>` | yes | The pull request. | Read live (`gh api repos/<o>/<n>/pulls/<n>`); its head is the slice's `head`. |
 | `--effort <id>` | yes | The effort whose slice this is. | The [one effort-id grammar](#effort-ids-and-the-ledgers-durable-home); exit 2 otherwise. |
 | `--findings <path>` | post, with `--findings-schema` | The caller's review findings document. | Posted verbatim once it passes the schema. One without the other is exit 2. |
-| `--findings-schema <path>` | post, with `--findings` | The caller's own JSON Schema for it (nen carries no consumer's contract). | A **subset** of draft 2020-12 is asserted (`type`, `enum`, `const`, `required`, `properties`, `additionalProperties`, `items`, `minItems`, `maxItems`, `minLength`, `maxLength`, `pattern`, `minimum`, `maximum`, `allOf`, `anyOf`, `oneOf`, `not`, `if`/`then`/`else`, local `$ref`); annotations are accepted; **any other keyword, `format` included, is refused at exit 2** rather than skipped. |
-| `--proof <path>` | no, repeatable | A file to index: `{ path, sha256, bytes }`. | Relative to `--repo`; unreadable is exit 2. |
+| `--findings-schema <path>` | post, with `--findings` | The caller's own JSON Schema for it (nen carries no consumer's contract). | A **subset** of draft 2020-12 is asserted (`type`, `enum`, `const`, `required`, `properties`, `additionalProperties`, `items`, `minItems`, `maxItems`, `minLength`, `maxLength`, `pattern`, `minimum`, `maximum`, `allOf`, `anyOf`, `oneOf`, `not`, `if`/`then`/`else`, local `$ref`); annotations are accepted. Refused at exit 2 rather than skipped: **any other keyword** (`format` included); **a supported keyword whose value is malformed** (`required` not an array of distinct strings, `enum` not a non-empty array, `properties`/`$defs` not an object, a `min*`/`max*` length or count that is not a non-negative integer, a `minimum`/`maximum` that is not a number, a tuple `items`); and **a `$ref` that does not point through subschema positions** (`$defs`/`definitions`/`properties/<name>`, `items`, `not`, `if`, `then`, `else`, `additionalProperties`, `allOf`/`anyOf`/`oneOf/<i>`), so `#/examples/0` is refused, as is a pointer that does not decode. |
+| `--proof <path>` | no, repeatable | A file to index: `{ path, sha256, bytes }`. | Relative to `--repo`, recorded repository-relative; a path outside `--repo` (absolute or `../`) or an unreadable file is exit 2. |
+| `--login <name>` | no | The login whose comment is the record, instead of `gh api user`. | For a token that cannot read `user` (an Actions installation token: `app-slug[bot]`). A value that is not a login is exit 2. |
 | `--dry-run` | no (post) | Print the `gh` call and the body; write nothing. | The reads and the private-name guard still run. |
-| `--restore` | no (read) | Write the slice's phases as the effort's phase ledger. | Only where none exists (`restored`), `unchanged` where it agrees; a local ledger that disagrees is exit 1 naming both, nothing overwritten. |
+| `--restore` | no (read) | Write the slice's phases as the effort's phase ledger. | Only where none exists (`restored`), `unchanged` where it agrees; a local ledger that disagrees is exit 1 naming both, nothing overwritten. On a **stale** slice the phases ARE restored and the exit is still 1 (stale); the line says so. |
 
-**post**: reads the PR's head, the authenticated login (`gh api user`) and every conversation comment,
-page by page. With no marked comment of **this login** for the effort it posts one (`POST
+**post**: reads the PR's head, the authenticated login (`gh api user`, or `--login`) and every
+conversation comment with its author and last **editor** (`gh api graphql`, page by page). With no marked comment of **this login** for the effort it posts one (`POST
 .../issues/<n>/comments`); with one it **edits it in place** (`PATCH .../issues/comments/<id>`); with the
 same marker digest already there it writes nothing (`unchanged`). Two marked comments by this login is
-exit 1: nen will not choose. Verdicts: `posted` · `updated` · `unchanged` · `dry-run` (exit 0) ·
-`findings-invalid` (exit 1, the first failing JSON pointer named, nothing posted) · `too-large` (exit 1: the
+exit 1: nen will not choose; so is this login's comment last edited by another login. Verdicts: `posted` · `updated` · `unchanged` · `dry-run` (exit 0) ·
+`findings-invalid` (exit 1, the first failing JSON pointer named, nothing posted) · `secret-shape` (exit 1:
+a credential's shape in the slice, the shape and the field named, never the value, nothing posted) · `too-large` (exit 1: the
 rendered comment is over GitHub's 65,536-character limit, both sizes named, **never truncated**) ·
 `refused` (exit 4, the [private-name guard](#the-private-name-guard)). A GitHub read or write that fails is
 exit 1.
 
-**read**: only a marked comment the **authenticated login** wrote is the record (SEC-15: read-back text is
-data); a marked comment by any other login is counted in `foreign` and never parsed. Verdicts: `ok` (exit
+**read**: only a marked comment the **authenticated login** wrote and **nobody else edited** is the record
+(SEC-15: read-back text is data; SEC-7: anyone with write access can edit another's comment, and the
+digest is unkeyed, so it catches an accidental edit while the editor check refuses a deliberate one); a
+marked comment by any other login, or edited by one, is counted in `foreign` and never parsed. Verdicts: `ok` (exit
 0: the recorded head is the PR's head) · `stale` (exit 1: the PR moved on since the slice was posted) ·
 `could-not-read` (exit 1: no such comment, two of them, a marker digest that does not match — the comment
 was **edited** — or a document that is not this contract's), each with its reason. `could-not-read` is never
