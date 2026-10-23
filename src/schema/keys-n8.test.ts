@@ -4,10 +4,10 @@
 // (HR-16, zheref/nen#453).
 
 import { describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describeContract, parseContract, type RepositoryContract } from "./contract.js";
+import { describeContract, findPrecedenceRestatements, parseContract, type RepositoryContract } from "./contract.js";
 import { parseRepoRegistry, type RepoRegistry } from "./repos.js";
 import { checkTaxonomy, type SchemaCheck } from "./taxonomy.js";
 import { parseWorkflow } from "./workflow.js";
@@ -68,6 +68,84 @@ describe("nen/contract.json precedence (HR-1)", () => {
 
   it("refuses a root key one edit from precedence instead of preserving it unread", () => {
     expect(() => parse({ mechanical: { changelog: ["CHANGELOG.md"] }, precedense: ["handbooks"] })).toThrow(/precedense.*one edit from 'precedence'/);
+  });
+});
+
+// Hatsu's committed restatement, docs/WORKFLOW.md lines 12-14 on its
+// integration branch (2026-10-23): one line-wrapped sentence.
+const HATSU_WORKFLOW = [
+  "**Canon precedence. When two canon texts disagree, the higher one wins, in the order of the",
+  "`precedence` key of [`../nen/contract.json`](../nen/contract.json), which wins over this copy:**",
+  "`skill.hardLimit` **>** `roster.ruling` **>** `nen/decisions.json` **>** `docs/WORKFLOW.md` **>**",
+  "`docs/PROCESS.md` **>** `akatsuki.CON` **>** `handbooks`. The key's `$precedence` comment names each",
+  "entry.",
+  "",
+].join("\n");
+
+describe("nen/contract.json precedenceRestatedIn (zheref/nen#474, HR-1)", () => {
+  const parse = (value: unknown): RepositoryContract => parseContract("<doc>", "nen", value);
+
+  it("reads the files and refuses a list with no precedence, an empty list, a repeat, and a path leaving the root", () => {
+    expect(parse({ precedence: HR1, precedenceRestatedIn: ["docs/WORKFLOW.md"] }).precedenceRestatedIn).toEqual(["docs/WORKFLOW.md"]);
+    expect(parse({ precedence: HR1 }).precedenceRestatedIn).toBeNull();
+    expect(() => parse({ dependency: { minimum: "0.26", pinned_ref: "v0.26.0" }, precedenceRestatedIn: ["a.md"] })).toThrow(/precedenceRestatedIn.*declares no 'precedence'/);
+    expect(() => parse({ precedence: HR1, precedenceRestatedIn: [] })).toThrow(/precedenceRestatedIn.*empty array/);
+    expect(() => parse({ precedence: HR1, precedenceRestatedIn: ["a.md", "a.md"] })).toThrow(/precedenceRestatedIn\[1\].*repeats/);
+    for (const bad of ["../x.md", "/abs.md", "a//b.md"]) expect(() => parse({ precedence: HR1, precedenceRestatedIn: [bad] }), bad).toThrow(/precedenceRestatedIn\[0\].*repository-relative/);
+    expect(describeContract(parse({ precedence: HR1, precedenceRestatedIn: ["docs/WORKFLOW.md"] }))).toMatch(/; restated in docs\/WORKFLOW\.md\)$/);
+  });
+
+  it("finds Hatsu's wrapped restatement on its line, and none inside a fence", () => {
+    expect(findPrecedenceRestatements(HATSU_WORKFLOW)).toEqual([{ line: 3, sequence: HR1 }]);
+    expect(findPrecedenceRestatements("```\n`a` **>** `b`\n```\n")).toEqual([]);
+    expect(findPrecedenceRestatements(HATSU_WORKFLOW.replace(/\n/g, "\r\n"))).toEqual([{ line: 3, sequence: HR1 }]);
+  });
+});
+
+describe("nen schema check's nen/contract.json#precedenceRestatedIn row (zheref/nen#474)", () => {
+  function repo(contract: unknown, files: Record<string, string>): string {
+    const root = mkdtempSync(join(tmpdir(), "nen-prec-"));
+    mkdirSync(join(root, "nen"));
+    writeFileSync(join(root, "nen", "contract.json"), JSON.stringify(contract));
+    for (const [file, text] of Object.entries(files)) {
+      mkdirSync(join(root, file, ".."), { recursive: true });
+      writeFileSync(join(root, file), text);
+    }
+    return root;
+  }
+  const FILE = "nen/contract.json#precedenceRestatedIn";
+  const row = (root: string): SchemaCheck | undefined => checkTaxonomy({ repoFlag: root }).checks.find((check) => check.file === FILE);
+  const declared = { precedence: HR1, precedenceRestatedIn: ["docs/WORKFLOW.md"] };
+
+  it("passes Hatsu's committed restatement, and adds no row when the key is undeclared", () => {
+    expect(row(repo(declared, { "docs/WORKFLOW.md": HATSU_WORKFLOW }))).toMatchObject({ ok: true, required: false, detail: "1 restatement file agrees with precedence: docs/WORKFLOW.md" });
+    expect(row(repo({ precedence: HR1 }, {}))).toBeUndefined();
+  });
+
+  it("FAILS, required, a drifted restatement, naming the file and line", () => {
+    const drifted = HATSU_WORKFLOW.replace("`roster.ruling` **>** `nen/decisions.json`", "`nen/decisions.json` **>** `roster.ruling`");
+    const found = row(repo(declared, { "docs/WORKFLOW.md": drifted }));
+    expect(found).toMatchObject({ ok: false, required: true });
+    expect(found?.detail).toMatch(/precedenceRestatedIn.*docs\/WORKFLOW\.md:3: restates .* drifted from precedence \(position 2 reads 'nen\/decisions\.json' where the array has 'roster\.ruling'\)/);
+    const short = row(repo(declared, { "docs/WORKFLOW.md": "`skill.hardLimit` **>** `roster.ruling`\n" }));
+    expect(short?.detail).toMatch(/docs\/WORKFLOW\.md:1: .*stops after 2 of 7 sources/);
+  });
+
+  it("FAILS, required, a declared file that restates nothing, is absent, or resolves outside the root", () => {
+    expect(row(repo(declared, { "docs/WORKFLOW.md": "no order here\n" }))?.detail).toMatch(/docs\/WORKFLOW\.md: restates no order/);
+    expect(row(repo(declared, {}))).toMatchObject({ ok: false, required: true });
+    expect(row(repo(declared, {}))?.detail).toMatch(/docs\/WORKFLOW\.md: could not read \(ENOENT\)/);
+    const outside = mkdtempSync(join(tmpdir(), "nen-prec-out-"));
+    writeFileSync(join(outside, "W.md"), HATSU_WORKFLOW);
+    const root = repo(declared, {});
+    mkdirSync(join(root, "docs"));
+    symlinkSync(join(outside, "W.md"), join(root, "docs", "WORKFLOW.md"));
+    expect(row(root)?.detail).toMatch(/could not read -- it resolves outside the repository/);
+  });
+
+  it("fails the whole report through the required row", () => {
+    const report = checkTaxonomy({ repoFlag: repo(declared, { "docs/WORKFLOW.md": "none\n" }) });
+    expect(report.checks.find((check) => check.file === FILE)?.required).toBe(true);
   });
 });
 

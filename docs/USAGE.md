@@ -574,6 +574,24 @@ the list and never applies it. The contract row of `schema check` prints it as
 `precedence (<n> sources: a > b > …)`. A file declaring only `precedence` is a
 readable contract.
 
+**Prose restatements (`precedenceRestatedIn`, [#474](https://github.com/zheref/nen/issues/474)).**
+Optional, beside `precedence`: the repository-relative files that restate the
+order in prose, for example `"precedenceRestatedIn": ["docs/WORKFLOW.md"]`. A
+restatement has one fixed shape: a run of two or more code spans joined by
+`**>**`, on one line or wrapped across several (Hatsu's
+`` `skill.hardLimit` **>** `roster.ruling` **>** … ``), read outside fenced
+code with CRLF read as LF. The key names the files, so nen never guesses which
+prose is a restatement. `schema check` refuses by pointer a list with no
+`precedence` beside it, an empty list, a repeated file, and a path that is
+absolute or climbs with `..`. It then adds the row
+`nen/contract.json#precedenceRestatedIn` under the contract row, **only when
+the key is declared**. The row reads each file and FAILS, required, naming the
+file and line, when a run's sequence differs from the array
+(`docs/WORKFLOW.md:13: restates a > c > … -- drifted from precedence (position 2 reads 'c' where the array has 'b')`),
+when a file carries no run, and when a file could not be read (absent, not
+UTF-8, or resolving outside the repository). An unread file is never a pass.
+The contract row adds `; restated in <files>` to its precedence summary.
+
 #### Product families (`families[]`)
 
 **Optional, in `nen/repos.json` ([#453](https://github.com/zheref/nen/issues/453); Hatsu's

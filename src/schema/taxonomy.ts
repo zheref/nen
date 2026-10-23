@@ -19,12 +19,12 @@
 // times a verb happened to ask, and a schema file does not become valid by being
 // re-read.
 
-import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, statSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { MARKER_FILE, parseMarker } from "../stop/marker.js";
 import { assertRepoRoot, type RepoRootOptions } from "../repo/root.js";
 import { loadColorVocabulary, type ColorVocabulary } from "./colors.js";
-import { describeContract, loadContract, withinOneEdit, type DeployTarget } from "./contract.js";
+import { describeContract, loadContract, precedenceRestatementFindings, withinOneEdit, type DeployTarget } from "./contract.js";
 import { GatesDuplicateKeyError, GatesUnknownKeyError, loadGateIdentities, pointerSegment, visibleKey, type GateIdentities } from "./gates.js";
 import { loadLabelTaxonomy, type LabelTaxonomy } from "./labels.js";
 import { loadRepoRegistry, type RepoRegistry } from "./repos.js";
@@ -458,6 +458,66 @@ function pointerCheck(root: string, pointer: string, describe: (workflow: Workfl
 // override is printed escaped, never raw.
 const DEFAULT_TARGET_POINTER = "deploy.defaultTarget";
 
+/**
+ * The `precedence` restatement row (zheref/nen#474, Hatsu HR-1): every file
+ * `precedenceRestatedIn` names, read and held to the array. A FAIL-capable
+ * pointer row like `deploy.defaultTarget`'s, because it checks the contract
+ * against second files: drift, a file restating nothing, and a file that
+ * could not be read (absent, outside the root, not UTF-8) are each a required
+ * FAIL naming the file -- an unread file is never a parity pass. THE ROW
+ * APPEARS ONLY WHEN THE KEY IS DECLARED, so the report a repository without it
+ * reads is unchanged row for row.
+ */
+function precedenceRestatementCheck(root: string): SchemaCheck | null {
+  const resolved = resolveSchemaFile(root, CONTRACT_FILE);
+  const row = (ok: boolean, required: boolean, detail: string): SchemaCheck => ({
+    file: `${resolved.relative}#precedenceRestatedIn`,
+    path: resolved.path,
+    ok,
+    detail,
+    required,
+    legacy: false,
+    note: null,
+  });
+  let precedence: readonly string[] | null;
+  let files: readonly string[] | null;
+  try {
+    const contract = loadContract(root);
+    precedence = contract.precedence;
+    files = contract.precedenceRestatedIn;
+  } catch (error) {
+    // Absent or malformed: the contract row already says so, and no
+    // restatement is declared that this row could hold to anything.
+    return null;
+  }
+  if (precedence === null || files === null) return null;
+  const findings: string[] = [];
+  let realRoot: string;
+  try {
+    realRoot = realpathSync(root);
+  } catch {
+    realRoot = root;
+  }
+  for (const file of files) {
+    let text: string;
+    try {
+      const real = realpathSync(join(root, file));
+      if (real !== realRoot && !real.startsWith(`${realRoot}/`)) {
+        findings.push(`${file}: could not read -- it resolves outside the repository`);
+        continue;
+      }
+      text = new TextDecoder("utf-8", { fatal: true }).decode(readFileSync(real));
+    } catch (error) {
+      const code = error !== null && typeof error === "object" && "code" in error ? String((error as { code: unknown }).code) : "not UTF-8";
+      findings.push(`${file}: could not read (${code})`);
+      continue;
+    }
+    findings.push(...precedenceRestatementFindings(file, text, precedence));
+  }
+  if (findings.length === 0) return row(true, false, `${files.length} restatement file${files.length === 1 ? " agrees" : "s agree"} with precedence: ${files.join(", ")}`);
+  return row(false, true, new SchemaError(resolved.path, "precedenceRestatedIn", findings.join("; ")).message);
+}
+
 function defaultTargetCheck(root: string): SchemaCheck {
   const resolved = resolveSchemaFile(root, WORKFLOW_FILE);
   const row = (ok: boolean, required: boolean, detail: string): SchemaCheck => ({
@@ -641,6 +701,8 @@ export function checkTaxonomy(options: CheckOptions = {}): CheckReport {
     // is NOT tolerated is a contract that is present and wrong, which fails
     // exactly like a present-and-wrong gates.json.
     contractCheck(root),
+    // ...and the prose restatements of its `precedence` (zheref/nen#474).
+    ...[precedenceRestatementCheck(root)].filter((check): check is SchemaCheck => check !== null),
     // `nen/workflow.json` LAST, and optional in the third of the three senses
     // this report distinguishes: gates.json's absence WARNS, contract.json's
     // absence is nothing to read, and this file's absence is a full policy made
