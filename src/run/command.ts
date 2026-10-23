@@ -7,6 +7,7 @@
 // Hatsu batch run (the manifest verbs, which take --id). Every flag below is
 // refused on the subcommands that do not read it, so the two never blur.
 
+import { resolve } from "node:path";
 import { parseTarget, type Target } from "../github/target.js";
 import {
   emit,
@@ -45,13 +46,14 @@ import {
   type RunManifest,
 } from "./manifest.js";
 import { readLivePr, renderVerify, verifyRun } from "./verify.js";
+import { CONSUMER_RUN_CONTRACTS, CONSUMER_RUN_DISPLAY, consumerRunPath, planImport, readConsumerRun } from "./import.js";
 import { computeBudget, renderBudget, runEfforts, type BudgetCeiling } from "./budget.js";
 
-const SUBCOMMANDS = ["rerun-failed", "start", "append", "verify", "budget", "park"] as const;
+const SUBCOMMANDS = ["rerun-failed", "start", "append", "verify", "budget", "park", "import"] as const;
 type Subcommand = (typeof SUBCOMMANDS)[number];
 
 const USAGE = `nen run rerun-failed -- re-run a workflow run's failed jobs, senkei's dead-reviewer recovery.
-nen run start|append|park|verify|budget -- a batch run's manifest (${RUN_CONTRACT}, HR-5).
+nen run start|append|park|verify|budget|import -- a batch run's manifest (${RUN_CONTRACT}, HR-5).
 
 usage:
   nen run rerun-failed --target <owner/name> --run-id <n> [--dry-run] [--json]
@@ -65,6 +67,7 @@ usage:
   nen run verify --id <run-id> --target <owner/name> [--repo <path>] [--json]
   nen run budget --id <run-id> [--claim] [--max-minutes <n>] [--max-tokens <n>]
                  [--effort <id,...>] [--repo <path>] [--json]
+  nen run import --id <run-id> [--from <file>] [--repo <path>] [--dry-run] [--json]
 
 rerun-failed: 'gh run rerun <n> --failed', exactly. senkei's own instruction:
 re-run the failed job when a reviewer job dies mid-run, NEVER re-label to force
@@ -113,13 +116,26 @@ GIT_WORK_TREE dropped. nen records and reads; it decides nothing.
           effort, a delivery PR's or an --effort's effort has no ledger, or a
           ledger will not read. With --claim: exit 1 once either ceiling is reached -- an
           answer, not a failure, the loop cap's shape. Nothing is written.
+  import  Read the consumer plane's futon run manifest
+          (${CONSUMER_RUN_CONTRACTS.join(" or ")}, at
+          '${CONSUMER_RUN_DISPLAY}', or --from <file>)
+          into this manifest, so one manifest owns the run (NN#486 AC-5): the
+          start, every PR (READ LIVE, as append reads it: the consumer keeps
+          the head branch and no commit; its issue number becomes
+          '<owner/name>#<N>') and every parked row, through the same plans
+          start, append and park use. The source file is READ ONLY -- never
+          written, moved or deleted. 'imported', or 'unchanged' on a
+          re-import; a PR gh cannot read, one created before the run started,
+          or a fact that contradicts what nen holds refuses the WHOLE import
+          at exit 1 and writes nothing. A missing or malformed source is exit 1.
 
 Exit 2 for a malformed flag or a flag another subcommand owns.`;
 
 const OWNED: Readonly<Record<string, readonly Subcommand[]>> = {
   "run-id": ["rerun-failed"],
   target: ["rerun-failed", "start", "verify"],
-  id: ["start", "append", "verify", "budget", "park"],
+  id: ["start", "append", "verify", "budget", "park", "import"],
+  from: ["import"],
   "idle-answers": ["start"],
   issue: ["append", "park"],
   pr: ["append"],
@@ -132,7 +148,7 @@ const OWNED: Readonly<Record<string, readonly Subcommand[]>> = {
   "max-tokens": ["budget"],
 };
 const OWNED_BOOLEANS: Readonly<Record<string, readonly Subcommand[]>> = {
-  "dry-run": ["rerun-failed", "start", "append", "park"],
+  "dry-run": ["rerun-failed", "start", "append", "park", "import"],
   claim: ["budget"],
 };
 
@@ -156,7 +172,7 @@ export const runCommand: Command = {
   summary: "Re-run a workflow run's failed jobs; keep and read a batch run's manifest.",
   usage: USAGE,
   flags: {
-    values: ["target", "run-id", "id", "idle-answers", "issue", "pr", "base", "kind", "head", "row", "effort", "max-minutes", "max-tokens"],
+    values: ["target", "run-id", "id", "idle-answers", "issue", "pr", "base", "kind", "head", "row", "effort", "max-minutes", "max-tokens", "from"],
     booleans: ["dry-run", "claim"],
   },
   run(context: CommandContext): number {
@@ -167,6 +183,7 @@ export const runCommand: Command = {
     if (subcommand === "append") return doAppend(context);
     if (subcommand === "verify") return doVerify(context);
     if (subcommand === "park") return doPark(context);
+    if (subcommand === "import") return doImport(context);
     return doBudget(context);
   },
 };
@@ -433,4 +450,44 @@ function doBudget(context: CommandContext): number {
   emit(context.io, context.json, report, renderBudget(report));
   if (report.verdict === "unevaluated") return 1;
   return claim && report.verdict === "reached" ? 1 : 0;
+}
+
+/**
+ * `nen run import` -- the consumer's futon run manifest read into nen's (NN#486
+ * AC-5; ./import.ts). The source file is read, never written; nen's is written under
+ * the ledger lock only when every PR read live and nothing conflicted.
+ */
+function doImport(context: CommandContext): number {
+  const id = runId(context);
+  const root = resolveRepoRoot({ repoFlag: context.repoFlag });
+  const dryRun = context.args.booleans.has("dry-run");
+  const fromFlag = context.args.values["from"];
+  let common: string;
+  try {
+    common = gitCommonDir(context.seams, root);
+  } catch (error) {
+    context.io.err(`nen: ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
+  }
+  const from = fromFlag === undefined ? consumerRunPath(common, id) : resolve(root, fromFlag);
+  const path = manifestPath(context, root, id);
+  if (path === null) return 1;
+  const now = context.seams.now().toISOString();
+  let result;
+  try {
+    const run = readConsumerRun(from);
+    if (run.id !== id) throw new RunManifestError(`'${from}' records run '${run.id}', not '${id}'. Nothing was written.`);
+    result = withManifest(path, (existing) => planImport(context.seams, existing, run, id, now), !dryRun);
+  } catch (error) {
+    context.io.err(`nen: ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
+  }
+  const outcome = dryRun && result.outcome === "imported" ? "dry-run" : result.outcome;
+  emit(context.io, context.json, { outcome, from, path, reason: result.reason, prs: result.prs, parked: result.parked, manifest: result.manifest }, [
+    result.reason === null
+      ? `${outcome}: run ${id} from ${from} -- ${result.prs.length} PR(s), ${result.parked.length} parked -- ${path}`
+      : `refused: ${result.reason}`,
+    ...result.prs.map((row): string => `  #${row.pr}: ${row.outcome}`),
+  ]);
+  return result.outcome === "conflict" ? 1 : 0;
 }
