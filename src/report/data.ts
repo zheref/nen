@@ -634,6 +634,24 @@ function sourceDirs(source: LedgerSource, family: EffortFamily): readonly Ledger
   return [{ dir: join(source, ...EFFORT_WORKTREE_LEGACY[family]), display: EFFORT_WORKTREE_LEGACY[family].join("/") }];
 }
 
+/**
+ * Ledger names present in more than one of `dirs` (the common dir AND a
+ * checkout's older copy): warned once and read from NEITHER (Nobunaga on #516),
+ * the same refusal `phase`/`usage` make at exit 1 -- doubled rows would
+ * otherwise read as one effort that ran every phase twice.
+ */
+function duplicateNames(dirs: readonly LedgerDir[], warn: (line: string) => void): ReadonlySet<string> {
+  const seen = new Map<string, string[]>();
+  for (const { dir, display } of dirs) for (const name of ledgerNames(dir)) seen.set(name, [...(seen.get(name) ?? []), `${display}/${name}`]);
+  const dupes = new Set<string>();
+  for (const [name, where] of seen) {
+    if (where.length < 2) continue;
+    dupes.add(name);
+    warn(`${where.join(" and ")}: one effort's ledger in two homes -- skipped; keep one (the common-dir copy) and move the other aside`);
+  }
+  return dupes;
+}
+
 /** Every `.json` name in `dir`, sorted; an absent directory is none. */
 function ledgerNames(dir: string): string[] {
   try {
@@ -648,7 +666,9 @@ export function readUsageLedgers(source: LedgerSource, warn: (line: string) => v
   const rows: ReportUsage[] = [];
   const string = (value: unknown): string | null => (typeof value === "string" ? value : null);
   const number = (value: unknown): number | null => (typeof value === "number" ? value : null);
-  for (const { dir, display: where } of sourceDirs(source, "usage")) for (const name of ledgerNames(dir)) {
+  const usageDirs = sourceDirs(source, "usage");
+  const usageDupes = duplicateNames(usageDirs, warn);
+  for (const { dir, display: where } of usageDirs) for (const name of ledgerNames(dir).filter((n): boolean => !usageDupes.has(n))) {
     const display = `${where}/${name}`;
     const doc = readJsonArtifact(join(dir, name), display, warn) as { contract?: unknown; effort?: unknown; entries?: unknown } | null;
     if (doc === null) continue;
@@ -680,7 +700,9 @@ export function readUsageLedgers(source: LedgerSource, warn: (line: string) => v
 /** Every phase entry under each `.nen/phases/` directory, flattened, directory then filename then entry order. */
 export function readPhaseLedgers(source: LedgerSource, warn: (line: string) => void): readonly ReportPhase[] {
   const rows: ReportPhase[] = [];
-  for (const { dir, display: where } of sourceDirs(source, "phases")) for (const name of ledgerNames(dir)) {
+  const phaseDirs = sourceDirs(source, "phases");
+  const phaseDupes = duplicateNames(phaseDirs, warn);
+  for (const { dir, display: where } of phaseDirs) for (const name of ledgerNames(dir).filter((n): boolean => !phaseDupes.has(n))) {
     const display = `${where}/${name}`;
     const doc = readJsonArtifact(join(dir, name), display, warn) as { contract?: unknown; effort?: unknown; phases?: unknown } | null;
     if (doc === null) continue;
@@ -718,11 +740,13 @@ export function readPhaseLedgers(source: LedgerSource, warn: (line: string) => v
 /** Every session entry, flattened with its effort, in filename then entry order. */
 export function readSessionLedgers(source: LedgerSource, warn: (line: string) => void): readonly ReportSession[] {
   const rows: ReportSession[] = [];
-  for (const { dir, display: where } of sourceDirs(source, "sessions")) rows.push(...readSessionDir(dir, where, warn));
+  const sessionDirs = sourceDirs(source, "sessions");
+  const sessionDupes = duplicateNames(sessionDirs, warn);
+  for (const { dir, display: where } of sessionDirs) rows.push(...readSessionDir(dir, where, warn, sessionDupes));
   return rows;
 }
 
-function readSessionDir(dir: string, where: string, warn: (line: string) => void): readonly ReportSession[] {
+function readSessionDir(dir: string, where: string, warn: (line: string) => void, skip: ReadonlySet<string>): readonly ReportSession[] {
   let names: string[];
   try {
     names = readdirSync(dir).filter((name): boolean => name.endsWith(".json")).sort();
@@ -742,7 +766,7 @@ function readSessionDir(dir: string, where: string, warn: (line: string) => void
     return [];
   }
   const rows: ReportSession[] = [];
-  for (const name of names) {
+  for (const name of names.filter((n): boolean => !skip.has(n))) {
     const display = `${where}/${name}`;
     const doc = readJsonArtifact(join(dir, name), display, warn, readSessionLedgerText) as { contract?: unknown; effort?: unknown; entries?: unknown } | null;
     if (doc === null) continue;

@@ -3,7 +3,7 @@
 // worktree-local ledger is read in place and moved on the next write, never
 // shadowed by an empty one. Real git, real temp repositories.
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -102,5 +102,52 @@ describe("per-effort ledgers live in the git common dir (zheref/nen#509)", () =>
     expect((JSON.parse(all.out) as { phases: { effort: string }[] }).phases.map((p): string => p.effort).sort()).toEqual(["mine", "theirs"]);
     const scoped = await nen(["report", "data", "--repo", tree, "--base", "main", "--effort", "mine", "--json"]);
     expect((JSON.parse(scoped.out) as { phases: { effort: string }[] }).phases.map((p): string => p.effort)).toEqual(["mine"]);
+  });
+
+  it("SEC-7: a symlink at an older ledger's name is refused, never read through and never moved", async () => {
+    const { tree, common } = repoWithWorktree();
+    const outside = join(mkdtempSync(join(tmpdir(), "nen-home-outside-")), "secret.json");
+    writeFileSync(outside, JSON.stringify({ contract: "nen.phase.ledger/v0.1", effort: "e5", phases: [] }));
+    mkdirSync(join(tree, ".nen", "phases"), { recursive: true });
+    symlinkSync(outside, join(tree, ".nen", "phases", "e5.json"));
+    const show = await nen(["phase", "show", "--effort", "e5", "--repo", tree]);
+    expect(show.code).toBe(1);
+    expect(show.err).toContain("is a symbolic link");
+    expect((await nen(["phase", "begin", "--effort", "e5", "--phase", "breath", "--repo", tree])).code).toBe(1);
+    expect(existsSync(join(common, ".nen", "phases", "e5.json"))).toBe(false);
+    expect(lstatSync(join(tree, ".nen", "phases", "e5.json")).isSymbolicLink()).toBe(true);
+  });
+
+  it("SEC-7: a durable family directory that links out of the common dir is refused", async () => {
+    const { tree, common } = repoWithWorktree();
+    const elsewhere = mkdtempSync(join(tmpdir(), "nen-home-elsewhere-"));
+    mkdirSync(join(common, ".nen"), { recursive: true });
+    symlinkSync(elsewhere, join(common, ".nen", "usage"));
+    const result = await nen(["usage", "record", "--effort", "e6", "--surface", "codex", "--input", "1", "--repo", tree]);
+    expect(result.code).toBe(1);
+    expect(result.err).toContain("outside the git common directory");
+    expect(existsSync(join(elsewhere, "e6.json"))).toBe(false);
+  });
+
+  it("a refused begin moves nothing: flags are checked before an older ledger is located", async () => {
+    const { tree } = repoWithWorktree();
+    const old = join(tree, ".nen", "phases", "e7.json");
+    mkdirSync(join(tree, ".nen", "phases"), { recursive: true });
+    writeFileSync(old, JSON.stringify({ contract: "nen.phase.ledger/v0.1", effort: "e7", phases: [] }));
+    expect((await nen(["phase", "begin", "--effort", "e7", "--repo", tree])).code).toBe(2);
+    expect(existsSync(old)).toBe(true);
+  });
+
+  it("report data skips, with a warning, an effort whose ledger sits in both homes", async () => {
+    const { tree, common } = repoWithWorktree();
+    const doc = JSON.stringify({ contract: "nen.phase.ledger/v0.1", effort: "dup", phases: [{ phase: "breath", startedAt: "2026-01-01T00:00:00.000Z", endedAt: null }] });
+    mkdirSync(join(tree, ".nen", "phases"), { recursive: true });
+    mkdirSync(join(common, ".nen", "phases"), { recursive: true });
+    writeFileSync(join(tree, ".nen", "phases", "dup.json"), doc);
+    writeFileSync(join(common, ".nen", "phases", "dup.json"), doc);
+    const result = await nen(["report", "data", "--repo", tree, "--base", "main", "--json"]);
+    expect(result.code).toBe(0);
+    expect((JSON.parse(result.out) as { phases: unknown[] }).phases).toEqual([]);
+    expect(result.err).toContain("one effort's ledger in two homes");
   });
 });

@@ -131,6 +131,12 @@ export const phaseCommand: Command = {
       return 0;
     }
 
+    // EVERY FLAG REFUSAL BEFORE THE LEDGER IS LOCATED (Nobunaga on #516): a
+    // write-mode locate moves an older worktree-local ledger, and a refused
+    // invocation must move nothing.
+    if (sub === "begin" && (context.args.values["phase"] ?? "").trim() === "") throw new VerbUsageError("--phase <name> is required for 'begin'.");
+    const exitFlag = context.args.values["exit"];
+    if (sub === "end" && exitFlag !== undefined && (!Number.isInteger(Number(exitFlag)) || Number(exitFlag) < 0)) throw new VerbUsageError("--exit must be a non-negative integer.");
     const located = locateEffortLedger(home, effort, "write");
     const path = located.path;
     const moved = legacyLine(located);

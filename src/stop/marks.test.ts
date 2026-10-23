@@ -110,3 +110,25 @@ describe("nen stop --mark keeps one marker per gate (zheref/nen#513)", () => {
     expect((await nen(["stop", "clear", "--all", "--gate", "G2", "--repo", tree])).code).toBe(2);
   });
 });
+
+describe("settle round on #516 (Nobunaga 3, 11)", () => {
+  it("a twin whose single file a hook removed is not listed, and the next mark removes it; replaced ones stay", async () => {
+    const { tree, marks } = repoWithWorktree();
+    await nen(["stop", "--gate", "G2", "--mark", "--effort", "a", "--repo", tree]);
+    await nen(["stop", "--gate", "G5", "--mark", "--effort", "a", "--repo", tree]);
+    // the hook rings and removes the single file itself, as stop-bell.sh does
+    execFileSync("rm", ["-f", join(tree, ".nen", "last-stop.json")]);
+    expect((await list(tree)).marks.map((mark): string | null => mark.gate)).toEqual(["G2"]);
+    await nen(["stop", "--gate", "G4", "--mark", "--effort", "a", "--repo", tree]);
+    expect(existsSync(join(marks, "a", "G5.json"))).toBe(false);
+    expect((await list(tree)).marks.map((mark): string | null => mark.gate)).toEqual(["G2", "G4"]);
+  });
+
+  it("clear --gate none removes a stop marked with no gate", async () => {
+    const { tree, marks } = repoWithWorktree();
+    await nen(["stop", "--mark", "--effort", "a", "--repo", tree]);
+    expect(existsSync(join(marks, "a", "none.json"))).toBe(true);
+    expect((await nen(["stop", "clear", "--gate", "none", "--effort", "a", "--repo", tree])).code).toBe(0);
+    expect(existsSync(join(marks, "a", "none.json"))).toBe(false);
+  });
+});

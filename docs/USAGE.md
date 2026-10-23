@@ -177,7 +177,12 @@ read (`show`, `run budget`) reads it in place and names the old path on stderr; 
 common directory first, once, and says so. A copy in both homes, or in two checkouts, is exit **1**
 naming every path; a move the filesystem refuses is exit **1** with the `mv` line. [`report
 data`](#nen-report-data) reads the common directory and the reported checkout's own old directory beside
-it. **This fallback is read through the 0.28 line and removed in 0.29.0.**
+it. **This fallback is read through the 0.28 line and removed in 0.29.0.** Only a **regular file** is a
+ledger: a symlink or anything else at a ledger's name, in either home, is refused and is neither read
+nor moved, and so is a ledger path whose real path leaves the git common directory (a linked
+`.nen/<family>`): exit **1** for `phase`, `usage` and `session` (their unreadable-ledger code), exit **2**
+for the direct record (its link refusal's code). A refused invocation moves nothing: flags are checked before an older ledger is located.
+`report data` skips, with a warning, an effort whose ledger sits in both homes.
 
 ### `--target <owner/name>` names the GitHub repository
 
@@ -9221,7 +9226,7 @@ nen run append --id <run-id> --pr <N> --kind delivery|integration|release
 | `--id <run-id>` | yes | The run. | As `run start`. |
 | `--pr <N>` | yes | The pull request number. | A positive integer; read live in the run's `repo`. A PR that could not be read exits 1. |
 | `--kind <kind>` | yes | `delivery`, `integration` or `release`. | Only `delivery` PRs are efforts for [`loop slots --from-run`](#nen-loop-slots). |
-| `--issue <ref>` | for `delivery` | The issue the PR delivers: `<CODE>#<N>` or `<owner/name>#<N>`. | Required for a delivery PR (exit 2 without); an integration or release PR may omit it, recorded `null`. Malformed: exit 2. |
+| `--issue <ref>` | for `delivery` | The issue the PR delivers: `<CODE>#<N>` or `<owner/name>#<N>`. | Required for a delivery PR (exit 2 without); an integration or release PR may omit it, recorded `null`. Malformed: exit 2. **Recorded as `<owner/name>#<N>`** (one spelling per manifest): a code is resolved through `--repo`'s `nen/repos.json`; one that does not resolve to one `owner/name` is exit 2. |
 | `--base <branch>` | no | The base the caller expects. | A branch name (a leading `-`, `..` or `@{` exits 2); one the live read disagrees with exits 1. |
 | `--head <sha>` | no | The head commit the caller expects. | 7 to 40 hex digits, a prefix of the live head or exit 1. |
 | `--effort <id>` | no | The effort id the usage ledger is keyed by (the branch, by Hatsu's canon). | The `usage record` alphabet; [`run budget`](#nen-run-budget) reads these. |
@@ -9263,7 +9268,7 @@ nen run park --id <run-id> --issue <ref> --row <decisions-row-id> [--repo <path>
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `--id <run-id>` | yes | The run. | As `run start`. |
-| `--issue <ref>` | yes | The issue whose effort is parked. | `<CODE>#<N>` or `<owner/name>#<N>`; otherwise exit 2. |
+| `--issue <ref>` | yes | The issue whose effort is parked. | `<CODE>#<N>` or `<owner/name>#<N>`; otherwise exit 2. **Recorded as `<owner/name>#<N>`**: a code is resolved through `--repo`'s `nen/repos.json`, one that does not resolve to one `owner/name` is exit 2 (the one spelling `run append` and `run import` record too). **Recorded as `<owner/name>#<N>`** (one spelling per manifest): a code is resolved through `--repo`'s `nen/repos.json`; one that does not resolve to one `owner/name` is exit 2. |
 | `--row <id>` | yes | The ask-once row it is parked on. | `[a-z0-9-]+`, as `nen/decisions.json` spells a row; otherwise exit 2. |
 | `--repo <path>` | no | Any checkout of the project. | Default the current directory. |
 | `--dry-run` | no | Report the outcome; write nothing. | Outcome `dry-run`. |
@@ -15633,12 +15638,15 @@ stop. A hook that must ring for every gate reads `stop list` and clears each wit
 
 - `nen stop list [--json]` prints every unrung marker, oldest first: each per-gate marker with its gate,
   effort, instant, who and title, and the single file as `legacy` when no per-gate marker is the same
-  stop (same `at`, `gate` and `who`), so a marker an older build wrote still reads. `--json`:
+  stop (same `at`, `gate` and `who`), so a marker an older build wrote still reads. A per-gate marker
+  whose single-file twin a hook removed itself (it rang and consumed it, e.g. `rm -f .nen/last-stop.json`)
+  is not listed, and the next `--mark` deletes it; `<marks>/.latest.json` records which marker the single
+  file twins. Markers whose single file was only replaced by a later mark stay unrung. `--json`:
   `{ contract: "nen.stop.list/v0.1", dir, marks: [{ source, path, contract, gate, effort, who, at, title }],
   unreadable: [{ path, reason }] }`. Exit 0 when every file read, an empty list included; exit **1** when
   a marker file exists and could not be read, listed under `unreadable` -- never skipped, never "no marker".
 - `nen stop clear --gate <g> [--effort <id>]` removes only that gate's marker for that effort (no
-  `--effort`: the stop marked without one), and the single file too when it records that same stop. Bare
+  `--effort`: the stop marked without one; `--gate none`: the stop marked with no gate), and the single file too when it records that same stop. Bare
   `clear` removes the single file and its own per-gate twin. `clear --all` removes every marker. `--effort`
   without `--gate`, and `--all` with either, are exit 2. `--json`: `{ cleared, path, removed[] }`.
 
