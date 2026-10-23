@@ -20,7 +20,7 @@
 // re-read.
 
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { MARKER_FILE, parseMarker } from "../stop/marker.js";
 import { assertRepoRoot, type RepoRootOptions } from "../repo/root.js";
 import { loadColorVocabulary, type ColorVocabulary } from "./colors.js";
@@ -502,7 +502,10 @@ function precedenceRestatementCheck(root: string): SchemaCheck | null {
     let text: string;
     try {
       const real = realpathSync(join(root, file));
-      if (real !== realRoot && !real.startsWith(`${realRoot}/`)) {
+      // `relative`, never a '/' prefix test: on Windows the separator is '\\'
+      // and a short (8.3) temp path only matches once both sides are real.
+      const inside = relative(realRoot, real);
+      if (inside === "" || inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside)) {
         findings.push(`${file}: could not read -- it resolves outside the repository`);
         continue;
       }
