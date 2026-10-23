@@ -2674,7 +2674,7 @@ Acceptance-criterion coverage as data (Hatsu's ruling HR-11): compares the crite
 **Usage**
 
 ```text
-nen pr converge --target <owner/name> --pr <n> [--requirements-from <catalogue.json>] [--json]
+nen pr converge --target <owner/name> --pr <n> [--requirements-from <catalogue.json>] [--require-head <sha>] [--json]
 ```
 
 **Arguments**
@@ -2684,6 +2684,7 @@ nen pr converge --target <owner/name> --pr <n> [--requirements-from <catalogue.j
 | `--target <owner/name>` | yes | The repository the pull request lives in. | Missing or malformed exits 2. |
 | `--pr <n>` | yes | The pull-request number. | Missing or not a positive whole number exits 2. |
 | `--requirements-from <path>` | no | The [issue-sections catalogue](#the-issue-sections-catalogue): its acceptance-row prefix and section scope the criteria, and an optional `coverage` block `{ "blocking": [<words>], "none": "<word>", "evidence": "required" \| "optional" }` sets the rules. | Resolves against `--repo`'s root. Absent: `AC` rows anywhere in the issue body, `missing` and `contradicts` block, `unrequested` on `none` rows, evidence required. Unreadable or malformed exits 2. |
+| `--require-head <sha>` | no | Pin the verdict to one head ([#483](https://github.com/zheref/nen/issues/483) AC-6). The first read's `headRefOid` must equal it, and a head-only re-read (`gh pr view <n> --repo <target> --json headRefOid`) **after** every closing issue was read must still equal it. | A full 40- or 64-hex SHA, compared case-insensitively; anything else exits 2 before any read. A first read at another head, a head that moved between the reads, or a re-read that failed exits **1** with stdout empty and stderr naming both heads: a verdict assembled across two heads is refused, never reported. |
 | `--json` | no | The report as one JSON document. | |
 
 Every other flag is refused at exit 2 before any `gh` call. `--repo` is read only to resolve `--requirements-from`.

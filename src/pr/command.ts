@@ -69,7 +69,7 @@ import { computeStaleness, type VerifiedWake } from "./staleness.js";
 import { nextBlocker } from "./blocker.js";
 import { cascadeMain } from "./cascade.js";
 import { fetchPullRequest, type PrSnapshot } from "./fetch.js";
-import { ConvergeReadError, readConvergeInput } from "./converge.js";
+import { assertPinnedHead, ConvergeReadError, readConvergeInput } from "./converge.js";
 import { converge, DEFAULT_COVERAGE_POLICY, PR_CONVERGE_CONTRACT, readCoveragePolicy, type CoveragePolicy } from "../issue/criteria.js";
 import { parseCatalogue, type IssueSectionsCatalogue } from "../issue/shape.js";
 import { retarget } from "./retarget.js";
@@ -157,7 +157,7 @@ nen pr body-check --body-from <path> [--requirements-from <path> | --base <ref>]
 nen pr sections resolve --catalogue <path> --kind <kind> --family <family> [--with a,b] [--overrides <workflow.json>] [--json]
 nen pr sections family --taxonomy <path> --catalogue <path> --jobs <a,b> [--json]
 nen pr fetch --target <owner/name> --pr <n>
-nen pr converge --target <owner/name> --pr <n> [--requirements-from <catalogue.json>] [--json]
+nen pr converge --target <owner/name> --pr <n> [--requirements-from <catalogue.json>] [--require-head <sha>] [--json]
 nen pr next-blocker --target <owner/name> --pr <n> --repo <path> [--reviewers a,b] [--policy bounded|strict] [--delivery-pr] [--gates <path>] [--requirements-from <path>]
 nen pr cascade-main --repo <path> [--trunk main] [--no-push] [--dry-run]
 nen pr retarget --target <owner/name> --pr <n> --base <branch> [--dry-run]
@@ -1091,7 +1091,7 @@ export const PR_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   "body-check": { values: ["body-from", "requirements-from", "base", "max", "prose-budget"], booleans: ["exact"] },
   sections: { values: ["catalogue", "kind", "family", "with", "overrides", "taxonomy", "jobs"] },
   fetch: { values: ["target", "pr"] },
-  converge: { values: ["target", "pr", "requirements-from"] },
+  converge: { values: ["target", "pr", "requirements-from", "require-head"] },
   "next-blocker": { values: ["target", "pr", "reviewers", "gates", "policy", "requirements-from"], booleans: ["delivery-pr"] },
   "cascade-main": { values: ["trunk"], booleans: ["no-push", "dry-run"] },
   retarget: { values: ["target", "pr", "base"], booleans: ["dry-run"] },
@@ -1394,9 +1394,14 @@ function convergeVerb(context: CommandContext): number {
       throw new VerbUsageError(plainLine(`'${catalogueFrom}': ${error instanceof Error ? error.message : String(error)}`));
     }
   }
+  const requireHead = context.args.values["require-head"];
+  if (requireHead !== undefined && !/^[0-9a-f]{40}([0-9a-f]{24})?$/i.test(requireHead)) {
+    throw new VerbUsageError(`--require-head '${requireHead}' is not a full commit SHA (40 or 64 hex characters).`);
+  }
   let input;
   try {
     input = readConvergeInput(context.seams, target, prNumber, catalogue);
+    if (requireHead !== undefined) assertPinnedHead(context.seams, target, prNumber, input, requireHead);
   } catch (error) {
     if (!(error instanceof ConvergeReadError)) throw error;
     context.io.err(plainLine(`nen pr converge: ${error.message}`));

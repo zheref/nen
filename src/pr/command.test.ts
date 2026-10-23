@@ -3077,7 +3077,7 @@ describe("the family's one flag guard (zheref/nen#351)", () => {
       [[...mark, "--base", "main"], "--base is only read by 'pr body-check', 'pr retarget' and 'pr open'."],
       [[...mark, "--body-file", BODY], "--body-file is only read by 'pr edit-body', 'pr threads reply' and 'pr open'."],
       [["pr", "fetch", "--target", "zheref/nen", "--pr", "12", "--from", SETTLE], "--from is only read by 'pr threads settle'."],
-      [["pr", "fetch", "--target", "zheref/nen", "--pr", "12", "--require-head", "abcdef1"], "--require-head is only read by 'pr ready', 'pr mark-ready' and 'pr merge --delivery'."],
+      [["pr", "fetch", "--target", "zheref/nen", "--pr", "12", "--require-head", "abcdef1"], "--require-head is only read by 'pr ready', 'pr converge', 'pr mark-ready' and 'pr merge --delivery'."],
     ];
     for (const [argv, message] of cases) {
       const result = await capture(argv, null, new ScriptedSeams([]));
@@ -3160,7 +3160,7 @@ describe("the family's one flag guard (zheref/nen#351)", () => {
 
   // Nobunaga 9 (hanten round 1): the form that reads it, not the one that refuses it.
   it("names 'pr merge --delivery' for --require-head", () => {
-    expect(prFlagOwners("require-head")).toEqual(["'pr ready'", "'pr mark-ready'", "'pr merge --delivery'"]);
+    expect(prFlagOwners("require-head")).toEqual(["'pr ready'", "'pr converge'", "'pr mark-ready'", "'pr merge --delivery'"]);
   });
 
   // Nobunaga 6 (hanten round 1): no default credential claim.
@@ -3183,7 +3183,7 @@ describe("the family's one flag guard (zheref/nen#351)", () => {
       "body-check": { values: ["body-from", "requirements-from", "base", "max", "prose-budget"], booleans: ["exact"] },
       sections: { values: ["catalogue", "kind", "family", "with", "overrides", "taxonomy", "jobs"] },
       fetch: { values: ["target", "pr"] },
-      converge: { values: ["target", "pr", "requirements-from"] },
+      converge: { values: ["target", "pr", "requirements-from", "require-head"] },
       "next-blocker": { values: ["target", "pr", "reviewers", "gates", "policy", "requirements-from"], booleans: ["delivery-pr"] },
       "cascade-main": { values: ["trunk"], booleans: ["no-push", "dry-run"] },
       retarget: { values: ["target", "pr", "base"], booleans: ["dry-run"] },
