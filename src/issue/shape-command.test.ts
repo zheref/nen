@@ -213,6 +213,36 @@ function filing(family: "issue" | "idea", titleFlags: readonly string[], extra: 
 }
 
 
+describe("--requirements-from on nen issue file and nen idea file: the body shape before the create (zheref/nen#476)", () => {
+  for (const family of ["issue", "idea"] as const) {
+    const command = family === "issue" ? issueCommand : ideaCommand;
+    const withBody = (dir: string, extra: readonly string[]): string[] =>
+      filing(family, ["--title", "t"], extra).map((arg) => (arg === "body.md" ? join(dir, "body.md") : arg));
+
+    it(`${family} file: a body missing a required section is refused at exit 1 before any gh call, every miss named`, async () => {
+      const dir = scratch({ "cat.json": CATALOGUE, "body.md": "## Problem\n\nIt breaks.\n" });
+      const result = await run(command, withBody(dir, ["--requirements-from", join(dir, "cat.json"), "--kind", "feature", "--dry-run"]), [], { repoFlag: BANKAI_REPO });
+      expect(result.code).toBe(1);
+      expect(result.err).toMatch(/body-check \(kind 'feature'\): missing.*nothing was filed/);
+      expect(result.calls).toEqual([]);
+    });
+
+    it(`${family} file: a body in shape passes into the ordinary filing (here its dry run)`, async () => {
+      const dir = scratch({ "cat.json": CATALOGUE, "body.md": BODY });
+      const result = await run(command, withBody(dir, ["--requirements-from", join(dir, "cat.json"), "--kind", "feature", "--dry-run"]), [PRIVATE_TARGET], { repoFlag: BANKAI_REPO, json: true });
+      expect(result.code, result.err).toBe(0);
+      expect((JSON.parse(result.out) as { dryRun: boolean }).dryRun).toBe(true);
+    });
+
+    it(`${family} file: refuses --kind without --requirements-from, an unreadable catalogue and an undeclared kind at exit 2`, async () => {
+      const dir = scratch({ "cat.json": CATALOGUE, "body.md": BODY });
+      expect((await run(command, withBody(dir, ["--kind", "feature", "--dry-run"]), [], { repoFlag: BANKAI_REPO })).code).toBe(2);
+      expect((await run(command, withBody(dir, ["--requirements-from", join(dir, "nope.json"), "--dry-run"]), [], { repoFlag: BANKAI_REPO })).code).toBe(2);
+      expect((await run(command, withBody(dir, ["--requirements-from", join(dir, "cat.json"), "--kind", "epic", "--dry-run"]), [], { repoFlag: BANKAI_REPO })).code).toBe(2);
+    });
+  }
+});
+
 describe("--title-file on nen issue file and nen idea file (zheref/nen#444)", () => {
   for (const family of ["issue", "idea"] as const) {
     const command = family === "issue" ? issueCommand : ideaCommand;

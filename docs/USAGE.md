@@ -9485,6 +9485,7 @@ nen issue file --target <owner/name> --repo <path>
                (--title <t> | --title-file <path>)
                --body-file <path> --label a,b --assignee <user>
                [--forbid-family ns:family] [--dry-run]
+               [--requirements-from <catalogue.json> [--kind <kind>]]
                [--skip-private-name-check]
                [--private-names-ignore-file <path> [--allow-all-ignored]]
 ```
@@ -9501,6 +9502,7 @@ nen issue file --target <owner/name> --repo <path>
 | `--label a,b` | yes | Comma-separated labels, applied in the create call. | Every label must exist in `--repo`'s taxonomy; an empty list is refused. |
 | `--assignee <user>` | yes | A single GitHub login. | Empty is refused: an unassigned issue reaches nobody by notification. |
 | `--forbid-family ns:family` | no | Label families this invocation declares off-limits. | Caller data -- nen carries no repository's own "which family means released" convention. |
+| `--requirements-from <catalogue.json>` | no | The [issue-sections catalogue](#the-issue-sections-catalogue): the body is held to it **before the create**, by the same check [`issue body-check`](#nen-issue-body-check) runs, on the bytes about to be sent ([#476](https://github.com/zheref/nen/issues/476)). `--kind <kind>` selects the kind, as `body-check`'s does. | Resolves against `--repo`'s root. Any miss refuses the filing at exit **1** before any GitHub read, each named as `body-check (kind '<kind>'): <miss> line <n>: <detail>; nothing was filed` (under `--json`, the [refusal envelope](#the-refusal-envelope)); advisories never block. `--kind` without it, an unreadable or malformed catalogue, and an undeclared kind exit **2**. |
 | `--dry-run` | no | Print the exact `gh issue create` argv and write nothing. | Writes nothing. Since [#329](https://github.com/zheref/nen/issues/329) it READS: the [private-name guard](#the-private-name-guard) runs here too, so a dry run's verdict is the real run's. |
 | `--skip-private-name-check` | no | Skip the [private-name guard](#the-private-name-guard): the caller attests it ran its own check. | Nothing is read; every run that uses it says so on stderr, and `--json` carries `privateNameCheck.result: "skipped-by-flag"`. |
 | `--private-names-ignore-file <path>` | no | Private repositories the caller ruled too generic to police ([private-name guard](#the-private-name-guard)). | No default path is read; a missing file exits **2** before any `gh` call. Resolves against `--repo`'s root. Ignored hits are reported, never silent. |
@@ -10329,6 +10331,7 @@ nen idea file --target <owner/name> --repo <path>
              (--title <t> | --title-file <path>)
              --body-file <path> --label a,b --assignee <user>
              [--forbid-family ns:family] [--dry-run]
+             [--requirements-from <catalogue.json> [--kind <kind>]]
              [--skip-private-name-check]
              [--private-names-ignore-file <path> [--allow-all-ignored]]
 ```
@@ -10346,6 +10349,7 @@ nen idea file --target <owner/name> --repo <path>
 | `--label a,b` | yes | Comma-separated labels. | Same taxonomy validation as `issue file`. |
 | `--assignee <user>` | yes | A single GitHub login. | |
 | `--forbid-family ns:family` | no | Label families this invocation declares off-limits. | Works exactly as [`issue file`](#nen-issue-file)'s does — forwarded into the same `FileRequest` — and is documented in `nen idea --help` since [#94](https://github.com/zheref/nen/issues/94). Caller data: nen carries no repository's own convention about which family means what. |
+| `--requirements-from <catalogue.json>` | no | The [issue-sections catalogue](#the-issue-sections-catalogue): the body is held to it **before the create**, by the same check [`issue body-check`](#nen-issue-body-check) runs, on the bytes about to be sent ([#476](https://github.com/zheref/nen/issues/476)). `--kind <kind>` selects the kind, as `body-check`'s does. | Resolves against `--repo`'s root. Any miss refuses the filing at exit **1** before any GitHub read, each named as `body-check (kind '<kind>'): <miss> line <n>: <detail>; nothing was filed` (under `--json`, the [refusal envelope](#the-refusal-envelope)); advisories never block. `--kind` without it, an unreadable or malformed catalogue, and an undeclared kind exit **2**. |
 | `--skip-private-name-check` | no | Skip the [private-name guard](#the-private-name-guard): the caller attests it ran its own check. | Nothing is read for it; named on stderr in every run that uses it, and `--json` carries `privateNameCheck.result: "skipped-by-flag"`. |
 | `--private-names-ignore-file <path>` | no | Private repositories the caller ruled too generic to police ([private-name guard](#the-private-name-guard)). | No default path is read; a missing file exits **2** before any `gh` call. Resolves against `--repo`'s root. Ignored hits are reported, never silent. |
 | `--allow-all-ignored` | no | Permit an ignore file that exempts **every** private name (otherwise exit 1). | Only with `--private-names-ignore-file` or a named list declared by `--repo`'s `privateNames.namedFile`; with neither it exits **2**. |

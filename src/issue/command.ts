@@ -15,6 +15,7 @@ import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
 import { decomposeLabelName, loadLabelTaxonomy, type LabelTaxonomy } from "../schema/labels.js";
 import { commaList } from "../cli/comma.js";
 import { readJsonFile, readTextFile, resolveAgainstRepo, splitList } from "../cli/inputs.js";
+import { shapePreflight } from "./preflight.js";
 import { statSync, writeFileSync } from "node:fs";
 import { parseTarget, type Target , TargetError} from "../github/target.js";
 import type { FlagSpec } from "../cli/args.js";
@@ -141,7 +142,7 @@ export const ISSUE_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   search: { values: ["target", "subject", "files", "rule-ids", "lane-labels"] },
   "open-pr-check": { values: ["target", "issues"] },
   file: {
-    values: ["target", "title", "title-file", "body-file", "label", "assignee", "forbid-family", ...PRIVATE_NAME_FLAGS.values],
+    values: ["target", "title", "title-file", "body-file", "label", "assignee", "forbid-family", "requirements-from", "kind", ...PRIVATE_NAME_FLAGS.values],
     booleans: ["dry-run", ...PRIVATE_NAME_FLAGS.booleans],
   },
   comment: {
@@ -377,6 +378,7 @@ usage:
                  (--title <t> | --title-file <path>)
                  --body-file <path> --label a,b --assignee <user>
                  [--forbid-family ns:family] [--dry-run]
+                 [--requirements-from <catalogue.json> [--kind <kind>]]
                  [--skip-private-name-check]
                  [--private-names-ignore-file <path> [--allow-all-ignored]]
       Creates the issue with its labels and assignee IN THE CREATE CALL. Every
@@ -1035,6 +1037,10 @@ function file(context: CommandContext): number {
     "--body-file names the bytes this verb files as the issue's body, and they are checked for private repository names before anything is sent.",
     true,
   );
+  // THE BODY SHAPE, before anything reaches GitHub (zheref/nen#476): the same
+  // check 'issue body-check' runs, on the bytes about to be sent.
+  const shape = shapePreflight(root, { requirementsFrom: context.args.values["requirements-from"], kind: context.args.values["kind"] }, body, "issue file");
+  if (shape !== null && shape.length > 0) return refuse(context.io, context.json, "issue file", 1, shape);
   const privateNameCheck = guardPrivateNames(context, target, [
     { field: "title", text: request.title },
     { field: "body", text: body },
