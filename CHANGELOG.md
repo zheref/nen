@@ -2,6 +2,20 @@
 
 All notable changes to nen. Versions are git tags on `main`; a tag is not a release — see [Install](README.md#install).
 
+## v0.27.0 — 2026-10-22
+
+Release unit for `v0.26.0..v0.27.0`: [#501](https://github.com/zheref/nen/pull/501). Read-only personas carried onto the surfaces: the Cursor mirror gains `readonly: true`, Codex reports a note, and `surface capabilities` names each surface's read-only control (zheref/nen#473).
+
+### Breaking / consumer notes
+
+- **No repin: the compatibility floor stays `0.26`.** Existing pins keep working and no exit code changes meaning. The one behaviour change is generated output: a consumer that commits Cursor mirrors of read-only personas regenerates them after adopting this release, or `surface mirror check` reads the committed mirror as hand-edited (the last bullet under Added).
+
+### Added
+
+- `nen surface mirror generate` carries a persona's read-only intent onto the surfaces that lost it (zheref/nen#473). A persona is read-only when its `tools:` list names none of `Edit`, `Write`, `MultiEdit` or `NotebookEdit` and no `mcp__*` tool, a YAML comment ignored and a list it cannot read as tool names treated as not read-only (no `tools` key means every tool, so not read-only). **Cursor:** its mirror gains `readonly: true`, the documented key ("no file edits, no state-changing shell commands"), unless the source sets `readonly` itself; `check` reads a hand-removed line as hand-edited. A persona whose only routable keys would be the derived one is still refused. **Codex:** nothing is written, because a custom agent file cannot override the parent sandbox (`sandbox_mode` "don't override the parent configuration"); each read-only persona is a report `note:` (`codex: <name> is read-only at source; Codex documents no per-agent read-only control …`), with or without `--models`. **Antigravity** and **claude-code** output is unchanged.
+- `nen surface capabilities` adds `readOnly: { control, source }` per surface and the text line `read-only persona:`: honoured on claude-code; honoured at project placement on cursor, with plugin placement unverified (forum.cursor.com/t/173787); unverified on antigravity, whose page documents its own tool names rather than the Claude Code names the mirror carries; none documented on codex.
+- Behaviour changes: the cursor mirror of every read-only persona gains one frontmatter line, so a consumer's committed mirror reads hand-edited until it is regenerated. `generate`'s `notes` gain one codex line per read-only persona.
+
 ## v0.26.0 — 2026-10-22
 
 Release unit for `v0.25.0..v0.26.0`: [#463](https://github.com/zheref/nen/pull/463), [#468](https://github.com/zheref/nen/pull/468), [#471](https://github.com/zheref/nen/pull/471), [#475](https://github.com/zheref/nen/pull/475), [#480](https://github.com/zheref/nen/pull/480), [#484](https://github.com/zheref/nen/pull/484), [#485](https://github.com/zheref/nen/pull/485), [#492](https://github.com/zheref/nen/pull/492), [#494](https://github.com/zheref/nen/pull/494), [#495](https://github.com/zheref/nen/pull/495), [#496](https://github.com/zheref/nen/pull/496), [#497](https://github.com/zheref/nen/pull/497), [#498](https://github.com/zheref/nen/pull/498). The review-cycle ledger Hatsu owed to nen (zheref/nen#346, Hatsu HA#216), AI-reviewer policy and event reviewer lanes, and the SDD plan's ten pieces through `integration/sdd-plan-2026-10-22` (#498).
