@@ -143,16 +143,37 @@ function readProof(context: CommandContext, root: string): readonly ProofEntry[]
   });
 }
 
-/** Every credential shape in the slice, by field (../security/secrets.ts's scanner). */
-function secretHits(slice: LedgerSlice): readonly { field: string; shapes: readonly string[] }[] {
+/**
+ * Every CALLER-SUPPLIED text in the slice, by field: the effort id, each phase's
+ * name, surface, model, dial, note and step argv, each usage total's surface
+ * and model, the findings document and the proof paths. The marker, the summary
+ * line and the contract keys are nen's own words and are never in this list
+ * (Bugbot on #518): the private-name guard and the secret scan judge what the
+ * caller wrote, so nen's boilerplate can neither trip nor hide a hit.
+ */
+function callerFields(slice: LedgerSlice): readonly { field: string; text: string }[] {
   const fields: { field: string; text: string }[] = [{ field: "effort", text: slice.effort }];
   slice.phases.forEach((phase, index): void => {
-    if (phase.note !== null) fields.push({ field: `phases[${index}].note`, text: phase.note });
-    (phase.steps ?? []).forEach((step, at): void => { fields.push({ field: `phases[${index}].steps[${at}].argv`, text: step.argv }); });
+    const at = `phases[${index}]`;
+    fields.push({ field: `${at}.phase`, text: phase.phase });
+    for (const key of ["surface", "model", "dial", "note"] as const) {
+      const value = phase[key];
+      if (typeof value === "string") fields.push({ field: `${at}.${key}`, text: value });
+    }
+    (phase.steps ?? []).forEach((step, stepAt): void => { fields.push({ field: `${at}.steps[${stepAt}].argv`, text: step.argv }); });
   });
-  if (slice.findings !== null) fields.push({ field: "findings.document", text: JSON.stringify(slice.findings.document) });
+  slice.usage.totals.forEach((total, index): void => {
+    fields.push({ field: `usage.totals[${index}].surface`, text: total.surface });
+    if (total.model !== null) fields.push({ field: `usage.totals[${index}].model`, text: total.model });
+  });
+  if (slice.findings !== null) fields.push({ field: "findings.document", text: JSON.stringify(slice.findings.document, null, 2) });
   slice.proof.forEach((entry, index): void => { fields.push({ field: `proof[${index}].path`, text: entry.path }); });
-  return fields.map(({ field, text }) => ({ field, shapes: scanContentSecrets(text) })).filter((hit): boolean => hit.shapes.length > 0);
+  return fields;
+}
+
+/** Every credential shape in the caller's text, by field (../security/secrets.ts's scanner). */
+function secretHits(slice: LedgerSlice): readonly { field: string; shapes: readonly string[] }[] {
+  return callerFields(slice).map(({ field, text }) => ({ field, shapes: scanContentSecrets(text) })).filter((hit): boolean => hit.shapes.length > 0);
 }
 
 /** Step argv and notes with the repository root spelt `.` (SEC-8): the comment names no machine's layout. */
@@ -241,7 +262,7 @@ function post(context: CommandContext, target: Target, pr: number, effort: strin
     emit(context.io, context.json, { contract: PR_LEDGER_CONTRACT, verdict: "secret-shape", posted: false, secrets }, []);
     return 1;
   }
-  const guard = guardPrivateNames(context, target, [{ field: "body", text: body }], ignore, "nen pr ledger post");
+  const guard = guardPrivateNames(context, target, callerFields(slice), ignore, "nen pr ledger post");
   if (blocksWrite(guard)) {
     emit(context.io, context.json, { contract: PR_LEDGER_CONTRACT, verdict: "refused", posted: false, privateNameCheck: guard }, []);
     return blockingExit(guard);

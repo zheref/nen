@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runFamily, type Io } from "../index.js";
-import { withPrivateTarget } from "../issue/privacy.testkit.js";
+import { FULL_REACH_ROW, privateListRow, visibilityRow, withPrivateTarget } from "../issue/privacy.testkit.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import { prCommand } from "./command.js";
 import { commentsArgv, renderComment, type LedgerSlice } from "./ledger.js";
@@ -237,5 +237,32 @@ describe("settle round on #518 (Feitan 1, 2, 5; Nobunaga 9, 10)", () => {
     const result = await run([...READ, "--restore"], fresh, [pull(MOVED), me, comments([{ id: 55, login: "maintainer", body: renderComment(sliceFor()) }])]);
     expect(result.code).toBe(1);
     expect(result.out).toMatch(/restored: .*from a STALE slice/);
+  });
+});
+
+describe("the private-name guard judges only the caller's text (Bugbot on #518)", () => {
+  // A private repository named "ledger": the word nen's own marker and summary carry.
+  const guardRows: readonly ScriptedCall[] = [visibilityRow("zheref/nen", "public"), FULL_REACH_ROW, privateListRow(["someone/ledger"])];
+  async function publicRun(argv: readonly string[], root: string, script: readonly ScriptedCall[]): Promise<{ code: number; out: string; err: string }> {
+    const out: string[] = [];
+    const err: string[] = [];
+    const io: Io = { out: (line): void => { out.push(line); }, err: (line): void => { err.push(line); } };
+    const code = await runFamily(prCommand, argv, root, false, io, new ScriptedSeams([NOT_A_REPO, ...guardRows, ...script]));
+    return { code, out: out.join("\n"), err: err.join("\n") };
+  }
+
+  it("passes when the private name appears only in nen's marker and summary", async () => {
+    const root = effortRepo();
+    const result = await publicRun([...POST, "--dry-run"], root, [pull(), me, comments([])]);
+    expect(result.code).toBe(0);
+    expect(result.out).toContain("<!-- nen:ledger effort=");
+  });
+
+  it("refuses at exit 4 when the private name is in a phase note the caller wrote", async () => {
+    const root = effortRepo();
+    writeFileSync(join(root, ".nen", "phases", "HA%2F12.json"), JSON.stringify({ contract: "nen.phase.ledger/v0.1", effort: "HA/12", phases: [{ ...PHASE, note: "ported from ledger" }] }));
+    const result = await publicRun([...POST, "--dry-run"], root, [pull(), me, comments([])]);
+    expect(result.code).toBe(4);
+    expect(result.err).toMatch(/phases\[0\]\.note/);
   });
 });

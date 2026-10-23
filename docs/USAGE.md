@@ -9813,7 +9813,7 @@ matched: zheref/hatsu's `scripts/private_name_check.sh`.
 | [`idea file`](#nen-idea-file) | `title`, `body` | after the filing's own refusals, before the create |
 | [`pr open`](#nen-pr-open) | `title`, `body` | before any other GitHub call and before git is asked anything |
 | [`pr edit-body`](#nen-pr-edit-body) | `body` | after the certifying read, before the write |
-| [`pr ledger post`](#nen-pr-ledger) | `body`, the rendered slice comment | after the findings check, the PR, login and comment reads and the size check, before the post or edit; on `--dry-run` too |
+| [`pr ledger post`](#nen-pr-ledger) | the caller's text only, by field: `effort`, each `phases[i].phase\|surface\|model\|dial\|note` and `steps[j].argv`, `usage.totals[i].surface\|model`, `findings.document`, `proof[i].path` -- never nen's own marker and summary | after the findings check, the PR, login and comment reads, the size check and the secret scan, before the post or edit; on `--dry-run` too |
 | [`pr threads reply`](#nen-pr-threads) | `body` | before the thread walk and the reply |
 | [`pr threads settle`](#nen-pr-threads) | `entry[<n>]`, every reply body in the batch file, numbered from 1 | after the batch file's own refusals, before the walk: one hit sends nothing to any thread |
 | [`wake fire`](#nen-wake-fire) | `comment` | before the label is removed. Only with `--comment`: without it nothing is posted, nothing is checked, `privateNameCheck` is `null` and the guard's flags are refused (exit **2**) |
