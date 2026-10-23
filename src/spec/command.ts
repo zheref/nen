@@ -263,7 +263,7 @@ function runCheck(context: CommandContext, repo: string): number {
   // clarify.maxQuestions caps an uncapped --rank, a stated maxBytes is a ceiling.
   const workflow = loadWorkflow(repo);
   const specPolicy = workflow.present ? workflow.workflow.spec : undefined;
-  const rankCap = maxRaw !== undefined ? Number(maxRaw) : rank && specPolicy?.clarify.maxQuestionsDeclared === true ? specPolicy.clarify.maxQuestions : null;
+  const rankCap = maxRaw !== undefined ? Number(maxRaw) : rank && specPolicy?.stated.includes("clarify.maxQuestions") === true ? specPolicy.clarify.maxQuestions : null;
   const vocabularyPath = context.args.values["vocabulary"];
   const vocabulary = vocabularyPath === undefined ? null : { path: vocabularyPath, terms: parseVocabulary(readCallerFile("vocabulary", vocabularyPath)) };
   try {

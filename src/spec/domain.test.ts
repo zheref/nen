@@ -18,7 +18,8 @@ describe("nen/workflow.json's spec domain", () => {
   it("fills the catalogue's defaults and leaves the typed keys null", () => {
     expect(defaultSpecPolicy()).toEqual({
       declared: false,
-      clarify: { maxQuestions: 5, maxRounds: 3, maxQuestionsDeclared: false },
+      stated: [],
+      clarify: { maxQuestions: 5, maxRounds: 3 },
       capture: { foldersPerPr: 4 },
       maxBytes: null,
       autonomy: { platformOrder: null, referencePlatform: null, maxInFlight: null, unmetSc: "refuse", convergeFiling: "propose", waveEnds: null },
@@ -30,7 +31,8 @@ describe("nen/workflow.json's spec domain", () => {
     const policy = parse({ clarify: { maxQuestions: 3 }, capture: { foldersPerPr: 2 }, maxBytes: 40000, autonomy: { platformOrder: ["android", "web"], referencePlatform: "android", maxInFlight: { android: 2, web: 1 }, convergeFiling: "file", waveEnds: "all-at-prompt" } }).spec;
     expect(policy).toEqual({
       declared: true,
-      clarify: { maxQuestions: 3, maxRounds: 3, maxQuestionsDeclared: true },
+      stated: ["clarify.maxQuestions", "capture.foldersPerPr", "maxBytes", "autonomy.platformOrder", "autonomy.referencePlatform", "autonomy.maxInFlight", "autonomy.convergeFiling", "autonomy.waveEnds"],
+      clarify: { maxQuestions: 3, maxRounds: 3 },
       capture: { foldersPerPr: 2 },
       maxBytes: 40000,
       autonomy: { platformOrder: ["android", "web"], referencePlatform: "android", maxInFlight: { android: 2, web: 1 }, unmetSc: "refuse", convergeFiling: "file", waveEnds: "all-at-prompt" },
@@ -46,6 +48,8 @@ describe("nen/workflow.json's spec domain", () => {
       [{ autonomy: { platformOrder: ["web", "web"] } }, "spec.autonomy.platformOrder"],
       [{ autonomy: { platformOrder: ["web"], referencePlatform: "ios" } }, "spec.autonomy.referencePlatform"],
       [{ autonomy: { maxInFlight: { web: -1 } } }, "spec.autonomy.maxInFlight.web"],
+      [{ autonomy: { maxInFlight: 2 } }, "spec.autonomy.maxInFlight"],
+      [{ autonomy: { platformOrder: ["web"], maxInFlight: { ios: 1 } } }, "spec.autonomy.maxInFlight.ios"],
     ] as const) {
       let caught: unknown = null;
       try {

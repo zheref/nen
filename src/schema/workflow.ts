@@ -2419,13 +2419,19 @@ export function parseWorkflow(path: string, value: unknown): Workflow {
  */
 export interface SpecPolicy {
   readonly declared: boolean;
-  readonly clarify: { readonly maxQuestions: number; readonly maxRounds: number; readonly maxQuestionsDeclared: boolean };
+  /**
+   * Every key path the file STATES (`clarify.maxQuestions`, `autonomy.unmetSc`, …), so a reader can tell a
+   * stated value from a filled default: Hatsu reads an absent key at wave time as missing-configuration,
+   * never as the default (spec-repo.md § The spec repository's keys; Nobunaga F13).
+   */
+  readonly stated: readonly string[];
+  readonly clarify: { readonly maxQuestions: number; readonly maxRounds: number };
   readonly capture: { readonly foldersPerPr: number };
   readonly maxBytes: number | null;
   readonly autonomy: {
     readonly platformOrder: readonly string[] | null;
     readonly referencePlatform: string | null;
-    readonly maxInFlight: number | Readonly<Record<string, number>> | null;
+    readonly maxInFlight: Readonly<Record<string, number>> | null;
     readonly unmetSc: (typeof SPEC_UNMET_SC)[number];
     readonly convergeFiling: (typeof SPEC_CONVERGE_FILING)[number];
     readonly waveEnds: (typeof SPEC_WAVE_ENDS)[number] | null;
@@ -2435,7 +2441,8 @@ export interface SpecPolicy {
 export function defaultSpecPolicy(): SpecPolicy {
   return {
     declared: false,
-    clarify: { maxQuestions: 5, maxRounds: 3, maxQuestionsDeclared: false },
+    stated: [],
+    clarify: { maxQuestions: 5, maxRounds: 3 },
     capture: { foldersPerPr: 4 },
     maxBytes: null,
     autonomy: { platformOrder: null, referencePlatform: null, maxInFlight: null, unmetSc: "refuse", convergeFiling: "propose", waveEnds: null },
@@ -2466,16 +2473,26 @@ function parseSpecPolicy(path: string, value: unknown): SpecPolicy {
   }
   const referencePlatform = autonomy["referencePlatform"] === undefined ? null : word("spec.autonomy.referencePlatform", autonomy["referencePlatform"]);
   if (referencePlatform !== null && platformOrder !== null && !platformOrder.includes(referencePlatform)) throw new SchemaError(path, "spec.autonomy.referencePlatform", `'${referencePlatform}' is not in spec.autonomy.platformOrder (${platformOrder.join(", ")})`);
-  let maxInFlight: number | Record<string, number> | null = null;
+  // "an integer per platform" (Hatsu spec-repo.md): a map, each key a platform of platformOrder when it is stated (Nobunaga F19).
+  let maxInFlight: Record<string, number> | null = null;
   const inFlight = autonomy["maxInFlight"];
-  if (typeof inFlight === "number") maxInFlight = positive("spec.autonomy.maxInFlight", inFlight, 1);
-  else if (inFlight !== undefined) {
+  if (inFlight !== undefined) {
     const map = requireRecord(path, "spec.autonomy.maxInFlight", inFlight);
-    maxInFlight = Object.fromEntries(Object.entries(map).filter(([key]): boolean => !key.startsWith("$")).map(([key, at]): [string, number] => [key, positive(`spec.autonomy.maxInFlight.${key}`, at, 1)]));
+    maxInFlight = Object.fromEntries(Object.entries(map).filter(([key]): boolean => !key.startsWith("$")).map(([key, at]): [string, number] => {
+      if (platformOrder !== null && !platformOrder.includes(key)) throw new SchemaError(path, `spec.autonomy.maxInFlight.${key}`, `'${key}' is not in spec.autonomy.platformOrder (${platformOrder.join(", ")})`);
+      return [key, positive(`spec.autonomy.maxInFlight.${key}`, at, 1)];
+    }));
   }
+  const stated = [
+    ...SPEC_CLARIFY_KEYS.filter((key): boolean => clarify[key] !== undefined).map((key): string => `clarify.${key}`),
+    ...SPEC_CAPTURE_KEYS.filter((key): boolean => capture[key] !== undefined).map((key): string => `capture.${key}`),
+    ...(raw["maxBytes"] === undefined ? [] : ["maxBytes"]),
+    ...SPEC_AUTONOMY_KEYS.filter((key): boolean => autonomy[key] !== undefined).map((key): string => `autonomy.${key}`),
+  ];
   return {
     declared: true,
-    clarify: { maxQuestions: positive("spec.clarify.maxQuestions", clarify["maxQuestions"], defaults.clarify.maxQuestions), maxRounds: positive("spec.clarify.maxRounds", clarify["maxRounds"], defaults.clarify.maxRounds), maxQuestionsDeclared: clarify["maxQuestions"] !== undefined },
+    stated,
+    clarify: { maxQuestions: positive("spec.clarify.maxQuestions", clarify["maxQuestions"], defaults.clarify.maxQuestions), maxRounds: positive("spec.clarify.maxRounds", clarify["maxRounds"], defaults.clarify.maxRounds) },
     capture: { foldersPerPr: positive("spec.capture.foldersPerPr", capture["foldersPerPr"], defaults.capture.foldersPerPr) },
     maxBytes: raw["maxBytes"] === undefined ? null : positive("spec.maxBytes", raw["maxBytes"], 1),
     autonomy: {
