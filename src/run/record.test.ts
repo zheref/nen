@@ -53,8 +53,11 @@ describe("nen run record", () => {
     expect(Object.keys(report)).toEqual(["contract", "verdict", "schema", "id", "path", "problems", "record", "reason"]);
     const path = join(state, "hatsu", "specs", `${ID}.json`);
     expect(report).toMatchObject({ contract: "nen.run.record/v0.1", verdict: "written", path });
-    expect(statSync(path).mode & 0o777).toBe(0o600);
-    expect(statSync(join(state, "hatsu", "specs")).mode & 0o777).toBe(0o700);
+    // POSIX modes only: Windows reports 0o666/0o777 whatever was asked (src/canon/pin-write.test.ts's rule).
+    if (process.platform !== "win32") {
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+      expect(statSync(join(state, "hatsu", "specs")).mode & 0o777).toBe(0o700);
+    }
     expect(readdirSync(join(state, "hatsu", "specs"))).toEqual([`${ID}.json`]);
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(RECORD);
     const read = await run(["record", "read", "--schema", "hatsu.spec.run/v0.1", "--id", ID], { XDG_STATE_HOME: state });
