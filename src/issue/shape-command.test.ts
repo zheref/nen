@@ -124,10 +124,10 @@ describe("nen issue body-check", () => {
 });
 
 describe("nen issue questions", () => {
-  it("counts and exits 0, with the counts in --json", async () => {
+  it("counts and exits 1 on an open row, with the counts in --json (zheref/nen#477 AC-1)", async () => {
     const dir = scratch({ "q.md": QUESTIONS });
     const result = await run(issueCommand, ["issue", "questions", "--body-file", "q.md"], [], { repoFlag: dir, json: true });
-    expect(result.code).toBe(0);
+    expect(result.code).toBe(1);
     const report = JSON.parse(result.out) as { contract: string; counts: unknown };
     expect(report.contract).toBe("nen.issue.questions/v0.1");
     expect(report.counts).toEqual({ open: 1, resolved: 1, needsMarkers: 1, unrecognised: 0 });
@@ -152,6 +152,50 @@ describe("nen issue questions", () => {
     const result = await run(issueCommand, ["issue", "questions", "--ref", "4", "--target", "o/n"], [pr]);
     expect(result.code).toBe(2);
     expect(result.out).toBe("");
+  });
+
+  it("exits 0 when every question is resolved, and 1 on a malformed OQ row or a [NEEDS] marker (AC-2, AC-3)", async () => {
+    const dir = scratch({
+      "clear.md": "- ~~OQ-1~~ → A: yes (2026-10-21, HR-4)\n- ~~OQ-2~~ → A: no (2026-10-22, HR-5)\n",
+      "none.md": "## Open questions\n\nNone.\n",
+      "bad.md": "- OQ-1 which?\n",
+      "needs.md": "[NEEDS CLARIFICATION: scope]\n",
+    });
+    const clear = await run(issueCommand, ["issue", "questions", "--body-file", "clear.md"], [], { repoFlag: dir, json: true });
+    expect(clear.code).toBe(0);
+    expect((JSON.parse(clear.out) as { counts: unknown }).counts).toEqual({ open: 0, resolved: 2, needsMarkers: 0, unrecognised: 0 });
+    expect((await run(issueCommand, ["issue", "questions", "--body-file", "none.md"], [], { repoFlag: dir })).code).toBe(0);
+    const bad = await run(issueCommand, ["issue", "questions", "--body-file", "bad.md"], [], { repoFlag: dir });
+    expect(bad.code).toBe(1);
+    expect(bad.out).toMatch(/UNRECOGNISED line 1: - OQ-1 which\?/);
+    expect((await run(issueCommand, ["issue", "questions", "--body-file", "needs.md"], [], { repoFlag: dir })).code).toBe(1);
+  });
+
+  it("counts a batch of refs in one report, each on its own, an unread one listed (AC-4, SC-2)", async () => {
+    const issue = (n: number, body: string): ScriptedCall => ({ match: `gh api repos/o/n/issues/${n}`, result: { stdout: JSON.stringify({ number: n, body }) } });
+    const script: ScriptedCall[] = [issue(1, QUESTIONS), issue(2, "- ~~OQ-1~~ → A: yes (2026-10-21, HR-4)\n"), { match: "gh api repos/o/n/issues/3", result: { code: 1, stderr: "HTTP 502" } }];
+    const result = await run(issueCommand, ["issue", "questions", "--ref", "NN#1,NN#2,NN#3", "--target", "o/n"], script, { json: true });
+    expect(result.code).toBe(1);
+    const report = JSON.parse(result.out) as { counts: unknown; issues: { source?: { number: number }; counts?: { open: number }; ref?: string; unread?: string }[] };
+    expect(report.counts).toEqual({ issues: 3, blocking: 1, clear: 1, unread: 1 });
+    expect(report.issues.map((entry) => entry.source?.number ?? entry.ref)).toEqual([1, 2, "NN#3"]);
+    expect(report.issues[0]?.counts?.open).toBe(1);
+    expect(report.issues[2]?.unread).toMatch(/502|could not read/i);
+
+    const fifty = Array.from({ length: 50 }, (_, index): number => index + 1);
+    const clearScript = fifty.map((n): ScriptedCall => issue(n, "None.\n"));
+    const batch = await run(issueCommand, ["issue", "questions", "--ref", fifty.map((n): string => `NN#${n}`).join(","), "--target", "o/n"], clearScript);
+    expect(batch.code).toBe(0);
+    expect(batch.out.split("\n")[0]).toBe("50 issue(s): 0 with an open question, 50 clear, 0 unread -- o/n");
+  });
+
+  it("refuses a batch naming a pull request, a repeat, or --body-file beside it (exit 2)", async () => {
+    const pr: ScriptedCall = { match: "gh api repos/o/n/issues/4", result: { stdout: JSON.stringify({ number: 4, pull_request: {}, body: "" }) } };
+    const ok: ScriptedCall = { match: "gh api repos/o/n/issues/5", result: { stdout: JSON.stringify({ number: 5, body: "" }) } };
+    expect((await run(issueCommand, ["issue", "questions", "--ref", "5,4", "--target", "o/n"], [ok, pr])).code).toBe(2);
+    expect((await run(issueCommand, ["issue", "questions", "--ref", "5,5", "--target", "o/n"], [ok])).code).toBe(2);
+    const dir = scratch({ "q.md": QUESTIONS });
+    expect((await run(issueCommand, ["issue", "questions", "--ref", "5,6", "--body-file", "q.md", "--target", "o/n"], [], { repoFlag: dir })).code).toBe(2);
   });
 
   it("refuses --target with --body-file (exit 2)", async () => {

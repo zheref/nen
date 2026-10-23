@@ -14,7 +14,7 @@
 import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
 import { decomposeLabelName, loadLabelTaxonomy, type LabelTaxonomy } from "../schema/labels.js";
 import { commaList } from "../cli/comma.js";
-import { readJsonFile, readTextFile, resolveAgainstRepo } from "../cli/inputs.js";
+import { readJsonFile, readTextFile, resolveAgainstRepo, splitList } from "../cli/inputs.js";
 import { statSync, writeFileSync } from "node:fs";
 import { parseTarget, type Target , TargetError} from "../github/target.js";
 import type { FlagSpec } from "../cli/args.js";
@@ -739,7 +739,7 @@ usage:
       id, number, line }], misses: [{ section, kind, line, detail }],
       advisories: [{ kind, word, line }] }'.
 
-  nen issue questions (--body-file <path> | --ref <CODE>#<N> --target <owner/name>)
+  nen issue questions (--body-file <path> | --ref <CODE>#<N>[,<CODE>#<N>...] --target <owner/name>)
                       [--requirements-from <catalogue.json>]
       Read-only. Counts open questions ('- OQ-{n} (<gate>): <question>'),
       resolved ones ('- ~~OQ-{n}~~ → A: <answer> (<YYYY-MM-DD>, <ruling
@@ -749,13 +749,18 @@ usage:
       two row patterns from the catalogue's rows.question instead. Any list
       row naming OQ-{n} -- a blockquoted one included -- in neither shape is
       listed as unrecognised, never counted as either: a resolved row lacking
-      its answer, date or ruling reference is unrecognised. It counts and
-      never decides: exit 0 whenever the body was read, 1 when the issue could
-      not be read, 2 usage or a malformed catalogue. --json: '{ contract:
+      its answer, date or ruling reference is unrecognised. Exit 1 when any
+      open row, [NEEDS] marker or unrecognised row is found, or an issue could
+      not be read; 0 when every question is resolved or there is none; 2 usage
+      or a malformed catalogue. A comma-separated --ref is a batch (up to 100):
+      each issue counted on its own in one report, an unreadable one listed
+      as unread. --json: '{ contract:
       "nen.issue.questions/v0.1", source, counts: { open, resolved,
       needsMarkers, unrecognised }, open: [{ id, number, gate, line }],
       resolved: [{ id, number, line }], needsMarkers: [{ label, line }],
-      unrecognised: [{ line, text }] }'.
+      unrecognised: [{ line, text }] }'; a batch: '{ contract, target, counts:
+      { issues, blocking, clear, unread }, issues: [<that shape> | { ref,
+      unread }] }'.
 
   nen issue criteria (--ref <CODE>#<N> --target <owner/name> | --body-file <path>)
                      [--requirements-from <catalogue.json>]
@@ -2229,8 +2234,12 @@ function readShapeBody(context: CommandContext, verb: string): { body: string; s
     const path = resolveAgainstRepo(resolveRepoRoot({ repoFlag: context.repoFlag }), bodyFile);
     return { body: readTextFile(path, process.cwd(), `--body-file names the issue body 'issue ${verb}' reads; an unreadable one is refused, never read as empty.`), source: { kind: "file", path } };
   }
-  const target = requireTarget(context);
-  const match = ISSUE_REF.exec((ref as string).trim());
+  return readShapeRef(context, ref as string, requireTarget(context));
+}
+
+/** One `--ref` read for an issue-shape verb: `<CODE>#<N>`, `<owner/name>#<N>`, `#<N>` or `<N>` in `target`. */
+function readShapeRef(context: CommandContext, ref: string, target: ReturnType<typeof requireTarget>): { body: string; source: ShapeSource } {
+  const match = ISSUE_REF.exec(ref.trim());
   const number = match === null ? NaN : Number.parseInt(match[2] as string, 10);
   if (match === null || !Number.isSafeInteger(number) || number <= 0) {
     throw new VerbUsageError(`--ref '${ref}' is not an issue reference. Write <CODE>#<N>, <owner/name>#<N>, #<N> or <N>; --target names the repository it is read from.`);
@@ -2249,7 +2258,7 @@ function readShapeBody(context: CommandContext, verb: string): { body: string; s
   if (summary.body === undefined) {
     throw new Error(`could not read ${target.slug}#${number}'s body: the API payload carried no 'body' field, and an unread body is never an empty one.`);
   }
-  return { body: summary.body.replace(/\r\n?/g, "\n"), source: { kind: "issue", ref: ref as string, target: target.slug, number } };
+  return { body: summary.body.replace(/\r\n?/g, "\n"), source: { kind: "issue", ref, target: target.slug, number } };
 }
 
 function describeSource(source: ShapeSource): string {
@@ -2305,19 +2314,80 @@ function optionalCatalogue(context: CommandContext): IssueSectionsCatalogue | nu
   }
 }
 
-function issueQuestions(context: CommandContext): number {
-  const catalogue = optionalCatalogue(context);
-  const { body, source } = readShapeBody(context, "questions");
-  const report = countQuestions(body, catalogue?.questions ?? undefined);
-  const lines = [
+/** Whether a questions report blocks a build (zheref/nen#477): an open row, a [NEEDS] marker, or a malformed OQ row. */
+function questionsBlock(report: ReturnType<typeof countQuestions>): boolean {
+  return report.counts.open > 0 || report.counts.needsMarkers > 0 || report.counts.unrecognised > 0;
+}
+
+function questionLines(report: ReturnType<typeof countQuestions>, source: ShapeSource): string[] {
+  return [
     `${report.counts.open} open, ${report.counts.resolved} resolved, ${report.counts.needsMarkers} [NEEDS] marker(s), ${report.counts.unrecognised} unrecognised -- ${describeSource(source)}`,
     ...report.open.map((row): string => `OPEN      ${row.id} (${row.gate}) line ${row.line}`),
     ...report.resolved.map((row): string => `RESOLVED  ${row.id} line ${row.line}`),
     ...report.needsMarkers.map((marker): string => `NEEDS     ${marker.label === "" ? "(no label)" : marker.label} line ${marker.line}`),
     ...report.unrecognised.map((row): string => `UNRECOGNISED line ${row.line}: ${row.text}`),
+  ];
+}
+
+/** At most this many `--ref` entries in one batch (zheref/nen#477 SC-2 asks for 50). */
+const QUESTIONS_BATCH_LIMIT = 100;
+
+/**
+ * `nen issue questions`. EXIT 1 WHEN A QUESTION IS STILL OPEN (zheref/nen#477
+ * AC-1, AC-3), so a selector can skip an issue on the exit alone: any open
+ * `OQ-{n}` row, any `[NEEDS …]` marker (an unanswered question in the shape
+ * HR-4 does not admit), and any malformed `OQ-{n}` row. Exit 0 only when every
+ * question read is resolved, or there is none.
+ *
+ * A BATCH (AC-4): `--ref` takes a comma-separated list, each read and counted
+ * on its own, in one report. One issue that could not be read is an `unread`
+ * entry with its reason, never zero counts, and makes the run exit 1 -- the
+ * others are still reported. A pull-request number anywhere refuses the whole
+ * run at exit 2, as a single `--ref` does.
+ */
+function issueQuestions(context: CommandContext): number {
+  const catalogue = optionalCatalogue(context);
+  const refs = context.args.values["ref"]?.includes(",") === true ? splitList(context.args.values["ref"]) : null;
+  if (refs === null) {
+    const { body, source } = readShapeBody(context, "questions");
+    const report = countQuestions(body, catalogue?.questions ?? undefined);
+    emit(context.io, context.json, { contract: ISSUE_QUESTIONS_CONTRACT, source, ...report }, questionLines(report, source).map(plainLine));
+    return questionsBlock(report) ? 1 : 0;
+  }
+  if (context.args.values["body-file"] !== undefined) {
+    throw new VerbUsageError("'issue questions' reads --body-file OR --ref, never both.");
+  }
+  if (refs.length === 0) throw new VerbUsageError("--ref names no issue.");
+  if (refs.length > QUESTIONS_BATCH_LIMIT) throw new VerbUsageError(`--ref names ${refs.length} issues; one batch reads at most ${QUESTIONS_BATCH_LIMIT}.`);
+  if (new Set(refs).size !== refs.length) throw new VerbUsageError("--ref names an issue twice.");
+  const target = requireTarget(context);
+  type Entry = ({ readonly source: ShapeSource } & ReturnType<typeof countQuestions>) | { readonly ref: string; readonly unread: string };
+  const entries: Entry[] = [];
+  for (const ref of refs) {
+    let read: { body: string; source: ShapeSource };
+    try {
+      read = readShapeRef(context, ref, target);
+    } catch (error) {
+      if (error instanceof VerbUsageError) throw error;
+      entries.push({ ref, unread: error instanceof Error ? error.message : String(error) });
+      continue;
+    }
+    entries.push({ source: read.source, ...countQuestions(read.body, catalogue?.questions ?? undefined) });
+  }
+  const counted = entries.filter((entry): entry is Extract<Entry, { source: ShapeSource }> => "source" in entry);
+  const unread = entries.filter((entry): entry is Extract<Entry, { unread: string }> => "unread" in entry);
+  const blocking = counted.filter((entry): boolean => questionsBlock(entry));
+  const lines = [
+    `${refs.length} issue(s): ${blocking.length} with an open question, ${counted.length - blocking.length} clear, ${unread.length} unread -- ${target.slug}`,
+    ...entries.flatMap((entry): string[] => ("unread" in entry ? [`UNREAD    ${entry.ref}: ${entry.unread}`] : questionLines(entry, entry.source))),
   ].map(plainLine);
-  emit(context.io, context.json, { contract: ISSUE_QUESTIONS_CONTRACT, source, ...report }, lines);
-  return 0;
+  emit(
+    context.io,
+    context.json,
+    { contract: ISSUE_QUESTIONS_CONTRACT, target: target.slug, counts: { issues: refs.length, blocking: blocking.length, clear: counted.length - blocking.length, unread: unread.length }, issues: entries },
+    lines,
+  );
+  return blocking.length > 0 || unread.length > 0 ? 1 : 0;
 }
 
 function issueCriteria(context: CommandContext): number {

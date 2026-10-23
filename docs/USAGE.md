@@ -10216,12 +10216,12 @@ ADVISORY line 3: vague 'fast'
 
 ### `nen issue questions`
 
-Counts an issue body's unresolved questions -- the one admitted shape for an open question in an issue (Hatsu's ruling HR-4) -- so a caller can refuse to build on an issue that still holds one. It **counts and never decides**: whether an open question blocks anything is the caller's rule.
+Counts an issue body's unresolved questions -- the one admitted shape for an open question in an issue (Hatsu's ruling HR-4) -- so a caller can refuse to build on an issue that still holds one. **Its exit says whether a question is still open** ([#477](https://github.com/zheref/nen/issues/477)), so a build or a batch selector can skip an issue on the exit alone; what an open question then stops is the caller's rule.
 
 **Usage**
 
 ```text
-nen issue questions (--body-file <path> | --ref <CODE>#<N> --target <owner/name>)
+nen issue questions (--body-file <path> | --ref <CODE>#<N>[,<CODE>#<N>...] --target <owner/name>)
                     [--requirements-from <catalogue.json>] [--json]
 ```
 
@@ -10230,7 +10230,7 @@ nen issue questions (--body-file <path> | --ref <CODE>#<N> --target <owner/name>
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `--body-file <path>` | one of the two | The issue body, read from disk. | As [`issue body-check`](#nen-issue-body-check)'s. |
-| `--ref <CODE>#<N>` | one of the two | The issue to read. | As [`issue body-check`](#nen-issue-body-check)'s: needs `--target`; a pull request is refused at exit 2. |
+| `--ref <CODE>#<N>[,…]` | one of the two | The issue to read, or a comma-separated **batch** of up to 100. | As [`issue body-check`](#nen-issue-body-check)'s: needs `--target`; a pull request anywhere in the list refuses the run at exit 2, and so does a repeated entry. |
 | `--target <owner/name>` | with `--ref` | The repository `--ref` is read from. | |
 | `--requirements-from <path>` | no | The [issue-sections catalogue](#the-issue-sections-catalogue) whose `rows.question` `pattern` and `resolvedPattern` replace the two shapes below. | Resolves against `--repo`'s root. Unreadable or malformed exits 2. |
 
@@ -10241,7 +10241,11 @@ nen issue questions (--body-file <path> | --ref <CODE>#<N> --target <owner/name>
 - **NEEDS markers** -- `[NEEDS CLARIFICATION: …]` and `[NEEDS <row-id>: …]`, each with its label;
 - **unrecognised** -- any list row naming `OQ-{n}` (a blockquoted one included) in neither shape above, listed with its text and counted as neither, so a malformed row is visible rather than lost.
 
-**Output and exit codes** -- the line `<open> open, <resolved> resolved, <n> [NEEDS] marker(s), <n> unrecognised -- <source>`, then `OPEN`, `RESOLVED`, `NEEDS` and `UNRECOGNISED` rows with their lines. `--json`: `{ contract, source, counts: { open, resolved, needsMarkers, unrecognised }, open, resolved, needsMarkers, unrecognised }` -- `contract` is `nen.issue.questions/v0.1`, `source` as `body-check`'s, `open` each `{ id, number, gate, line }`, `resolved` each `{ id, number, line }`, `needsMarkers` each `{ label, line }`, `unrecognised` each `{ line, text }`. Exit 0 whenever the body was read, whatever the counts; exit 1 when `--ref`'s issue could not be read or carried no body (never zero counts); exit 2 on usage or a malformed catalogue.
+**Output and exit codes** -- the line `<open> open, <resolved> resolved, <n> [NEEDS] marker(s), <n> unrecognised -- <source>`, then `OPEN`, `RESOLVED`, `NEEDS` and `UNRECOGNISED` rows with their lines. `--json`: `{ contract, source, counts: { open, resolved, needsMarkers, unrecognised }, open, resolved, needsMarkers, unrecognised }` -- `contract` is `nen.issue.questions/v0.1`, `source` as `body-check`'s, `open` each `{ id, number, gate, line }`, `resolved` each `{ id, number, line }`, `needsMarkers` each `{ label, line }`, `unrecognised` each `{ line, text }`.
+
+**A batch** (`--ref` with a comma) reads and counts each issue on its own and prints `<n> issue(s): <n> with an open question, <n> clear, <n> unread -- <owner/name>`, then each issue's block, and `UNREAD    <ref>: <reason>` for one that could not be read -- listed, never zero counts, and the others still reported. `--json`: `{ contract, target, counts: { issues, blocking, clear, unread }, issues }`, each entry the single-issue shape (with its `source`) or `{ ref, unread }`.
+
+**Exit codes** -- **1** when any open row, any `[NEEDS …]` marker or any unrecognised `OQ-{n}` row is found (a malformed row is a question nobody can tell is answered), and when an issue could not be read or carried no body; **0** only when every question read is resolved, or there is none; **2** on usage or a malformed catalogue. **Changed from v0.26.0**, which exited 0 whatever the counts. A `[NEEDS …]` marker blocks because it is an unanswered question in a shape HR-4 does not admit (this delivery's reading; #477 named open and malformed rows).
 
 **Example**
 
@@ -10254,7 +10258,7 @@ OPEN      OQ-1 (G4) line 1
 RESOLVED  OQ-2 line 2
 NEEDS     CLARIFICATION line 3
 ```
-(shape from `src/issue/shape-command.test.ts`)
+(shape from `src/issue/shape-command.test.ts`; exit 1)
 
 ### `nen issue criteria`
 
