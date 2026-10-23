@@ -1,7 +1,8 @@
 // src/spec/command.ts -- the `nen spec` family: number, check, cite-check,
-// index. The first slice of the spec verbs Hatsu's capture skill
-// (`dowsing-chain`, ruling HR-12) owes to nen: text-only and read-only, but for
-// `index --write`, which writes one generated file and takes --dry-run.
+// index (the first slice), then inventory, diff, converge and coverage
+// (zheref/nen#493 waves A and C). The verbs Hatsu's capture skill
+// (`dowsing-chain`, ruling HR-12) owes to nen: read-only, but for `index
+// --write`, `converge --write` (each behind --dry-run) and `inventory --out`.
 //
 // EVERY VERB REPORTS AND NONE DECIDES. `number` computes the next free
 // `{nnn}` and names collisions without picking a winner; `check` lists
@@ -11,7 +12,8 @@
 // over a hand edit. "Could not read" is exit 1 on every one of them, never a
 // clean report.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { emit, parseCallerToken, refuseExtraPositionals, requireRepoFlag, requireSubcommand, requireValue, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import { parseTarget, targetFromRemote, TargetError, type Target } from "../github/target.js";
 import { resolveRepoRoot } from "../repo/root.js";
@@ -21,8 +23,11 @@ import { checkSpec, CONSTITUTION_PATH, parseVocabulary, renderSpecCheck, SpecCon
 import { citeCheck, parseCheckouts, renderCiteCheck } from "./citecheck.js";
 import { computeNext, readBaseFolders, readPrFolders, renderSpecNumber, SPEC_NUMBER_CONTRACT, type SpecNumberReport } from "./number.js";
 import { renderSpecIndex, specIndex } from "./specindex.js";
+import { parseContract } from "../schema/contract.js";
+import { couldNotRead, GOVERNED_SCENARIOS, inventory, renderInventory, scenarioReader, type InventoryReport } from "./inventory.js";
+import { readTree, TreeReadError } from "./tree.js";
 
-const SUBCOMMANDS = ["number", "check", "cite-check", "index"] as const;
+const SUBCOMMANDS = ["number", "check", "cite-check", "index", "inventory"] as const;
 type Subcommand = (typeof SUBCOMMANDS)[number];
 
 export const DEFAULT_SPEC_LAYOUT = "specs/{nnn}-{slug}";
@@ -31,6 +36,7 @@ const USAGE = `nen spec number --repo <spec-checkout> --layout <pattern> [--base
 nen spec check --repo <path> (--folder <dir> | --constitution) [--vocabulary <file>] [--markers [--rank [--max <n>]]] [--json]
 nen spec cite-check --repo <spec> --folder <dir> --checkouts <file> [--at <sha>|HEAD] [--verify-excerpt] [--json]
 nen spec index --repo <spec> [--layout <pattern>] [--write [--dry-run]] [--json]
+nen spec inventory --repo <member> --scenario <id> [--lane <lane>] [--at <ref>] [--exclude <glob>[,<glob>...]] [--out <file>] [--json]
 
 Read-only verbs over a Spec Kit spec repository. Each
 reports and refuses; none decides. A layout is '<dir>/<final>' whose final
@@ -73,11 +79,25 @@ index       <root>/INDEX.md from each folder's spec.md header (title, Status,
             file is current. --write regenerates an absent or stale file and
             refuses (exit 1) a hand-edited one; --dry-run writes nothing.
 
+inventory   One row per owned file fact of a member checkout at --at (default
+            HEAD), read through git, never the work tree: the file set is the
+            build system's own (xcode: the project's target build phases and
+            synchronized groups; gradle: settings' include list and each
+            module's source sets; tsconfig: files/include/exclude, extends and
+            references), the suffix -> kind -> rule id table the scenario's
+            stack handbook appendix (${GOVERNED_SCENARIOS.join(", ")}).
+            Rows {id, kind, path, lines, sha, excerptSha256, tier, ruleId}; no
+            excerpts. --lane reads the lane's cwd from nen/contract.json at
+            that commit. --out writes the same JSON document to a file.
+            Exit 1 when partial (a declaration nen could not read) or nothing
+            could be read.
+
 --json shapes (key order as listed):
   number:     { contract: "nen.spec.number/v0.1", repo, target, layout, base, baseSource, baseSha, openPrs, taken, collisions, next, reason }
   check:      { contract: "nen.spec.check/v0.1", repo, mode, path, files, vocabulary, requirements, markers, open, ranked, tasks, findings, counts }
   cite-check: { contract: "nen.spec.cite-check/v0.1", repo, folder, checkouts, at, verifyExcerpt, members, citations, counts }
-  index:      { contract: "nen.spec.index/v0.1", repo, layout, path, rows, ignored, state, action, reason }`;
+  index:      { contract: "nen.spec.index/v0.1", repo, layout, path, rows, ignored, state, action, reason }
+  inventory:  { contract: "nen.spec.inventory/v0.1", verdict, repo, origin, lane, cwd, scenario, handbook, sha, membership, excluded, rows, totals, unread, reason }`;
 
 const OWNED: Readonly<Record<string, readonly Subcommand[]>> = {
   layout: ["number", "index"],
@@ -87,7 +107,11 @@ const OWNED: Readonly<Record<string, readonly Subcommand[]>> = {
   vocabulary: ["check"],
   max: ["check"],
   checkouts: ["cite-check"],
-  at: ["cite-check"],
+  at: ["cite-check", "inventory"],
+  scenario: ["inventory"],
+  lane: ["inventory"],
+  exclude: ["inventory"],
+  out: ["inventory"],
 };
 const OWNED_BOOLEANS: Readonly<Record<string, readonly Subcommand[]>> = {
   constitution: ["check"],
@@ -203,20 +227,68 @@ function runIndex(context: CommandContext, repo: string): number {
   return report.state === "current" ? 0 : 1;
 }
 
+const LANE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+function runInventory(context: CommandContext, repo: string): number {
+  const scenario = requireValue(context.args, "scenario", `It names the member's governed scenario: ${GOVERNED_SCENARIOS.join(", ")}.`);
+  const reader = scenarioReader(scenario);
+  if (reader === null) throw new VerbUsageError(`--scenario '${scenario}' has no capture reader; the governed scenarios are ${GOVERNED_SCENARIOS.join(", ")} (each stack handbook's capture-reader appendix).`);
+  const lane = context.args.values["lane"] ?? null;
+  if (lane !== null && !LANE_NAME.test(lane)) throw new VerbUsageError(`--lane '${lane}' is not a lane name.`);
+  const at = context.args.values["at"] ?? "HEAD";
+  if (at !== "HEAD" && !/^[0-9a-f]{7,40}$/.test(at)) throw new VerbUsageError(`--at '${at}' is neither HEAD nor a 7-40 character hex sha.`);
+  const exclude = (context.args.values["exclude"] ?? "").split(",").map((entry): string => entry.trim()).filter((entry): boolean => entry !== "");
+  for (const pattern of exclude) checkRelativePath("exclude", pattern.replace(/\*/g, "x"));
+  const out = context.args.values["out"] ?? null;
+  let origin: string | null = null;
+  try {
+    origin = targetFromRemote(context.seams, repo).slug;
+  } catch {
+    origin = null;
+  }
+  const finish = (report: InventoryReport): number => {
+    if (out !== null && report.verdict !== "could-not-read") writeFileSync(resolve(out), `${JSON.stringify(report, null, 2)}\n`);
+    emit(context.io, context.json, report, [...renderInventory(report), ...(out !== null && report.verdict !== "could-not-read" ? [`  wrote ${out}`] : [])]);
+    return report.verdict === "read" ? 0 : 1;
+  };
+  const input = { repo, origin, lane, cwd: "", scenario, exclude };
+  let tree;
+  try {
+    tree = readTree(context.seams, repo, at);
+  } catch (error) {
+    if (error instanceof TreeReadError) return finish(couldNotRead(input, reader, error.message));
+    throw error;
+  }
+  let cwd = "";
+  if (lane !== null) {
+    const text = tree.read("nen/contract.json");
+    if (text === null) return finish(couldNotRead(input, reader, `--lane ${lane}: nen/contract.json is not in the tree at ${tree.sha.slice(0, 12)}`));
+    try {
+      const contract = parseContract("nen/contract.json", "nen", JSON.parse(text) as unknown);
+      const declared = contract.project?.lanes[lane];
+      if (declared === undefined) return finish(couldNotRead(input, reader, `--lane ${lane} is not a lane of nen/contract.json's project block at ${tree.sha.slice(0, 12)} (declared: ${Object.keys(contract.project?.lanes ?? {}).join(", ") || "none"})`));
+      cwd = declared.cwd === "." ? "" : declared.cwd.replace(/^\.\//, "").replace(/\/+$/, "");
+    } catch (error) {
+      return finish(couldNotRead(input, reader, `nen/contract.json at ${tree.sha.slice(0, 12)} could not be read: ${(error as Error).message}`));
+    }
+  }
+  return finish(inventory(tree, { ...input, cwd }, reader));
+}
+
 export const specCommand: Command = {
   name: "spec",
-  summary: "Number, check, cite-check and index a Spec Kit spec repository's folders (read-only).",
+  summary: "Inventory, number, check, cite-check and index a product family's Spec Kit spec repository.",
   usage: USAGE,
   subcommands: [...SUBCOMMANDS],
   flags: {
-    values: ["layout", "base", "target", "folder", "vocabulary", "max", "checkouts", "at"],
+    values: ["layout", "base", "target", "folder", "vocabulary", "max", "checkouts", "at", "scenario", "lane", "exclude", "out"],
     booleans: ["constitution", "markers", "rank", "verify-excerpt", "write", "dry-run"],
   },
   run(context): number {
     const subcommand = requireSubcommand("spec", context.args, SUBCOMMANDS) as Subcommand;
     refuseExtraPositionals(context.args, 2);
     refuseForeignFlags(context, subcommand);
-    const repo = resolveRepoRoot({ repoFlag: requireRepoFlag(context, "It names the spec repository's checkout.") });
+    const repo = resolveRepoRoot({ repoFlag: requireRepoFlag(context, subcommand === "inventory" ? "It names the member's checkout." : "It names the spec repository's checkout.") });
     switch (subcommand) {
       case "number":
         return runNumber(context, repo);
@@ -226,6 +298,9 @@ export const specCommand: Command = {
         return runCiteCheck(context, repo);
       case "index":
         return runIndex(context, repo);
+      case "inventory":
+        return runInventory(context, repo);
     }
+    throw new VerbUsageError(`'spec ${subcommand}' is not dispatched here.`);
   },
 };

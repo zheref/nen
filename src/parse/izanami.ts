@@ -1016,7 +1016,6 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
     subcommands: {
       build: RO("assembles a board from rows already fetched"),
       render: RO("renders a board JSON as a table"),
-      diff: RO("diffs two board snapshots"),
     },
   },
   canon: {
@@ -1185,7 +1184,6 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       // from this side, so the rows cannot silently go false again no
       // matter which module a refactor touches first.
       fetch: RO("one typed PR snapshot -- gh reads only (its REST reviews call pins --method GET)"),
-      converge: RO("compares closing issues' AC rows with the PR body's verify rows -- gh pr view and gh api issue reads only"),
       "next-blocker": RO("reports the first blocking condition -- reads only (same pinned-GET fetch)"),
       "cascade-main": MUT("merges the trunk into the branch and pushes; --no-push still merges locally (a working-tree/index mutation), so it stays mutating in every spelling"),
       retarget: MUT("gh pr edit --base"),
@@ -1471,14 +1469,17 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       warmup: MUT("brings a working copy to a known state: it discards, fetches, force-moves a trunk ref and checks out a branch. No form of it is a pure read -- the dry run spawns nothing, but a warm-up is not a thing anyone WATCHES, so certifying one form read-only buys a caller nothing and costs the fail-closed answer"),
     },
   },
-  // The spec family's first slice (SDD piece N10, HR-12): three pure reads
-  // and one generator whose write is behind --write, itself dry-run-gated.
+  // The spec family (SDD piece N10, HR-12; zheref/nen#493): pure reads,
+  // generators whose write is behind --write (itself dry-run-gated), and
+  // inventory's --out.
   spec: {
     subcommands: {
       number: RO("reads origin/<base> with git rev-parse/ls-tree and the open PRs' files over gh pr list; writes nothing"),
       check: RO("reads a spec folder's or constitution's Markdown and a caller's vocabulary file; writes nothing"),
       "cite-check": RO("reads member checkouts with git remote get-url, rev-parse and cat-file; writes nothing"),
       index: GATED_DRY(["--write"], "reads each folder's spec.md header; --write writes <root>/INDEX.md unless --dry-run is given"),
+      // zheref/nen#493 waves A and C.
+      inventory: GATED(["--out"], "reads a member checkout through git rev-parse, ls-tree and cat-file; --out writes the inventory document to the caller's file"),
     },
   },
   split: { subcommands: { verify: RO("proves diff equality over git reads") } },

@@ -12,7 +12,7 @@ repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
 what each version changed: 47 command
-families, 161 verbs, every flag checked against that binary.
+families, 162 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -206,7 +206,7 @@ change from a compatible one.
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **91 shapes** and **94 ids** (`nen.runner.plan`,
+binary carries**, writing or reading — **92 shapes** and **95 ids** (`nen.runner.plan`,
 `nen.stop.mark` and `nen.wc.worktree.copies` each have two versions, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -266,7 +266,7 @@ file formats).
 - **`schema`** — `nen.schema.set/v0.1`
 - **`session`** — `nen.session.ledger/v0.1`
 - **`shu`** — `nen.shu.<verb>/v0.1` · `nen.shu.coverage-capture/v0.1` · `nen.shu.coverage/v0.1` · `nen.shu.detect/v0.1` · `nen.shu.evidence/v0.1` · `nen.shu.proof/v0.1` · `nen.shu.test-report/v0.1` · `nen.shu.tools/v0.1` · `nen.shu.warmup/v0.1`
-- **`spec`** — `nen.spec.check/v0.1` · `nen.spec.cite-check/v0.1` · `nen.spec.index/v0.1` · `nen.spec.number/v0.1`
+- **`spec`** — `nen.spec.check/v0.1` · `nen.spec.cite-check/v0.1` · `nen.spec.index/v0.1` · `nen.spec.inventory/v0.1` · `nen.spec.number/v0.1`
 - **`stop`** — `nen.stop.answer/v0.1` · `nen.stop.mark/v0.1` · `nen.stop.mark/v0.2` · `nen.stop.proposed-issue/v0.1`
 - **`surface`** — `nen.surface.capabilities/v0.1` · `nen.surface.install/v0.1` · `nen.surface.mirror.check-installed/v0.1` · `nen.surface.mirror.check-plugin/v0.1` · `nen.surface.mirror.check/v0.1` · `nen.surface.mirror.generate/v0.1` · `nen.surface.status/v0.1`
 - **`usage`** — `nen.usage.ledger/v0.1`
@@ -920,7 +920,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 161 verbs, grouped as the README groups them. **Reads** is what a
+All 162 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -1060,6 +1060,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`spec`](#family-spec) | [`nen spec check`](#nen-spec-check) | a spec folder or the constitution held to citation-or-marker, plus Spec Kit analyze's computable passes (duplicate ids, placeholders, inferred tier in a MUST/SC, FR↔task both ways, the caller's vague terms) and the open markers ranked by clarify's taxonomy; CRITICAL exits 1 | spec.md/tasks.md or .specify/memory/constitution.md under --repo; the --vocabulary file; no git/gh | yes |
 | [`spec`](#family-spec) | [`nen spec cite-check`](#nen-spec-cite-check) | every `[src:]` range in a folder resolves at its own sha in the member checkout the checkouts file names; excerpt hashes against `capture/<CODE>/inventory.json`; `--at` reports [STALE] candidates | the folder's .md files and nen/repos.json under --repo; the --checkouts file; git (remote get-url, rev-parse, cat-file) in each member checkout | yes |
 | [`spec`](#family-spec) | [`nen spec index`](#nen-spec-index) | `<root>/INDEX.md` regenerated from each folder's spec.md header; reports current / stale / hand-edited / absent; `--write` refuses over a hand edit | spec.md headers and INDEX.md under --repo; WRITES `<root>/INDEX.md` under --write unless --dry-run | yes |
+| [`spec`](#family-spec) | [`nen spec inventory`](#nen-spec-inventory) | one row per owned file fact of a member at a commit — {id, kind, path, lines, sha, excerptSha256, tier, ruleId}, no excerpts — from the build system's own membership (Xcode build phases and synchronized groups, Gradle include list and source sets, tsconfig files/include/extends/references) classified by the scenario handbook's capture-reader appendix; totals per kind, unknown never omitted | git (rev-parse, ls-tree, cat-file, remote get-url) in the member checkout; WRITES --out when given | yes |
 | [`decisions`](#family-decisions) | [`nen decisions summary`](#nen-decisions-summary) | rows per class and per gate and the G5 ids of nen/decisions.json, so prose never carries those numbers | nen/decisions.json under --repo | yes |
 | [`shu`](#family-shu) | [`nen shu detect`](#nen-shu-detect) | read the markers on disk and PROPOSE a nen/contract.json project block; never writes without --write and never overwrites one | the target repo's own files (framework configs, package.json, project files); writes nen/contract.json only with --write | yes |
 | [`shu`](#family-shu) | [`nen shu build`](#nen-shu-build) | compile or assemble a lane, from the invocation its declaration states | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
@@ -11404,13 +11405,18 @@ message:
 
 **`nen spec`**
 
-The first slice of the verbs Hatsu's capture skill (`dowsing-chain`, Hatsu
-ruling HR-12) reads a Spec Kit spec repository through: number a new folder,
-hold a folder or the constitution to citation-or-marker, resolve every
-citation against the member checkouts, and keep `INDEX.md` generated. They
-**report and refuse; none decides** — no slug is picked, no question is chosen,
-no citation is rewritten, no hand edit is overwritten — and "could not read"
-is exit 1 on every one of them, never a clean report.
+The verbs Hatsu's capture skill (`dowsing-chain`, Hatsu ruling HR-12) reads a
+product family's Spec Kit spec repository and its members through
+(zheref/nen#493): inventory a member's owned files, number a new folder, hold
+a folder or the constitution to citation-or-marker, resolve every citation
+against the member checkouts, diff two inventories, converge a folder against
+a newer one, measure coverage, and keep `INDEX.md` generated. They **report
+and refuse; none decides** — no slug is picked, no question is chosen, no
+citation is rewritten, no hand edit is overwritten — and "could not read" is
+exit 1 on every one of them, never a clean report. The verbs added by #493's
+later waves also carry it as a **`verdict`**, drawn from each verb's closed
+set and always including `could-not-read`, so a `--json` reader can tell an
+unread input from an empty or passing one without parsing prose.
 
 One grammar serves all four (`src/spec/lines.ts`). A requirement line ends in
 
@@ -11694,6 +11700,89 @@ specs/INDEX.md: absent · action none
   002 other-feature Specified · 0 open marker(s) · Other | feature
 ```
 (exit 1; run live against this repository's fixture)
+
+### `nen spec inventory`
+
+One row per **owned file fact** of a member checkout, read at one commit
+(zheref/nen#493 AC-1). Everything is read **through git at `--at`** (default
+`HEAD`) — `git ls-tree` for the file list, `git cat-file` for each file — never
+the work tree, so a row's sha is the sha its bytes belong to. The file set is
+the **build system's own** (SP-14: never a filename glob), one reader per
+governed scenario:
+
+| `--scenario` | Membership | What is read |
+|---|---|---|
+| `swiftui-tca-uzf-v2` | `xcode` | every `*.xcodeproj/project.pbxproj` (not under `Pods/`): each native target's Sources and Resources build-phase files, resolved through the group tree (`<group>` and `SOURCE_ROOT` paths; an SDK or product reference is not product code and is skipped), plus every file under a target's file-system-synchronized root group minus that target's `membershipExceptions` |
+| `compose-uzf-v2` | `gradle` | `settings.gradle(.kts)`'s `include(...)` modules; each module's `src/<set>/{kotlin,java}` source sets, any `srcDir(...)`/`srcDirs(...)` string in its build file, and `src/<set>/res/values*/strings.xml`. A `projectDir` override is not followed and is reported `unread` |
+| `react-uzf-v1` | `tsconfig` | `tsconfig.json`'s `files`/`include`/`exclude` (TypeScript's defaults when absent: `**/*`; `node_modules`, `bower_components`, `jspm_packages` and `outDir` excluded), a relative `extends` for the keys a file does not state, every `references[].path` project; `.ts`/`.tsx` (`.js`/`.jsx` with `allowJs`), `.d.ts` skipped. A package `extends` is reported `unread` |
+
+Each owned file is classified by the scenario stack handbook's **capture-reader
+appendix** (`src/spec/readers.json`, data, at bankai-handbooks v0.12.0): file
+suffix → row kind (the fourteen of `handbooks/spec/authoring.md` § *Capture row
+kinds*) → the rule id the appendix cites. A suffix the appendix says **joins**
+another row (a pure renderer, an adapter) emits none and is counted `joined`; a
+file no suffix matches is counted `unclassified`. A `test` file emits **one row
+per test case** (`it(`/`test(` titles; JUnit `@Test fun`; XCTest `func test…`
+and Swift Testing `@Test func`), its range the declaration line; every other
+kind is **one row per file**, its range the whole file. `--exclude` drops the
+caller's own globs (comma-separated, matched against repository paths) and lists
+what it dropped.
+
+A row is `{ id, kind, path, lines: [l1, l2], sha, excerptSha256, tier, ruleId }`:
+`id` is stable across commits (`<kind>:<path>`, or `<kind>:<path>#<test name>`,
+a repeated name suffixed `~2`); `excerptSha256` is the sha256 of lines `l1..l2`,
+each ending in a newline, a CRLF read as LF — the bytes
+[`spec cite-check --verify-excerpt`](#nen-spec-cite-check) hashes; `tier` is
+`declared` for a test case (a test assertion, SP-2) and `observed` otherwise.
+**No excerpt is ever printed or written.** `totals` lists all fourteen kinds:
+`total` with `unit` `file` or `case`, or `total: null` with `unit: unknown` for a
+kind the appendix derives from no suffix (a flag registry, analytics call
+sites) — reported, never omitted (SP-14).
+
+**Usage**
+
+```text
+nen spec inventory --repo <member> --scenario <id> [--lane <lane>] [--at <ref>] [--exclude <glob>[,<glob>...]] [--out <file>] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--repo <path>` | yes | The member's checkout. | Omitted exits 2. |
+| `--scenario <id>` | yes | The member's governed scenario (as [`repo scenario`](#nen-repo-scenario) reads it). | Not one of the three exits 2, naming them. |
+| `--lane <lane>` | no | Read under the lane's `cwd` from `nen/contract.json` **at the same commit**. | A malformed name exits 2; a contract absent, unparseable or without the lane at that commit is `could-not-read`. |
+| `--at <ref>` | no | The commit to read. | `HEAD` or 7–40 hex; anything else exits 2. |
+| `--exclude <globs>` | no | The caller's exclusions. | `*`, `**`, `?`; `..` or an absolute path exits 2. |
+| `--out <file>` | no | Write the same JSON document to a file. | Written whenever the verdict is not `could-not-read`. |
+
+**Output and exit codes** — prints `<verdict>: <scenario> <origin> @ <sha> --
+<n> row(s) from <m> owned file(s)`, the totals per kind, the classified /
+joined / unclassified / excluded counts and one `unread` line per declaration
+nen could not read. `--json` top-level keys: `contract`
+(`nen.spec.inventory/v0.1`), `verdict` (`read` \| `partial` \|
+`could-not-read`), `repo`, `origin` (the checkout's `origin` slug, or null),
+`lane`, `cwd`, `scenario`, `handbook`, `sha`, `membership` (`{ source, read,
+files, classified, joined, unclassified }`), `excluded`, `rows`, `totals`
+(`{ kind, total, unit }` each), `unread` (`{ path, reason }` each), `reason`.
+Exit 0 when `read`; exit 1 when `partial` (a declaration nen could not read, a
+listed file missing at the sha) or `could-not-read` (no commit, no build
+declaration, no owned file — never an empty inventory); exit 2 on a usage
+error.
+
+**Example**
+
+```bash
+nen spec inventory --repo ../fixture-app --scenario react-uzf-v1 --out capture/FX/inventory.json
+```
+```text
+read: react-uzf-v1 fixture-owner/fixture-app @ 0123456789ab -- 4 row(s) from 5 owned file(s) (tsconfig: tsconfig.json)
+  totals: screen 1 · state 1 · event unknown · shifter 0 · selector 0 · producer 0 · service 0 · model 0 · flag unknown · strings unknown · analytics unknown · navigation unknown · test 2 (per case) · snapshot 0
+  3 classified · 1 joined to another row · 1 unclassified · 0 excluded by --exclude
+  wrote capture/FX/inventory.json
+```
+(exit 0; the shape of `src/spec/inventory.test.ts`'s tsconfig member, which
+builds a real repository per test)
 
 <a id="family-decisions"></a>
 
