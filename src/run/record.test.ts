@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
@@ -82,6 +82,15 @@ describe("nen run record", () => {
     expect((await run(["record", "read", "--schema", "hatsu.spec.run/v0.1", "--id", ID], { XDG_STATE_HOME: state })).json()["verdict"]).toBe("could-not-read");
     const nowhere = await run(["record", "read", "--schema", "hatsu.spec.run/v0.1", "--id", ID], { XDG_STATE_HOME: "relative/dir" });
     expect(nowhere.json()).toMatchObject({ verdict: "could-not-read", path: null });
+    // A relative XDG_STATE_HOME is ignored, as the XDG spec says, and HOME's default applies (Nobunaga F10).
+    const home = mkdtempSync(join(tmpdir(), "nen-record-home-"));
+    const fallback = await run(["record", "read", "--schema", "hatsu.spec.run/v0.1", "--id", ID], { XDG_STATE_HOME: "relative/dir", HOME: home });
+    expect(fallback.json()).toMatchObject({ verdict: "absent", path: join(home, ".local", "state", "hatsu", "specs", `${ID}.json`) });
+    const garbled = join(mkdtempSync(join(tmpdir(), "nen-record-in-")), "record.json");
+    writeFileSync(garbled, "{");
+    const unread = await run(["record", "write", "--schema", "hatsu.spec.run/v0.1", "--id", ID, "--from", garbled], { XDG_STATE_HOME: state });
+    expect(unread.code).toBe(1);
+    expect(unread.json()).toMatchObject({ verdict: "could-not-read" });
   });
 
   it("refuses another schema, another caller, a runId that is not the file's and a field off its type, writing nothing", async () => {
@@ -94,6 +103,10 @@ describe("nen run record", () => {
       [{ members: [{ code: "FA" }] }, "members[0].platform is missing"],
       [{ targets: [{ code: "FA", folder: "x", story: "US1", issue: null, pr: null, state: "merged" }] }, "targets[0].state"],
       [{ at: "yesterday" }, "at \"yesterday\" does not match"],
+      [{ members: [{ code: 1, platform: "android", sha: "0".repeat(40) }] }, "members[0].code is not a string"],
+      [{ folders: [{ nnn: "001", slug: "list", status: "bogus", markers: { clarification: 0, ruling: 0, unverified: 0 } }] }, "folders[0].status is \"bogus\""],
+      [{ folders: [{ nnn: "001", slug: "list", status: "captured", markers: "x" }] }, "folders[0].markers is not an object"],
+      [{ clarify: { round: "a", asked: 0, answered: 0 } }, "clarify.round is not a whole number"],
     ] as const) {
       const result = await run(["record", "write", "--schema", "hatsu.spec.run/v0.1", "--id", ID, "--from", input({ ...RECORD, ...change })], { XDG_STATE_HOME: state });
       expect(result.code, why).toBe(1);
@@ -120,6 +133,17 @@ describe("nen run record", () => {
       expect((await run(argv, env)).code, argv.join(" ")).toBe(2);
     }
     expect((await run(["record", "read", "--schema", "hatsu.spec.run/v0.1", "--id", ID], env, ".")).code).toBe(2);
+  });
+
+  it.skipIf(process.platform === "win32")("refuses a record directory that is a link, and writes nothing through it (Feitan F2)", async () => {
+    const state = mkdtempSync(join(tmpdir(), "nen-record-state-"));
+    const elsewhere = mkdtempSync(join(tmpdir(), "nen-record-elsewhere-"));
+    mkdirSync(join(state, "hatsu"));
+    symlinkSync(elsewhere, join(state, "hatsu", "specs"));
+    const result = await run(["record", "write", "--schema", "hatsu.spec.run/v0.1", "--id", ID, "--from", input(RECORD)], { XDG_STATE_HOME: state });
+    expect(result.code).toBe(1);
+    expect(result.json()).toMatchObject({ verdict: "could-not-read" });
+    expect(readdirSync(elsewhere)).toEqual([]);
   });
 
   it("accepts Hatsu's own fixture record shape", () => {

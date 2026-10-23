@@ -47,7 +47,7 @@ import {
 import { readLivePr, renderVerify, verifyRun } from "./verify.js";
 import { computeBudget, renderBudget, runEfforts, type BudgetCeiling } from "./budget.js";
 import { readFileSync } from "node:fs";
-import { readRecord, RECORD_SCHEMAS, recordSchema, renderRecord, runIdMatches, writeRecord } from "./record.js";
+import { readRecord, RECORD_SCHEMAS, recordSchema, renderRecord, runIdMatches, unreadableRecord, writeRecord } from "./record.js";
 
 const SUBCOMMANDS = ["rerun-failed", "start", "append", "verify", "budget", "park", "record"] as const;
 type Subcommand = (typeof SUBCOMMANDS)[number];
@@ -207,12 +207,14 @@ function doRecord(context: CommandContext): number {
   } else {
     const from = requireValue(context.args, "from", "It names the file holding the whole record to write.");
     let value: unknown;
+    let unread: string | null = null;
     try {
       value = JSON.parse(readFileSync(from, "utf8"));
     } catch (error) {
-      throw new VerbUsageError(`--from '${from}' could not be read as JSON: ${(error as Error).message}`);
+      unread = `--from '${from}' could not be read as JSON: ${(error as Error).message}; nothing was written`;
     }
-    report = writeRecord(input, value, context.args.booleans.has("dry-run"));
+    // An unreadable input is the record's could-not-read, with its report, never a usage error (Nobunaga F14).
+    report = unread === null ? writeRecord(input, value, context.args.booleans.has("dry-run")) : unreadableRecord(input, unread);
   }
   emit(context.io, context.json, report, renderRecord(report));
   return report.verdict === "valid" || report.verdict === "written" || report.verdict === "would-write" ? 0 : 1;

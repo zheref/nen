@@ -9303,8 +9303,9 @@ Hatsu's `docs/config/spec-repo.md` § *The run record*). It is not the batch
 manifest above: a spec run spans a product family's repositories and outlives
 any one checkout, so its record lives at
 `${XDG_STATE_HOME:-$HOME/.local/state}/<schema directory>/<run-id>.json`
-(a relative `XDG_STATE_HOME` is ignored, as the XDG spec says, and with no
-absolute `HOME` either there is no directory: `could-not-read`). nen validates
+(a relative `XDG_STATE_HOME` is ignored, as the XDG spec says, so
+`$HOME/.local/state` applies; with no absolute `HOME` either there is no
+directory: `could-not-read`). nen validates
 and stores; the record holds pointers, and the caller recomputes its step from
 live state on resume.
 
@@ -9314,12 +9315,19 @@ One schema today, `hatsu.spec.run/v0.1` (`src/run/schemas/`): caller
 and every field of Hatsu's table (`schema`, `caller`, `runId`, `mode`,
 `family`, `specRepo`, `members[]`, `scope[]`, `constitutionPr`, `wavePrs[]`,
 `folders[]`, `targets[]`, `clarify`, `preAnswered[]`, `next`, `at`) held to its
-type, its closed values and its row keys. **The order of the checks is the
+type and closed values, and every row's keys to theirs (`members[].code` a
+product code, `members[].sha` hex, `folders[].nnn` three digits,
+`folders[].status` one of the seven folder statuses, `folders[].markers` three
+whole numbers, `targets[].state` one of five, `clarify`'s three counters whole
+numbers). **The order of the checks is the
 contract**: `--id` is matched **whole** against the pattern — no newline, no
 partial match — before any path is built (exit 2 otherwise); then the
 record's `schema`, `caller` and `runId` (equal to `--id`) before any field; a
-write is the **whole** document to a temp file at `0600` in a `0700`
-directory (narrowed to `0700` when it was wider), then a rename.
+write is the **whole** document to a temp file created exclusively (`wx`) at
+`0600` in a `0700` directory (narrowed to `0700` when it was wider), then a
+rename. A record directory that is a link, not a directory, or owned by
+another user is refused, nothing written through it; a failed write removes
+its temp file and is `could-not-read`, never a crash.
 
 **Usage**
 
@@ -9334,7 +9342,7 @@ nen run record write --schema <id> --id <run-id> --from <file> [--dry-run] [--js
 |---|---|---|---|
 | `--schema <id>` | yes | The record's schema. | Unknown exits 2. |
 | `--id <run-id>` | yes | The run, and the file's name. | Not matching the schema's pattern whole exits 2. |
-| `--from <file>` | `write` | The whole record to write, as JSON. | Unreadable or not JSON exits 2; on `read`, exit 2. |
+| `--from <file>` | `write` | The whole record to write, as JSON. | Unreadable or not JSON: `could-not-read`, exit 1, nothing written; on `read`, exit 2. |
 | `--dry-run` | no | `write` only: validate and report `would-write`, write nothing. | On `read`, exit 2. |
 
 The verb reads no checkout and refuses `--repo` (exit 2).

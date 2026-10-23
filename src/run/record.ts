@@ -16,7 +16,7 @@
 // before its fields; a write is the whole document to a temp file at 0600 in
 // a 0700 directory, then a rename, never a partial file.
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import specRun from "./schemas/spec-run.v0.1.json";
 
@@ -28,8 +28,8 @@ interface FieldRule {
   readonly kind: "string" | "string|null" | "string[]" | "object" | "object[]" | "integer";
   readonly enum?: readonly string[];
   readonly pattern?: string;
-  readonly keys?: readonly string[];
-  readonly enumKey?: Readonly<Record<string, readonly string[]>>;
+  /** An object's (or each object[] item's) keys, each with its own rule, every one required. */
+  readonly row?: Readonly<Record<string, FieldRule>>;
 }
 
 export interface RecordSchema {
@@ -56,11 +56,54 @@ export function runIdMatches(schema: RecordSchema, id: string): boolean {
 
 /** `${XDG_STATE_HOME:-$HOME/.local/state}`, absolute, or null with the reason. */
 export function stateHome(env: Readonly<Record<string, string | undefined>>): { path: string | null; reason: string | null } {
+  // The XDG spec: a relative XDG_STATE_HOME is invalid and is ignored -- the default applies (Nobunaga F10).
   const xdg = env["XDG_STATE_HOME"];
-  if (xdg !== undefined && xdg !== "") return isAbsolute(xdg) ? { path: xdg, reason: null } : { path: null, reason: `XDG_STATE_HOME '${xdg}' is not absolute; the XDG spec says to ignore it, and nen will not guess a directory` };
+  if (xdg !== undefined && xdg !== "" && isAbsolute(xdg)) return { path: xdg, reason: null };
   const home = env["HOME"];
-  if (home === undefined || home === "" || !isAbsolute(home)) return { path: null, reason: "neither XDG_STATE_HOME nor an absolute HOME is set, so there is no state directory to keep the record in" };
+  if (home === undefined || home === "" || !isAbsolute(home)) return { path: null, reason: `${xdg !== undefined && xdg !== "" ? `XDG_STATE_HOME '${xdg}' is not absolute and so is ignored, and ` : ""}no absolute HOME is set, so there is no state directory to keep the record in` };
   return { path: join(home, ".local", "state"), reason: null };
+}
+
+/** One value against its rule, every problem named by its path (Nobunaga F11: row values are typed, not only present). */
+function validateValue(rule: FieldRule, value: unknown, where: string, problems: string[]): void {
+  const isString = typeof value === "string";
+  switch (rule.kind) {
+    case "string":
+      if (!isString) problems.push(`${where} is not a string`);
+      break;
+    case "string|null":
+      if (!isString && value !== null) problems.push(`${where} is neither a string nor null`);
+      break;
+    case "integer":
+      if (!Number.isSafeInteger(value) || (value as number) < 0) problems.push(`${where} is not a whole number`);
+      break;
+    case "string[]":
+      if (!Array.isArray(value) || value.some((item): boolean => typeof item !== "string")) problems.push(`${where} is not a list of strings`);
+      break;
+    case "object":
+    case "object[]": {
+      const rows = rule.kind === "object" ? [value] : Array.isArray(value) ? value : null;
+      if (rows === null) {
+        problems.push(`${where} is not a list`);
+        break;
+      }
+      rows.forEach((row, index): void => {
+        const at = rule.kind === "object" ? where : `${where}[${index}]`;
+        if (row === null || typeof row !== "object" || Array.isArray(row)) {
+          problems.push(`${at} is not an object`);
+          return;
+        }
+        for (const [key, inner] of Object.entries(rule.row ?? {})) {
+          const entry = (row as Record<string, unknown>)[key];
+          if (entry === undefined) problems.push(`${at}.${key} is missing`);
+          else validateValue(inner, entry, `${at}.${key}`, problems);
+        }
+      });
+      break;
+    }
+  }
+  if (isString && rule.enum !== undefined && !rule.enum.includes(value)) problems.push(`${where} is ${JSON.stringify(value)}, not one of ${rule.enum.join(", ")}`);
+  if (isString && rule.pattern !== undefined && !new RegExp(rule.pattern).test(value)) problems.push(`${where} ${JSON.stringify(value)} does not match ${rule.pattern}`);
 }
 
 /** Every way `value` fails the schema, by field; empty when it is a record of this schema for `id`. */
@@ -73,49 +116,8 @@ export function validateRecord(schema: RecordSchema, id: string, value: unknown)
   const problems: string[] = [];
   for (const [name, rule] of Object.entries(schema.fields)) {
     const field = record[name];
-    const where = name;
-    if (field === undefined) {
-      problems.push(`${where} is missing`);
-      continue;
-    }
-    const isString = typeof field === "string";
-    switch (rule.kind) {
-      case "string":
-        if (!isString) problems.push(`${where} is not a string`);
-        break;
-      case "string|null":
-        if (!isString && field !== null) problems.push(`${where} is neither a string nor null`);
-        break;
-      case "integer":
-        if (!Number.isSafeInteger(field)) problems.push(`${where} is not a whole number`);
-        break;
-      case "string[]":
-        if (!Array.isArray(field) || field.some((item): boolean => typeof item !== "string")) problems.push(`${where} is not a list of strings`);
-        break;
-      case "object":
-      case "object[]": {
-        const rows = rule.kind === "object" ? [field] : Array.isArray(field) ? field : null;
-        if (rows === null) {
-          problems.push(`${where} is not a list`);
-          break;
-        }
-        rows.forEach((row, index): void => {
-          const at = rule.kind === "object" ? where : `${where}[${index}]`;
-          if (row === null || typeof row !== "object" || Array.isArray(row)) {
-            problems.push(`${at} is not an object`);
-            return;
-          }
-          for (const key of rule.keys ?? []) if (!Object.hasOwn(row, key)) problems.push(`${at}.${key} is missing`);
-          for (const [key, allowed] of Object.entries(rule.enumKey ?? {})) {
-            const entry = (row as Record<string, unknown>)[key];
-            if (entry !== undefined && !allowed.includes(entry as string)) problems.push(`${at}.${key} is ${JSON.stringify(entry)}, not one of ${allowed.join(", ")}`);
-          }
-        });
-        break;
-      }
-    }
-    if (isString && rule.enum !== undefined && !rule.enum.includes(field)) problems.push(`${where} is ${JSON.stringify(field)}, not one of ${rule.enum.join(", ")}`);
-    if (isString && rule.pattern !== undefined && !new RegExp(rule.pattern).test(field)) problems.push(`${where} ${JSON.stringify(field)} does not match ${rule.pattern}`);
+    if (field === undefined) problems.push(`${name} is missing`);
+    else validateValue(rule, field, name, problems);
   }
   return problems;
 }
@@ -167,13 +169,28 @@ export function writeRecord(input: RecordInput, value: unknown, dryRun: boolean)
   const problems = validateRecord(input.schema, input.id, value);
   if (problems.length > 0) return make("invalid", where.path, problems, null, "nothing was written");
   if (dryRun) return make("would-write", where.path, [], value, null);
-  mkdirSync(where.dir, { recursive: true, mode: 0o700 });
-  if ((statSync(where.dir).mode & 0o077) !== 0) chmodSync(where.dir, 0o700);
+  // Feitan F2 (SEC-2): the directory is a real directory this user owns, never a link followed; the
+  // temp file is created exclusively at 0600, and any failure removes it and is reported, never thrown.
   const temp = `${where.path}.${process.pid}.tmp`;
-  writeFileSync(temp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-  chmodSync(temp, 0o600);
-  renameSync(temp, where.path);
+  try {
+    mkdirSync(where.dir, { recursive: true, mode: 0o700 });
+    const dir = lstatSync(where.dir);
+    if (dir.isSymbolicLink() || !dir.isDirectory()) return make("could-not-read", where.path, [], null, `${where.dir} is not a real directory (a link or a file); nen writes no record through one`);
+    if (typeof process.getuid === "function" && dir.uid !== process.getuid()) return make("could-not-read", where.path, [], null, `${where.dir} is owned by uid ${dir.uid}, not this user; nen writes no record into it`);
+    if ((dir.mode & 0o077) !== 0) chmodSync(where.dir, 0o700);
+    rmSync(temp, { force: true });
+    writeFileSync(temp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+    renameSync(temp, where.path);
+  } catch (error) {
+    rmSync(temp, { force: true });
+    return make("could-not-read", where.path, [], null, `the record could not be written: ${(error as Error).message}`);
+  }
   return make("written", where.path, [], value, null);
+}
+
+/** A record operation whose input could not be read. */
+export function unreadableRecord(input: RecordInput, reason: string): RecordReport {
+  return { contract: RUN_RECORD_CONTRACT, verdict: "could-not-read", schema: input.schema.schema, id: input.id, path: null, problems: [], record: null, reason };
 }
 
 export function renderRecord(report: RecordReport): string[] {
