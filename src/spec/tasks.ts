@@ -129,15 +129,19 @@ export function readStories(spec: string): { stories: Map<number, Story>; marked
   const lines = new Map<string, string>();
   let current: { number: number; title: string; marked: boolean; scenarios: { ac: number; text: string }[] } | null = null;
   let ac = 0;
+  let storyLevel = 0;
   for (const line of proseLines(spec)) {
     const requirement = requirementOf(line.text);
+    const heading = /^(#{1,6})\s/.exec(line.text);
     if (requirement?.kind === "US") {
+      storyLevel = heading === null ? 0 : (heading[1] as string).length;
       const title = line.text.replace(/^#{1,6}\s+(?:User Story\s+\d+|US-\d+)\s*[-–—:]?\s*/i, "").replace(/\s*\(Priority:.*$/i, "").replace(/\s*\[[^\]]*\]\s*$/g, "").trim();
       current = { number: Number(requirement.id.slice(3)), title, marked: markersIn(line.text).length > 0, scenarios: [] };
       stories.set(current.number, current);
       continue;
     }
-    if (/^#{1,3}\s/.test(line.text) && !/^###\s/.test(line.text)) current = null;
+    // A heading at the story's own level or above ends it (`### Edge Cases`, `## Requirements`).
+    if (heading !== null && (heading[1] as string).length <= storyLevel) current = null;
     if (requirement !== null) {
       lines.set(requirement.id, line.text.trim());
       if (markersIn(line.text).length > 0) marked.add(requirement.id);

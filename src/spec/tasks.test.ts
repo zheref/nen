@@ -21,6 +21,10 @@ const SPEC = [
   "",
   "1. **Given** a list, **When** the user sorts it, **Then** the order holds. [UNVERIFIED]",
   "",
+  "### Edge Cases",
+  "",
+  "1. **Given** an edge, **When** it happens, **Then** it is not a scenario of US-2.",
+  "",
   "## Requirements",
   "",
   "- **FR-001**: The system MUST show the empty state. [src: FA:app/L.kt:1-2 @ 0123abcd · observed]",
@@ -94,6 +98,9 @@ describe("nen spec tasks groups", () => {
     expect(body).toContain("- AC-2: Given a full list, When the user opens it, Then the rows show ``like this``. (F002-AC-002)");
     expect(body).toContain("```source-data\n1. **Given** an empty list");
     expect(body).toContain("- **SC-001**: The list opens. [NEEDS RULING]\n```");
+    const sort = (await spec(["tasks", "groups", "--folder", "specs/002-list", "--group", "US2/android"], repo, defaultSeams())).out.join("\n");
+    expect(sort).toContain("(F002-AC-003)");
+    expect(sort).not.toContain("an edge");
   });
 
   it("refuses a cycle and an unknown dependency, exit 1", async () => {
