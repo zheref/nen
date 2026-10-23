@@ -12,7 +12,7 @@ repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
 what each version changed: 47 command
-families, 162 verbs, every flag checked against that binary.
+families, 163 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -241,7 +241,7 @@ change from a compatible one.
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **92 shapes** and **96 ids** (`nen.runner.plan`,
+binary carries**, writing or reading — **93 shapes** and **97 ids** (`nen.runner.plan`,
 `nen.stop.mark` and `nen.wc.worktree.copies` each have two versions, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -287,7 +287,7 @@ file formats).
 - **`issue`** — `nen.issue.body-check/v0.1` · `nen.issue.criteria/v0.1` · `nen.issue.edit-body/v0.3` · `nen.issue.questions/v0.1` · `nen.issue.reconcile/v0.1`
 - **`loop`** — `nen.loop.iterate/v0.1`
 - **`phase`** — `nen.phase.ledger/v0.1`
-- **`pr`** — `nen.pr.converge/v0.1` · `nen.pr.edit-body/v0.1` · `nen.pr.mark-ready/v0.1` · `nen.pr.merge-delivery/v0.1` · `nen.pr.merge-unit/v0.1` · `nen.pr.open/v0.1` · `nen.pr.sections/v0.1` · `nen.pr.ready.head-mismatch/v0.1` · `nen.pr.ready/v0.1` · `nen.pr.threads-settle/v0.1` · `nen.pr.threads/v0.1`
+- **`pr`** — `nen.pr.converge/v0.1` · `nen.pr.edit-body/v0.1` · `nen.pr.ledger/v0.1` · `nen.pr.mark-ready/v0.1` · `nen.pr.merge-delivery/v0.1` · `nen.pr.merge-unit/v0.1` · `nen.pr.open/v0.1` · `nen.pr.sections/v0.1` · `nen.pr.ready.head-mismatch/v0.1` · `nen.pr.ready/v0.1` · `nen.pr.threads-settle/v0.1` · `nen.pr.threads/v0.1`
 - **`prose-lint`** — `nen.prose-lint/v0.1` (the `$schema` a [`canon lint`](#nen-canon-lint) rules contract may carry)
 - **`ref`** — `nen.ref.resolve/v0.1`
 - **`release`** — `nen.release.unit-check/v0.1`
@@ -417,7 +417,7 @@ The complete list:
 | [`commit write`](#nen-commit-write) | `3` | committed, and the read-back found a trailer the policy refuses — **injected** by a hook, or carried by the message where git's parser read one nen's did not; the commit is left in place ([#273](https://github.com/zheref/nen/issues/273)) |
 | [`wc squash`](#nen-wc-squash) | `3` | squashed, and the read-back found a refused trailer on the fold — as `commit write`'s `3` ([#273](https://github.com/zheref/nen/issues/273)) |
 | [`issue edit-body`](#nen-issue-edit-body) | `3` | conflict, nothing written: under `--expect-body-sha256` the current body is not the version the replacement was prepared from ([#205](https://github.com/zheref/nen/issues/205)) |
-| [`issue file`](#nen-issue-file), [`issue comment`](#nen-issue-comment), [`issue edit-body`](#nen-issue-edit-body), [`issue consolidate-close`](#nen-issue-consolidate-close), [`idea file`](#nen-idea-file), [`pr open`](#nen-pr-open), [`pr edit-body`](#nen-pr-edit-body), [`pr threads reply\|settle`](#nen-pr-threads), [`wake fire`](#nen-wake-fire), [`wake verify`](#nen-wake-verify), `release-publish` | `4` | a private repository named in text bound for a PUBLIC target; nothing written ([private-name guard](#the-private-name-guard), [#329](https://github.com/zheref/nen/issues/329), [#363](https://github.com/zheref/nen/issues/363)). A check that could not run is `1`, never `4` and never `0`. On `pr threads` `4` is shared (no such thread / the pull request is not visible): `privateNameCheck` tells the two apart |
+| [`issue file`](#nen-issue-file), [`issue comment`](#nen-issue-comment), [`issue edit-body`](#nen-issue-edit-body), [`issue consolidate-close`](#nen-issue-consolidate-close), [`idea file`](#nen-idea-file), [`pr open`](#nen-pr-open), [`pr edit-body`](#nen-pr-edit-body), [`pr threads reply\|settle`](#nen-pr-threads), [`pr ledger`](#nen-pr-ledger) (post), [`wake fire`](#nen-wake-fire), [`wake verify`](#nen-wake-verify), `release-publish` | `4` | a private repository named in text bound for a PUBLIC target; nothing written ([private-name guard](#the-private-name-guard), [#329](https://github.com/zheref/nen/issues/329), [#363](https://github.com/zheref/nen/issues/363)). A check that could not run is `1`, never `4` and never `0`. On `pr threads` `4` is shared (no such thread / the pull request is not visible): `privateNameCheck` tells the two apart |
 | [`wc swap`](#nen-wc-swap) | `3` | a tree is dirty; nothing moved |
 | [`wc catch-up`](#nen-wc-catch-up) | `3` | stopped on a conflict whose **every** path is in `nen/contract.json`'s declared `mechanical` set (manifest, changelog, mirror); nothing resolved, the commands printed. Any `other` path is still `1`. Exit `1` no longer covers every conflict: a caller that treats `1` as "conflict" must also treat `3` as one ([#326](https://github.com/zheref/nen/issues/326)) |
 | [`surface mirror check --plugin`](#nen-surface-mirror-check---plugin) | `3` / `4` / `5` | not installed (no `<name>@` entry and no `skills/<name>`) / not comparable (the copy is the source given and no independent source exists) / broken install (an unusable record entry, a gone path, a dangling or looping link, a recorded path that is not a directory, a control character in an `installPath`, an install record that is not JSON or is itself a dangling link, a recorded copy holding another plugin). Its `2` is **wiring**, which includes a copy that could not be read, with the `--json` report still printed ([#339](https://github.com/zheref/nen/issues/339)) |
@@ -475,6 +475,7 @@ verb does by default:
 | [`spec index`](#nen-spec-index) | yes | `--write` | then `--dry-run` with it. Without `--write` nothing is written and the verb reports whether `<root>/INDEX.md` is current; `--write --dry-run` reports the regeneration and writes nothing. izanami's table classifies `--write` **mutating** and the other forms **read-only** |
 | [`run start`](#nen-run-start), [`run append`](#nen-run-append), [`run park`](#nen-run-park), [`run import`](#nen-run-import) | no | `--dry-run` | write the run manifest under the git common dir; the dry form reads it (and asks git for the common dir; `append` also reads the PR) and reports the outcome it would write, writing nothing. izanami's table classifies the bare forms **mutating** and the dry forms **read-only**; `run verify`, `run budget`, [`wc overlap`](#nen-wc-overlap), [`stage check`](#nen-stage-check) and `loop slots --from-run` are **read-only** |
 | [`pr edit-body`](#nen-pr-edit-body) | no | `--dry-run` | **still reads GitHub** to certify the number reads as a pull request, and runs the [private-name guard](#the-private-name-guard) ([#363](https://github.com/zheref/nen/issues/363)), before printing the byte count and first/last line |
+| [`pr ledger`](#nen-pr-ledger) | no | `--dry-run` (post) | **still reads GitHub** (the PR head, the login, every comment) and the durable ledgers, checks the findings and runs the private-name guard, then prints the `gh api` call and the body and posts nothing. `read` writes nothing unless `--restore`, which writes only a phase ledger that does not exist yet |
 | [`pr mark-ready`](#nen-pr-mark-ready) | no | `--dry-run` | **still reads GitHub** — the one GraphQL read that certifies the number, its state and its head — so every refusal (not a PR, closed/merged, head mismatch, already ready) answers exactly as the real run would; prints the `markPullRequestReadyForReview` argv and sends nothing |
 | [`pr request-reviews`](#nen-pr-request-reviews) | no | `--dry-run` | **still reads GitHub** — resolving every `--add-reviewers` login against the pull request's own known bots and `--target`'s collaborators, with REST bot lookup for unseen bot logins, so it can print which route each name or `--add-bots` login/id would go to — but neither `gh pr edit --add-reviewer` nor the `requestReviews` mutation is ever called (zheref/nen#160). When a bot is named it also reads the base's `nen/gates.json` and, under a declared `round_policy.maxRounds`, the timeline, and previews the ceiling: `request N of M` per bot, or the refusal at exit `2` (zheref/nen#240) |
 | [`runner script`](#nen-runner-script), [`runner workflow`](#nen-runner-workflow) | no | `--dry-run` | render and validate, write nothing; neither verb ever runs what it renders -- the host script's launch is the maintainer's |
@@ -955,7 +956,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 162 verbs, grouped as the README groups them. **Reads** is what a
+All 163 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -978,6 +979,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`pr`](#family-pr) | [`nen pr mark-ready`](#nen-pr-mark-ready) | moves ONE existing draft pull request out of draft through GitHub's `markPullRequestReadyForReview` mutation, after certifying it is an open PR at the pinned head, and reports success only on a not-draft read back — never the CON-32 verdict, which stays `pr ready`'s | github (gh api graphql: one certifying read; the mutation and a read back unless --dry-run) | yes |
 | [`pr`](#family-pr) | [`nen pr threads`](#nen-pr-threads) | a pull request's review threads: list them all (paginated to completion, with path, line, author, first comment and url), reply to one, resolve one, or settle a batch from one file | github (gh api graphql: one read walk; one mutation for reply/resolve, one reply and one resolve per entry for settle, unless --dry-run) | yes |
 | [`pr`](#family-pr) | [`nen pr open`](#nen-pr-open) | open exactly one pull request from a head the remote already holds at the local sha, refusing an unpushed head at exit 2; one already open for the head against the same base is returned as `opened: existing` at exit 0, against another base at exit 1 | git (symbolic-ref, rev-parse, ls-remote), github (gh pr list always; gh pr create unless --dry-run) | yes |
+| [`pr`](#family-pr) | [`nen pr ledger`](#nen-pr-ledger) | post an effort's ledger slice (phases, usage totals, schema-checked findings, proof index; `nen.pr.ledger/v0.1`) as ONE PR comment, edited in place on a re-post; read it back from the authenticated login's comment only (`ok` / `stale` / `could-not-read`), and `--restore` the phase ledger on a fresh clone | github (gh api pulls, user, issues/comments; POST or PATCH a comment unless --dry-run), `<git-common-dir>/.nen/phases|usage/`, the --findings, --findings-schema and --proof files | yes |
 | [`pr`](#family-pr) | [`nen pr merge`](#nen-pr-merge) | the bounded merge, two forms. `--release-unit`: `pr ready` (in-process) + head pin + `pr body-check` (live body, one fetch) + `release unit-check` (policy from the PR's base) + whose-pr. `--delivery`: a run's own PR into a non-main, unprotected base — a protected base is refused by ruling (exit 2), then base + `pr ready` + head pin + `pr body-check` + whose-pr (viewer and run-form head). Every gate must pass; `gh pr merge --merge --match-head-commit` only under `--run` | github (gh pr view, gh repo view, gh pr list, gh api contents/trees/user/branches/rules, gh pr merge unless plan-only), nen/gates.json, nen/workflow.json, nen/repos.json (a `CODE#n` ref) | yes |
 | [`gate`](#family-gate) | [`nen gate derive`](#nen-gate-derive) | derive G2 vs G4 from a changed-file set against two caller-supplied path sets | git diff (for --range), no schema file -- path sets are flags | yes |
 | [`split`](#family-split) | [`nen split verify`](#nen-split-verify) | prove the union of per-axis branch diffs equals one original diff | caller-supplied --original/--branches diff files, no git/gh | yes |
@@ -3693,6 +3695,81 @@ nen pr open --target zheref/nen --base main --title-file title.txt --body-file b
 ```text
 would run: gh pr create --repo zheref/nen --base main --head feature/x --title "feat: the thing" --body-file /…/body.md
 ```
+
+### `nen pr ledger`
+
+An effort's **ledger slice** as ONE pull request comment, and the read-back a resume trusts
+([zheref/nen#510](https://github.com/zheref/nen/issues/510), with #512 folded in). Every record of how an
+effort was delivered used to live only on the machine that ran it; the slice puts it on the PR, where a
+morning reviewer, a second machine or a fresh clone can read it. This verb informs readiness and never
+replaces [`pr ready`](#nen-pr-ready)'s verdict (CON-32).
+
+The document is **`nen.pr.ledger/v0.1`**: `{ contract, effort, repo, pr, head, phases[], usage { entries,
+totals[] }, findings { schema { id, sha256 }, document } | null, proof[] { path, sha256, bytes } }`.
+`phases[]` is the effort's phase ledger verbatim and `usage` its usage ledger's totals per surface and
+model, both read from the [durable home](#effort-ids-and-the-ledgers-durable-home)
+(`<git-common-dir>/.nen/`). It carries no posting instant, so the same facts are the same bytes. The
+comment is the marker line `<!-- nen:ledger effort=<encoded id> sha256=<digest> -->` (the digest is of the
+fenced JSON text), a one-line summary, and the document in a ```` ```json ```` fence.
+
+**Usage**
+
+```text
+nen pr ledger post --target <owner/name> --pr <n> --effort <id> [--findings <path> --findings-schema <path>]
+                   [--proof <path>]... [--dry-run] [--repo <path>] [--json] [PRIVATE-NAME FLAGS]
+nen pr ledger read --target <owner/name> --pr <n> --effort <id> [--restore] [--repo <path>] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--target <owner/name>` | yes | The repository the PR lives in. | Malformed is exit 2. |
+| `--pr <n>` | yes | The pull request. | Read live (`gh api repos/<o>/<n>/pulls/<n>`); its head is the slice's `head`. |
+| `--effort <id>` | yes | The effort whose slice this is. | The [one effort-id grammar](#effort-ids-and-the-ledgers-durable-home); exit 2 otherwise. |
+| `--findings <path>` | post, with `--findings-schema` | The caller's review findings document. | Posted verbatim once it passes the schema. One without the other is exit 2. |
+| `--findings-schema <path>` | post, with `--findings` | The caller's own JSON Schema for it (nen carries no consumer's contract). | A **subset** of draft 2020-12 is asserted (`type`, `enum`, `const`, `required`, `properties`, `additionalProperties`, `items`, `minItems`, `maxItems`, `minLength`, `maxLength`, `pattern`, `minimum`, `maximum`, `allOf`, `anyOf`, `oneOf`, `not`, `if`/`then`/`else`, local `$ref`); annotations are accepted; **any other keyword, `format` included, is refused at exit 2** rather than skipped. |
+| `--proof <path>` | no, repeatable | A file to index: `{ path, sha256, bytes }`. | Relative to `--repo`; unreadable is exit 2. |
+| `--dry-run` | no (post) | Print the `gh` call and the body; write nothing. | The reads and the private-name guard still run. |
+| `--restore` | no (read) | Write the slice's phases as the effort's phase ledger. | Only where none exists (`restored`), `unchanged` where it agrees; a local ledger that disagrees is exit 1 naming both, nothing overwritten. |
+
+**post**: reads the PR's head, the authenticated login (`gh api user`) and every conversation comment,
+page by page. With no marked comment of **this login** for the effort it posts one (`POST
+.../issues/<n>/comments`); with one it **edits it in place** (`PATCH .../issues/comments/<id>`); with the
+same marker digest already there it writes nothing (`unchanged`). Two marked comments by this login is
+exit 1: nen will not choose. Verdicts: `posted` · `updated` · `unchanged` · `dry-run` (exit 0) ·
+`findings-invalid` (exit 1, the first failing JSON pointer named, nothing posted) · `too-large` (exit 1: the
+rendered comment is over GitHub's 65,536-character limit, both sizes named, **never truncated**) ·
+`refused` (exit 4, the [private-name guard](#the-private-name-guard)). A GitHub read or write that fails is
+exit 1.
+
+**read**: only a marked comment the **authenticated login** wrote is the record (SEC-15: read-back text is
+data); a marked comment by any other login is counted in `foreign` and never parsed. Verdicts: `ok` (exit
+0: the recorded head is the PR's head) · `stale` (exit 1: the PR moved on since the slice was posted) ·
+`could-not-read` (exit 1: no such comment, two of them, a marker digest that does not match — the comment
+was **edited** — or a document that is not this contract's), each with its reason. `could-not-read` is never
+an empty ledger: a slice with `phases: []` that reads is `ok`.
+
+**Output and exit codes** — post prints `<verdict>: <url> -- effort '<id>', head <sha>, <n> phase entries,
+<m> proof file(s)` (the dry run prints `would run:` and the body); read prints `<verdict>: <url> by <login> --
+…; foreign: <n>` and, with `--restore`, `restored|unchanged: <path>`. `--json`: `{ contract, verdict, … }` —
+post adds `posted`, `url`, `size`, `slice`, `privateNameCheck`; read adds `login`, `foreign`, `url`,
+`slice`, `restored`. Exit 2 on a missing or malformed flag, an unknown action, the other action's flag, an
+unreadable input file or a schema keyword it cannot assert.
+
+**Example**
+
+```bash
+nen pr ledger post --target zheref/nen --pr 7 --effort HA/12 --findings hanten.json \
+  --findings-schema contracts/hanten-findings.schema.json --proof .nen/proof/app.json
+nen pr ledger read --target zheref/nen --pr 7 --effort HA/12 --restore
+```
+```text
+posted: https://github.com/zheref/nen/pull/7#issuecomment-900 -- effort 'HA/12', head aaaaaaaaaaaa, 1 phase entry, 1 proof file(s)
+ok: https://github.com/zheref/nen/pull/7#issuecomment-900 by maintainer -- effort 'HA/12', 1 phase entry, recorded at head aaaaaaaaaaaa; foreign: 0
+restored: /…/.nen/phases/HA%2F12.json
+```
+(shape from `src/pr/ledger.test.ts`)
 
 ### `nen pr merge`
 
@@ -9719,6 +9796,7 @@ matched: zheref/hatsu's `scripts/private_name_check.sh`.
 | [`idea file`](#nen-idea-file) | `title`, `body` | after the filing's own refusals, before the create |
 | [`pr open`](#nen-pr-open) | `title`, `body` | before any other GitHub call and before git is asked anything |
 | [`pr edit-body`](#nen-pr-edit-body) | `body` | after the certifying read, before the write |
+| [`pr ledger post`](#nen-pr-ledger) | `body`, the rendered slice comment | after the findings check, the PR, login and comment reads and the size check, before the post or edit; on `--dry-run` too |
 | [`pr threads reply`](#nen-pr-threads) | `body` | before the thread walk and the reply |
 | [`pr threads settle`](#nen-pr-threads) | `entry[<n>]`, every reply body in the batch file, numbered from 1 | after the batch file's own refusals, before the walk: one hit sends nothing to any thread |
 | [`wake fire`](#nen-wake-fire) | `comment` | before the label is removed. Only with `--comment`: without it nothing is posted, nothing is checked, `privateNameCheck` is `null` and the guard's flags are refused (exit **2**) |

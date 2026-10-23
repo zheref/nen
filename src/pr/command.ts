@@ -103,6 +103,8 @@ import {
 import { certifyPullRequest, editBodyArgv, writePullRequestBody } from "./editbody.js";
 import { blockingExit, blocksWrite, type CheckedText, type IgnoreList, type PrivateNameCheck } from "../issue/privacy.js";
 import { guardPrivateNames, PRIVATE_NAME_FLAGS, readIgnoreFlag } from "../issue/privacyguard.js";
+import { LEDGER_ACTION_FLAGS, ledgerVerb } from "./ledger-verb.js";
+import { GITHUB_COMMENT_LIMIT, PR_LEDGER_CONTRACT } from "./ledger.js";
 import { LOGIN as OPEN_LOGIN, ME as OPEN_ME, OPEN_CONTRACT, openPullRequest } from "./open.js";
 import { sectionsCommand } from "./sections_command.js";
 import { plainLine } from "../cli/plain.js";
@@ -189,6 +191,8 @@ PRIVATE-NAME FLAGS (zheref/nen#363): [--skip-private-name-check]
   stdin ('--body-file -'), never the path.
 nen pr merge <n|owner/name#n|CODE#n> --release-unit --requirements-from <path> --repo <path> [--run] [--json]
 nen pr merge <n|owner/name#n|CODE#n> --delivery --requirements-from <path> --repo <path> [--require-head <sha>] [--run] [--json]
+nen pr ledger post --target <owner/name> --pr <n> --effort <id> [--findings <path> --findings-schema <path>] [--proof <path>]... [--dry-run] [--repo <path>] [--json] [PRIVATE-NAME FLAGS]
+nen pr ledger read --target <owner/name> --pr <n> --effort <id> [--restore] [--repo <path>] [--json]
 
 Flags are PER SUBCOMMAND (zheref/nen#351). Every subcommand refuses, at exit
 2 and before any gh call, each flag it does not read -- another
@@ -696,6 +700,35 @@ open:
   private-name guard found a private repository named in the title or body;
   '{ contract, dryRun, opened: false, privateNameCheck }' under --json.
 
+ledger:
+  An effort's ledger slice as ONE pull request comment (zheref/nen#510),
+  contract '${PR_LEDGER_CONTRACT}': { contract, effort, repo, pr, head, phases[],
+  usage { entries, totals[] }, findings { schema { id, sha256 }, document } |
+  null, proof[] { path, sha256, bytes } }, in a json fence behind the marker
+  '<!-- nen:ledger effort=<encoded id> sha256=<digest of the fenced json> -->'.
+  The phases and usage come from the effort's durable ledgers
+  (<git-common-dir>/.nen/phases|usage/).
+  post: validates --findings against --findings-schema (the caller's own JSON
+    Schema; nen carries no consumer's contract; a keyword nen does not assert
+    is refused, exit 2), hashes each --proof file, runs the private-name
+    guard, then posts a new comment, or EDITS this login's one marked comment
+    for the effort in place. Verdicts: posted | updated | unchanged (the same
+    bytes are already there) | dry-run (prints the gh call and the body,
+    writes nothing) | findings-invalid (exit 1, the first failing JSON pointer
+    named, nothing posted) | too-large (exit 1: over GitHub's ${GITHUB_COMMENT_LIMIT}-
+    character limit, both sizes named, never truncated) | refused (exit 4,
+    the private-name guard). Two marked comments by this login is exit 1.
+  read: the one marked comment the AUTHENTICATED login wrote for the effort;
+    marked comments by any other login are counted (foreign: n) and never
+    read. Verdicts: ok (exit 0: its head is the PR's head) | stale (exit 1:
+    the PR moved on) | could-not-read (exit 1: none, two, edited -- the
+    digest does not match -- or not this contract). --restore writes the
+    slice's phases as the effort's phase ledger when there is none
+    ('restored'), 'unchanged' when it agrees, and refuses (exit 1, nothing
+    overwritten) one that disagrees, naming both.
+  --json: { contract, verdict, ... } (post: posted, url, size, slice,
+  privateNameCheck; read: login, foreign, url, slice, restored).
+
 merge:
   THE BOUNDED MERGE THIS BINARY PERFORMS, in exactly two forms: a release
   unit (--release-unit) and a run's own delivery into a non-main base
@@ -1107,6 +1140,12 @@ export const PR_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   // --require-head is read by --delivery only; doMerge refuses it with
   // --release-unit, naming the form that reads it.
   merge: { values: ["requirements-from", "require-head"], booleans: ["release-unit", "delivery", "run"] },
+  // zheref/nen#510; the post/read split of these flags is ./ledger-verb.ts's LEDGER_ACTION_FLAGS.
+  ledger: {
+    values: ["target", "pr", "effort", ...LEDGER_ACTION_FLAGS.post.values],
+    booleans: [...LEDGER_ACTION_FLAGS.post.booleans, ...LEDGER_ACTION_FLAGS.read.booleans],
+    lists: [...LEDGER_ACTION_FLAGS.post.lists],
+  },
 };
 
 /** The subcommand names, read off the table so the two can never differ. */
@@ -1206,6 +1245,7 @@ const TOKEN_ENV_ADVICE: Readonly<Record<string, string>> = {
   "mark-ready": `mark-ready ${GH_RESOLVES}`,
   threads: `threads ${GH_RESOLVES}`,
   open: `open ${GH_RESOLVES}`,
+  ledger: `ledger ${GH_RESOLVES}`,
   merge: "merge judges readiness on GH_TOKEN and merges on whatever credential gh resolves (GH_TOKEN/GITHUB_TOKEN if exported, else its stored login); the variable --token-env names would have changed neither.",
 };
 
@@ -1295,11 +1335,12 @@ export const prCommand: Command = {
     { verb: "pr mark-ready", code: 3, meaning: "the pull request is CLOSED or MERGED; nothing sent" },
     { verb: "pr mark-ready", code: 8, meaning: "--require-head did not match GitHub's head" },
     { verb: "pr request-reviews", code: 9, meaning: "a bot request GitHub accepted but did not list as pending" },
+    { verb: "pr ledger", code: 4, meaning: "post: a private repository named in the slice bound for a PUBLIC target; nothing written (the private-name guard)" },
   ],
   name: "pr",
   subcommands: PR_SUBCOMMANDS,
   summary:
-    "CON-32 readiness, staleness, body-check, fetch, next-blocker, cascade-main, retarget, request-reviews, edit-body, mark-ready, threads, open, merge.",
+    "CON-32 readiness, staleness, body-check, fetch, next-blocker, cascade-main, retarget, request-reviews, edit-body, mark-ready, threads, open, merge, ledger.",
   usage: USAGE,
   flags: PR_FLAGS,
   run(context: CommandContext): number | Promise<number> {
@@ -1339,6 +1380,8 @@ export const prCommand: Command = {
         return doMerge(context);
       case "mark-ready":
         return doMarkReady(context);
+      case "ledger":
+        return ledgerVerb(context, requireTarget(context), requirePr(context));
       default:
         return editBody(context);
     }
