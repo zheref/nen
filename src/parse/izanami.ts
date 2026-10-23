@@ -1016,6 +1016,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
     subcommands: {
       build: RO("assembles a board from rows already fetched"),
       render: RO("renders a board JSON as a table"),
+      diff: RO("diffs two board snapshots"),
     },
   },
   canon: {
@@ -1480,6 +1481,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       index: GATED_DRY(["--write"], "reads each folder's spec.md header; --write writes <root>/INDEX.md unless --dry-run is given"),
       // zheref/nen#493 waves A and C.
       inventory: GATED(["--out"], "reads a member checkout through git rev-parse, ls-tree and cat-file; --out writes the inventory document to the caller's file"),
+      diff: RO("reads two inventory files; writes nothing"),
     },
   },
   split: { subcommands: { verify: RO("proves diff equality over git reads") } },

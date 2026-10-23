@@ -12,7 +12,7 @@ repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
 what each version changed: 47 command
-families, 162 verbs, every flag checked against that binary.
+families, 163 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -206,7 +206,7 @@ change from a compatible one.
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **92 shapes** and **95 ids** (`nen.runner.plan`,
+binary carries**, writing or reading — **93 shapes** and **96 ids** (`nen.runner.plan`,
 `nen.stop.mark` and `nen.wc.worktree.copies` each have two versions, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -266,7 +266,7 @@ file formats).
 - **`schema`** — `nen.schema.set/v0.1`
 - **`session`** — `nen.session.ledger/v0.1`
 - **`shu`** — `nen.shu.<verb>/v0.1` · `nen.shu.coverage-capture/v0.1` · `nen.shu.coverage/v0.1` · `nen.shu.detect/v0.1` · `nen.shu.evidence/v0.1` · `nen.shu.proof/v0.1` · `nen.shu.test-report/v0.1` · `nen.shu.tools/v0.1` · `nen.shu.warmup/v0.1`
-- **`spec`** — `nen.spec.check/v0.1` · `nen.spec.cite-check/v0.1` · `nen.spec.index/v0.1` · `nen.spec.inventory/v0.1` · `nen.spec.number/v0.1`
+- **`spec`** — `nen.spec.check/v0.1` · `nen.spec.cite-check/v0.1` · `nen.spec.diff/v0.1` · `nen.spec.index/v0.1` · `nen.spec.inventory/v0.1` · `nen.spec.number/v0.1`
 - **`stop`** — `nen.stop.answer/v0.1` · `nen.stop.mark/v0.1` · `nen.stop.mark/v0.2` · `nen.stop.proposed-issue/v0.1`
 - **`surface`** — `nen.surface.capabilities/v0.1` · `nen.surface.install/v0.1` · `nen.surface.mirror.check-installed/v0.1` · `nen.surface.mirror.check-plugin/v0.1` · `nen.surface.mirror.check/v0.1` · `nen.surface.mirror.generate/v0.1` · `nen.surface.status/v0.1`
 - **`usage`** — `nen.usage.ledger/v0.1`
@@ -920,7 +920,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 162 verbs, grouped as the README groups them. **Reads** is what a
+All 163 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -1061,6 +1061,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`spec`](#family-spec) | [`nen spec cite-check`](#nen-spec-cite-check) | every `[src:]` range in a folder resolves at its own sha in the member checkout the checkouts file names; excerpt hashes against `capture/<CODE>/inventory.json`; `--at` reports [STALE] candidates | the folder's .md files and nen/repos.json under --repo; the --checkouts file; git (remote get-url, rev-parse, cat-file) in each member checkout | yes |
 | [`spec`](#family-spec) | [`nen spec index`](#nen-spec-index) | `<root>/INDEX.md` regenerated from each folder's spec.md header; reports current / stale / hand-edited / absent; `--write` refuses over a hand edit | spec.md headers and INDEX.md under --repo; WRITES `<root>/INDEX.md` under --write unless --dry-run | yes |
 | [`spec`](#family-spec) | [`nen spec inventory`](#nen-spec-inventory) | one row per owned file fact of a member at a commit — {id, kind, path, lines, sha, excerptSha256, tier, ruleId}, no excerpts — from the build system's own membership (Xcode build phases and synchronized groups, Gradle include list and source sets, tsconfig files/include/extends/references) classified by the scenario handbook's capture-reader appendix; totals per kind, unknown never omitted | git (rev-parse, ls-tree, cat-file, remote get-url) in the member checkout; WRITES --out when given | yes |
+| [`spec`](#family-spec) | [`nen spec diff`](#nen-spec-diff) | added, removed and changed rows by stable id between two inventories of one member, each changed field named; a different sha alone is no change, so identical inputs give an empty diff | the two inventory files; no git/gh | yes |
 | [`decisions`](#family-decisions) | [`nen decisions summary`](#nen-decisions-summary) | rows per class and per gate and the G5 ids of nen/decisions.json, so prose never carries those numbers | nen/decisions.json under --repo | yes |
 | [`shu`](#family-shu) | [`nen shu detect`](#nen-shu-detect) | read the markers on disk and PROPOSE a nen/contract.json project block; never writes without --write and never overwrites one | the target repo's own files (framework configs, package.json, project files); writes nen/contract.json only with --write | yes |
 | [`shu`](#family-shu) | [`nen shu build`](#nen-shu-build) | compile or assemble a lane, from the invocation its declaration states | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
@@ -11783,6 +11784,60 @@ read: react-uzf-v1 fixture-owner/fixture-app @ 0123456789ab -- 4 row(s) from 5 o
 ```
 (exit 0; the shape of `src/spec/inventory.test.ts`'s tsconfig member, which
 builds a real repository per test)
+
+### `nen spec diff`
+
+Two inventories of **one member**, compared by stable row id (zheref/nen#493
+AC-5): every row of `--to` that `--from` lacks is `added`, every row the other
+way `removed`, and a row in both whose `kind`, `path`, `lines`, `excerptSha256`,
+`tier` or `ruleId` differs is `changed`, each changed field with its `from` and
+`to`. **A different `sha` alone is not a change** — every row of a later
+inventory carries a later commit, so comparing it would mark every row changed
+on every recapture and hide the rows that did; the two commits are reported
+once, at the top. Identical inputs, or inputs differing only in their commit,
+produce an empty diff. Each input is held to
+[`spec inventory`](#nen-spec-inventory)'s row shape; one whose `verdict` was
+`could-not-read` holds no rows and is refused as unreadable, never diffed as
+empty.
+
+**Usage**
+
+```text
+nen spec diff --from <inventory> --to <inventory> [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--from <file>` | yes | The earlier inventory (`spec inventory --out`). | Missing exits 2. |
+| `--to <file>` | yes | The later inventory. | Two different `origin`s exit 2: a diff compares one member. |
+
+This verb reads no checkout and refuses `--repo` (exit 2).
+
+**Output and exit codes** — prints `<verdict>: <origin> <from sha> -> <to sha>
+-- <a> added, <r> removed, <c> changed, <u> unchanged`, then one `+`, `-` or
+`~` line per row. `--json` top-level keys: `contract` (`nen.spec.diff/v0.1`),
+`verdict` (`identical` \| `differs` \| `could-not-read`), `from` and `to`
+(`{ file, sha }`), `origin`, `added` and `removed` (rows), `changed` (`{ id,
+fields }` each), `counts` (`{ added, removed, changed, unchanged }`), `reason`.
+Exit 0 when `identical` or `differs` — the diff is the answer, not a finding;
+exit 1 when an input could not be read (not JSON, not
+`nen.spec.inventory/v0.1`, a row off the shape, a row id twice, a recorded
+`could-not-read`); exit 2 on a usage error.
+
+**Example**
+
+```bash
+nen spec diff --from capture/FX/inventory.json --to /tmp/FX-now.json
+```
+```text
+differs: fixture-owner/fixture-app aaaaaaaaaaaa -> aaaaaaaaaaaa -- 1 added, 1 removed, 1 changed, 1 unchanged
+  + screen:src/NewPage.tsx
+  - screen:src/OldPage.tsx
+  ~ state:src/AFeature.ts (lines, excerptSha256)
+```
+(exit 0; from `src/spec/diff.test.ts`)
 
 <a id="family-decisions"></a>
 

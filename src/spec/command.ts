@@ -25,9 +25,10 @@ import { computeNext, readBaseFolders, readPrFolders, renderSpecNumber, SPEC_NUM
 import { renderSpecIndex, specIndex } from "./specindex.js";
 import { parseContract } from "../schema/contract.js";
 import { couldNotRead, GOVERNED_SCENARIOS, inventory, renderInventory, scenarioReader, type InventoryReport } from "./inventory.js";
+import { diffInventories, InventoryReadError, loadInventory, renderDiff, unreadableDiff, type SpecDiffReport } from "./diff.js";
 import { readTree, TreeReadError } from "./tree.js";
 
-const SUBCOMMANDS = ["number", "check", "cite-check", "index", "inventory"] as const;
+const SUBCOMMANDS = ["number", "check", "cite-check", "index", "inventory", "diff"] as const;
 type Subcommand = (typeof SUBCOMMANDS)[number];
 
 export const DEFAULT_SPEC_LAYOUT = "specs/{nnn}-{slug}";
@@ -37,6 +38,7 @@ nen spec check --repo <path> (--folder <dir> | --constitution) [--vocabulary <fi
 nen spec cite-check --repo <spec> --folder <dir> --checkouts <file> [--at <sha>|HEAD] [--verify-excerpt] [--json]
 nen spec index --repo <spec> [--layout <pattern>] [--write [--dry-run]] [--json]
 nen spec inventory --repo <member> --scenario <id> [--lane <lane>] [--at <ref>] [--exclude <glob>[,<glob>...]] [--out <file>] [--json]
+nen spec diff --from <inventory> --to <inventory> [--json]
 
 Read-only verbs over a Spec Kit spec repository. Each
 reports and refuses; none decides. A layout is '<dir>/<final>' whose final
@@ -91,13 +93,18 @@ inventory   One row per owned file fact of a member checkout at --at (default
             that commit. --out writes the same JSON document to a file.
             Exit 1 when partial (a declaration nen could not read) or nothing
             could be read.
+diff        Added, removed and changed rows by stable id between two
+            inventories of one member; a different sha alone is no change.
+            Exit 0 identical or differing; 1 when an inventory could not be
+            read; 2 when the two name different members.
 
 --json shapes (key order as listed):
   number:     { contract: "nen.spec.number/v0.1", repo, target, layout, base, baseSource, baseSha, openPrs, taken, collisions, next, reason }
   check:      { contract: "nen.spec.check/v0.1", repo, mode, path, files, vocabulary, requirements, markers, open, ranked, tasks, findings, counts }
   cite-check: { contract: "nen.spec.cite-check/v0.1", repo, folder, checkouts, at, verifyExcerpt, members, citations, counts }
   index:      { contract: "nen.spec.index/v0.1", repo, layout, path, rows, ignored, state, action, reason }
-  inventory:  { contract: "nen.spec.inventory/v0.1", verdict, repo, origin, lane, cwd, scenario, handbook, sha, membership, excluded, rows, totals, unread, reason }`;
+  inventory:  { contract: "nen.spec.inventory/v0.1", verdict, repo, origin, lane, cwd, scenario, handbook, sha, membership, excluded, rows, totals, unread, reason }
+  diff:       { contract: "nen.spec.diff/v0.1", verdict, from, to, origin, added, removed, changed, counts, reason }`;
 
 const OWNED: Readonly<Record<string, readonly Subcommand[]>> = {
   layout: ["number", "index"],
@@ -112,6 +119,8 @@ const OWNED: Readonly<Record<string, readonly Subcommand[]>> = {
   lane: ["inventory"],
   exclude: ["inventory"],
   out: ["inventory"],
+  from: ["diff"],
+  to: ["diff"],
 };
 const OWNED_BOOLEANS: Readonly<Record<string, readonly Subcommand[]>> = {
   constitution: ["check"],
@@ -121,6 +130,8 @@ const OWNED_BOOLEANS: Readonly<Record<string, readonly Subcommand[]>> = {
   write: ["index"],
   "dry-run": ["index"],
 };
+/** The verbs that read no spec or member checkout, and so take no --repo. */
+const REPOLESS: readonly Subcommand[] = ["diff"];
 
 function refuseForeignFlags(context: CommandContext, subcommand: Subcommand): void {
   const refuse = (flag: string, owners: readonly Subcommand[]): never => {
@@ -275,19 +286,40 @@ function runInventory(context: CommandContext, repo: string): number {
   return finish(inventory(tree, { ...input, cwd }, reader));
 }
 
+function runDiff(context: CommandContext): number {
+  const from = requireValue(context.args, "from", "It names the earlier inventory file.");
+  const to = requireValue(context.args, "to", "It names the later inventory file.");
+  let report: SpecDiffReport;
+  try {
+    const before = loadInventory(from);
+    const after = loadInventory(to);
+    if (before.origin !== null && after.origin !== null && before.origin !== after.origin) throw new VerbUsageError(`--from is an inventory of ${before.origin} and --to of ${after.origin}; a diff compares two inventories of one member.`);
+    report = diffInventories(before, after);
+  } catch (error) {
+    if (!(error instanceof InventoryReadError)) throw error;
+    report = unreadableDiff(from, to, error.message);
+  }
+  emit(context.io, context.json, report, renderDiff(report));
+  return report.verdict === "could-not-read" ? 1 : 0;
+}
+
 export const specCommand: Command = {
   name: "spec",
-  summary: "Inventory, number, check, cite-check and index a product family's Spec Kit spec repository.",
+  summary: "Inventory, number, check, cite-check, diff and index a product family's Spec Kit spec repository.",
   usage: USAGE,
   subcommands: [...SUBCOMMANDS],
   flags: {
-    values: ["layout", "base", "target", "folder", "vocabulary", "max", "checkouts", "at", "scenario", "lane", "exclude", "out"],
+    values: ["layout", "base", "target", "folder", "vocabulary", "max", "checkouts", "at", "scenario", "lane", "exclude", "out", "from", "to"],
     booleans: ["constitution", "markers", "rank", "verify-excerpt", "write", "dry-run"],
   },
   run(context): number {
     const subcommand = requireSubcommand("spec", context.args, SUBCOMMANDS) as Subcommand;
     refuseExtraPositionals(context.args, 2);
     refuseForeignFlags(context, subcommand);
+    if (REPOLESS.includes(subcommand)) {
+      if (context.repoFlag !== null) throw new VerbUsageError(`'spec ${subcommand}' reads no checkout, so it takes no --repo.`);
+      return runDiff(context);
+    }
     const repo = resolveRepoRoot({ repoFlag: requireRepoFlag(context, subcommand === "inventory" ? "It names the member's checkout." : "It names the spec repository's checkout.") });
     switch (subcommand) {
       case "number":
