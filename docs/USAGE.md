@@ -181,7 +181,7 @@ it. **This fallback is read through the 0.28 line and removed in 0.29.0.** Only 
 ledger: a symlink or anything else at a ledger's name, in either home, is refused and is neither read
 nor moved, and so is a ledger path whose real path leaves the git common directory (a linked
 `.nen/<family>`): exit **1** for `phase`, `usage` and `session` (their unreadable-ledger code), exit **2**
-for the direct record (its link refusal's code). A refused invocation moves nothing: flags are checked before an older ledger is located.
+for the direct record (its link refusal's code). A refused invocation moves nothing: flags and the ledger's state (an open entry) are checked before an older ledger is located. A symlinked older `.nen/<family>` (or `.nen`) directory is refused, never scanned.
 `report data` skips, with a warning, an effort whose ledger sits in both homes.
 
 ### `--target <owner/name>` names the GitHub repository
@@ -15659,7 +15659,7 @@ stop. A hook that must ring for every gate reads `stop list` and clears each wit
   a marker file exists and could not be read, listed under `unreadable` -- never skipped, never "no marker".
 - `nen stop clear --gate <g> [--effort <id>]` removes only that gate's marker for that effort (no
   `--effort`: the stop marked without one; `--gate none`: the stop marked with no gate), and the single file too when it records that same stop. Bare
-  `clear` removes the single file and its own per-gate twin. `clear --all` removes every marker. `--effort`
+  `clear` removes the single file and its own per-gate twin. `clear --all` removes every marker, an unreadable marker file included (named `unreadable marker`; a directory it could not list is left and named). `--effort`
   without `--gate`, and `--all` with either, are exit 2. `--json`: `{ cleared, path, removed[] }`.
 
 ```

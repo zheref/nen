@@ -137,6 +137,11 @@ export const phaseCommand: Command = {
     if (sub === "begin" && (context.args.values["phase"] ?? "").trim() === "") throw new VerbUsageError("--phase <name> is required for 'begin'.");
     const exitFlag = context.args.values["exit"];
     if (sub === "end" && exitFlag !== undefined && (!Number.isInteger(Number(exitFlag)) || Number(exitFlag) < 0)) throw new VerbUsageError("--exit must be a non-negative integer.");
+    // ...AND EVERY STATE REFUSAL TOO (Bugbot on #516): the ledger is read where
+    // it is (an older copy in place, nothing moved) and the open-entry checks
+    // run against it; only a call that will succeed migrates.
+    const preview = locateEffortLedger(home, effort, "read");
+    stateRefusal(sub, readLedger(preview.path, effort), effort, context.args.values["phase"] ?? null, resume);
     const located = locateEffortLedger(home, effort, "write");
     const path = located.path;
     const moved = legacyLine(located);
@@ -233,6 +238,22 @@ export const phaseCommand: Command = {
     }, { warn: context.io.err });
   },
 };
+
+/** The open-entry refusals `begin` and `end` make, as a usage error, before anything moves or is written. */
+function stateRefusal(sub: string, ledger: PhaseLedger, effort: string, named: string | null, resume: boolean): void {
+  const open = ledger.phases.filter((entry): boolean => entry.endedAt === null);
+  if (sub === "begin" && named !== null) {
+    const same = open.some((entry): boolean => entry.phase === named);
+    if (same && !resume) throw new VerbUsageError(`phase '${named}' is already open on effort '${effort}'. End it first, or continue it with --resume; two open entries with one name cannot be told apart.`);
+    if (!same && resume && open.length > 0) {
+      const others = open.map((entry): string => `'${entry.phase}'`);
+      throw new VerbUsageError(`--resume continues an open '${named}' entry, and none is open on effort '${effort}'; ${others.join(", ")} ${others.length === 1 ? "is" : "are"} open instead. Resume that phase, end it first, or begin '${named}' without --resume.`);
+    }
+  }
+  if (sub === "end" && !open.some((entry): boolean => named === null || entry.phase === named)) {
+    throw new VerbUsageError(named === null ? `no open phase on effort '${effort}'. 'begin' one first.` : `phase '${named}' is not open on effort '${effort}'.`);
+  }
+}
 
 export function renderLedger(ledger: PhaseLedger): string[] {
   const lines = [`effort: ${ledger.effort} (${ledger.phases.length} phase entr${ledger.phases.length === 1 ? "y" : "ies"})`];

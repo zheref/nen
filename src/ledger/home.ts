@@ -181,6 +181,28 @@ function refusal(family: EffortFamily, message: string): Error {
   return family === "direct" ? new VerbUsageError(message) : new LedgerHomeError(message);
 }
 
+/**
+ * An older worktree-local `.nen/<family>/` is only scanned when it, and the
+ * `.nen` above it, is a real directory of that checkout (Bugbot on #516): a
+ * symlinked directory -- one a checked-out PR head could carry -- would hand
+ * the scan another tree's files, so it is refused like a symlinked ledger.
+ */
+function legacyDirSafe(dir: string, family: EffortFamily): void {
+  for (const path of [dirname(dir), dir]) {
+    let stats;
+    try {
+      stats = lstatSync(path);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException | null)?.code;
+      if (code === "ENOENT" || code === "ENOTDIR") return;
+      throw new LedgerHomeError(`'${path}' could not be inspected (${code ?? String(error)}). Could not read is never nothing found.`);
+    }
+    if (!stats.isDirectory()) {
+      throw refusal(family, `'${path}' is ${stats.isSymbolicLink() ? "a symbolic link" : "not a directory"}; an older ledger directory is scanned only when it is a real directory of its checkout. Remove it and run again.`);
+    }
+  }
+}
+
 /** The durable path must really sit under the home's base (SEC-7): a `.nen` or family directory that is a link out is refused. */
 function assertContained(home: EffortHome, path: string): void {
   const real = realContainment(home.base, path);
@@ -200,6 +222,7 @@ export function locateEffortLedger(home: EffortHome, effort: string, mode: "read
   const durable = exists(path, home.family);
   const old: string[] = [];
   for (const dir of home.legacyDirs) {
+    legacyDirSafe(dir, home.family);
     const candidate = join(dir, name);
     if (exists(candidate, home.family) && !old.some((known): boolean => canonical(known) === canonical(candidate))) old.push(candidate);
   }

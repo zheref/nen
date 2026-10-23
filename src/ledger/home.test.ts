@@ -150,4 +150,28 @@ describe("per-effort ledgers live in the git common dir (zheref/nen#509)", () =>
     expect((JSON.parse(result.out) as { phases: unknown[] }).phases).toEqual([]);
     expect(result.err).toContain("one effort's ledger in two homes");
   });
+
+  it("a refused begin or end because of the ledger's state moves nothing (Bugbot on #516)", async () => {
+    const { tree } = repoWithWorktree();
+    const old = join(tree, ".nen", "phases", "e8.json");
+    mkdirSync(join(tree, ".nen", "phases"), { recursive: true });
+    writeFileSync(old, JSON.stringify({ contract: "nen.phase.ledger/v0.1", effort: "e8", phases: [{ phase: "breath", startedAt: "2026-01-01T00:00:00.000Z", endedAt: null, durationMs: null, exitCode: null, surface: null, model: null, note: null, steps: [], dial: null }] }));
+    expect((await nen(["phase", "begin", "--effort", "e8", "--phase", "breath", "--repo", tree])).code).toBe(2);
+    expect((await nen(["phase", "end", "--effort", "e8", "--phase", "kokusen", "--repo", tree])).code).toBe(2);
+    expect(existsSync(old)).toBe(true);
+    expect((await nen(["phase", "end", "--effort", "e8", "--repo", tree])).code).toBe(0);
+    expect(existsSync(old)).toBe(false);
+  });
+
+  it("SEC-7: a symlinked older ledger directory is refused, never scanned (Bugbot on #516)", async () => {
+    const { tree, common } = repoWithWorktree();
+    const other = mkdtempSync(join(tmpdir(), "nen-home-otherdir-"));
+    writeFileSync(join(other, "e9.json"), JSON.stringify({ contract: "nen.phase.ledger/v0.1", effort: "e9", phases: [] }));
+    mkdirSync(join(tree, ".nen"), { recursive: true });
+    symlinkSync(other, join(tree, ".nen", "phases"));
+    const result = await nen(["phase", "show", "--effort", "e9", "--repo", tree]);
+    expect(result.code).toBe(1);
+    expect(result.err).toContain("is a symbolic link");
+    expect(existsSync(join(common, ".nen", "phases", "e9.json"))).toBe(false);
+  });
 });

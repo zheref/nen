@@ -20,8 +20,6 @@ import {
 } from "../cli/command.js";
 import { splitList } from "../cli/inputs.js";
 import { resolveRepoRoot } from "../repo/root.js";
-import { resolveToken } from "../repo/resolve.js";
-import { loadRepoRegistry } from "../schema/repos.js";
 import { loadWorkflow } from "../schema/workflow.js";
 import { effortIdProblem, effortIdRefusal } from "../ledger/effort.js";
 import { resolveEffortHome } from "../ledger/home.js";
@@ -48,6 +46,7 @@ import {
   type RunManifest,
 } from "./manifest.js";
 import { readLivePr, renderVerify, verifyRun } from "./verify.js";
+import { normaliseIssue } from "./issue.js";
 import { CONSUMER_RUN_CONTRACTS, CONSUMER_RUN_DISPLAY, consumerRunPath, planImport, readConsumerRun } from "./import.js";
 import { computeBudget, renderBudget, runEfforts, type BudgetCeiling } from "./budget.js";
 
@@ -239,34 +238,6 @@ function manifestPath(context: CommandContext, root: string, id: string): string
     context.io.err(`nen: ${error instanceof Error ? error.message : String(error)}`);
     return null;
   }
-}
-
-/**
- * ONE SPELLING PER ISSUE IN A MANIFEST (Nobunaga on #516): `<owner/name>#<N>`.
- * A `<CODE>#<N>` is resolved through --repo's nen/repos.json (the registry `nen
- * ref` reads), so a run that appends `HA#12` and an import that wrote
- * `zheref/hatsu#12` name one issue. A code the registry does not resolve to an
- * `owner/name` is exit 2: inventing an owner is a guess.
- */
-function normaliseIssue(root: string, issue: string): string {
-  const hash = issue.lastIndexOf("#");
-  const scope = issue.slice(0, hash);
-  if (scope.includes("/")) return issue;
-  let registry;
-  try {
-    registry = loadRepoRegistry(root);
-  } catch (error) {
-    throw new VerbUsageError(`--issue '${issue}' is a code form and --repo's nen/repos.json could not resolve it (${error instanceof Error ? error.message : String(error)}). Pass <owner/name>#<N>.`);
-  }
-  let hits;
-  try {
-    hits = resolveToken(registry, scope);
-  } catch (error) {
-    throw new VerbUsageError(`--issue '${issue}': the code '${scope}' does not resolve in nen/repos.json (${error instanceof Error ? error.message : String(error)}). Pass <owner/name>#<N>.`);
-  }
-  const repo = hits[0]?.repo;
-  if (hits.length !== 1 || repo === undefined || !repo.includes("/")) throw new VerbUsageError(`--issue '${issue}': the code '${scope}' resolves to no single owner/name in nen/repos.json. Pass <owner/name>#<N>.`);
-  return `${repo}${issue.slice(hash)}`;
 }
 
 function targetFlag(context: CommandContext, why: string): Target {
@@ -511,7 +482,7 @@ function doImport(context: CommandContext): number {
   try {
     const run = readConsumerRun(from);
     if (run.id !== id) throw new RunManifestError(`'${from}' records run '${run.id}', not '${id}'. Nothing was written.`);
-    result = withManifest(path, (existing) => planImport(context.seams, existing, run, id, now), !dryRun);
+    result = withManifest(path, (existing) => planImport(context.seams, existing, run, id, now, root), !dryRun);
   } catch (error) {
     context.io.err(`nen: ${error instanceof Error ? error.message : String(error)}`);
     return 1;
