@@ -27,6 +27,7 @@
 import { existsSync, lstatSync, mkdirSync, realpathSync, renameSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { VerbUsageError } from "../cli/command.js";
+import { realContainment } from "../repo/contain.js";
 import { GIT, type Seams } from "../seam/exec.js";
 import { encodeEffortId } from "./effort.js";
 import { withLedgerLock } from "./lock.js";
@@ -147,14 +148,44 @@ export function effortLedgerPath(home: EffortHome, effort: string): string {
   return join(home.dir, `${encodeEffortId(effort)}.json`);
 }
 
-function exists(path: string): boolean {
+/**
+ * True when a ledger file is at `path`; false when nothing is. ONLY A REGULAR
+ * FILE IS A LEDGER (Feitan on zheref/nen#516, SEC-7): a symlink, a directory or
+ * anything else at a ledger's name -- a link a checked-out PR head could carry
+ * into a worktree's `.nen/` -- is refused -- exit 1 for the phase, usage and
+ * session ledgers, exit 2 for the direct record, each family's documented code -- never read through and
+ * never moved into the common dir.
+ */
+function exists(path: string, family: EffortFamily): boolean {
+  let stats;
   try {
-    lstatSync(path);
-    return true;
+    stats = lstatSync(path);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException | null)?.code;
     if (code === "ENOENT" || code === "ENOTDIR") return false;
     throw new LedgerHomeError(`'${path}' could not be inspected (${code ?? String(error)}). Could not read is never nothing found.`);
+  }
+  if (!stats.isFile()) {
+    throw refusal(family, `'${path}' is ${stats.isSymbolicLink() ? "a symbolic link" : "not a regular file"}; a ledger is only ever a plain file nen wrote, so it is neither read nor moved. Remove it and run again.`);
+  }
+  return true;
+}
+
+/**
+ * The refusal's exit code is the family's own, as each documented it before
+ * the homes were shared: the direct record refuses a link at exit 2 (a usage
+ * error, ../direct/record.ts); the phase, usage and session ledgers refuse an
+ * unreadable ledger at exit 1.
+ */
+function refusal(family: EffortFamily, message: string): Error {
+  return family === "direct" ? new VerbUsageError(message) : new LedgerHomeError(message);
+}
+
+/** The durable path must really sit under the home's base (SEC-7): a `.nen` or family directory that is a link out is refused. */
+function assertContained(home: EffortHome, path: string): void {
+  const real = realContainment(home.base, path);
+  if (!real.contained) {
+    throw refusal(home.family, `'${path}' resolves to '${real.real}', outside ${home.durable ? "the git common directory" : "the repository (--repo)"}${real.link === null ? "" : ` (through the link '${real.link}')`}; a ledger is read and written only there.`);
   }
 }
 
@@ -164,14 +195,15 @@ function exists(path: string): boolean {
  */
 export function locateEffortLedger(home: EffortHome, effort: string, mode: "read" | "write"): LocatedLedger {
   const path = effortLedgerPath(home, effort);
+  assertContained(home, path);
   const name = `${encodeEffortId(effort)}.json`;
+  const durable = exists(path, home.family);
   const old: string[] = [];
   for (const dir of home.legacyDirs) {
     const candidate = join(dir, name);
-    if (exists(candidate) && !old.some((known): boolean => canonical(known) === canonical(candidate))) old.push(candidate);
+    if (exists(candidate, home.family) && !old.some((known): boolean => canonical(known) === canonical(candidate))) old.push(candidate);
   }
   if (old.length === 0) return { path, home: path, legacy: null, migratedFrom: null };
-  const durable = exists(path);
   if (durable || old.length > 1) {
     throw new LedgerHomeError(
       `effort '${effort}' has a ${home.family} ledger in more than one place (${[...(durable ? [path] : []), ...old].join(", ")}); nen will not choose which is the effort's record. Keep one -- the durable one is ${path} -- and move the others aside.`,

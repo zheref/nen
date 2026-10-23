@@ -20,6 +20,8 @@ import {
 } from "../cli/command.js";
 import { splitList } from "../cli/inputs.js";
 import { resolveRepoRoot } from "../repo/root.js";
+import { resolveToken } from "../repo/resolve.js";
+import { loadRepoRegistry } from "../schema/repos.js";
 import { loadWorkflow } from "../schema/workflow.js";
 import { effortIdProblem, effortIdRefusal } from "../ledger/effort.js";
 import { resolveEffortHome } from "../ledger/home.js";
@@ -92,7 +94,10 @@ GIT_WORK_TREE dropped. nen records and reads; it decides nothing.
           --base and --head, when given, must match what is read. A PR
           created before the run's startedAt is refused, exit 1: the run did
           not open it. --issue is required for a delivery PR and optional
-          (null) for an integration or release PR. The same facts again:
+          (null) for an integration or release PR; it is recorded as
+          '<owner/name>#<N>' (a code is resolved through --repo's
+          nen/repos.json, exit 2 when it does not resolve), as park and
+          import record it. The same facts again:
           'unchanged'; a moved head or a retargeted base: 'updated'; another
           issue, kind or effort for a recorded PR: refused, exit 1. No
           manifest, or a PR that could not be read: exit 1.
@@ -236,6 +241,34 @@ function manifestPath(context: CommandContext, root: string, id: string): string
   }
 }
 
+/**
+ * ONE SPELLING PER ISSUE IN A MANIFEST (Nobunaga on #516): `<owner/name>#<N>`.
+ * A `<CODE>#<N>` is resolved through --repo's nen/repos.json (the registry `nen
+ * ref` reads), so a run that appends `HA#12` and an import that wrote
+ * `zheref/hatsu#12` name one issue. A code the registry does not resolve to an
+ * `owner/name` is exit 2: inventing an owner is a guess.
+ */
+function normaliseIssue(root: string, issue: string): string {
+  const hash = issue.lastIndexOf("#");
+  const scope = issue.slice(0, hash);
+  if (scope.includes("/")) return issue;
+  let registry;
+  try {
+    registry = loadRepoRegistry(root);
+  } catch (error) {
+    throw new VerbUsageError(`--issue '${issue}' is a code form and --repo's nen/repos.json could not resolve it (${error instanceof Error ? error.message : String(error)}). Pass <owner/name>#<N>.`);
+  }
+  let hits;
+  try {
+    hits = resolveToken(registry, scope);
+  } catch (error) {
+    throw new VerbUsageError(`--issue '${issue}': the code '${scope}' does not resolve in nen/repos.json (${error instanceof Error ? error.message : String(error)}). Pass <owner/name>#<N>.`);
+  }
+  const repo = hits[0]?.repo;
+  if (hits.length !== 1 || repo === undefined || !repo.includes("/")) throw new VerbUsageError(`--issue '${issue}': the code '${scope}' resolves to no single owner/name in nen/repos.json. Pass <owner/name>#<N>.`);
+  return `${repo}${issue.slice(hash)}`;
+}
+
 function targetFlag(context: CommandContext, why: string): Target {
   const raw = requireValue(context.args, "target", why);
   try {
@@ -282,8 +315,7 @@ function doAppend(context: CommandContext): number {
   if (!(RUN_KINDS as readonly string[]).includes(kind)) throw new VerbUsageError(`--kind '${kind}' must be one of ${RUN_KINDS.join(", ")}.`);
   const issueRaw = context.args.values["issue"];
   if (issueRaw === undefined && kind === "delivery") throw new VerbUsageError("--issue <CODE>#<N> is required for a delivery PR: it is the issue the PR delivers. An integration or release PR may omit it (recorded null).");
-  const issue = issueRaw ?? null;
-  if (issue !== null && !ISSUE_REF.test(issue)) throw new VerbUsageError(`--issue '${issue}' is not <CODE>#<N> or <owner/name>#<N>.`);
+  if (issueRaw !== undefined && !ISSUE_REF.test(issueRaw)) throw new VerbUsageError(`--issue '${issueRaw}' is not <CODE>#<N> or <owner/name>#<N>.`);
   const prRaw = requireValue(context.args, "pr", "It is the pull request number the run opened.");
   const pr = Number(prRaw);
   if (!/^[1-9][0-9]*$/.test(prRaw) || !Number.isSafeInteger(pr)) throw new VerbUsageError(`--pr '${prRaw}' is not a pull request number.`);
@@ -296,6 +328,7 @@ function doAppend(context: CommandContext): number {
   if (effort !== null && effortProblem !== null) throw new VerbUsageError(`--effort: ${effortIdRefusal(effort, effortProblem)}`);
 
   const root = resolveRepoRoot({ repoFlag: context.repoFlag });
+  const issue = issueRaw === undefined ? null : normaliseIssue(root, issueRaw);
   const path = manifestPath(context, root, id);
   if (path === null) return 1;
   const dryRun = context.args.booleans.has("dry-run");
@@ -348,11 +381,12 @@ function doAppend(context: CommandContext): number {
 
 function doPark(context: CommandContext): number {
   const id = runId(context);
-  const issue = requireValue(context.args, "issue", "It is the issue whose effort is parked, as <CODE>#<N> or <owner/name>#<N>.");
-  if (!ISSUE_REF.test(issue)) throw new VerbUsageError(`--issue '${issue}' is not <CODE>#<N> or <owner/name>#<N>.`);
+  const issueRaw = requireValue(context.args, "issue", "It is the issue whose effort is parked, as <CODE>#<N> or <owner/name>#<N>.");
+  if (!ISSUE_REF.test(issueRaw)) throw new VerbUsageError(`--issue '${issueRaw}' is not <CODE>#<N> or <owner/name>#<N>.`);
   const row = requireValue(context.args, "row", "It is the ask-once decisions row the effort is parked on (HR-5).");
   if (!ROW_ID.test(row)) throw new VerbUsageError(`--row '${row}' is not [a-z0-9-]+, the spelling nen/decisions.json uses.`);
   const root = resolveRepoRoot({ repoFlag: context.repoFlag });
+  const issue = normaliseIssue(root, issueRaw);
   const path = manifestPath(context, root, id);
   if (path === null) return 1;
   const dryRun = context.args.booleans.has("dry-run");

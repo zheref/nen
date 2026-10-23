@@ -24,13 +24,25 @@
 // `at`, `gate` and `who`) -- a marker an older build wrote still reads.
 
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { encodeEffortId } from "../ledger/effort.js";
 import { commonDirOrNull } from "../ledger/home.js";
 import { writeLedgerAtomically } from "../ledger/lock.js";
 import { MARKS_COMMON_SEGMENTS } from "../ledger/roots.js";
 import type { Seams } from "../seam/exec.js";
 import { MARKER_FILE, parseMarker } from "./marker.js";
+
+/**
+ * THE RUNG TWIN (Nobunaga on #516). A Stop hook that rings off the single file
+ * and removes it (`rm -f .nen/last-stop.json`, as Hatsu's stop-bell does)
+ * never consumes the per-gate twin. So every mark also records which per-gate
+ * marker the single file currently twins, in `<marks>/.latest.json` { path, at, single }.
+ * When the single file is GONE and that marker still carries the same `at`, the
+ * hook consumed it: `list` does not report it, and the next `--mark` removes
+ * it. A single file that was REPLACED by a later mark consumed nothing, so the
+ * earlier gates stay listed as unrung.
+ */
+export const LATEST_FILE = ".latest.json";
 
 /** `nen.stop.list/v0.1` -- `nen stop list --json`'s document. */
 export const STOP_LIST_CONTRACT = "nen.stop.list/v0.1";
@@ -116,7 +128,9 @@ export function listMarks(home: MarksHome, root: string): MarkList {
       return [];
     }
   };
+  const rung = rungTwin(home);
   for (const effortDir of entries(home.dir)) {
+    if (effortDir === LATEST_FILE) continue;
     const directory = join(home.dir, effortDir);
     if (!lstatSync(directory).isDirectory()) {
       unreadable.push({ path: directory, reason: "not a directory" });
@@ -130,6 +144,7 @@ export function listMarks(home: MarksHome, root: string): MarkList {
         unreadable.push({ path, reason: verdict.reason });
         continue;
       }
+      if (rung !== null && path === rung) continue;
       documents.push(verdict.marker);
       marks.push(listed("gate", path, verdict.marker));
     }
@@ -165,4 +180,28 @@ export function readLegacy(root: string): Record<string, unknown> | null {
   if (!existsSync(path)) return null;
   const verdict = readMarker(path);
   return verdict.ok ? verdict.marker : null;
+}
+
+/** The per-gate marker the single file twinned, when the single file is gone (consumed) and the marker is still that stop; else null. */
+export function rungTwin(home: MarksHome): string | null {
+  const latest = join(home.dir, LATEST_FILE);
+  let pointer: { path?: unknown; at?: unknown; single?: unknown };
+  try {
+    pointer = JSON.parse(readFileSync(latest, "utf8")) as { path?: unknown; at?: unknown; single?: unknown };
+  } catch {
+    return null;
+  }
+  if (typeof pointer.path !== "string" || typeof pointer.at !== "string" || typeof pointer.single !== "string" || !pointer.path.startsWith(home.dir) || !existsSync(pointer.path)) return null;
+  // CONSUMED only when the checkout that held the single file still exists and
+  // the file is gone from it: a removed worktree took the file without anyone
+  // ringing, so its markers stay unrung (AC-4).
+  const checkout = dirname(dirname(pointer.single));
+  if (!existsSync(checkout) || existsSync(pointer.single)) return null;
+  const verdict = readMarker(pointer.path);
+  return verdict.ok && verdict.marker["at"] === pointer.at ? pointer.path : null;
+}
+
+/** Record which per-gate marker the single file now twins. */
+export function writeLatest(home: MarksHome, path: string, at: string, single: string): void {
+  writeLedgerAtomically(join(home.dir, LATEST_FILE), { path, at, single });
 }

@@ -67,7 +67,7 @@ import { parsePipeTable, renderPipeTable } from "../cli/table.js";
 import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
 import { normalizeEol } from "../seam/exec.js";
 import { assertEffortId } from "../ledger/effort.js";
-import { gateMarkPath, listMarks, readLegacy, removeIfPresent, resolveMarksHome, sameStop, STOP_LIST_CONTRACT, twinsOf, writeGateMark } from "./marks.js";
+import { gateMarkPath, LATEST_FILE, listMarks, NO_GATE_FILE, readLegacy, removeIfPresent, resolveMarksHome, rungTwin, sameStop, STOP_LIST_CONTRACT, twinsOf, writeGateMark, writeLatest } from "./marks.js";
 import { ANSWER_BOOLEAN_FLAGS, ANSWER_LIST_FLAGS, ANSWER_VALUE_FLAGS, runAnswer } from "./answer.js";
 import type { GateId } from "../schema/decisions.js";
 
@@ -170,7 +170,10 @@ list:
   Every unrung marker, oldest first: each per-gate marker (gate, effort, at,
   who, title, path), and '${MARKER_FILE}' as 'legacy' when no per-gate marker
   is the same stop (same at, gate and who) -- a marker an older build wrote
-  still reads. --json: { contract: '${STOP_LIST_CONTRACT}', dir, marks[],
+  still reads. A per-gate marker whose single-file twin a hook already removed
+  (rang and consumed) is not listed, and the next --mark removes it; markers
+  whose single file was only REPLACED by a later mark stay unrung.
+  --json: { contract: '${STOP_LIST_CONTRACT}', dir, marks[],
   unreadable[] }. Exit 0 when every file read (an empty list included); exit 1
   when any marker file exists and could not be read -- listed under
   'unreadable', never skipped and never counted as no marker.
@@ -179,7 +182,8 @@ clear:
   Bare: remove '${MARKER_FILE}' when it exists, and the per-gate marker that
   is the same stop -- the consumption a Stop hook performs, as a verb, exactly
   as before. --gate <g> [--effort <id>]: remove ONLY that gate's marker for
-  that effort (no --effort: the stop marked without one), and the single
+  that effort (no --effort: the stop marked without one; --gate none: the
+  stop marked with no gate), and the single
   file too when it is that same stop; every other gate's marker stays.
   --all: every per-gate marker and the single file. Nothing to remove is
   exit 0 saying so.
@@ -460,10 +464,13 @@ function listCommand(context: CommandContext): number {
 function clearMarker(context: CommandContext): number {
   const root = assertRepoRoot({ repoFlag: context.repoFlag });
   const legacyPath = join(root, ...MARKER_FILE.split("/"));
-  const gate = context.args.values["gate"] ?? null;
+  const gateFlag = context.args.values["gate"] ?? null;
   const effortFlag = context.args.values["effort"];
   const all = context.args.booleans.has("all");
-  if (gate !== null && !Object.hasOwn(GATE_NAMES, gate)) throw new VerbUsageError(`--gate must be one of ${Object.keys(GATE_NAMES).join(", ")}, got '${gate}'.`);
+  // `--gate none` names a stop marked with no --gate (its file is `none.json`; Nobunaga on #516).
+  if (gateFlag !== null && gateFlag !== NO_GATE_FILE && !Object.hasOwn(GATE_NAMES, gateFlag)) throw new VerbUsageError(`--gate must be one of ${Object.keys(GATE_NAMES).join(", ")} or ${NO_GATE_FILE}, got '${gateFlag}'.`);
+  const gate = gateFlag;
+  const gateKey = gateFlag === NO_GATE_FILE ? null : gateFlag;
   if (all && (gate !== null || effortFlag !== undefined)) throw new VerbUsageError("--all clears every marker; it takes no --gate or --effort.");
   if (effortFlag !== undefined && gate === null) throw new VerbUsageError("--effort names which effort's marker to clear: give the --gate too.");
   const effort = effortFlag === undefined ? null : assertEffortId(effortFlag);
@@ -477,11 +484,14 @@ function clearMarker(context: CommandContext): number {
     }
   };
   if (all) {
+    const rung = rungTwin(home);
+    if (rung !== null) remove(rung);
     const list = listMarks(home, root);
     for (const mark of list.marks) remove(mark.path);
     remove(legacyPath);
+    remove(join(home.dir, LATEST_FILE));
   } else if (gate !== null) {
-    const path = gateMarkPath(home, effort, gate);
+    const path = gateMarkPath(home, effort, gateKey);
     const legacy = readLegacy(root);
     let target: Record<string, unknown> | null = null;
     try {
@@ -499,7 +509,7 @@ function clearMarker(context: CommandContext): number {
   }
   if (removed.length === 0) {
     const what = all ? "no marker" : gate !== null ? `no ${gate} marker${effort === null ? "" : ` for '${effort}'`}` : `no marker at ${legacyPath}`;
-    emit(context.io, context.json, { cleared: false, path: gate !== null ? gateMarkPath(home, effort, gate) : legacyPath, removed }, [`${what} -- nothing to clear.`]);
+    emit(context.io, context.json, { cleared: false, path: gate !== null ? gateMarkPath(home, effort, gateKey) : legacyPath, removed }, [`${what} -- nothing to clear.`]);
     return 0;
   }
   emit(context.io, context.json, { cleared: true, path: removed[0], removed }, removed.map((path): string => `cleared ${path}.`));
@@ -537,7 +547,11 @@ function writeMarker(
   const path = join(root, ...MARKER_FILE.split("/"));
   // The per-gate marker's home is asked of git BEFORE either file is written,
   // so a git refusal (exit 2) leaves no half-written stop behind.
-  const gatePath = gateMarkPath(resolveMarksHome(root, context.seams), stop.effort, stop.gate);
+  const marksHome = resolveMarksHome(root, context.seams);
+  const gatePath = gateMarkPath(marksHome, stop.effort, stop.gate);
+  // A twin a hook already rang (the single file removed) is consumed now, before
+  // the single file is rewritten and the evidence is gone (./marks.ts).
+  const rung = rungTwin(marksHome);
   const at = context.seams.now().toISOString();
   const rich =
     stop.title !== null || stop.body !== null || stop.reportUrl !== null || stop.options !== null || stop.proposedIssue !== null;
@@ -589,6 +603,7 @@ function writeMarker(
     writeFileSync(path, `${JSON.stringify(document, null, 2)}\n`, "utf8");
     // THE PER-GATE MARKER (zheref/nen#513): always the full v0.3 shape, every
     // v0.2 key present (null where the stop said nothing) plus `effort`.
+    if (rung !== null) removeIfPresent(rung);
     writeGateMark(gatePath, {
       contract: STOP_MARK_CONTRACT_V3,
       who: marker.who,
@@ -602,6 +617,7 @@ function writeMarker(
       proposedIssue: marker.proposedIssue,
       effort: marker.effort,
     });
+    writeLatest(marksHome, gatePath, at, path);
     if (proposedPath !== null && stop.proposedIssue !== null) {
       mkdirSync(dirname(proposedPath), { recursive: true });
       writeFileSync(
