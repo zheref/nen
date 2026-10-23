@@ -981,6 +981,9 @@ describe("a read-only persona keeps its intent on every surface (zheref/nen#473)
   it("derives read-only from a tools list naming no write tool, in every spelling", () => {
     expect(isReadOnlyPersona(entries("tools: Read, Grep, Glob"))).toBe(true);
     expect(isReadOnlyPersona(entries("tools:\n  - Read\n  - Bash(git:*)"))).toBe(true);
+    // A comma inside a scope does not split the grant (zheref/nen#505).
+    expect(isReadOnlyPersona(entries("tools: Read, Bash(git log, git diff)"))).toBe(true);
+    expect(isReadOnlyPersona(entries("tools: Read, Bash(git log, git diff), Edit"))).toBe(false);
     expect(isReadOnlyPersona(entries('tools: ["Read", "WebFetch"]'))).toBe(true);
     expect(isReadOnlyPersona(entries("tools: Read, Edit"))).toBe(false);
     expect(isReadOnlyPersona(entries("tools:\n  - Read\n  - MultiEdit"))).toBe(false);
@@ -1104,7 +1107,9 @@ describe("the antigravity mirror writes a persona's tools in Antigravity's own n
   });
 
   it("refuses a list it cannot read as tool names rather than writing it as is", () => {
-    expect(() => generate([persona("odd", "tools: Read, Bob's, Edit # x")])).toThrow(/'odd\.md' has a 'tools' list that cannot be read as tool names/);
+    expect(() => generate([persona("odd", "tools: Read, Bob's, Edit # x")])).toThrow(
+      /'odd\.md' has a 'tools' list that cannot be read as tool names \('Bob's' is not one\), so it cannot be translated into the 'antigravity' surface's own tool names/,
+    );
   });
 
   it("passes a persona with no tools key, or an empty one, through untouched", () => {
@@ -1126,15 +1131,34 @@ describe("the antigravity mirror writes a persona's tools in Antigravity's own n
     expect(generate([reader], "cursor").notes.some((note): boolean => note.includes("dropped"))).toBe(false);
   });
 
-  // AC-6: a consumer's mirror generated before this change is drift, not ok.
-  it("check reports a mirror carrying the old Claude Code names as drift", () => {
+  // AC-6: a consumer's mirror generated before this change is drift, not ok --
+  // and STALE, because an older build really wrote it (the #270 rule).
+  it("check reports a mirror an older build generated, with the old Claude Code names, as stale", () => {
     const out = tempDir();
-    const files = generate([persona("reader", "tools: Read, Grep, Bash")]).files;
+    const files = generate([persona("reader", "tools: Read, Grep, Bash"), persona("open", "model: pro")]).files;
     writeSurfaceMirror(out, files, row("antigravity"));
     const path = join(out, "agents", "reader.md");
     writeFileSync(path, readFileSync(path, "utf8").replace("tools:\n  - view_file\n  - run_command\n", "tools: Read, Grep, Bash\n"));
     const check = checkSurfaceMirror(out, files, row("antigravity"));
     expect(mirrorReportOk(check)).toBe(false);
-    expect(check.handEdited).toEqual(["agents/reader.md"]);
+    expect(check.stale).toEqual(["agents/reader.md"]);
+    expect(check.handEdited).toEqual([]);
+    expect(at(files, "agents/open.md")).toBeDefined();
+    expect(files.find((file): boolean => file.path === "agents/open.md")?.beforeToolNames).toBeUndefined();
+  });
+
+  it("check still reads any other edit to the tools list as hand-edited", () => {
+    const out = tempDir();
+    const files = generate([persona("reader", "tools: Read, Grep, Bash")]).files;
+    writeSurfaceMirror(out, files, row("antigravity"));
+    const path = join(out, "agents", "reader.md");
+    writeFileSync(path, readFileSync(path, "utf8").replace("  - run_command\n", "  - run_command\n  - edit_file\n"));
+    expect(checkSurfaceMirror(out, files, row("antigravity")).handEdited).toEqual(["agents/reader.md"]);
+  });
+
+  it("keeps a comma inside a scoped grant in one item, and drops the grant", () => {
+    const result = generate([persona("scoped", "tools: Read, Bash(git log, git diff)")]);
+    expect(front(at(result.files, "agents/scoped.md"))).toBe("---\nname: scoped\ndescription: scoped.\ntools:\n  - view_file\n---\n");
+    expect(result.notes).toEqual([`antigravity: scoped: dropped Bash(git log, git diff) from tools (no documented antigravity name: ${RULING}); wrote view_file`]);
   });
 });
