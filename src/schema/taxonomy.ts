@@ -485,7 +485,7 @@ function precedenceRestatementCheck(root: string): SchemaCheck | null {
     const contract = loadContract(root);
     precedence = contract.precedence;
     files = contract.precedenceRestatedIn;
-  } catch (error) {
+  } catch {
     // Absent or malformed: the contract row already says so, and no
     // restatement is declared that this row could hold to anything.
     return null;
