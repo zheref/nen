@@ -984,6 +984,9 @@ describe("a read-only persona keeps its intent on every surface (zheref/nen#473)
     // A comma inside a scope does not split the grant (zheref/nen#505).
     expect(isReadOnlyPersona(entries("tools: Read, Bash(git log, git diff)"))).toBe(true);
     expect(isReadOnlyPersona(entries("tools: Read, Bash(git log, git diff), Edit"))).toBe(false);
+    // ...but a scope left open is a list the parse did not understand, never the one tool before it.
+    expect(isReadOnlyPersona(entries("tools: Bash(git:*, Edit, Read"))).toBe(false);
+    expect(isReadOnlyPersona(entries("tools:\n  - Bash(git:*\n  - Edit\n  - Read"))).toBe(false);
     expect(isReadOnlyPersona(entries('tools: ["Read", "WebFetch"]'))).toBe(true);
     expect(isReadOnlyPersona(entries("tools: Read, Edit"))).toBe(false);
     expect(isReadOnlyPersona(entries("tools:\n  - Read\n  - MultiEdit"))).toBe(false);
@@ -1112,6 +1115,14 @@ describe("the antigravity mirror writes a persona's tools in Antigravity's own n
     );
   });
 
+  it("refuses a list whose scope is left open as unreadable, naming the swallowing item", () => {
+    expect(() => generate([persona("open-scope", "tools: Bash(git:*, Edit, Read")])).toThrow(
+      /'open-scope\.md' has a 'tools' list that cannot be read as tool names \('Bash\(git:\*, Edit, Read' is not one\)/,
+    );
+    const cursor = generate([persona("open-scope", "tools: Bash(git:*, Edit, Read")], "cursor");
+    expect(at(cursor.files, "agents/open-scope.md")).not.toContain("readonly");
+  });
+
   it("passes a persona with no tools key, or an empty one, through untouched", () => {
     const result = generate([persona("open", "model: pro"), persona("empty", "tools:")]);
     expect(front(at(result.files, "agents/open.md"))).toBe("---\nname: open\ndescription: open.\nmodel: pro\n---\n");
@@ -1145,6 +1156,17 @@ describe("the antigravity mirror writes a persona's tools in Antigravity's own n
     expect(check.handEdited).toEqual([]);
     expect(at(files, "agents/open.md")).toBeDefined();
     expect(files.find((file): boolean => file.path === "agents/open.md")?.beforeToolNames).toBeUndefined();
+  });
+
+  it("reads the older build's bytes as stale under --stamp too, the way Hatsu checks", () => {
+    const out = tempDir();
+    const files = generateSurfaceMirrorReport({ row: row("antigravity"), skills: [], agents: [persona("reader", "tools: Read, Grep, Bash")], invocationPrefix: null, stamp: "1.2.3" }).files;
+    writeSurfaceMirror(out, files, row("antigravity"));
+    const path = join(out, "agents", "reader.md");
+    writeFileSync(path, readFileSync(path, "utf8").replace("tools:\n  - view_file\n  - run_command\n", "tools: Read, Grep, Bash\n"));
+    const check = checkSurfaceMirror(out, files, row("antigravity"), "1.2.3");
+    expect(check.stale).toEqual(["agents/reader.md"]);
+    expect(check.handEdited).toEqual([]);
   });
 
   it("check still reads any other edit to the tools list as hand-edited", () => {

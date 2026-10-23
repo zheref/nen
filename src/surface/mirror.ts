@@ -677,10 +677,17 @@ function toolListItems(entry: FrontmatterEntry): readonly ToolListItem[] {
     }
   }
   parts.push(part);
+  // A scope left open swallows every item after it; its name keeps the `(`,
+  // so it fails TOOL_NAME and the list reads as unreadable rather than as the
+  // one tool before the paren (Nobunaga, cycle 2 on zheref/nen#505).
+  const unclosed = depth > 0 ? parts.length - 1 : -1;
   return parts
-    .map((piece): string => piece.trim().replace(/^-\s*/, "").replace(/^["']|["']$/g, "").trim())
-    .filter((written): boolean => written !== "")
-    .map((written): ToolListItem => ({ written, name: written.replace(/\(.*$/, "").trim() }));
+    .map((piece, index): { readonly written: string; readonly open: boolean } => ({
+      written: piece.trim().replace(/^-\s*/, "").replace(/^["']|["']$/g, "").trim(),
+      open: index === unclosed,
+    }))
+    .filter((piece): boolean => piece.written !== "")
+    .map((piece): ToolListItem => ({ written: piece.written, name: piece.open ? piece.written : piece.written.replace(/\(.*$/, "").trim() }));
 }
 
 /**
