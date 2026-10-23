@@ -119,7 +119,9 @@ converge    A folder's citations of one member (--code) re-read at the
             capture/<CODE>/inventory.json). A ticked task is a claim, never
             evidence. --write APPENDS ONLY: [STALE @ <sha>] beside a moved,
             changed or vanished citation, and one '## Phase N: Convergence
-            <date> @ <sha12>' to tasks.md; a second run changes nothing.
+            <date>' to tasks.md (first line 'Inventory: <CODE> @ <sha12>'),
+            each row tagged [US<k>] [platform:<p>] and ending '· supersedes
+            T<nnn>' when its class changed; a second run changes nothing.
             Exit 1 on any gap or when the inputs could not be read.
 coverage    Capture form: per member and row kind, covered/total (a row is
             covered when one of the member's citations overlaps it), plus

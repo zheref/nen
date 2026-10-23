@@ -23,11 +23,13 @@
 // WHAT --write APPENDS, and nothing else: a `[STALE @ <cited sha>]` companion
 // right after each cited range that moved, vanished or changed (the sentence
 // and its citation stay, byte for byte), and one `## Phase N: Convergence
-// <date> @ <sha12>` section at the end of tasks.md, one open task per gap.
-// It never renumbers, never deletes, never writes a `supersedes` line (a
-// reversal needs a new id with new words, which are the author's). A second
-// run on the same inputs finds its companions and its phase already written
-// and changes zero bytes (SC-3).
+// <date>` section (SP-9's heading; the body's first line `Inventory: <CODE> @
+// <sha12>` is the key a rerun finds) at the end of tasks.md, one open task per
+// gap tagged with its story and the member's platform. When a requirement's
+// gap class differs from the last finding recorded for it, the new row ends
+// `· supersedes T<nnn>` -- computed, so no author words are needed. It never
+// renumbers and never deletes. A second run on the same inputs finds its
+// companions and its phase already written and changes zero bytes (SC-3).
 
 import { existsSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -287,9 +289,27 @@ export function converge(seams: Seams, input: ConvergeInput): ConvergeReport {
     writes.push({ file: specFile, kind: "stale", line: citation.line, text: companion });
   }
   const sha12 = tree.sha.slice(0, 12);
-  const phaseKey = `@ ${sha12}`;
+  // SP-9's heading is `## Phase N: Convergence <date>`; the commit read goes in the body, and is the key a rerun finds.
+  const phaseKey = `Inventory: ${input.code} @ ${sha12}`;
   const tasks = tasksText ?? "";
-  const phaseWritten = proseLines(tasks).some((line): boolean => /^##\s+Phase\s+\d+:\s+Convergence\b/.test(line.text) && line.text.trimEnd().endsWith(phaseKey));
+  const phaseWritten = tasks.split("\n").some((line): boolean => line.trim() === phaseKey);
+  // Each row carries its story (from a task already naming the requirement) and the member's platform, so
+  // `spec tasks groups` files it in a story group; a class that changed since the last recorded finding
+  // for the same id supersedes that row (SP-10: a reversal is a supersedes line, never an edit).
+  const platform = (registry?.families ?? []).flatMap((family) => family.members).find((member): boolean => member.code === input.code)?.platform ?? input.code;
+  const storyOf = (id: string): string | null => {
+    for (const line of tasks.split("\n")) {
+      if (!new RegExp(`\\b${id}\\b`).test(line)) continue;
+      const story = /\[US-?(\d+)\]/.exec(line);
+      if (story !== null) return `US${story[1] as string}`;
+    }
+    return null;
+  };
+  const lastFinding = (id: string): { task: string; class: string } | null => {
+    let found: { task: string; class: string } | null = null;
+    for (const match of tasks.matchAll(new RegExp(`^\\s*-\\s+\\[[ xX]\\]\\s+(T\\d{3,})\\b[^\\n]*?\\[(missing|partial|contradicts|unrequested)\\] ${id.replace(/[.*+?^\${}()|[\]\\]/g, "\\$&")} —`, "gm"))) found = { task: match[1] as string, class: match[2] as string };
+    return found;
+  };
   let phaseText: string | null = null;
   if (gaps.length > 0 && !phaseWritten) {
     const phases = [...tasks.matchAll(/^##\s+Phase\s+(\d+)\b/gm)].map((match): number => Number(match[1]));
@@ -297,11 +317,14 @@ export function converge(seams: Seams, input: ConvergeInput): ConvergeReport {
     let task = Math.max(0, ...[...tasks.matchAll(/\bT(\d{3,})\b/g)].map((match): number => Number(match[1])));
     const rows = gaps.map((gap): string => {
       task += 1;
-      return `- [ ] T${String(task).padStart(3, "0")} [${gap.class}] ${gap.id} — ${gap.detail}`;
+      const story = gap.class === "unrequested" ? null : storyOf(gap.id);
+      const previous = lastFinding(gap.id);
+      const supersedes = previous !== null && previous.class !== gap.class ? ` · supersedes ${previous.task}` : "";
+      return `- [ ] T${String(task).padStart(3, "0")}${story === null ? "" : ` [${story}]`} [platform:${platform}] [${gap.class}] ${gap.id} — ${gap.detail}${supersedes}`;
     });
-    const heading = `## Phase ${next}: Convergence ${input.date} ${phaseKey}`;
+    const heading = `## Phase ${next}: Convergence ${input.date}`;
     const separator = tasks === "" ? "" : tasks.endsWith("\n\n") ? "" : tasks.endsWith("\n") ? "\n" : "\n\n";
-    phaseText = `${separator}${heading}\n\n${rows.join("\n")}\n`;
+    phaseText = `${separator}${heading}\n\n${phaseKey}\n\n${rows.join("\n")}\n`;
     writes.push({ file: tasksFile, kind: "phase", line: null, text: heading });
   }
 

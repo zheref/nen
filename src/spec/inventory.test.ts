@@ -6,6 +6,7 @@ import { defaultSeams } from "../seam/exec.js";
 import { sha256 } from "./check.js";
 import { excerptLines, testCases } from "./inventory.js";
 import { parsePlist } from "./membership.js";
+import { globMatcher } from "./tree.js";
 import { commit, MEMBER_SLUG, memberRepo } from "./member.testkit.js";
 import { spec } from "./testkit.testkit.js";
 
@@ -210,5 +211,23 @@ describe("the inventory's readers", () => {
   it("parses the property-list forms a project file uses and refuses a broken one", () => {
     expect(parsePlist(`{ a = "x\\"y"; b = (c, d,); /* c */ e = { f = g; }; // tail\n}`)).toEqual({ a: 'x"y', b: ["c", "d"], e: { f: "g" } });
     expect(() => parsePlist("{ a = b }")).toThrow(/expected ';'/);
+  });
+});
+
+describe("the build system's glob, matched without backtracking", () => {
+  it("matches tsconfig's forms", () => {
+    expect(globMatcher("src/**/*.ts").test("src/a/b/c.ts")).toBe(true);
+    expect(globMatcher("src/**/*.ts").test("src/c.ts")).toBe(true);
+    expect(globMatcher("src/*.ts").test("src/a/c.ts")).toBe(false);
+    expect(globMatcher("src/?.ts").test("src/a.ts")).toBe(true);
+    expect(globMatcher("**/*").test("a")).toBe(true);
+    expect(globMatcher("node_modules/**/*").test("node_modules/x/y.ts")).toBe(true);
+  });
+
+  it("answers a six-star pattern against a long segment, and a many-** pattern, within a bound (Feitan F1)", () => {
+    const started = Date.now();
+    expect(globMatcher("*a*a*a*a*a*b").test("a".repeat(200))).toBe(false);
+    expect(globMatcher(Array.from({ length: 12 }, () => "**").join("/") + "/y").test(Array.from({ length: 40 }, () => "x").join("/"))).toBe(false);
+    expect(Date.now() - started).toBeLessThan(1000);
   });
 });

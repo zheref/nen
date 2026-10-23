@@ -93,23 +93,63 @@ export function normalise(path: string): string | null {
   return out.join("/");
 }
 
+/** A compiled glob: `test` answers whether a repository path matches. */
+export interface GlobMatcher {
+  test(path: string): boolean;
+}
+
+/** One segment against one pattern segment, `*` any run and `?` one character, by the linear two-pointer walk (no regex, no backtracking blow-up). */
+function segmentMatches(pattern: string, text: string): boolean {
+  let p = 0;
+  let t = 0;
+  let star = -1;
+  let mark = 0;
+  while (t < text.length) {
+    if (p < pattern.length && (pattern[p] === "?" || pattern[p] === text[t])) {
+      p += 1;
+      t += 1;
+    } else if (p < pattern.length && pattern[p] === "*") {
+      while (pattern[p] === "*") p += 1;
+      star = p;
+      mark = t;
+    } else if (star !== -1) {
+      p = star;
+      mark += 1;
+      t = mark;
+    } else return false;
+  }
+  while (pattern[p] === "*") p += 1;
+  return p === pattern.length;
+}
+
 /**
  * A build system's own glob (tsconfig `include`, an Xcode exception path) as a
- * matcher: `**` any run of segments, `*` any run within one segment, `?` one
- * character. It is the BUILD SYSTEM's pattern, read from its file -- never one
- * nen chose (SP-14).
+ * matcher: a `**` segment any run of segments, `*` any run within one segment,
+ * `?` one character. It is the BUILD SYSTEM's pattern, read from its file --
+ * never one nen chose (SP-14) -- and so UNTRUSTED bytes: it is matched segment
+ * by segment, `**` through a memo over (pattern segment, path segment) and each
+ * segment by a two-pointer walk, so no pattern can make a match take more than
+ * O(pattern x path) steps (Feitan F1 on zheref/nen#517: the regex this replaced
+ * took 78 s on a six-star pattern).
  */
-export function globMatcher(pattern: string): RegExp {
-  let source = "";
-  for (let index = 0; index < pattern.length; index += 1) {
-    const char = pattern[index] as string;
-    if (char === "*" && pattern[index + 1] === "*") {
-      const slash = pattern[index + 2] === "/";
-      source += slash ? "(?:.*/)?" : ".*";
-      index += slash ? 2 : 1;
-    } else if (char === "*") source += "[^/]*";
-    else if (char === "?") source += "[^/]";
-    else source += char.replace(/[.+^${}()|[\]\\]/g, "\\$&");
-  }
-  return new RegExp(`^${source}$`);
+export function globMatcher(pattern: string): GlobMatcher {
+  const parts = pattern.split("/");
+  return {
+    test(path: string): boolean {
+      const segments = path.split("/");
+      const memo = new Map<number, boolean>();
+      const walk = (i: number, j: number): boolean => {
+        const key = i * (segments.length + 1) + j;
+        const known = memo.get(key);
+        if (known !== undefined) return known;
+        let answer: boolean;
+        if (i === parts.length) answer = j === segments.length;
+        else if (parts[i] === "**") answer = walk(i + 1, j) || (j < segments.length && walk(i, j + 1));
+        else answer = j < segments.length && segmentMatches(parts[i] as string, segments[j] as string) && walk(i + 1, j + 1);
+        memo.set(key, answer);
+        return answer;
+      };
+      return walk(0, 0);
+    },
+  };
 }
