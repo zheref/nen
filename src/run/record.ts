@@ -18,7 +18,7 @@
 
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
-import specRun from "./schemas/hatsu.spec.run.v0.1.json";
+import specRun from "./schemas/spec-run.v0.1.json";
 
 export const RUN_RECORD_CONTRACT = "nen.run.record/v0.1";
 
