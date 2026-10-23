@@ -30,6 +30,8 @@ import { renderPipeTable } from "../cli/table.js";
 import { loadClassifyTaxonomy } from "../classify/taxonomy.js";
 import { assertRepoRoot } from "../repo/root.js";
 import { loadWorkflow } from "../schema/workflow.js";
+import { assertEffortId } from "../ledger/effort.js";
+import { legacyLine, locateEffortLedger, resolveEffortHome } from "../ledger/home.js";
 import { recordPath, writeRecord } from "./record.js";
 import { loadDirectRegistry } from "./registry.js";
 import {
@@ -117,7 +119,9 @@ export function runResolve(context: CommandContext): number {
   const record = args.values["record"];
   // Refused BEFORE anything is read or resolved: a traversal is a typo, and
   // "you typed it wrong" outranks every failure the files could produce.
-  const target = record === undefined ? null : recordPath(root, record);
+  if (record !== undefined) assertEffortId(record);
+  const home = record === undefined ? null : resolveEffortHome(root, "direct", context.seams);
+  const target = record === undefined || home === null ? null : recordPath(home, record);
 
   const registry = loadDirectRegistry(root, registryFlag);
   const taxonomy = loadClassifyTaxonomy(root, taxonomyFlag);
@@ -163,8 +167,11 @@ export function runResolve(context: CommandContext): number {
     record: target,
   };
 
-  if (target !== null) {
-    writeRecord(root, target, { ...document, recordedAt: context.seams.now().toISOString() });
+  if (target !== null && home !== null && record !== undefined) {
+    // An older worktree-local record is moved into the durable home first (#509 AC-4).
+    const moved = legacyLine(locateEffortLedger(home, record, "write"));
+    if (moved !== null) context.io.err(`nen direct: ${moved}`);
+    writeRecord(home.base, target, { ...document, recordedAt: context.seams.now().toISOString() });
   }
 
   if (context.json) {

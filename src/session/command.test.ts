@@ -11,9 +11,12 @@ const NOW = "2026-10-19T12:00:00.000Z";
 async function capture(argv: string[], repo: string, full = false): Promise<{ code: number; out: string[]; err: string[] }> {
   const out: string[] = [], err: string[] = [];
   const io: Io = { out: (line): void => { out.push(line); }, err: (line): void => { err.push(line); } };
-  const seams = new ScriptedSeams([], { now: (): Date => new Date(NOW), env: { SESSION_ID: "never infer", MODEL: "never infer" } });
+  // The one call the ledger home makes (zheref/nen#509): a temp dir is not a git
+  // repository, so the ledger stays under --repo. Nothing else may be spawned.
+  const commonDir = "git rev-parse --path-format=absolute --git-common-dir";
+  const seams = new ScriptedSeams([{ match: commonDir, result: { code: 128, stderr: "fatal: not a git repository (or any of the parent directories): .git" } }], { now: (): Date => new Date(NOW), env: { SESSION_ID: "never infer", MODEL: "never infer" } });
   const code = full ? await run([...argv, "--repo", repo], io, seams) : await runFamily(sessionCommand, argv, repo, false, io, seams);
-  expect(seams.calls).toEqual([]);
+  expect(seams.calls.map((call): string => [call.command, ...call.args].join(" ")).filter((call): boolean => call !== commonDir)).toEqual([]);
   return { code, out, err };
 }
 const root = (): string => mkdtempSync(join(tmpdir(), "nen-session-command-"));

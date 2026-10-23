@@ -9,11 +9,12 @@
 // fact once, deterministically, on every surface, so a report can render it
 // and a later reader can compare runs.
 //
-// WHERE IT LIVES. `.nen/phases/<effort>.json`, generated output under the
-// dot-prefixed directory (../schema/source.ts's rule), one file per effort,
-// contract `nen.phase.ledger/v0.1`. An effort id is the caller's -- a branch
-// slug, a PR number, a session id -- and is used as the filename after the
-// same sanitising ../loop/command.ts applies to its own ledger ids.
+// WHERE IT LIVES. `<git-common-dir>/.nen/phases/<effort>.json` since
+// zheref/nen#509 -- the git common directory, so a resumed effort finds its
+// phases after its worktree was cleaned up -- and `<--repo>/.nen/phases/`
+// only outside git (../ledger/home.ts). One file per effort, contract
+// `nen.phase.ledger/v0.1`. The effort id is the caller's, held to the one
+// grammar every nen ledger admits (../ledger/effort.ts).
 //
 // WALL CLOCK, FROM THE SEAM. Every instant is `seams.now()`, so a test pins
 // it and a report's durations are reproducible. A phase's `durationMs` is
@@ -25,12 +26,12 @@
 import { emit, requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import { plainLine } from "../cli/plain.js";
 import { resolveRepoRoot } from "../repo/root.js";
+import { assertEffortId } from "../ledger/effort.js";
+import { legacyLine, locateEffortLedger, resolveEffortHome } from "../ledger/home.js";
 
 import {
-  EFFORT_ID,
   PHASE_CONTRACT,
   PHASE_LEDGER_DIR,
-  phaseLedgerPath,
   readLedger,
   withLedgerLock,
   writeLedger,
@@ -45,20 +46,28 @@ const USAGE = `nen phase begin --effort <id> --phase <name> [--resume] [--surfac
 nen phase end   --effort <id> [--phase <name>] [--exit <code>] [--note <text>]
 nen phase show  --effort <id> [--repo <path>] [--json]
 
-Every form reads and writes the ledger under --repo (default: the current
-directory).
+Every form reads and writes the ledger of --repo's repository (default: the
+current directory): '<git-common-dir>/${PHASE_LEDGER_DIR}/<effort>.json', the
+git common directory every worktree shares, so a worktree cleanup never takes
+an effort's phases with it. Outside git it is '<--repo>/${PHASE_LEDGER_DIR}/'.
+A ledger an older build left at '<worktree>/${PHASE_LEDGER_DIR}/' is read in
+place by 'show' (the old path is named) and moved once by 'begin' and 'end';
+a copy in both places is refused, exit 1, naming both. That fallback is read
+through the 0.28 line and removed in 0.29.0.
 
-The per-phase timing ledger: one JSON file per effort under
-'${PHASE_LEDGER_DIR}/<effort>.json' (generated output, gitignored), contract
+The per-phase timing ledger: one JSON file per effort (generated output),
+contract
 '${PHASE_CONTRACT}'. 'begin' opens an entry stamped with this invocation's
 clock; 'end' closes the most recent OPEN entry -- the one named by --phase, or
 the last opened when the flag is omitted -- and records the elapsed
 milliseconds and the exit code the caller reports. 'show' prints the ledger.
 
   --effort <id>    The effort this phase belongs to: a branch slug, a PR
-                   number, a session id. Letters, digits, '.', '_', '-' and
-                   '/' (a '/' is percent-encoded as '%2F' in the filename, so
-                   'HA/85' and 'HA-85' are two ledgers, never one).
+                   number, an issue ref. The one effort-id grammar: letters,
+                   digits, '.', '_', '-', '/', '#' and ':', starting with a
+                   letter or digit, no '.' or '..' segment. Percent-encoded
+                   into the file name ('HA/85' -> 'HA%2F85.json'), so 'HA/85'
+                   and 'HA-85' are two ledgers, never one.
   --phase <name>   The phase: 'breath', 'rasengan', 'kokusen', 'hanten',
                    'review', 'launch', 'report' -- the caller's vocabulary.
   --surface <s>    Which surface ran it (claude-code, codex, cursor,
@@ -93,8 +102,7 @@ under their phase.`;
 function requireEffort(context: CommandContext): string {
   const effort = context.args.values["effort"];
   if (effort === undefined || effort.trim() === "") throw new VerbUsageError("--effort <id> is required.");
-  if (!EFFORT_ID.test(effort)) throw new VerbUsageError(`--effort '${effort}' is not a ledger id: letters, digits, '.', '_', '-' and '/' only.`);
-  return effort;
+  return assertEffortId(effort);
 }
 
 export const phaseCommand: Command = {
@@ -107,7 +115,7 @@ export const phaseCommand: Command = {
     const sub = requireSubcommand("phase", context.args, ["begin", "end", "show"]);
     const effort = requireEffort(context);
     const root = resolveRepoRoot({ repoFlag: context.repoFlag });
-    const path = phaseLedgerPath(root, effort);
+    const home = resolveEffortHome(root, "phases", context.seams);
     const now = context.seams.now();
     const note = context.args.values["note"] ?? null;
 
@@ -115,10 +123,18 @@ export const phaseCommand: Command = {
     if (resume && sub !== "begin") throw new VerbUsageError(`--resume is read by 'phase begin' only; 'phase ${sub}' does not read it.`);
 
     if (sub === "show") {
-      const ledger = readLedger(path, effort);
+      const located = locateEffortLedger(home, effort, "read");
+      const ledger = readLedger(located.path, effort);
+      const note = legacyLine(located);
+      if (note !== null) context.io.err(`nen phase: ${note}`);
       emit(context.io, context.json, ledger, renderLedger(ledger));
       return 0;
     }
+
+    const located = locateEffortLedger(home, effort, "write");
+    const path = located.path;
+    const moved = legacyLine(located);
+    if (moved !== null) context.io.err(`nen phase: ${moved}`);
 
     // BEGIN AND END READ-MODIFY-WRITE UNDER THE SAME LOCK `nen shu --effort`'s
     // step append takes (Copilot review on zheref/nen#231), so an `end` that

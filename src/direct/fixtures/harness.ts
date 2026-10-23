@@ -9,6 +9,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { runFamily, type Io } from "../../index.js";
+import { GIT, spawnRunner, type CommandResult, type RunOptions } from "../../seam/exec.js";
 import { ScriptedSeams } from "../../seam/scripted.js";
 import { directCommand } from "../command.js";
 
@@ -79,7 +80,15 @@ export async function capture(argv: readonly string[]): Promise<Captured> {
       err.push(line);
     },
   };
-  const seams = new ScriptedSeams([], { now: (): Date => new Date("2026-10-04T12:00:00Z") });
+  const scripted = new ScriptedSeams([], { now: (): Date => new Date("2026-10-04T12:00:00Z") });
+  // THE ONE SPAWN A RECORD MAKES (zheref/nen#509): git, asked where the common
+  // directory is. A temp fixture is not a repository, so the answer is git's
+  // own "not a git repository" and the record stays under --repo. Anything else
+  // is still the scripted seam's finding.
+  const seams = Object.assign(Object.create(scripted) as ScriptedSeams, {
+    run: (command: string, args: readonly string[], options?: RunOptions): CommandResult =>
+      command === GIT && args.includes("--git-common-dir") ? spawnRunner(command, args, options) : scripted.run(command, args, options),
+  });
   const code = await runFamily(directCommand, argv, null, false, io, seams);
   return { code, out, err };
 }

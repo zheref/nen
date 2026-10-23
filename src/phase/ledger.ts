@@ -6,12 +6,20 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { encodeEffortId } from "../ledger/effort.js";
+import { effortLedgerPath, locateEffortLedger, type EffortHome } from "../ledger/home.js";
 import { withLedgerLock, writeLedgerAtomically, type LedgerLockOptions } from "../ledger/lock.js";
 
 // THE LOCK IS SHARED with the usage ledger (../ledger/lock.ts; Copilot review
 // on zheref/nen#231, T7). Re-exported so this ledger's callers name one module.
 export { LEDGER_LOCK_STALE_MS, LEDGER_LOCK_WAIT_MS, ledgerLockPath, withLedgerLock, type LedgerLockOptions } from "../ledger/lock.js";
 
+/**
+ * The ledger directory's last two segments. Since zheref/nen#509 it sits under
+ * the git common directory (`<git-common-dir>/.nen/phases/`, ../ledger/home.ts),
+ * and under --repo only outside git; this is also the worktree-local spelling an
+ * older build wrote, read and moved from through the 0.28 line.
+ */
 export const PHASE_LEDGER_DIR = ".nen/phases";
 /**
  * `v0.1` STILL, after `steps[]` arrived on an entry (zheref/nen#227). The key
@@ -22,8 +30,8 @@ export const PHASE_LEDGER_DIR = ".nen/phases";
  */
 export const PHASE_CONTRACT = "nen.phase.ledger/v0.1";
 
-/** The same id alphabet `nen usage` admits, so one effort names both ledgers. */
-export const EFFORT_ID = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+/** The ONE effort-id grammar (../ledger/effort.ts, zheref/nen#509), re-exported for this ledger's callers. */
+export { EFFORT_ID } from "../ledger/effort.js";
 
 /**
  * One `nen shu` step, appended to the OPEN phase entry it ran inside.
@@ -75,14 +83,13 @@ export interface PhaseLedger {
 }
 
 /**
- * `.nen/phases/<effort>.json`. `encodeURIComponent` is INJECTIVE on the id
- * alphabet: '/' -> '%2F' and every other admitted character is left as
- * itself, so no two effort ids share a file. A '/' -> '-' substitution was
- * not (Copilot review on zheref/nen#217): 'HA/85' and 'HA-85' appended to the
- * same ledger.
+ * `<root>/.nen/phases/<effort>.json` -- the WORKTREE-LOCAL path, the only one
+ * before zheref/nen#509 and the home outside git. A verb resolves the durable
+ * one through ../ledger/home.ts; this stays for that fallback and its tests.
+ * The file name is ../ledger/effort.ts's one injective encoder.
  */
 export function phaseLedgerPath(root: string, effort: string): string {
-  return join(root, ...PHASE_LEDGER_DIR.split("/"), `${encodeURIComponent(effort)}.json`);
+  return join(root, ...PHASE_LEDGER_DIR.split("/"), `${encodeEffortId(effort)}.json`);
 }
 
 export function readLedger(path: string, effort: string): PhaseLedger {
@@ -128,12 +135,13 @@ export function lastOpenIndex(ledger: PhaseLedger): number {
  * open entry at once would otherwise both read the same `phases` and the
  * later write would drop the earlier run's steps.
  */
-export function appendStepsToOpenPhase(root: string, effort: string, steps: readonly PhaseStep[], lock: LedgerLockOptions = {}): boolean {
+export function appendStepsToOpenPhase(home: EffortHome, effort: string, steps: readonly PhaseStep[], lock: LedgerLockOptions = {}): boolean {
   if (steps.length === 0) return false;
-  const path = phaseLedgerPath(root, effort);
   // NO LEDGER, NO LOCK: taking one would create `.nen/phases/` for an effort
-  // nobody began, and the answer is the same either way -- nothing is open.
-  if (!existsSync(path)) return false;
+  // nobody began, and the answer is the same either way -- nothing is open. An
+  // older worktree-local ledger is moved into the durable home first (#509).
+  if (!existsSync(effortLedgerPath(home, effort)) && locateEffortLedger(home, effort, "read").legacy === null) return false;
+  const path = locateEffortLedger(home, effort, "write").path;
   return withLedgerLock(path, (): boolean => {
     const ledger = readLedger(path, effort);
     const index = lastOpenIndex(ledger);

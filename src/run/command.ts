@@ -20,7 +20,8 @@ import {
 import { splitList } from "../cli/inputs.js";
 import { resolveRepoRoot } from "../repo/root.js";
 import { loadWorkflow } from "../schema/workflow.js";
-import { EFFORT_ID } from "../usage/ledger.js";
+import { effortIdProblem, effortIdRefusal } from "../ledger/effort.js";
+import { resolveEffortHome } from "../ledger/home.js";
 import { rerunFailed } from "./rerun.js";
 import {
   BRANCH_NAME,
@@ -103,8 +104,8 @@ GIT_WORK_TREE dropped. nen records and reads; it decides nothing.
   budget  Minutes are WALL-CLOCK since the manifest's startedAt
           (idle.budget.minutes as its catalogue row defines it); the
           efforts' own minutes are printed as effortMinutes, never compared.
-          Tokens are the usage ledgers' (.nen/usage/<effort>.json under
-          --repo) input + output + cache read + cache write, for the efforts
+          Tokens are the usage ledgers' (<git-common-dir>/.nen/usage/
+          <effort>.json, as 'nen usage show' reads them) input + output + cache read + cache write, for the efforts
           the PRs name plus --effort. Ceilings: --max-minutes and
           --max-tokens, default --repo's nen/workflow.json idle.budget. The
           token sum is UNREAD -- 'unevaluated', a claim refused, exit 1 --
@@ -274,9 +275,8 @@ function doAppend(context: CommandContext): number {
   const headFlag = context.args.values["head"];
   if (headFlag !== undefined && !HEAD_SHA.test(headFlag)) throw new VerbUsageError(`--head '${headFlag}' is not a commit id of 7 to 40 hex digits.`);
   const effort = context.args.values["effort"] ?? null;
-  if (effort !== null && !EFFORT_ID.test(effort)) {
-    throw new VerbUsageError(`--effort '${effort}' is not an effort id ([A-Za-z0-9][A-Za-z0-9._/-]*), the alphabet nen usage record admits.`);
-  }
+  const effortProblem = effort === null ? null : effortIdProblem(effort);
+  if (effort !== null && effortProblem !== null) throw new VerbUsageError(`--effort: ${effortIdRefusal(effort, effortProblem)}`);
 
   const root = resolveRepoRoot({ repoFlag: context.repoFlag });
   const path = manifestPath(context, root, id);
@@ -398,7 +398,8 @@ function doBudget(context: CommandContext): number {
   const id = runId(context);
   const extra = splitList(context.args.values["effort"]);
   for (const effort of extra) {
-    if (!EFFORT_ID.test(effort)) throw new VerbUsageError(`--effort '${effort}' is not an effort id ([A-Za-z0-9][A-Za-z0-9._/-]*).`);
+    const problem = effortIdProblem(effort);
+    if (problem !== null) throw new VerbUsageError(`--effort: ${effortIdRefusal(effort, problem)}`);
   }
   const root = resolveRepoRoot({ repoFlag: context.repoFlag });
   const minutesFlag = context.args.values["max-minutes"];
@@ -428,7 +429,7 @@ function doBudget(context: CommandContext): number {
   const manifest = loadManifest(context, id);
   if (manifest === null) return 1;
   const claim = context.args.booleans.has("claim");
-  const report = computeBudget(manifest, root, runEfforts(manifest, extra), ceiling, claim, context.seams.now());
+  const report = computeBudget(manifest, resolveEffortHome(root, "usage", context.seams), runEfforts(manifest, extra), ceiling, claim, context.seams.now());
   emit(context.io, context.json, report, renderBudget(report));
   if (report.verdict === "unevaluated") return 1;
   return claim && report.verdict === "reached" ? 1 : 0;

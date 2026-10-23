@@ -3,25 +3,22 @@
 //
 // WHY IT IS ITS OWN MODULE. A record is the ledger of what was recommended for one
 // effort, so the maintainer (and the skill that asked once about a mismatch) can
-// read it back. It is OUTPUT: it goes under `.nen/direct/` -- the gitignored
-// scratch tree, never `nen/`, which is the repository's declarations -- under
-// `--repo`'s root, which is the core checkout, so it exists before any worktree does.
+// read it back. It is OUTPUT: it goes under `.nen/direct/` -- never `nen/`, which
+// is the repository's declarations -- and since zheref/nen#509 under the GIT
+// COMMON DIRECTORY (`<git-common-dir>/.nen/direct/`, ../ledger/home.ts), so a
+// worktree cleanup never takes it; under `--repo` only outside git. A record an
+// older build wrote at `<checkout>/.nen/direct/` is moved there once on the next
+// write.
 //
 // THE NAME IS THE EFFORT'S IDENTITY, a string the CALLER types: `<CODE>-IS-#<N>` for
-// an issue, `inline-<ISO-8601 UTC>` for a textual effort. It is percent-encoded
-// into the file name by `encodeEffortId`, the ONE encoder `nen usage record` also
-// uses for `.nen/usage/<effort>.json` (../usage/ledger.ts: `encodeURIComponent`,
-// injective, so no two efforts share a file and a `/` can never open a
-// subdirectory). The ENCODER is shared; the id VOCABULARY is not: the usage
-// ledger's EFFORT_ID alphabet refuses `#` and `:`, so it cannot hold either of the
-// ids above, while this ledger accepts any id that is not a traversal. That
-// disagreement is routed to the usage ledger's owner and is not fixed here.
-//
-// A typed name that reached the filesystem unchecked would be a way to write anywhere,
-// so a name that is empty, absolute, carries a backslash or a NUL, or has a `..`
-// segment is refused as a USAGE error (exit 2: "you typed it wrong"), and the
-// resolved path is checked to still sit under the directory before a byte is written.
-// The encoding makes the last check unreachable today; it stays because it is the
+// an issue, `inline-<ISO-8601 UTC>` for a textual effort. It is held to the ONE
+// effort-id grammar every nen ledger admits (../ledger/effort.ts, which admits '#'
+// and ':' for exactly these two ids) and percent-encoded into the file name by
+// the one injective encoder, so no two efforts share a file and a `/` can never
+// open a subdirectory. A refused id is a USAGE error (exit 2: "you typed it
+// wrong"), in the same words `nen phase` and `nen usage` use, and the resolved path
+// is checked to still sit under the directory before a byte is written. The
+// encoding makes the last check unreachable today; it stays because it is the
 // property the refusal exists for, not the encoding's side effect.
 
 import { lstatSync, mkdirSync } from "node:fs";
@@ -29,31 +26,27 @@ import { dirname, resolve, sep } from "node:path";
 import { VerbUsageError } from "../cli/command.js";
 import { writeLedgerAtomically } from "../ledger/lock.js";
 import { realContainment } from "../repo/contain.js";
-import { encodeEffortId } from "../usage/ledger.js";
+import { assertEffortId, encodeEffortId } from "../ledger/effort.js";
+import type { EffortHome } from "../ledger/home.js";
 
-/** The one directory a record may be written under, relative to `--repo`'s root. */
+/** The directory's last two segments: under the git common dir since #509, under `--repo` outside git. */
 export const RECORD_DIR = ".nen/direct";
 
-/** The absolute path a record for the effort `id` is written to, or a usage refusal. */
-export function recordPath(root: string, id: string): string {
-  const refuse = (why: string): never => {
-    throw new VerbUsageError(`--record '${id}' is refused: ${why}. It is the effort's id; the record is written as ${RECORD_DIR}/<percent-encoded id>.json.`);
-  };
-  if (id.trim() === "") return refuse("it is empty");
-  if (id.includes("\\")) return refuse("it contains a backslash");
-  if (id.includes("\0")) return refuse("it contains a NUL");
-  if (id.startsWith("/") || /^[A-Za-z]:/.test(id)) return refuse("it is an absolute path");
-  if (id.split("/").some((segment): boolean => segment === "..")) return refuse("a segment is '..'");
-  const directory = resolve(root, RECORD_DIR);
+/** The absolute path a record for the effort `id` is written to in `home`, or a usage refusal. */
+export function recordPath(home: EffortHome, id: string): string {
+  assertEffortId(id);
+  const directory = resolve(home.dir);
   const full = resolve(directory, `${encodeEffortId(id)}.json`);
-  if (!full.startsWith(directory + sep)) return refuse("it resolves outside the record directory");
+  if (!full.startsWith(directory + sep)) {
+    throw new VerbUsageError(`--record '${id}' is refused: it resolves outside the record directory ${home.display}.`);
+  }
   return full;
 }
 
 /**
  * Refuse a record path the FILESYSTEM would send somewhere else (exit 2). The
  * lexical check in `recordPath` cannot see a `.nen/direct` directory, or an
- * existing target file, that is a symlink out of `--repo`: `writeFileSync` follows
+ * existing target file, that is a symlink out of the home's base: `writeFileSync` follows
  * both. So the path is asked of ../repo/contain.ts's `realContainment` -- the real
  * path the kernel would reach must stay under the real root -- and a record that is
  * ITSELF a symlink is refused outright, even a dangling one or one pointing back
@@ -63,7 +56,7 @@ export function recordPath(root: string, id: string): string {
  */
 export function assertRecordContained(root: string, path: string): void {
   const refuse = (why: string): never => {
-    throw new VerbUsageError(`the record '${path}' is refused: ${why}. A record is written only as a plain file under ${RECORD_DIR}/ inside --repo.`);
+    throw new VerbUsageError(`the record '${path}' is refused: ${why}. A record is written only as a plain file under ${RECORD_DIR}/ in the git common directory (or --repo outside git).`);
   };
   const real = realContainment(root, path);
   if (!real.contained) {

@@ -43,6 +43,7 @@ async function capture(
         options.env?.(runOptions?.env);
         return options.common === null ? failed("fatal: not a git repository") : ok(`${options.common}\n`);
       }
+      if (command === "git" && args.includes("worktree") && args.includes("list")) return ok("");
       if (command === "gh" && args[0] === "pr" && args[1] === "view") {
         const number = Number(args[2]);
         const live = options.prs?.[number];

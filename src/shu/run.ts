@@ -62,7 +62,9 @@ import { EXIT_SELECTION_EMPTY, EXIT_TOOL_NOT_INSTALLED, ShuRefusal } from "./exi
 import { readSelectionResults } from "./select-results.js";
 import { acquireFocusedLock, moveResultsAside, proveResultsClearable } from "./focused-guard.js";
 import { openDeclaration } from "./declaration.js";
-import { appendStepsToOpenPhase, EFFORT_ID, type PhaseStep } from "../phase/ledger.js";
+import { appendStepsToOpenPhase, type PhaseStep } from "../phase/ledger.js";
+import { effortIdProblem, effortIdRefusal } from "../ledger/effort.js";
+import { resolveEffortHome } from "../ledger/home.js";
 import {
   ASSERTABLE_KINDS,
   isLaunchTarget,
@@ -1072,7 +1074,7 @@ function ledgerSink(
         stalled: step.stall?.stalled === true,
       }));
       try {
-        appendStepsToOpenPhase(repoRoot, effort, steps, { warn: context.io.err });
+        appendStepsToOpenPhase(resolveEffortHome(repoRoot, "phases", context.seams), effort, steps, { warn: context.io.err });
       } catch (error) {
         context.io.err(
           `the run's steps could not be recorded on effort '${effort}': ${error instanceof Error ? error.message : String(error)}. The run itself is unaffected.`,
@@ -1099,10 +1101,9 @@ function resolveEffort(context: CommandContext, options: RunOptions): string | n
   const fromEnv = context.seams.env["NEN_EFFORT"];
   const effort = fromFlag ?? (fromEnv === undefined || fromEnv.trim() === "" ? null : fromEnv);
   if (effort === null) return null;
-  if (!EFFORT_ID.test(effort)) {
-    throw new VerbUsageError(
-      `${fromFlag === null ? "NEN_EFFORT" : "--effort"} '${effort}' is not a ledger id: letters, digits, '.', '_', '-' and '/' only -- the same alphabet 'nen phase' admits.`,
-    );
+  const problem = effortIdProblem(effort);
+  if (problem !== null) {
+    throw new VerbUsageError(`${fromFlag === null ? "NEN_EFFORT" : "--effort"}: ${effortIdRefusal(effort, problem)}`);
   }
   return effort;
 }

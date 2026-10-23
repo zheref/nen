@@ -4138,6 +4138,8 @@ describe("a run's steps land on the open phase entry", () => {
   }
   const OPEN = { phase: "rasengan", startedAt: "2026-01-01T00:00:00.000Z", endedAt: null, durationMs: null, exitCode: null, surface: null, model: null, note: null, steps: [] };
   const CLOSED = { ...OPEN, phase: "breath", endedAt: "2026-01-01T00:00:05.000Z", durationMs: 5000, exitCode: 0 };
+  // The ledger's home is asked of git once (zheref/nen#509); a temp dir is no repository, so it stays under --repo.
+  const NOT_A_REPO = { match: "git rev-parse --path-format=absolute --git-common-dir", result: { code: 128, stderr: "fatal: not a git repository (or any of the parent directories): .git" } };
   type Ledger = { phases: { phase: string; steps?: { verb: string; argv: string; exitCode: number | null; durationMs: number | null; stalled: boolean }[] }[] };
 
   it("with --effort, still runs every step and exits on the failing one (the ledger write itself is proved by the read-back case below)", async () => {
@@ -4151,7 +4153,7 @@ describe("a run's steps land on the open phase entry", () => {
     // The ledger was read back before the temp dir went away, so capture it here.
     expect(result.code).toBe(1);
     expect(path).not.toBe("");
-    expect(result.seams.calls.map((c): string => [c.command, ...c.args].join(" "))).toEqual(["placeholder-tool one", "placeholder-tool two a b"]);
+    expect(result.seams.calls.map((c): string => [c.command, ...c.args].join(" ")).filter((c): boolean => !c.startsWith("git "))).toEqual(["placeholder-tool one", "placeholder-tool two a b"]);
   });
 
   it("writes the steps, and only under the open entry (read back)", async () => {
@@ -4162,7 +4164,7 @@ describe("a run's steps land on the open phase entry", () => {
       const path = ledgerWith(dir, [CLOSED, OPEN]);
       const result = await capture(["build", "--effort", "HA/85"], {
         repo: dir,
-        script: [ok("placeholder-tool one"), { match: "placeholder-tool two a b", result: { code: 3 } }],
+        script: [NOT_A_REPO, ok("placeholder-tool one"), { match: "placeholder-tool two a b", result: { code: 3 } }],
         ticking: true,
       });
       expect(result.code).toBe(1);
@@ -4173,7 +4175,7 @@ describe("a run's steps land on the open phase entry", () => {
         { verb: "build", argv: "placeholder-tool two 'a b'", exitCode: 3, durationMs: 1000, stalled: false },
       ]);
       // A second run APPENDS rather than replacing.
-      await capture(["build", "--effort", "HA/85"], { repo: dir, script: [ok("placeholder-tool one"), ok("placeholder-tool two a b")], ticking: true });
+      await capture(["build", "--effort", "HA/85"], { repo: dir, script: [NOT_A_REPO, ok("placeholder-tool one"), ok("placeholder-tool two a b")], ticking: true });
       expect((JSON.parse(readFileSync(path, "utf8")) as Ledger).phases[1]?.steps).toHaveLength(4);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -4189,7 +4191,7 @@ describe("a run's steps land on the open phase entry", () => {
       const result = await capture(["build"], {
         repo: dir,
         env: { NEN_EFFORT: "HA/85" },
-        script: [{ match: "placeholder-tool go", result: { spawnFailed: true } }],
+        script: [NOT_A_REPO, { match: "placeholder-tool go", result: { spawnFailed: true } }],
       });
       expect(result.code).toBe(5);
       expect((JSON.parse(readFileSync(path, "utf8")) as Ledger).phases[0]?.steps).toEqual([
@@ -4229,7 +4231,7 @@ describe("a run's steps land on the open phase entry", () => {
   it("refuses an --effort outside the ledger alphabet at exit 2, before anything runs", async () => {
     const result = await capture(["build", "--effort", "../x"]);
     expect(result.code).toBe(2);
-    expect(result.err.join("\n")).toContain("not a ledger id");
+    expect(result.err.join("\n")).toContain("is refused: an effort id is letters");
     expect(result.seams.calls).toEqual([]);
   });
 
@@ -4241,7 +4243,7 @@ describe("a run's steps land on the open phase entry", () => {
       const path = ledgerWith(dir, [OPEN]);
       const result = await capture(["build", "--effort", "HA/85"], {
         repo: dir,
-        script: [timeline([{ atMs: 200_000 }, { atMs: 300_000 }]), ok(KILLER)],
+        script: [NOT_A_REPO, timeline([{ atMs: 200_000 }, { atMs: 300_000 }]), ok(KILLER)],
       });
       expect(result.code).toBe(1);
       expect((JSON.parse(readFileSync(path, "utf8")) as Ledger).phases[0]?.steps?.[0]).toMatchObject({ verb: "build", exitCode: null, durationMs: null, stalled: true });
