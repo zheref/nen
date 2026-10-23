@@ -715,6 +715,7 @@ they assumed instead); they come back empty or `null`.
 | `monitor.maxCycles` / `pollSeconds` | how long a monitoring loop may run | callers |
 | `monitor.localSlotFrees` | when a LOCAL concurrency slot frees (Hatsu's ruling HR-5), a **closed** set: `"ready+prompted"` (the default — the PR is ready and the human has been prompted), `"merged"` (only once the PR merged), `"stacked-open"` (a PR open and stacked onto another effort's branch frees; every other effort as `ready+prompted`). Any other value is refused by pointer | [`loop slots`](#nen-loop-slots) |
 | `idle` | a typed **idle profile** (HR-5): `decisions` maps an ask-once row id (`[a-z0-9][a-z0-9-]*`, as `nen/decisions.json` spells one) to `"default"` \| `"hold"` \| `"refuse"`; `terminal` is the terminal state the batch runs to, a non-empty string in the repository's own words; `budget` is `{ "minutes": <n>, "tokens": <n> }`, positive whole numbers, `minutes` being **wall-clock minutes from the run manifest's `startedAt`** (the consumer's catalogue row owns the key's meaning); `localSlotFrees` is the slot rule under an idle profile, the same closed set as `monitor.localSlotFrees`, read by [`loop slots`](#nen-loop-slots) before it (stating both with two values is refused). Every key is optional; a stated one is validated by pointer, a near-miss key is refused, and any other key nen does not read is a warn on the `#idle` row, never accepted silently. **No default**, and nen never runs a batch or picks a resolution. [`schema check`](#nen-schema-check)'s `nen/workflow.json#idle` row cross-checks each id against `nen/decisions.json`: a row declared there with a class other than `ask-once-per-run` is a required FAIL; an id that file does not declare (or no file) is a warn, never a pass — the row may be the canon matrix's, which the checkout cannot see | callers; [`schema check`](#nen-schema-check) |
+| `spec` | a **spec repository's** capture and autonomy keys (zheref/nen#493; Hatsu's `docs/config/spec-repo.md` § *The spec repository's keys*): `clarify.maxQuestions` (default `5`) and `clarify.maxRounds` (default `3`), `capture.foldersPerPr` (default `4`), `maxBytes`, each a positive whole number; `autonomy.platformOrder` (a non-empty list of distinct platforms), `autonomy.referencePlatform` (one of them), `autonomy.maxInFlight` (a positive whole number, or one per platform), `autonomy.unmetSc` (`refuse`, its only value and default), `autonomy.convergeFiling` (`propose`, the default, \| `file`) and `autonomy.waveEnds` (`all-at-prompt`). `maxBytes` and the `autonomy` keys but the two named have **no default**: they are the maintainer's to type, and a reader that needs one says it is missing. Every key is optional; a stated one is validated by pointer and a near-miss key is refused. Read by [`spec check`](#nen-spec-check): a stated `clarify.maxQuestions` caps an uncapped `--rank`, and a stated `maxBytes` makes a folder file over it a HIGH `over-max-bytes` finding | [`spec check`](#nen-spec-check); callers (Hatsu's `dowsing-chain`) |
 | `alwaysOverlaps` | paths every delivery touches sooner or later -- a manifest version, the `CHANGELOG`, generated mirrors -- each a repository-relative path (a trailing `/` for a directory prefix), never empty, absolute, climbing with `..` or repeated; refused by pointer otherwise. **Default empty.** [`schema check`](#nen-schema-check) reports it on the `nen/workflow.json#alwaysOverlaps` row | [`wc overlap`](#nen-wc-overlap) |
 | `models.<surface>.<tier>` / `models.roles` / `models.rule` | which model alias a role gets on a surface. An **open** map at both levels — nen checks that every leaf is a string and reads nothing else | callers |
 | `profile.default` / `profile.allowed` | which RUN PROFILE a bare turn runs under, and which a caller may ask for (v0.13.0, [#227](https://github.com/zheref/nen/issues/227)). The names are **closed** — `fast`, `standard`, `thorough` — and their meaning is the turn loop's, not nen's: nen refuses a fourth name by pointer, an empty or repeating `allowed`, and a `default` outside `allowed`. Default `{ "default": "standard", "allowed": ["fast", "standard", "thorough"] }`; an `allowed` with no `default` falls back to `standard` when listed, else its first entry | callers ([`schema check`](#nen-schema-check) prints it as the `nen/workflow.json#profile` row) |
@@ -12039,6 +12040,24 @@ says a test ran, never that it exercises the criterion.
 | `test-not-found` · `test-failing` | no | the report lacks the test, or it did not pass |
 | `deferred-incomplete` · `malformed` | no | a row off the grammar |
 | `duplicate` · `unaccounted` | no | two rows, or none |
+
+**The PR Spec section row.** Nen ships no section catalogue; a consumer's
+`pr sections resolve` catalogue carries the section as a conditional row
+admitted by the run fact `spec` — `{ "id": "spec", "title": "Spec", "when":
+"spec" }` (its own glyph and `pattern` are the catalogue's) — so a
+spec-derived delivery PR gets the heading in its resolved order. The heading
+alone does not prove the section is filled, so the requirement a
+`pr body-check --requirements-from` file adds beside the resolved ones is this
+one (from `src/spec/coverage.ts`, quoted whole and held by
+`src/spec/domain.test.ts`), which a missing section and an empty one both
+fail:
+
+```json
+{"name":"spec-rows","pattern":"^ {0,3}##[ \\t]+(?:[^A-Za-z0-9#\\r\\n]+[ \\t]*)?Spec[ \\t]*\\r?\\n(?:[ \\t]*\\r?\\n)*[ \\t]*(?:[-*+][ \\t]+)?F\\d{3}-SC-\\d{3}[ \\t]+[—–-]"}
+```
+
+It proves the section is there and not empty; this verb's delivery form
+proves every criterion is accounted for.
 
 **Usage**
 

@@ -254,6 +254,19 @@ export interface DeliveryCoverageReport {
   readonly reason: string | null;
 }
 
+/**
+ * The `nen pr body-check --requirements-from` row for a PR body's Spec
+ * section (zheref/nen#493 AC-12): the heading, a glyph before `Spec` allowed,
+ * then -- past blank lines only -- at least one criterion row. A missing
+ * section and an empty one both fail it. It proves the section is there and
+ * not empty; `spec coverage --issue-body --pr-body` proves every criterion is
+ * accounted for. docs/USAGE.md quotes it verbatim, held by coverage.test.ts.
+ */
+export const SPEC_SECTION_REQUIREMENT = {
+  name: "spec-rows",
+  pattern: "^ {0,3}##[ \\t]+(?:[^A-Za-z0-9#\\r\\n]+[ \\t]*)?Spec[ \\t]*\\r?\\n(?:[ \\t]*\\r?\\n)*[ \\t]*(?:[-*+][ \\t]+)?F\\d{3}-SC-\\d{3}[ \\t]+[—–-]",
+} as const;
+
 const SC_ID = /\bF\d{3}-SC-\d{3}\b/g;
 const SECTION_HEADING = /^(#{1,6})\s+(?:\S+\s+)?Spec\s*#*\s*$/;
 const ROW = /^\s*(?:[-*+]\s+)?(F\d{3}-SC-\d{3})\s+[—–-]{1,2}\s+(satisfied|deferred)\s+[—–-]{1,2}\s+(.+?)\s*$/;

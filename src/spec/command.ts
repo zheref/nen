@@ -257,6 +257,11 @@ function runCheck(context: CommandContext, repo: string): number {
   if (rank && !markers) throw new VerbUsageError("--rank orders the open markers, so it needs --markers.");
   if (maxRaw !== undefined && !rank) throw new VerbUsageError("--max caps the ranked list, so it needs --rank.");
   if (maxRaw !== undefined && !/^[1-9][0-9]{0,5}$/.test(maxRaw)) throw new VerbUsageError(`--max '${maxRaw}' is not a positive whole number.`);
+  // The spec repository's own `spec` keys (zheref/nen#493's domain): a stated
+  // clarify.maxQuestions caps an uncapped --rank, a stated maxBytes is a ceiling.
+  const workflow = loadWorkflow(repo);
+  const specPolicy = workflow.present ? workflow.workflow.spec : undefined;
+  const rankCap = maxRaw !== undefined ? Number(maxRaw) : rank && specPolicy?.clarify.maxQuestionsDeclared === true ? specPolicy.clarify.maxQuestions : null;
   const vocabularyPath = context.args.values["vocabulary"];
   const vocabulary = vocabularyPath === undefined ? null : { path: vocabularyPath, terms: parseVocabulary(readCallerFile("vocabulary", vocabularyPath)) };
   try {
@@ -267,7 +272,8 @@ function runCheck(context: CommandContext, repo: string): number {
       vocabulary,
       markers,
       rank,
-      max: maxRaw === undefined ? null : Number(maxRaw),
+      max: rankCap,
+      maxBytes: specPolicy?.maxBytes ?? null,
     });
     emit(context.io, context.json, report, renderSpecCheck(report));
     return report.counts.CRITICAL > 0 ? 1 : 0;

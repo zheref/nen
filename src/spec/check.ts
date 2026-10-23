@@ -111,6 +111,8 @@ export interface CheckInput {
   readonly markers: boolean;
   readonly rank: boolean;
   readonly max: number | null;
+  /** `spec.maxBytes` from the repository's nen/workflow.json, when it states one: a file over it is a HIGH finding. */
+  readonly maxBytes?: number | null;
 }
 
 export class SpecReadError extends Error {
@@ -360,6 +362,12 @@ export function checkSpec(input: CheckInput): SpecCheckReport {
     .map((marker, index) => ({ marker, index }))
     .sort((a, b): number => CLARIFY_TAXONOMY.indexOf(a.marker.category) - CLARIFY_TAXONOMY.indexOf(b.marker.category) || a.index - b.index)
     .map(({ marker }): RankedMarker => marker);
+  if (input.maxBytes !== undefined && input.maxBytes !== null) {
+    for (const file of files) {
+      const size = statSync(join(input.repo, file)).size;
+      if (size > input.maxBytes) add("HIGH", "over-max-bytes", file, null, `${file} is ${size} bytes, over spec.maxBytes ${input.maxBytes} (nen/workflow.json)`);
+    }
+  }
   const severityCounts = Object.fromEntries(SEVERITIES.map((severity): [Severity, number] => [severity, findings.filter((finding): boolean => finding.severity === severity).length])) as Record<Severity, number>;
   const sorted = [...findings].sort((a, b): number => SEVERITIES.indexOf(a.severity) - SEVERITIES.indexOf(b.severity));
   return {
