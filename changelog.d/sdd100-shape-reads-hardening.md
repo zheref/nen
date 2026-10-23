@@ -1,0 +1,3 @@
+- `nen pr converge` reports a non-default base whose body names no closing issue as `closingSource: "none-on-non-default-base"` with zero criteria and no longer blocks on it (exit 0 when nothing else blocks); v0.26.0 exited 1. A sub-PR into an integration branch that closes nothing has no criterion to miss.
+- `nen issue body-check`, `issue questions` and `issue criteria` refuse a `--body-file` that is not valid UTF-8 at exit 2, where it used to decode with replacement characters and read as zero rows at exit 0.
+- Every verb's `--json` output escapes bidirectional and zero-width controls (U+200B-200F, U+202A-202E, U+2066-2069, U+FEFF) as `\uXXXX`; the parsed value is unchanged, but a `U+202E` in an issue body can no longer reorder what a terminal or log shows.

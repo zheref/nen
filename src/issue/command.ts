@@ -16,7 +16,8 @@ import { decomposeLabelName, loadLabelTaxonomy, type LabelTaxonomy } from "../sc
 import { commaList } from "../cli/comma.js";
 import { readJsonFile, readTextFile, resolveAgainstRepo, splitList } from "../cli/inputs.js";
 import { shapePreflight } from "./preflight.js";
-import { statSync, writeFileSync } from "node:fs";
+import { isUtf8 } from "node:buffer";
+import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { parseTarget, type Target , TargetError} from "../github/target.js";
 import type { FlagSpec } from "../cli/args.js";
 import {
@@ -2238,7 +2239,13 @@ function readShapeBody(context: CommandContext, verb: string): { body: string; s
       throw new VerbUsageError("--target is read only with --ref: a --body-file is read from disk and addresses no repository.");
     }
     const path = resolveAgainstRepo(resolveRepoRoot({ repoFlag: context.repoFlag }), bodyFile);
-    return { body: readTextFile(path, process.cwd(), `--body-file names the issue body 'issue ${verb}' reads; an unreadable one is refused, never read as empty.`), source: { kind: "file", path } };
+    const body = readTextFile(path, process.cwd(), `--body-file names the issue body 'issue ${verb}' reads; an unreadable one is refused, never read as empty.`);
+    // NOT UTF-8 IS NOT "NO ROWS": a body decoded with replacement characters
+    // read as zero criteria at exit 0. Refused by name instead.
+    if (body.includes("\uFFFD") && !isUtf8(readFileSync(path))) {
+      throw new VerbUsageError(`--body-file '${bodyFile}' is not valid UTF-8 text; 'issue ${verb}' refuses it rather than reading replacement characters as an empty body.`);
+    }
+    return { body, source: { kind: "file", path } };
   }
   return readShapeRef(context, ref as string, requireTarget(context));
 }

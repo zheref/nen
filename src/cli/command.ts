@@ -307,9 +307,18 @@ export function splitIntegerList(entries: readonly string[], flag: string): numb
  * describes, so a verb cannot grow a `--json` shape that has quietly stopped
  * matching what it prints.
  */
+/**
+ * Bidirectional and zero-width controls (U+200B-200F, U+202A-202E,
+ * U+2066-2069, U+FEFF), which `JSON.stringify` writes raw. Escaped as `\uXXXX`
+ * in `--json` output: the parsed value is byte-for-byte the same, and a
+ * terminal or a log viewer can no longer be made to reorder what it shows
+ * (a `U+202E` in an issue body read by `issue criteria`).
+ */
+const JSON_INVISIBLE = /[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/g;
+
 export function emit(io: Io, json: boolean, value: unknown, lines: readonly string[]): void {
   if (json) {
-    io.out(JSON.stringify(value, null, 2));
+    io.out(JSON.stringify(value, null, 2).replace(JSON_INVISIBLE, (char): string => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`));
     return;
   }
   for (const line of lines) io.out(line);

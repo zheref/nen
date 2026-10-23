@@ -123,6 +123,28 @@ describe("nen issue body-check", () => {
   });
 });
 
+describe("issue-shape reads: a non-UTF-8 body and bidi controls in --json", () => {
+  it("refuses a --body-file that is not UTF-8 at exit 2 on all three verbs, never zero rows", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-issue-shape-"));
+    writeFileSync(join(dir, "bad.md"), Buffer.from([0xff, 0xfe, 0x2d, 0x20, 0x41]));
+    writeFileSync(join(dir, "cat.json"), CATALOGUE);
+    for (const argv of [["issue", "criteria", "--body-file", "bad.md"], ["issue", "questions", "--body-file", "bad.md"], ["issue", "body-check", "--body-file", "bad.md", "--requirements-from", "cat.json", "--kind", "feature"]]) {
+      const result = await run(issueCommand, argv, [], { repoFlag: dir });
+      expect(result.code, argv[1]).toBe(2);
+      expect(result.err, argv[1]).toMatch(/not valid UTF-8/);
+    }
+  });
+
+  it("escapes U+202E in --json while the parsed text is unchanged", async () => {
+    const dir = scratch({ "b.md": "- AC-1: a \u202E evil\n" });
+    const result = await run(issueCommand, ["issue", "criteria", "--body-file", "b.md"], [], { repoFlag: dir, json: true });
+    expect(result.code).toBe(0);
+    expect(result.out).not.toContain("\u202E");
+    expect(result.out).toContain("\\u202e");
+    expect((JSON.parse(result.out) as { criteria: { text: string }[] }).criteria[0]?.text).toBe("a \u202E evil");
+  });
+});
+
 describe("nen issue questions", () => {
   it("counts and exits 1 on an open row, with the counts in --json (zheref/nen#477 AC-1)", async () => {
     const dir = scratch({ "q.md": QUESTIONS });
