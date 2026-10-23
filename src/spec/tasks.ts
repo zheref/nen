@@ -3,17 +3,21 @@
 // body a dispatch files (zheref/nen#493 AC-9; Hatsu docs/config/spec-repo.md §
 // The issue a dispatch files).
 //
-// THE GROUPING IS THE FILE'S OWN. A task is a `- [ ] T<nnn> …` / `- [x] …` line;
-// its story is its `[US<k>]` tag, else the `User Story <k>` / `US-<k>` its
-// phase heading names; its platform is its `[platform:<name>]` tag, else the
-// nearest `### Platform: <name>` heading. A task with neither story nor
-// platform belongs to its phase's group (Setup, Foundational).
+// THE GROUPING IS THE FILE'S OWN. A task is a `- [ ] …` / `- [x] …` line, with
+// a Spec Kit `T<nnn>` id or, in Hatsu's id-less grammar (`[x] captured —
+// <cite>`, `[ ]`, `[x] delivered — <PR>`), the id `L<line>`; its story is its
+// `[US<k>]` / `[US-<k>]` tag, else the `User Story <k>` / `US-<k>` its nearest
+// phase or story heading names; its platform is its `[platform:<name>]` tag,
+// else the nearest `### Platform: <name>` heading (both tags are nen's
+// proposal until Hatsu's spec-repo.md states them). A task with neither story
+// nor platform belongs to its phase's group (Setup, Foundational).
 //
-// THE STATE IS COMPUTED, NEVER CLAIMED. A group with an open task is
-// `clarifying` when its story heading or a requirement its tasks name carries
-// a marker in spec.md (a story holding any marker is excluded from every
-// dispatch), else `open`; a group whose every task is ticked is `delivered`
-// when each says `delivered`, else `captured`.
+// THE STATE IS READ FROM THE FILE'S OWN CLAIMS, NAMED AS CLAIMS. A group with
+// an open task is `clarifying` when its story heading or a requirement its
+// tasks name carries a marker in spec.md (a story holding any marker is
+// excluded from every dispatch), else `open`; a group whose every task is
+// ticked is `delivered` when each reads `delivered — <PR>` (Hatsu writes that
+// only from a merged PR's Development link), else `captured`.
 //
 // THE ORDER. A story group depends on every phase group of an earlier phase
 // (Spec Kit: user stories start after Setup and Foundational), and on the
@@ -26,12 +30,12 @@
 // criteria are repeated verbatim inside a `source-data` fence one character
 // longer than the longest backtick run they hold.
 
-import { markersIn, proseLines, requirementOf, trailingAnnotation } from "./lines.js";
+import { markersIn, proseLines, qualifiedId, requirementOf, trailingAnnotation } from "./lines.js";
 
 export const SPEC_TASKS_CONTRACT = "nen.spec.tasks/v0.1";
 
 export type GroupState = "open" | "clarifying" | "captured" | "delivered";
-export type TasksVerdict = "grouped" | "refused" | "could-not-read";
+export type TasksVerdict = "grouped" | "no-tasks" | "refused" | "could-not-read";
 
 export interface Task {
   readonly id: string;
@@ -58,6 +62,8 @@ export interface TaskGroup {
   readonly dependsOn: readonly string[];
   readonly title: string | null;
   readonly body: string | null;
+  /** Why a story group renders no title or body, or null. */
+  readonly note: string | null;
 }
 
 /** KEY ORDER IS THE DOCUMENTED `--json` SHAPE. */
@@ -72,38 +78,48 @@ export interface TasksReport {
   readonly reason: string | null;
 }
 
-const TASK = /^\s*[-*]\s+\[([ xX])\]\s+(T\d{3,})\b(.*)$/;
+/** A task line: Spec Kit's `- [ ] T012 …`, or Hatsu's id-less `- [ ] …` / `- [x] captured — <cite>` / `- [x] delivered — <PR>`. */
+const TASK = /^\s*[-*]\s+\[([ xX])\]\s+(?:(T\d{3,})\b)?(.*)$/;
+/** `delivered — <PR>`: the claim Hatsu's tasks.md makes only from a merged PR's Development link, and the only one read as delivered. */
+const DELIVERED = /\bdelivered\s+[—–-]{1,2}\s+(?:[A-Z][A-Z0-9]{1,7}-PR-#\d+|[A-Za-z0-9-]+\/[A-Za-z0-9._-]+#\d+|[A-Z][A-Z0-9]{1,7}#\d+|#\d+|https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/pull\/\d+)/i;
+const STORY_NAMED = /\b(?:User Story\s+(\d+)|US-?(\d+))\b/i;
 
 export function parseTasks(text: string): Task[] {
   const tasks: Task[] = [];
   let phase: number | null = null;
-  let phaseStory: number | null = null;
+  let headingStory: number | null = null;
   let platform: string | null = null;
   for (const line of proseLines(text)) {
-    const phaseHeading = /^##\s+Phase\s+(\d+)\b(.*)$/i.exec(line.text);
-    if (phaseHeading !== null) {
-      phase = Number(phaseHeading[1]);
-      const story = /\b(?:User Story\s+(\d+)|US-?(\d+))\b/i.exec(phaseHeading[2] as string);
-      phaseStory = story === null ? null : Number(story[1] ?? story[2]);
-      platform = null;
-      continue;
-    }
-    const platformHeading = /^#{3,6}\s+Platform:\s*(\S.*?)\s*$/i.exec(line.text);
-    if (platformHeading !== null) {
-      platform = platformHeading[1] as string;
+    const heading = /^(#{1,6})\s+(.*?)\s*$/.exec(line.text);
+    if (heading !== null) {
+      const body = heading[2] as string;
+      const phaseHeading = /^Phase\s+(\d+)\b(.*)$/i.exec(body);
+      const platformHeading = /^Platform:\s*(\S.*?)$/i.exec(body);
+      const story = STORY_NAMED.exec(body);
+      if (phaseHeading !== null) {
+        phase = Number(phaseHeading[1]);
+        const named = STORY_NAMED.exec(phaseHeading[2] as string);
+        headingStory = named === null ? null : Number(named[1] ?? named[2]);
+        platform = null;
+      } else if (platformHeading !== null) platform = platformHeading[1] as string;
+      else if (story !== null) {
+        // Hatsu's tasks.md groups gaps under story headings with no phase (docs/config/spec-repo.md, tasks.md row).
+        headingStory = Number(story[1] ?? story[2]);
+        platform = null;
+      }
       continue;
     }
     const match = TASK.exec(line.text);
     if (match === null) continue;
     const rest = match[3] as string;
-    const tagStory = /\[US(\d+)\]/.exec(rest);
+    const tagStory = /\[US-?(\d+)\]/i.exec(rest);
     const tagPlatform = /\[platform:\s*([^\]\s]+)\s*\]/i.exec(rest);
     tasks.push({
-      id: match[2] as string,
+      id: match[2] ?? `L${line.number}`,
       line: line.number,
       done: match[1] !== " ",
-      delivered: match[1] !== " " && /\bdelivered\b/i.test(rest),
-      story: tagStory === null ? phaseStory : Number(tagStory[1]),
+      delivered: match[1] !== " " && DELIVERED.test(rest),
+      story: tagStory === null ? headingStory : Number(tagStory[1]),
       platform: tagPlatform === null ? platform : (tagPlatform[1] as string),
       phase,
       requirements: [...new Set([...rest.matchAll(/\b(?:FR|SC)-\d+\b/g)].map((entry): string => entry[0]))],
@@ -146,8 +162,10 @@ export function readStories(spec: string): { stories: Map<number, Story>; marked
       lines.set(requirement.id, line.text.trim());
       if (markersIn(line.text).length > 0) marked.add(requirement.id);
     }
-    if (current !== null && /^\s*\d+\.\s+(?:\*\*)?Given\b/.test(line.text)) {
-      ac += 1;
+    const scenario = /^\s*\d+\.\s+(?:\*\*AC-(\d+)\*\*:?\s*)?(?:\*\*)?Given\b/.exec(line.text);
+    if (current !== null && scenario !== null) {
+      // A written `**AC-###**:` label is the scenario's id (SP-10); an unlabelled one continues the folder-global count.
+      ac = scenario[1] === undefined ? ac + 1 : Number(scenario[1]);
       current.scenarios.push({ ac, text: line.text.trim() });
       if (markersIn(line.text).length > 0) current.marked = true;
     }
@@ -166,7 +184,7 @@ export function scenarioSentence(text: string): string {
   const { citations, markers, malformed, ruled, stale } = trailingAnnotation(text);
   let body = text;
   for (const token of [...citations.map((entry): string => entry.text), ...markers.map((entry): string => entry.text), ...malformed, ...ruled.map((id): string => `[ruled: ${id}]`), ...stale]) body = body.replace(token, "");
-  return body.replace(/^\s*\d+\.\s+/, "").replace(/\*\*/g, "").replace(/\s+/g, " ").trim();
+  return body.replace(/^\s*\d+\.\s+/, "").replace(/^\*\*AC-\d+\*\*:?\s*/, "").replace(/\*\*/g, "").replace(/\s+/g, " ").trim();
 }
 
 export interface TasksInput {
@@ -221,10 +239,13 @@ export function taskGroups(input: TasksInput, specText: string, tasksText: strin
     const state: GroupState = open ? (clarifying ? "clarifying" : "open") : members.every((task): boolean => task.delivered) ? "delivered" : "captured";
     let title: string | null = null;
     let body: string | null = null;
-    if (first.story !== null) {
-      const platform = first.platform ?? "all";
+    let note: string | null = null;
+    if (first.story !== null && first.platform === null) note = "no platform is named for this story group (a [platform:<p>] tag or a '### Platform: <p>' heading); a dispatch title's tail is '(F<nnn>/US<k> · <platform>)', so no title or body is rendered";
+    if (first.story !== null && first.platform !== null) {
+      const platform = first.platform;
       title = `spec: ${story?.title ?? `User Story ${first.story}`} (F${input.nnn}/US${first.story} · ${platform})`;
-      const qualify = (requirement: string): string => `F${input.nnn}-${requirement.replace(/-(\d+)$/, (_, digits: string): string => `-${digits.padStart(3, "0")}`)}`;
+      const qualify = (requirement: string): string => qualifiedId(input.nnn, requirement);
+      const frs = requirements.filter((requirement): boolean => requirement.startsWith("FR-")).map(qualify);
       const scenarios = story?.scenarios ?? [];
       const scs = requirements.filter((requirement): boolean => requirement.startsWith("SC-"));
       const verbatim = [...scenarios.map((scenario): string => scenario.text), ...scs.map((sc): string => lines.get(sc) ?? sc)].join("\n");
@@ -232,10 +253,12 @@ export function taskGroups(input: TasksInput, specText: string, tasksText: strin
       body = [
         `Spec: ${base.spec ?? `${input.folder}@<unread>`}`,
         "",
-        `Requirements: ${requirements.filter((requirement): boolean => requirement.startsWith("FR-")).map(qualify).join(", ") || "none"} · Success criteria: ${scs.map(qualify).join(", ") || "none"}`,
+        `Requirements: ${frs.join(", ") || "none"} · Success criteria: ${scs.map(qualify).join(", ") || "none"}`,
         `Tasks: ${members.map((task): string => task.id).join(", ")} · Platform: ${platform} · Depends on: ${deps.join(", ") || "none"}`,
+        `Parity: ${input.folder}/parity.md · ${frs.length === 0 ? "no FR row" : frs.map((fr): string => `${fr} × ${platform}`).join(", ")}`,
+        `Plan: ${input.folder}/plan.md § Platform: ${platform}`,
         "",
-        ...(scenarios.length === 0 ? ["No acceptance scenario is written under this story yet."] : scenarios.map((scenario, index): string => `- AC-${index + 1}: ${scenarioSentence(scenario.text)} (F${input.nnn}-AC-${String(scenario.ac).padStart(3, "0")})`)),
+        ...(scenarios.length === 0 ? ["No acceptance scenario is written under this story yet."] : scenarios.map((scenario, index): string => `- AC-${index + 1}: ${scenarioSentence(scenario.text)} (${qualifiedId(input.nnn, `AC-${scenario.ac}`)})`)),
         "",
         `${fence}source-data`,
         verbatim,
@@ -243,9 +266,11 @@ export function taskGroups(input: TasksInput, specText: string, tasksText: strin
         "",
       ].join("\n");
     }
-    return { id, phase: first.phase, story: first.story, storyTitle: story?.title ?? null, platform: first.platform, state, tasks: members.map((task): string => task.id), requirements, dependsOn: deps, title, body };
+    return { id, phase: first.phase, story: first.story, storyTitle: story?.title ?? null, platform: first.platform, state, tasks: members.map((task): string => task.id), requirements, dependsOn: deps, title, body, note };
   });
-  return { contract: base.contract, verdict: problems.length === 0 ? "grouped" : "refused", repo: base.repo, folder: base.folder, spec: base.spec, groups, order, reason: problems.length === 0 ? (groups.length === 0 ? "tasks.md defines no T<nnn> task" : null) : problems.join("; ") };
+  // Zero tasks is its own answer, never a pass over nothing (Nobunaga F3).
+  const verdict: TasksVerdict = groups.length === 0 ? "no-tasks" : problems.length === 0 ? "grouped" : "refused";
+  return { contract: base.contract, verdict, repo: base.repo, folder: base.folder, spec: base.spec, groups, order, reason: problems.length === 0 ? (groups.length === 0 ? "tasks.md holds no task line ('- [ ] …', '- [x] …')" : null) : problems.join("; ") };
 }
 
 export function unreadableTasks(input: TasksInput, reason: string): TasksReport {
@@ -258,7 +283,7 @@ export function renderTasks(report: TasksReport): string[] {
   if (report.reason !== null) lines.push(`  ${report.reason}`);
   for (const id of report.order) {
     const group = report.groups.find((entry): boolean => entry.id === id) as TaskGroup;
-    lines.push(`  ${group.id} ${group.state} · ${group.tasks.join(", ")}${group.dependsOn.length === 0 ? "" : ` · after ${group.dependsOn.join(", ")}`}${group.title === null ? "" : ` · ${group.title}`}`);
+    lines.push(`  ${group.id} ${group.state} · ${group.tasks.join(", ")}${group.dependsOn.length === 0 ? "" : ` · after ${group.dependsOn.join(", ")}`}${group.title === null ? "" : ` · ${group.title}`}${group.note === null ? "" : ` -- ${group.note}`}`);
   }
   return lines;
 }

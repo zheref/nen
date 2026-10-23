@@ -132,13 +132,83 @@ describe("nen spec tasks groups", () => {
   });
 });
 
-describe("nen spec tasks groups in a plain directory", () => {
-  it("pins no sha when the spec repository is not a git checkout", async () => {
+describe("nen spec tasks groups at its pin", () => {
+  it("says could-not-read when the spec repository has no commit to pin the body to (SP-8)", async () => {
     const repo = mkdtempSync(join(tmpdir(), "nen-spec-tasks-"));
     mkdirSync(join(repo, "specs", "002-list"), { recursive: true });
     writeFileSync(join(repo, "specs", "002-list", "spec.md"), SPEC);
     writeFileSync(join(repo, "specs", "002-list", "tasks.md"), TASKS);
-    const run = await spec(["tasks", "groups", "--folder", "specs/002-list", "--group", "US1/web"], repo, defaultSeams());
-    expect(run.out[0]).toBe("Spec: specs/002-list@<unread>");
+    const run = await spec(["tasks", "groups", "--folder", "specs/002-list"], repo, defaultSeams(), true);
+    expect(run.code).toBe(1);
+    expect(run.json()).toMatchObject({ verdict: "could-not-read" });
+    expect(String(run.json()["reason"])).toContain("no HEAD commit");
+  });
+
+  it("reads spec.md and tasks.md at the pinned commit, never the work tree", async () => {
+    const repo = folder(SPEC, TASKS);
+    writeFileSync(join(repo, "specs", "002-list", "spec.md"), SPEC.replace("an empty list", "an UNCOMMITTED list"));
+    const body = (await spec(["tasks", "groups", "--folder", "specs/002-list", "--group", "US1/web"], repo, defaultSeams())).out.join("\n");
+    expect(body).toContain("Given an empty list");
+    expect(body).not.toContain("UNCOMMITTED");
+  });
+});
+
+describe("nen spec tasks groups on Hatsu's own shapes", () => {
+  // Hatsu docs/config/spec-repo.md: a labelled scenario `1. **AC-001**: **Given** …` and a tasks.md of
+  // `[x] captured — <cite>`, `[ ]` gaps grouped by story and platform, `[x] delivered — <PR>`, no T ids.
+  const HATSU_SPEC = [
+    "### US-1 — A user opens the fixture list (Priority: P1)",
+    "",
+    "1. **AC-004**: **Given** an empty fixture list, **When** the user opens it, **Then** the empty state is shown. [src: FI:T.swift:12-20 @ 0000000000000000000000000000000000000001 · declared]",
+    "",
+    "## Requirements",
+    "",
+    "- **FR-001**: The system shows the empty state. [src: FI:S.swift:40-52 @ 0000000000000000000000000000000000000001 · observed]",
+    "",
+  ].join("\n");
+  const HATSU_TASKS = [
+    "# Tasks",
+    "",
+    "## US-1 — A user opens the fixture list",
+    "",
+    "### Platform: web",
+    "",
+    "- [ ] FR-001 the empty state on web",
+    "- [x] captured — [src: FW:a.ts:1-2 @ 0000000000000000000000000000000000000003 · observed] FR-001",
+    "",
+    "### Platform: android",
+    "",
+    "- [x] delivered — FA-PR-#12 FR-001",
+    "- [x] captured, not delivered yet — FR-001",
+    "",
+  ].join("\n");
+
+  it("takes a scenario's AC number from its label and reads id-less task lines by story and platform heading", async () => {
+    const repo = folder(HATSU_SPEC, HATSU_TASKS);
+    const run = await spec(["tasks", "groups", "--folder", "specs/002-list"], repo, defaultSeams(), true);
+    expect(run.code).toBe(0);
+    const groups = run.json()["groups"] as { id: string; state: string; tasks: string[]; body: string | null }[];
+    expect(groups.map((group) => `${group.id} ${group.state} ${group.tasks.join(",")}`)).toEqual(["US1/web open L7,L8", "US1/android captured L12,L13"]);
+    expect(groups[0]?.body).toContain("- AC-1: Given an empty fixture list, When the user opens it, Then the empty state is shown. (F002-AC-004)");
+    expect(groups[0]?.body).toContain("Parity: specs/002-list/parity.md · F002-FR-001 × web");
+    expect(groups[0]?.body).toContain("Plan: specs/002-list/plan.md § Platform: web");
+  });
+
+  it("reads delivered only from 'delivered — <PR>', and a [US-1] tag as story 1", async () => {
+    const repo = folder(HATSU_SPEC, "- [x] [US-1] [platform:web] delivered — #12 FR-001\n- [x] [US-1] [platform:ios] FR-001 delivered soon\n");
+    const groups = (await spec(["tasks", "groups", "--folder", "specs/002-list"], repo, defaultSeams(), true)).json()["groups"] as { id: string; state: string }[];
+    expect(groups.map((group) => `${group.id} ${group.state}`)).toEqual(["US1/web delivered", "US1/ios captured"]);
+  });
+
+  it("marks a story group with no platform instead of titling it, and answers no-tasks, exit 1, for a tasks.md with none", async () => {
+    const repo = folder(HATSU_SPEC, "- [ ] [US-1] FR-001 somewhere\n");
+    const run = await spec(["tasks", "groups", "--folder", "specs/002-list"], repo, defaultSeams(), true);
+    const group = (run.json()["groups"] as { title: string | null; body: string | null; note: string | null }[])[0];
+    expect(group).toMatchObject({ title: null, body: null });
+    expect(group?.note).toContain("no platform is named");
+    expect((await spec(["tasks", "groups", "--folder", "specs/002-list", "--group", "US1/all"], repo, defaultSeams())).code).toBe(2);
+    const empty = await spec(["tasks", "groups", "--folder", "specs/002-list"], folder(HATSU_SPEC, "# Tasks\n\nNothing yet.\n"), defaultSeams(), true);
+    expect(empty.code).toBe(1);
+    expect(empty.json()["verdict"]).toBe("no-tasks");
   });
 });

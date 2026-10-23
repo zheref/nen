@@ -12196,19 +12196,26 @@ gaps: 4/6 requirement x member row(s) handled across 1 folder(s), members FA, FW
 
 A folder's `tasks.md` as **story-grouped, dependency-ordered task groups**,
 each story group rendered as the issue body a dispatch files (zheref/nen#493
-AC-9; Hatsu's `docs/config/spec-repo.md` § *The issue a dispatch files*). A
-task is a `- [ ] T<nnn> …` or `- [x] T<nnn> …` line. Its **story** is its
-`[US<k>]` tag, else the `User Story <k>` / `US-<k>` its `## Phase <n>:`
-heading names; its **platform** is its `[platform:<name>]` tag, else the
-nearest `### Platform: <name>` heading; a task with neither belongs to its
-phase's group (`phase-<n>`). A story group's id is `US<k>/<platform>` (`all`
-when no platform is named).
+AC-9; Hatsu's `docs/config/spec-repo.md` § *The issue a dispatch files*). Both
+files are read **at the spec checkout's `HEAD` commit** through `git cat-file`,
+never from the work tree, because the body pins that commit (SP-8); no commit,
+or a file not in it, is `could-not-read`. A task is a `- [ ] …` or `- [x] …`
+line: Spec Kit's `T<nnn> …`, or Hatsu's id-less `[ ]` gap, `[x] captured —
+<cite>` and `[x] delivered — <PR>`, whose id is then `L<line>`. Its **story**
+is its `[US<k>]` / `[US-<k>]` tag, else the `User Story <k>` / `US-<k>` its
+nearest phase or story heading names; its **platform** is its
+`[platform:<name>]` tag, else the nearest `### Platform: <name>` heading; a
+task with neither belongs to its phase's group (`phase-<n>`). A story group's
+id is `US<k>/<platform>` (`US<k>/all` when no platform is named). **The two
+platform spellings and `depends on T<nnn>` are nen's proposal**: Hatsu's
+`spec-repo.md` says gaps are "grouped by story and platform" without naming a
+form, and states them once it adopts one (zheref/hatsu#405).
 
 | Group state | When |
 |---|---|
 | `clarifying` | it has an open task, and its story heading or a requirement its tasks name carries a marker in `spec.md` — excluded from every dispatch |
 | `open` | it has an open task and no such marker |
-| `delivered` | every task is ticked and says `delivered` |
+| `delivered` | every task is ticked and reads `delivered — <PR>` (a `#<n>`, `<CODE>-PR-#<n>`, `<CODE>#<n>`, `<owner>/<name>#<n>` or pull URL) — the claim Hatsu writes only from a merged PR's Development link; the word alone is not it |
 | `captured` | every task is ticked, not all `delivered` |
 
 A story group **depends on** every phase group of an earlier phase (Spec Kit:
@@ -12216,18 +12223,22 @@ stories start after Setup and Foundational) and on the group of any task its
 tasks name with `depends on T<nnn>`; `order` is the topological order, ties by
 first appearance. For a story group, `title` is `spec: <story title>
 (F<nnn>/US<k> · <platform>)` and `body` carries `Spec: <folder>@<sha>` (the
-spec checkout's `HEAD`, `<unread>` outside git), the qualified FR and SC ids,
-the tasks and dependencies, **one unfenced `- AC-<n>: Given … When … Then …
-(F<nnn>-AC-<###>)` row per acceptance scenario**, numbered from 1 and mapped
-onto the folder-global scenario number, and the scenarios and SC lines
+commit read), the qualified FR and SC ids, the tasks and dependencies, the
+`parity.md` row ids (`F<nnn>-FR-### × <platform>`) and the `plan.md` platform
+section (`§ Platform: <platform>`), **one unfenced `- AC-<n>: Given … When …
+Then … (F<nnn>-AC-<###>)` row per acceptance scenario**, numbered from 1, the
+`###` taken from the scenario's own `**AC-###**:` label (SP-10) or, unlabelled,
+from the folder-global count; and the scenarios and SC lines
 **verbatim inside a `source-data` fence** one character longer than the longest
 backtick run they hold (SP-4). Nothing in the body is reworded but the AC rows'
-markdown, stripped of bold, numbering and annotations.
+markdown, stripped of bold, numbering, label and annotations. **A story group
+with no platform renders no title and no body**: the title's tail is the
+dedupe key, and `all` is not a platform; its `note` says so.
 
 **Usage**
 
 ```text
-nen spec tasks groups --repo <spec> --folder <dir> [--group <id>] [--json]
+nen spec tasks groups --repo <spec> --folder <dir> [--layout <pattern>] [--group <id>] [--json]
 ```
 
 **Arguments**
@@ -12235,19 +12246,22 @@ nen spec tasks groups --repo <spec> --folder <dir> [--group <id>] [--json]
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `--repo <path>` | yes | The spec repository's checkout. | Omitted exits 2. |
-| `--folder <dir>` | yes | The folder whose `tasks.md` is grouped. | No `spec.md` or `tasks.md`, or no `{nnn}` in its name: `could-not-read`. |
-| `--group <id>` | no | Print one story group's body alone (`--json`: `{ contract, verdict, group }`). | An unknown id, or a phase group, exits 2. |
+| `--folder <dir>` | yes | The folder whose `tasks.md` is grouped. | Not a folder of the layout, or no `spec.md`/`tasks.md` at `HEAD`: `could-not-read`. |
+| `--layout <pattern>` | no | Where the folders live; the folder's `{nnn}` is the layout's. | Default `specs/{nnn}-{slug}`. |
+| `--group <id>` | no | Print one story group's body alone (`--json`: `{ contract, verdict, group }`). | An unknown id, a phase group or a story group with no platform exits 2. |
 
 `spec tasks` with any action but `groups` exits 2.
 
 **Output and exit codes** — prints `<verdict>: <folder> -- <n> group(s) in order
 …`, then one line per group in order (`<id> <state> · <tasks> · after <deps> ·
 <title>`). `--json` top-level keys: `contract` (`nen.spec.tasks/v0.1`),
-`verdict` (`grouped` \| `refused` \| `could-not-read`), `repo`, `folder`,
-`spec` (`<folder>@<sha>` or null), `groups` (`{ id, phase, story, storyTitle,
-platform, state, tasks, requirements, dependsOn, title, body }` each, `title`
-and `body` null for a phase group), `order`, `reason`. Exit 0 when `grouped`;
-exit 1 when `refused` (a dependency cycle, a `depends on` naming no task) or
+`verdict` (`grouped` \| `no-tasks` \| `refused` \| `could-not-read`), `repo`,
+`folder`, `spec` (`<folder>@<sha>` or null), `groups` (`{ id, phase, story,
+storyTitle, platform, state, tasks, requirements, dependsOn, title, body, note
+}` each, `title` and `body` null for a phase group and for a story group with
+no platform, `note` saying why), `order`, `reason`. Exit 0 when `grouped`; exit
+1 when `no-tasks` (a tasks.md with no task line — never a pass over nothing),
+`refused` (a dependency cycle, a `depends on` naming no task) or
 `could-not-read`; exit 2 on a usage error.
 
 **Example**

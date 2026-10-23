@@ -19,8 +19,8 @@ import { emit, parseCallerToken, refuseExtraPositionals, requireRepoFlag, requir
 import { parseTarget, targetFromRemote, TargetError, type Target } from "../github/target.js";
 import { resolveRepoRoot } from "../repo/root.js";
 import { loadWorkflow } from "../schema/workflow.js";
-import { checkRelativePath, parseLayout } from "./layout.js";
-import { assertInsideRepo, checkSpec, CONSTITUTION_PATH, parseVocabulary, renderSpecCheck, SpecContainmentError, SpecReadError } from "./check.js";
+import { checkRelativePath, matchFolder, parseLayout } from "./layout.js";
+import { checkSpec, CONSTITUTION_PATH, parseVocabulary, renderSpecCheck, SpecContainmentError, SpecReadError } from "./check.js";
 import { citeCheck, parseCheckouts, renderCiteCheck } from "./citecheck.js";
 import { computeNext, readBaseFolders, readPrFolders, renderSpecNumber, SPEC_NUMBER_CONTRACT, type SpecNumberReport } from "./number.js";
 import { renderSpecIndex, specIndex } from "./specindex.js";
@@ -35,8 +35,6 @@ import { parity, readParityFolders, renderParity, unreadableParity, type ParityR
 import { renderTasks, taskGroups, unreadableTasks, type TasksReport } from "./tasks.js";
 import { renderTrace, specTrace } from "./trace.js";
 import { GIT, outputLines } from "../seam/exec.js";
-import { lstatSync } from "node:fs";
-import { join } from "node:path";
 
 const SUBCOMMANDS = ["number", "check", "cite-check", "index", "inventory", "diff", "converge", "coverage", "parity", "tasks", "trace"] as const;
 type Subcommand = (typeof SUBCOMMANDS)[number];
@@ -53,7 +51,7 @@ nen spec converge --repo <spec> --folder <dir> --inventory <file> --code <CODE> 
 nen spec coverage --repo <spec> --inventory <file>[,<file>...] [--layout <pattern>] [--json]
 nen spec coverage --issue-body <file> --pr-body <file> [--test-report <file>] [--json]
 nen spec parity --repo <spec> (--folder <dir> | --family <name>) [--layout <pattern>] [--target <owner/name>[,<owner/name>...]] [--json]
-nen spec tasks groups --repo <spec> --folder <dir> [--group <id>] [--json]
+nen spec tasks groups --repo <spec> --folder <dir> [--layout <pattern>] [--group <id>] [--json]
 nen spec trace --repo <spec> --family <name> [--layout <pattern>] [--write [--dry-run]] [--json]
 
 Read-only verbs over a Spec Kit spec repository. Each
@@ -148,8 +146,10 @@ tasks groups
             (earlier phase groups; 'depends on T<nnn>') and topological order,
             and for a story group the dispatch title and issue body: the
             pinned 'Spec: <folder>@<sha>', one '- AC-<n>: …' row per scenario,
-            the scenarios and SCs in a source-data fence. --group prints one
-            body. Exit 1 on a cycle, an unknown dependency or an unread file.
+            the scenarios and SCs in a source-data fence. Read at HEAD (SP-8).
+            Hatsu's id-less lines ([ ], [x] captured — <cite>, [x] delivered —
+            <PR>) are read too. --group prints one body. Exit 1 on no task,
+            a cycle, an unknown dependency or an unread file or pin.
 trace       <root>/traceability.md for one family: one row per FR and SC, one
             column per member (parity state, else citation count), the tasks
             and open markers. Without --write: exit 0 only when current;
@@ -171,7 +171,7 @@ trace       <root>/traceability.md for one family: one row per FR and SC, one
   trace:      { contract: "nen.spec.trace/v0.1", verdict, repo, family, members, path, rows, action, reason }`;
 
 const OWNED: Readonly<Record<string, readonly Subcommand[]>> = {
-  layout: ["number", "index", "coverage", "parity", "trace"],
+  layout: ["number", "index", "coverage", "parity", "trace", "tasks"],
   base: ["number"],
   target: ["number", "parity"],
   folder: ["check", "cite-check", "converge", "parity", "tasks"],
@@ -502,30 +502,31 @@ function runTasks(context: CommandContext, repo: string): number {
   refuseExtraPositionals(context.args, 3);
   const folder = checkRelativePath("folder", requireValue(context.args, "folder", "It names the folder whose tasks.md is grouped."));
   const only = context.args.values["group"] ?? null;
-  const nnn = /(?:^|\/)[^/]*?(\d{3})[^/]*$/.exec(folder)?.[1] ?? null;
+  const layout = parseLayout(context.args.values["layout"] ?? DEFAULT_SPEC_LAYOUT);
+  // The folder number is the layout's, as parity and trace read it (Nobunaga F17).
+  const parent = folder.includes("/") ? folder.slice(0, folder.lastIndexOf("/")) : "";
+  const name = matchFolder(layout, folder.slice(folder.lastIndexOf("/") + 1));
+  const nnn = parent === layout.root ? (name?.nnn ?? null) : null;
+  // SP-8: the body pins a commit, so both files are read AT that commit, never from the work tree.
   const rev = context.seams.run(GIT, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], { cwd: repo });
   const sha = rev.code === 0 ? (outputLines(rev.stdout)[0] ?? null) : null;
   const input = { repo, folder, nnn: nnn ?? "000", sha };
-  const read = (name: string): string | null => {
-    const path = join(repo, folder, name);
-    if (lstatSync(path, { throwIfNoEntry: false })?.isFile() !== true) return null;
-    try {
-      assertInsideRepo(repo, path, `${folder}/${name}`);
-    } catch (error) {
-      throw new VerbUsageError((error as Error).message);
-    }
-    return readFileSync(path, "utf8");
+  const read = (file: string): string | null => {
+    if (sha === null) return null;
+    const blob = context.seams.run(GIT, ["cat-file", "blob", `${sha}:./${folder}/${file}`], { cwd: repo });
+    return blob.code === 0 ? blob.stdout : null;
   };
   let report: TasksReport;
   const specText = read("spec.md");
   const tasksText = read("tasks.md");
-  if (nnn === null) report = unreadableTasks(input, `${folder} carries no three-digit folder number to qualify its ids with`);
-  else if (specText === null || tasksText === null) report = unreadableTasks(input, `${folder}/${specText === null ? "spec.md" : "tasks.md"} does not exist`);
+  if (nnn === null) report = unreadableTasks(input, `${folder} is not a folder matching ${layout.pattern}, so it carries no {nnn} to qualify its ids with`);
+  else if (sha === null) report = unreadableTasks(input, `${repo} has no HEAD commit to pin the body to (SP-8); nen renders no body at an unread pin`);
+  else if (specText === null || tasksText === null) report = unreadableTasks(input, `${folder}/${specText === null ? "spec.md" : "tasks.md"} is not in the commit ${sha.slice(0, 12)} (uncommitted text is never rendered into a pinned body)`);
   else report = taskGroups(input, specText, tasksText);
   if (only !== null) {
     const group = report.groups.find((entry): boolean => entry.id === only);
     if (group === undefined) throw new VerbUsageError(`--group '${only}' is not a group of ${folder} (groups: ${report.groups.map((entry): string => entry.id).join(", ") || "none"}).`);
-    if (group.body === null) throw new VerbUsageError(`--group '${only}' is a phase group; only a story group renders as an issue body.`);
+    if (group.body === null) throw new VerbUsageError(`--group '${only}' renders no issue body: ${group.note ?? "it is a phase group; only a story group renders as an issue body"}.`);
     if (context.json) emit(context.io, true, { contract: report.contract, verdict: report.verdict, group }, []);
     else for (const line of group.body.replace(/\n$/, "").split("\n")) context.io.out(line);
     return report.verdict === "grouped" ? 0 : 1;
