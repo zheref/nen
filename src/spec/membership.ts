@@ -24,7 +24,7 @@
 // entry with its reason, and the inventory is `partial`, never complete.
 
 import { dirname } from "node:path/posix";
-import { globMatcher, joinPath, normalise, under, type MemberTree } from "./tree.js";
+import { globMatcher, joinPath, normalise, under, type GlobMatcher, type MemberTree } from "./tree.js";
 
 export type MembershipSource = "xcode" | "gradle" | "tsconfig";
 
@@ -400,14 +400,14 @@ function tsconfig(tree: MemberTree, cwd: string): Membership {
     }
     const include = config.include ?? (config.files === null ? ["**/*"] : []);
     const exclude = config.exclude ?? ["node_modules", "bower_components", "jspm_packages", ...(config.outDir === null ? [] : [config.outDir])];
-    const toMatcher = (base: string, pattern: string): RegExp | null => {
+    const toMatcher = (base: string, pattern: string): GlobMatcher | null => {
       const full = normalise(joinPath(base, pattern));
       if (full === null) return null;
       const last = full.split("/").pop() ?? "";
       return globMatcher(/[*?]/.test(last) || /\.[A-Za-z0-9]+$/.test(last) ? full : `${full}/**/*`);
     };
-    const includes = include.map((pattern): RegExp | null => toMatcher(config.base.include, pattern)).filter((matcher): matcher is RegExp => matcher !== null);
-    const excludes = exclude.map((pattern): RegExp | null => toMatcher(config.base.exclude, pattern)).filter((matcher): matcher is RegExp => matcher !== null);
+    const includes = include.map((pattern): GlobMatcher | null => toMatcher(config.base.include, pattern)).filter((matcher): matcher is GlobMatcher => matcher !== null);
+    const excludes = exclude.map((pattern): GlobMatcher | null => toMatcher(config.base.exclude, pattern)).filter((matcher): matcher is GlobMatcher => matcher !== null);
     for (const file of tree.files) {
       if (!extensions.test(file) || /\.d\.[cm]?ts$/.test(file)) continue;
       if (includes.some((matcher): boolean => matcher.test(file)) && !excludes.some((matcher): boolean => matcher.test(file))) owned.add(file);

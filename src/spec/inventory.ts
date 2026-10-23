@@ -21,7 +21,7 @@
 import readersData from "./readers.json";
 import { sha256 } from "./check.js";
 import { readMembership, type Membership, type MembershipSource, type Unread } from "./membership.js";
-import { globMatcher, lineCount, type MemberTree } from "./tree.js";
+import { globMatcher, lineCount, type GlobMatcher, type MemberTree } from "./tree.js";
 
 export const SPEC_INVENTORY_CONTRACT = "nen.spec.inventory/v0.1";
 
@@ -149,7 +149,7 @@ export function couldNotRead(input: InventoryInput, reader: ScenarioReader, reas
 
 export function inventory(tree: MemberTree, input: InventoryInput, reader: ScenarioReader): InventoryReport {
   const membership: Membership = readMembership(reader.membership, tree, input.cwd);
-  const excluders = input.exclude.map((pattern): RegExp => globMatcher(pattern));
+  const excluders = input.exclude.map((pattern): GlobMatcher => globMatcher(pattern));
   const excluded = membership.files.filter((file): boolean => excluders.some((matcher): boolean => matcher.test(file)));
   const files = membership.files.filter((file): boolean => !excluded.includes(file));
   const unread: Unread[] = [...membership.unread];
