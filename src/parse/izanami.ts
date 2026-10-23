@@ -1484,6 +1484,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       inventory: GATED(["--out"], "reads a member checkout through git rev-parse, ls-tree and cat-file; --out writes the inventory document to the caller's file"),
       diff: RO("reads two inventory files; writes nothing"),
       converge: GATED_DRY(["--write"], "reads the folder, the inventories and the member checkout through git; --write appends [STALE] companions to spec.md and a convergence phase to tasks.md unless --dry-run is given"),
+      coverage: RO("reads the spec folders and inventory files, or an issue body, a PR body and a test report; writes nothing"),
     },
   },
   split: { subcommands: { verify: RO("proves diff equality over git reads") } },

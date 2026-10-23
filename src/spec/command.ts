@@ -28,9 +28,10 @@ import { parseContract } from "../schema/contract.js";
 import { couldNotRead, GOVERNED_SCENARIOS, inventory, renderInventory, scenarioReader, type InventoryReport } from "./inventory.js";
 import { diffInventories, InventoryReadError, loadInventory, renderDiff, unreadableDiff, type SpecDiffReport } from "./diff.js";
 import { converge, renderConverge } from "./converge.js";
+import { captureCoverage, deliveryCoverage, readReport, renderCaptureCoverage, renderDeliveryCoverage, unreadableDelivery } from "./coverage.js";
 import { readTree, TreeReadError } from "./tree.js";
 
-const SUBCOMMANDS = ["number", "check", "cite-check", "index", "inventory", "diff", "converge"] as const;
+const SUBCOMMANDS = ["number", "check", "cite-check", "index", "inventory", "diff", "converge", "coverage"] as const;
 type Subcommand = (typeof SUBCOMMANDS)[number];
 
 export const DEFAULT_SPEC_LAYOUT = "specs/{nnn}-{slug}";
@@ -42,6 +43,8 @@ nen spec index --repo <spec> [--layout <pattern>] [--write [--dry-run]] [--json]
 nen spec inventory --repo <member> --scenario <id> [--lane <lane>] [--at <ref>] [--exclude <glob>[,<glob>...]] [--out <file>] [--json]
 nen spec diff --from <inventory> --to <inventory> [--json]
 nen spec converge --repo <spec> --folder <dir> --inventory <file> --code <CODE> --checkouts <file> [--date <YYYY-MM-DD>] [--write [--dry-run]] [--json]
+nen spec coverage --repo <spec> --inventory <file>[,<file>...] [--layout <pattern>] [--json]
+nen spec coverage --issue-body <file> --pr-body <file> [--test-report <file>] [--json]
 
 Read-only verbs over a Spec Kit spec repository. Each
 reports and refuses; none decides. A layout is '<dir>/<final>' whose final
@@ -108,6 +111,15 @@ converge    A folder's citations of one member (--code) re-read at the
             changed or vanished citation, and one '## Phase N: Convergence
             <date> @ <sha12>' to tasks.md; a second run changes nothing.
             Exit 1 on any gap or when the inputs could not be read.
+coverage    Capture form: per member and row kind, covered/total (a row is
+            covered when one of the member's citations overlaps it), plus
+            requirement<->task/test traceability both ways, each with its
+            denominator. Delivery form: every F<nnn>-SC-### of the issue body
+            has one '## Spec' row in the PR body -- '— satisfied — test <id>'
+            (in --test-report and passing, when given) or '— deferred —
+            <reason> · <follow-up>'. Exit 1 on an unaccounted criterion, a
+            missing or empty section, or an unreadable input; 2 when the PR
+            names an id the issue does not carry.
 
 --json shapes (key order as listed):
   number:     { contract: "nen.spec.number/v0.1", repo, target, layout, base, baseSource, baseSha, openPrs, taken, collisions, next, reason }
@@ -116,10 +128,12 @@ converge    A folder's citations of one member (--code) re-read at the
   index:      { contract: "nen.spec.index/v0.1", repo, layout, path, rows, ignored, state, action, reason }
   inventory:  { contract: "nen.spec.inventory/v0.1", verdict, repo, origin, lane, cwd, scenario, handbook, sha, membership, excluded, rows, totals, unread, reason }
   diff:       { contract: "nen.spec.diff/v0.1", verdict, from, to, origin, added, removed, changed, counts, reason }
-  converge:   { contract: "nen.spec.converge/v0.1", verdict, repo, folder, inventory, member, citations, gaps, unrequested, unrequestedReason, claims, writes, action, counts, reason }`;
+  converge:   { contract: "nen.spec.converge/v0.1", verdict, repo, folder, inventory, member, citations, gaps, unrequested, unrequestedReason, claims, writes, action, counts, reason }
+  coverage:   { contract: "nen.spec.coverage/v0.1", form: "capture", verdict, repo, layout, folders, members, markers, reason }
+              { contract: "nen.spec.coverage/v0.1", form: "delivery", verdict, issueBody, prBody, testReport, section, criteria, outside, counts, reason }`;
 
 const OWNED: Readonly<Record<string, readonly Subcommand[]>> = {
-  layout: ["number", "index"],
+  layout: ["number", "index", "coverage"],
   base: ["number"],
   target: ["number"],
   folder: ["check", "cite-check", "converge"],
@@ -133,9 +147,12 @@ const OWNED: Readonly<Record<string, readonly Subcommand[]>> = {
   out: ["inventory"],
   from: ["diff"],
   to: ["diff"],
-  inventory: ["converge"],
+  inventory: ["converge", "coverage"],
   code: ["converge"],
   date: ["converge"],
+  "issue-body": ["coverage"],
+  "pr-body": ["coverage"],
+  "test-report": ["coverage"],
 };
 const OWNED_BOOLEANS: Readonly<Record<string, readonly Subcommand[]>> = {
   constitution: ["check"],
@@ -343,13 +360,64 @@ function runConverge(context: CommandContext, repo: string): number {
   return report.verdict === "converged" ? 0 : 1;
 }
 
+function runCoverage(context: CommandContext): number {
+  const issueBody = context.args.values["issue-body"];
+  const prBody = context.args.values["pr-body"];
+  const testReport = context.args.values["test-report"] ?? null;
+  const inventories = context.args.values["inventory"];
+  const delivery = issueBody !== undefined || prBody !== undefined || testReport !== null;
+  if (delivery) {
+    if (inventories !== undefined || context.args.values["layout"] !== undefined || context.repoFlag !== null) throw new VerbUsageError("give the capture form (--repo, --inventory, --layout) or the delivery form (--issue-body, --pr-body, --test-report), never both.");
+    if (issueBody === undefined || prBody === undefined) throw new VerbUsageError("the delivery form needs both --issue-body <file> and --pr-body <file>.");
+    const names = { issueBodyFile: issueBody, prBodyFile: prBody, testReportFile: testReport };
+    const read = (path: string): string | null => {
+      try {
+        return readFileSync(path, "utf8");
+      } catch {
+        return null;
+      }
+    };
+    const issueText = read(issueBody);
+    const prText = read(prBody);
+    let report;
+    if (issueText === null || prText === null) report = unreadableDelivery(names, `${issueText === null ? issueBody : prBody} could not be read`);
+    else {
+      const parsed = testReport === null ? { report: null, reason: null } : readReport(resolve(testReport), testReport);
+      report = parsed.reason !== null ? unreadableDelivery(names, parsed.reason) : deliveryCoverage({ ...names, issueBody: issueText, prBody: prText, testReport: parsed.report });
+    }
+    emit(context.io, context.json, report, renderDeliveryCoverage(report));
+    if (report.outside.length > 0) return 2;
+    return report.verdict === "accounted" ? 0 : 1;
+  }
+  const repo = resolveRepoRoot({ repoFlag: requireRepoFlag(context, "It names the spec repository's checkout (or give the delivery form's --issue-body and --pr-body).") });
+  const list = requireValue(context.args, "inventory", "It names one inventory file per member, comma-separated.").split(",").map((entry): string => entry.trim()).filter((entry): boolean => entry !== "");
+  if (list.length === 0) throw new VerbUsageError("--inventory names no file.");
+  const layout = parseLayout(context.args.values["layout"] ?? DEFAULT_SPEC_LAYOUT);
+  let registry: RepoRegistry | null = null;
+  let registryError: string | null = null;
+  try {
+    registry = loadRepoRegistry(repo);
+  } catch (error) {
+    registryError = `the spec repository's nen/repos.json could not be read: ${(error as Error).message}`;
+  }
+  let report;
+  try {
+    report = captureCoverage(repo, layout, registry, registryError, list);
+  } catch (error) {
+    if (error instanceof SpecContainmentError) throw new VerbUsageError(error.message);
+    throw error;
+  }
+  emit(context.io, context.json, report, renderCaptureCoverage(report));
+  return report.verdict === "measured" ? 0 : 1;
+}
+
 export const specCommand: Command = {
   name: "spec",
-  summary: "Inventory, number, check, cite-check, diff, converge and index a product family's Spec Kit spec repository.",
+  summary: "Inventory, number, check, cite-check, diff, converge, cover and index a product family's Spec Kit spec repository.",
   usage: USAGE,
   subcommands: [...SUBCOMMANDS],
   flags: {
-    values: ["layout", "base", "target", "folder", "vocabulary", "max", "checkouts", "at", "scenario", "lane", "exclude", "out", "from", "to", "inventory", "code", "date"],
+    values: ["layout", "base", "target", "folder", "vocabulary", "max", "checkouts", "at", "scenario", "lane", "exclude", "out", "from", "to", "inventory", "code", "date", "issue-body", "pr-body", "test-report"],
     booleans: ["constitution", "markers", "rank", "verify-excerpt", "write", "dry-run"],
   },
   run(context): number {
@@ -360,6 +428,7 @@ export const specCommand: Command = {
       if (context.repoFlag !== null) throw new VerbUsageError(`'spec ${subcommand}' reads no checkout, so it takes no --repo.`);
       return runDiff(context);
     }
+    if (subcommand === "coverage") return runCoverage(context);
     const repo = resolveRepoRoot({ repoFlag: requireRepoFlag(context, subcommand === "inventory" ? "It names the member's checkout." : "It names the spec repository's checkout.") });
     switch (subcommand) {
       case "number":
