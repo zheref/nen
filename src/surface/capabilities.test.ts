@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { runFamily, type Io } from "../index.js";
 import type { Seams } from "../seam/exec.js";
 import { noPortProbe } from "../seam/scripted.js";
-import { CAPABILITIES } from "./capabilities.js";
+import { CAPABILITIES, toolListControl } from "./capabilities.js";
 import { surfaceCommand } from "./command.js";
-import { SURFACES } from "./rules.js";
+import { ANTIGRAVITY_TOOL_NAMES, SURFACES } from "./rules.js";
 
 const SEAMS: Seams = {
   run: (): never => {
@@ -89,8 +89,15 @@ describe("the read-only persona control per surface (zheref/nen#473)", () => {
     expect(control("claude-code")).toMatch(/^honoured/);
     expect(control("codex")).toMatch(/^none documented/);
     expect(control("cursor")).toMatch(/^honoured at project placement.*plugin placement unverified/);
-    expect(control("antigravity")).toMatch(/^unverified/);
+    expect(control("antigravity")).toMatch(/^honoured \(the persona's tools list, mapped to this surface's names: Read -> view_file, Bash -> run_command;/);
     for (const row of CAPABILITIES) expect(row.readOnly.source).toMatch(/^https:\/\//);
+  });
+
+  it("antigravity: honoured only while the tool-name map exists (zheref/nen#505)", () => {
+    const source = "https://antigravity.google/docs/subagents";
+    expect(toolListControl(ANTIGRAVITY_TOOL_NAMES, source).control).toMatch(/^honoured/);
+    expect(toolListControl(null, source)).toEqual({ control: expect.stringMatching(/^unverified/) as unknown as string, source });
+    expect(toolListControl({ ruling: "none", entries: [] }, source).control).toMatch(/^unverified/);
   });
 
   it("agrees with the generator's row: a surface with no control is the one that reports", () => {

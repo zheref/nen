@@ -21,6 +21,23 @@
 // description budget, the permission shape -- are stated here as data a
 // skill can print, and there as the row constants the generator enforces.
 
+import { ANTIGRAVITY_TOOL_NAMES, type ToolNameMap } from "./rules.js";
+
+/**
+ * The read-only fact for a surface whose control is a `tools` list written in
+ * the surface's own tool names (zheref/nen#505): honoured once a name map
+ * exists, because the generator then writes only mapped names (an unmapped one
+ * is dropped and reported); unverified while none does, because the list
+ * would arrive in names the surface does not document.
+ */
+export function toolListControl(map: ToolNameMap | null, source: string): { readonly control: string; readonly source: string } {
+  if (map === null || map.entries.length === 0) {
+    return { control: "unverified (no map from the source's tool names to this surface's own; the list would arrive in names the page does not document)", source };
+  }
+  const pairs = map.entries.map((entry): string => `${entry.from} -> ${entry.to}`).join(", ");
+  return { control: `honoured (the persona's tools list, mapped to this surface's names: ${pairs}; any other name is dropped and reported)`, source };
+}
+
 export interface SurfaceCapabilities {
   readonly surface: string;
   /** The tool a session asks a human a multiple-choice question with, or null. */
@@ -197,10 +214,10 @@ export const CAPABILITIES: readonly SurfaceCapabilities[] = [
     descriptionBudgetSource: null,
     permissionsShape: null,
     // The page's `tools` row: "Explicit list of tools permitted for this
-    // subagent", with names such as view_file, replace_file_content and
-    // run_command. The mirror carries the source's Claude Code names
-    // (Read, Grep, Bash) unchanged, which the page does not document.
-    readOnly: { control: "unverified (the tools list is carried in Claude Code tool names; the page documents its own, e.g. view_file, replace_file_content)", source: "https://antigravity.google/docs/subagents" },
+    // subagent". Honoured only because the mirror writes the list in the
+    // surface's own names (./rules.ts ANTIGRAVITY_TOOL_NAMES, zheref/nen#505);
+    // derived from that map, so removing it reads unverified again.
+    readOnly: toolListControl(ANTIGRAVITY_TOOL_NAMES, "https://antigravity.google/docs/subagents"),
     source: "https://antigravity.google/docs/hooks",
     caveat: "a rules file is truncated past 24,000 bytes and must open with frontmatter declaring a trigger (always_on | model_decision | glob | manual) or is silently discarded; personas live in .agents/agents/ and skills in .agents/skills/ (.agent/ is the back-compatibility spelling); workflows are deprecated (retired 2026-11-01); no permission pack is written because commandExecutionPolicy: auto would approve arbitrary commands",
   },

@@ -34,7 +34,9 @@
 // a mirror whose links OUT of it were aimed from another location -- a copied
 // install, or a check run from another root than the generate: equal to a
 // fresh generation once those targets are masked (./links.ts's
-// `maskLinksOutOfMirror`), it is stale, and `relocated` says why.
+// `maskLinksOutOfMirror`), it is stale, and `relocated` says why. Each later
+// generator change keeps the same promise with its own older bytes:
+// `beforeSummaryQuoting` (zheref/nen#328) and `beforeToolNames` (zheref/nen#505).
 //
 // WHERE THE MARKER SITS, AND WHY IT IS NOT LINE 1. Every surface here loads a
 // SKILL.md by reading YAML frontmatter delimited by `---` AT THE START OF THE
@@ -303,6 +305,15 @@ export interface GeneratedFile {
    * equal to any of them STALE, for `beforeLinkRewrite`'s reason.
    */
   readonly beforeSummaryQuoting?: readonly string[];
+  /**
+   * Every set of bytes a build before zheref/nen#505 generated for this
+   * persona -- its `tools` list carried verbatim in the source's tool names --
+   * with its links re-aimed and, for a build before zheref/nen#270 as well,
+   * verbatim; present only where the surface's tool-name map changed the
+   * file. `check` calls a committed file equal to any of them STALE, for
+   * `beforeLinkRewrite`'s reason.
+   */
+  readonly beforeToolNames?: readonly string[];
 }
 
 export interface GenerateOptions {
@@ -618,17 +629,120 @@ const TOOL_NAME = /^[A-Za-z0-9_*:.-]+$/;
 export function isReadOnlyPersona(entries: readonly FrontmatterEntry[]): boolean {
   const entry = entries.find((candidate): boolean => candidate.key === "tools");
   if (entry === undefined) return false;
+  const tools = parseToolList(entry);
+  // Fail closed: a list that was not understood is not read-only.
+  if (tools === null) return false;
+  return tools.length > 0 && !tools.some((tool): boolean => WRITE_TOOLS.has(tool.name) || tool.name.startsWith("mcp__"));
+}
+
+/** One entry of a `tools:` list: as written (quotes cut), and its tool name with any `(…)` scope cut. */
+interface ToolListItem {
+  readonly written: string;
+  readonly name: string;
+}
+
+/**
+ * A `tools` entry's items, in either spelling, or null when the list was not
+ * understood: a name that does not look like a tool name (a stray quote, `#`,
+ * space or backslash left by an odd spelling the comment scan misread) means
+ * the parse cannot say what the list grants.
+ */
+function parseToolList(entry: FrontmatterEntry): readonly ToolListItem[] | null {
+  return unreadableTool(entry) === null ? toolListItems(entry) : null;
+}
+
+/** The first item of a `tools` entry that is not a tool name, or null when every one is. */
+function unreadableTool(entry: FrontmatterEntry): string | null {
+  return toolListItems(entry).find((item): boolean => !TOOL_NAME.test(item.name))?.written ?? null;
+}
+
+/**
+ * A `tools` entry's items, split at the commas and flow-list brackets OUTSIDE
+ * a scope's parentheses, so `Bash(git log, git diff)` stays one item (a
+ * scoped grant counted by its tool name, Nobunaga on zheref/nen#505).
+ */
+function toolListItems(entry: FrontmatterEntry): readonly ToolListItem[] {
   const raw = [inlineValue(entry), ...entry.lines.slice(1)].map(withoutYamlComment).join(",");
-  const names = raw
-    .replace(/[[\]]/g, ",")
-    .split(",")
-    .map((part): string => part.trim().replace(/^-\s*/, "").replace(/^["']|["']$/g, "").replace(/\(.*$/, "").trim())
-    .filter((name): boolean => name !== "");
-  // Fail closed: a name that does not look like a tool name (a stray quote,
-  // `#`, space or backslash left by an odd spelling the comment scan misread)
-  // means the list was not understood, so the persona is not read-only.
-  if (names.some((name): boolean => !TOOL_NAME.test(name))) return false;
-  return names.length > 0 && !names.some((name): boolean => WRITE_TOOLS.has(name) || name.startsWith("mcp__"));
+  const parts: string[] = [];
+  let depth = 0;
+  let part = "";
+  for (const char of raw) {
+    if (char === "(") depth += 1;
+    else if (char === ")" && depth > 0) depth -= 1;
+    if (depth === 0 && (char === "," || char === "[" || char === "]")) {
+      parts.push(part);
+      part = "";
+    } else {
+      part += char;
+    }
+  }
+  parts.push(part);
+  // A scope left open swallows every item after it; its name keeps the `(`,
+  // so it fails TOOL_NAME and the list reads as unreadable rather than as the
+  // one tool before the paren (Nobunaga, cycle 2 on zheref/nen#505).
+  const unclosed = depth > 0 ? parts.length - 1 : -1;
+  return parts
+    .map((piece, index): { readonly written: string; readonly open: boolean } => ({
+      written: piece.trim().replace(/^-\s*/, "").replace(/^["']|["']$/g, "").trim(),
+      open: index === unclosed,
+    }))
+    .filter((piece): boolean => piece.written !== "")
+    .map((piece): ToolListItem => ({ written: piece.written, name: piece.open ? piece.written : piece.written.replace(/\(.*$/, "").trim() }));
+}
+
+/**
+ * The persona's `tools` entry rewritten into the surface's own names through
+ * the row's `toolNames` map (zheref/nen#505), as a YAML block list -- the shape
+ * the surface documents -- with every source name the map does not hold
+ * dropped and named in `notes`. A scoped grant (`Bash(git:*)`) is never mapped:
+ * the surface's name would grant the whole tool. A list this parse cannot read,
+ * or one whose every name is unmapped, is refused: the first cannot be
+ * translated safely, and the second would leave a persona whose source named
+ * tools with none, a restriction nobody wrote. An empty source list and a
+ * persona with no `tools` key pass through unchanged.
+ */
+function withToolNames(
+  row: SurfaceRow,
+  agent: SourceAgent,
+  entries: readonly FrontmatterEntry[],
+  notes: string[],
+): readonly FrontmatterEntry[] {
+  const map = row.toolNames;
+  if (map === null) return entries;
+  const at = entries.findIndex((entry): boolean => entry.key === "tools");
+  const entry = entries[at];
+  if (entry === undefined) return entries;
+  const tools = parseToolList(entry);
+  if (tools === null) {
+    throw new SurfaceMirrorError(
+      `'${agent.relative}' has a 'tools' list that cannot be read as tool names ('${unreadableTool(entry) ?? ""}' is not one), so it cannot be translated into the '${row.surface}' surface's own tool names (${row.agentSource}); carried as written it would hand the surface names it may hang on. Fix the source rather than the mirror.`,
+    );
+  }
+  if (tools.length === 0) return entries;
+  const mapped: string[] = [];
+  const dropped: string[] = [];
+  for (const tool of tools) {
+    const target = map.entries.find((candidate): boolean => candidate.from === tool.written)?.to;
+    if (target === undefined) {
+      if (!dropped.includes(tool.written)) dropped.push(tool.written);
+    } else if (!mapped.includes(target)) {
+      mapped.push(target);
+    }
+  }
+  if (mapped.length === 0) {
+    throw new SurfaceMirrorError(
+      `'${agent.relative}' names no tool with a documented '${row.surface}' equivalent (unmapped: ${dropped.join(", ")}; admitted: ${map.ruling}). Writing those names may hang the subagent (${row.agentSource}), and writing none would leave it a restriction its source never stated. Add a mapped tool to the source, or map the name in nen's src/surface/rules.ts once the pages document it.`,
+    );
+  }
+  if (dropped.length > 0) {
+    notes.push(
+      `${row.surface}: ${agent.name}: dropped ${dropped.join(", ")} from tools (no documented ${row.surface} name: ${map.ruling}); wrote ${mapped.join(", ")}`,
+    );
+  }
+  // A CRLF source keeps its `\r` on every line it owns (./frontmatter.ts).
+  const eol = (entry.lines[0] ?? "").endsWith("\r") ? "\r" : "";
+  const lines = [`tools:${eol}`, ...mapped.map((name): string => `  - ${name}${eol}`)];
+  return [...entries.slice(0, at), { key: "tools", lines }, ...entries.slice(at + 1)];
 }
 
 /** The line up to a YAML comment: a `#` at the start or after whitespace, outside quotes. */
@@ -650,13 +764,19 @@ function withoutYamlComment(line: string): string {
 /**
  * The persona's entries with the surface's read-only key added, where the
  * surface documents one, the persona is read-only, and the source does not
- * already set that key (an explicit source value wins either way).
+ * already set that key (an explicit source value wins either way). Read-only
+ * is decided on the SOURCE's entries: a list already translated through
+ * `toolNames` has lost its write tools by being translated, not by intent.
  */
-function withReadOnlyKey(row: SurfaceRow, entries: readonly FrontmatterEntry[]): readonly FrontmatterEntry[] {
+function withReadOnlyKey(
+  row: SurfaceRow,
+  entries: readonly FrontmatterEntry[],
+  source: readonly FrontmatterEntry[],
+): readonly FrontmatterEntry[] {
   const control = row.readOnlyControl;
   if (control.kind !== "key") return entries;
   if (entries.some((entry): boolean => entry.key === control.key)) return entries;
-  if (!isReadOnlyPersona(entries)) return entries;
+  if (!isReadOnlyPersona(source)) return entries;
   return [...entries, { key: control.key, lines: [`${control.key}: ${control.value}`] }];
 }
 
@@ -704,12 +824,13 @@ function agentFiles(options: GenerateOptions, relink: Relink): AgentOutput {
           );
         }
       }
-      const kept = mapped(agent, document.entries);
+      const modelled = mapped(agent, document.entries);
+      const kept = withToolNames(row, agent, modelled, notes);
       // The empty-block refusal below reads the SOURCE's kept keys: a derived
       // `readonly` line is not something for the surface to route on, so it
       // must not rescue a persona that carries nothing else.
       const sourceFront = renderFrontmatter(kept, new Set(rule.keys));
-      const front = sourceFront === "" ? "" : renderFrontmatter(withReadOnlyKey(row, kept), new Set(rule.keys));
+      const front = sourceFront === "" ? "" : renderFrontmatter(withReadOnlyKey(row, kept, document.entries), new Set(rule.keys));
       // A `files` surface reads a persona AS frontmatter-bearing markdown, so a
       // mirror with an EMPTY block cannot be one (zheref/nen#149, review).
       // Emitting it anyway would write a persona file with no frontmatter at
@@ -728,12 +849,26 @@ function agentFiles(options: GenerateOptions, relink: Relink): AgentOutput {
           `'${agent.relative}' would mirror to a persona file with no frontmatter, because ${because}. '${row.surface}' reads a persona as frontmatter-bearing markdown (${row.agentSource}), so there would be nothing for it to route on. Fix the source rather than the mirror.`,
         );
       }
-      const content = `${front}${markerFor(row.surface, stamp)}\n${document.body}`;
-      return relinked(
-        path,
-        rewriteInvocations(relink(content, agentSource(options, agent), path), row, options.invocationPrefix),
-        rewriteInvocations(content, row, options.invocationPrefix),
+      const render = (head: string): GeneratedFile => {
+        const content = `${head}${markerFor(row.surface, stamp)}\n${document.body}`;
+        return relinked(
+          path,
+          rewriteInvocations(relink(content, agentSource(options, agent), path), row, options.invocationPrefix),
+          rewriteInvocations(content, row, options.invocationPrefix),
+        );
+      };
+      const file = render(front);
+      if (kept === modelled) return file;
+      // The bytes a build before zheref/nen#505 wrote for this persona -- its
+      // `tools` line carried verbatim -- so `check` reads a mirror that build
+      // really generated as STALE, never hand-edited (the #270 rule, Nobunaga
+      // on this change). With its links re-aimed and, for a build before
+      // zheref/nen#270 as well, verbatim, as `beforeSummaryQuoting` keeps both.
+      const old = render(renderFrontmatter(withReadOnlyKey(row, modelled, document.entries), new Set(rule.keys)));
+      const before = [...new Set([old.content, old.beforeLinkRewrite ?? old.content])].filter(
+        (bytes): boolean => bytes !== file.content,
       );
+      return before.length === 0 ? file : { ...file, beforeToolNames: before };
     });
     // The includes, beside the personas (S11): frontmatter reduced the same
     // way, marker after it, body verbatim but for its relative links (re-aimed
@@ -1276,6 +1411,14 @@ export function checkSurfaceMirror(
       file.beforeSummaryQuoting !== undefined &&
       withoutStamp(existing) !== withoutStamp(file.content) &&
       file.beforeSummaryQuoting.some((before): boolean => withoutStamp(existing) === withoutStamp(before))
+    )
+      stale.push(file.path);
+    // ...and what a build before zheref/nen#505 generated: a persona's tools
+    // in the source's names, which the surface does not document.
+    else if (
+      file.beforeToolNames !== undefined &&
+      withoutStamp(existing) !== withoutStamp(file.content) &&
+      file.beforeToolNames.some((before): boolean => withoutStamp(existing) === withoutStamp(before))
     )
       stale.push(file.path);
     // Aimed from another location (Nobunaga, the #270 review): the links OUT

@@ -672,7 +672,7 @@ describe("the shared include", () => {
     }
     // The persona beside it is still rewritten as a persona, not dropped.
     const scout = at(generateSurfaceMirror({ row: row("antigravity"), skills: readSourceSkills(SKILLS), agents: read.agents, includes: [preamble], invocationPrefix: null }), "agents/scout.md");
-    expect(scout).toMatch(/^tools: Read, Grep, Glob$/m);
+    expect(scout).toMatch(/^tools:\n {2}- view_file\n/m);
   });
 
   it("follows the personas as a ## _<stem> section on the appendix row", () => {
@@ -981,6 +981,12 @@ describe("a read-only persona keeps its intent on every surface (zheref/nen#473)
   it("derives read-only from a tools list naming no write tool, in every spelling", () => {
     expect(isReadOnlyPersona(entries("tools: Read, Grep, Glob"))).toBe(true);
     expect(isReadOnlyPersona(entries("tools:\n  - Read\n  - Bash(git:*)"))).toBe(true);
+    // A comma inside a scope does not split the grant (zheref/nen#505).
+    expect(isReadOnlyPersona(entries("tools: Read, Bash(git log, git diff)"))).toBe(true);
+    expect(isReadOnlyPersona(entries("tools: Read, Bash(git log, git diff), Edit"))).toBe(false);
+    // ...but a scope left open is a list the parse did not understand, never the one tool before it.
+    expect(isReadOnlyPersona(entries("tools: Bash(git:*, Edit, Read"))).toBe(false);
+    expect(isReadOnlyPersona(entries("tools:\n  - Bash(git:*\n  - Edit\n  - Read"))).toBe(false);
     expect(isReadOnlyPersona(entries('tools: ["Read", "WebFetch"]'))).toBe(true);
     expect(isReadOnlyPersona(entries("tools: Read, Edit"))).toBe(false);
     expect(isReadOnlyPersona(entries("tools:\n  - Read\n  - MultiEdit"))).toBe(false);
@@ -1042,11 +1048,139 @@ describe("a read-only persona keeps its intent on every surface (zheref/nen#473)
     ]);
   });
 
-  it("antigravity: the tools list still travels as written, with no readonly key", () => {
+  it("antigravity: the tools list is the control, with no readonly key and no read-only note", () => {
     const result = report("antigravity", cast());
     const reader = at(result.files, "agents/reader.md");
-    expect(reader).toContain("tools: Read, Grep, Bash, WebFetch");
     expect(reader).not.toContain("readonly");
     expect(result.notes.some((note): boolean => note.includes("read-only at source"))).toBe(false);
+  });
+});
+
+describe("the antigravity mirror writes a persona's tools in Antigravity's own names (zheref/nen#505)", () => {
+  const RULING = "a name both Antigravity pages give (the maintainer's ruling of 2026-10-22, zheref/nen#505 OQ-1)";
+  const persona = (name: string, front: string, crlf = false): SourceAgent => {
+    const text = `---\nname: ${name}\ndescription: ${name}.\n${front}\n---\n\nbody\n`;
+    return { stem: name, name, relative: `${name}.md`, text: crlf ? text.replace(/\n/g, "\r\n") : text };
+  };
+  const generate = (agents: readonly SourceAgent[], surface = "antigravity"): ReturnType<typeof generateSurfaceMirrorReport> =>
+    generateSurfaceMirrorReport({ row: row(surface), skills: [], agents, invocationPrefix: null });
+  const front = (content: string): string => content.slice(0, content.indexOf("\n---\n") + 5);
+
+  // AC-1 + AC-5: a read-only persona and one that may edit, each pinned.
+  it("maps a read-only persona's list to view_file and run_command, as a block list, and reports the rest", () => {
+    const result = generate([persona("reader", "tools: Read, Grep, Glob, Bash, WebSearch, WebFetch")]);
+    expect(front(at(result.files, "agents/reader.md"))).toBe("---\nname: reader\ndescription: reader.\ntools:\n  - view_file\n  - run_command\n---\n");
+    expect(result.notes).toEqual([
+      `antigravity: reader: dropped Grep, Glob, WebSearch, WebFetch from tools (no documented antigravity name: ${RULING}); wrote view_file, run_command`,
+    ]);
+  });
+
+  it("maps a writer's list the same way: its write tools are unmapped, so dropped and reported, never written", () => {
+    const result = generate([persona("writer", "tools: Read, Grep, Glob, Edit, Write, MultiEdit, Bash, WebSearch, WebFetch")]);
+    const writer = front(at(result.files, "agents/writer.md"));
+    expect(writer).toBe("---\nname: writer\ndescription: writer.\ntools:\n  - view_file\n  - run_command\n---\n");
+    expect(result.notes).toEqual([
+      `antigravity: writer: dropped Grep, Glob, Edit, Write, MultiEdit, WebSearch, WebFetch from tools (no documented antigravity name: ${RULING}); wrote view_file, run_command`,
+    ]);
+  });
+
+  it("reads every source spelling, keeps the source's key position, and writes a list parseable as string[]", () => {
+    const spellings = ["tools:\n  - Read\n  - Bash", 'tools: ["Read", "Bash"]', "tools: [Read, Bash] # both", "tools: Read, Bash, Read"];
+    for (const spelling of spellings) {
+      const result = generate([persona("p", `${spelling}\nmodel: pro`)]);
+      const content = at(result.files, "agents/p.md");
+      expect(front(content), spelling).toBe("---\nname: p\ndescription: p.\ntools:\n  - view_file\n  - run_command\nmodel: pro\n---\n");
+      expect((parseYaml(front(content).slice(4, -4)) as { tools: unknown }).tools).toEqual(["view_file", "run_command"]);
+      expect(result.notes, spelling).toEqual([]);
+    }
+  });
+
+  // AC-2: the drop-and-report branch, and its two refusals.
+  it("never maps a scoped grant: Bash(git:*) would become the whole run_command", () => {
+    const result = generate([persona("scoped", "tools: Read, Bash(git:*)")]);
+    expect(front(at(result.files, "agents/scoped.md"))).toBe("---\nname: scoped\ndescription: scoped.\ntools:\n  - view_file\n---\n");
+    expect(result.notes).toEqual([`antigravity: scoped: dropped Bash(git:*) from tools (no documented antigravity name: ${RULING}); wrote view_file`]);
+  });
+
+  it("refuses a persona whose every tool is unmapped, naming it and the names", () => {
+    expect(() => generate([persona("finder", "tools: Grep, Glob, mcp__fs__read")])).toThrow(SurfaceMirrorError);
+    expect(() => generate([persona("finder", "tools: Grep, Glob, mcp__fs__read")])).toThrow(
+      /'finder\.md' names no tool with a documented 'antigravity' equivalent \(unmapped: Grep, Glob, mcp__fs__read;/,
+    );
+  });
+
+  it("refuses a list it cannot read as tool names rather than writing it as is", () => {
+    expect(() => generate([persona("odd", "tools: Read, Bob's, Edit # x")])).toThrow(
+      /'odd\.md' has a 'tools' list that cannot be read as tool names \('Bob's' is not one\), so it cannot be translated into the 'antigravity' surface's own tool names/,
+    );
+  });
+
+  it("refuses a list whose scope is left open as unreadable, naming the swallowing item", () => {
+    expect(() => generate([persona("open-scope", "tools: Bash(git:*, Edit, Read")])).toThrow(
+      /'open-scope\.md' has a 'tools' list that cannot be read as tool names \('Bash\(git:\*, Edit, Read' is not one\)/,
+    );
+    const cursor = generate([persona("open-scope", "tools: Bash(git:*, Edit, Read")], "cursor");
+    expect(at(cursor.files, "agents/open-scope.md")).not.toContain("readonly");
+  });
+
+  it("passes a persona with no tools key, or an empty one, through untouched", () => {
+    const result = generate([persona("open", "model: pro"), persona("empty", "tools:")]);
+    expect(front(at(result.files, "agents/open.md"))).toBe("---\nname: open\ndescription: open.\nmodel: pro\n---\n");
+    expect(front(at(result.files, "agents/empty.md"))).toBe("---\nname: empty\ndescription: empty.\ntools:\n---\n");
+    expect(result.notes).toEqual([]);
+  });
+
+  it("keeps a CRLF source's line endings on the lines it writes", () => {
+    const content = at(generate([persona("crlf", "tools: Read, Bash", true)]).files, "agents/crlf.md");
+    expect(content).toContain("tools:\r\n  - view_file\r\n  - run_command\r\n---");
+  });
+
+  it("leaves every other surface's tools handling as it was", () => {
+    const reader = persona("reader", "tools: Read, Grep");
+    expect(at(generate([reader], "claude-code").files, "agents/reader.md")).toBe(reader.text);
+    expect(at(generate([reader], "cursor").files, "agents/reader.md")).not.toContain("tools");
+    expect(generate([reader], "cursor").notes.some((note): boolean => note.includes("dropped"))).toBe(false);
+  });
+
+  // AC-6: a consumer's mirror generated before this change is drift, not ok --
+  // and STALE, because an older build really wrote it (the #270 rule).
+  it("check reports a mirror an older build generated, with the old Claude Code names, as stale", () => {
+    const out = tempDir();
+    const files = generate([persona("reader", "tools: Read, Grep, Bash"), persona("open", "model: pro")]).files;
+    writeSurfaceMirror(out, files, row("antigravity"));
+    const path = join(out, "agents", "reader.md");
+    writeFileSync(path, readFileSync(path, "utf8").replace("tools:\n  - view_file\n  - run_command\n", "tools: Read, Grep, Bash\n"));
+    const check = checkSurfaceMirror(out, files, row("antigravity"));
+    expect(mirrorReportOk(check)).toBe(false);
+    expect(check.stale).toEqual(["agents/reader.md"]);
+    expect(check.handEdited).toEqual([]);
+    expect(at(files, "agents/open.md")).toBeDefined();
+    expect(files.find((file): boolean => file.path === "agents/open.md")?.beforeToolNames).toBeUndefined();
+  });
+
+  it("reads the older build's bytes as stale under --stamp too, the way Hatsu checks", () => {
+    const out = tempDir();
+    const files = generateSurfaceMirrorReport({ row: row("antigravity"), skills: [], agents: [persona("reader", "tools: Read, Grep, Bash")], invocationPrefix: null, stamp: "1.2.3" }).files;
+    writeSurfaceMirror(out, files, row("antigravity"));
+    const path = join(out, "agents", "reader.md");
+    writeFileSync(path, readFileSync(path, "utf8").replace("tools:\n  - view_file\n  - run_command\n", "tools: Read, Grep, Bash\n"));
+    const check = checkSurfaceMirror(out, files, row("antigravity"), "1.2.3");
+    expect(check.stale).toEqual(["agents/reader.md"]);
+    expect(check.handEdited).toEqual([]);
+  });
+
+  it("check still reads any other edit to the tools list as hand-edited", () => {
+    const out = tempDir();
+    const files = generate([persona("reader", "tools: Read, Grep, Bash")]).files;
+    writeSurfaceMirror(out, files, row("antigravity"));
+    const path = join(out, "agents", "reader.md");
+    writeFileSync(path, readFileSync(path, "utf8").replace("  - run_command\n", "  - run_command\n  - edit_file\n"));
+    expect(checkSurfaceMirror(out, files, row("antigravity")).handEdited).toEqual(["agents/reader.md"]);
+  });
+
+  it("keeps a comma inside a scoped grant in one item, and drops the grant", () => {
+    const result = generate([persona("scoped", "tools: Read, Bash(git log, git diff)")]);
+    expect(front(at(result.files, "agents/scoped.md"))).toBe("---\nname: scoped\ndescription: scoped.\ntools:\n  - view_file\n---\n");
+    expect(result.notes).toEqual([`antigravity: scoped: dropped Bash(git log, git diff) from tools (no documented antigravity name: ${RULING}); wrote view_file`]);
   });
 });
