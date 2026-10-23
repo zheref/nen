@@ -132,3 +132,15 @@ describe("settle round on #516 (Nobunaga 3, 11)", () => {
     expect(existsSync(join(marks, "a", "none.json"))).toBe(false);
   });
 });
+
+it("clear --all removes an unreadable marker too, naming it (Bugbot on #516)", async () => {
+  const { tree, marks } = repoWithWorktree();
+  await nen(["stop", "--gate", "G2", "--mark", "--effort", "a", "--repo", tree]);
+  mkdirSync(join(marks, "x"), { recursive: true });
+  writeFileSync(join(marks, "x", "G5.json"), "{ not json");
+  const result = await nen(["stop", "clear", "--all", "--repo", tree]);
+  expect(result.code).toBe(0);
+  expect(result.out).toMatch(/cleared .*G5\.json \(unreadable marker\)/);
+  expect(existsSync(join(marks, "x", "G5.json"))).toBe(false);
+  expect((await nen(["stop", "list", "--repo", tree])).code).toBe(0);
+});

@@ -495,3 +495,16 @@ describe("one issue spelling per manifest (Nobunaga on #516)", () => {
     expect((await capture(["run", "append", "--id", "r1", "--issue", "ZZ#1", "--pr", "480", "--kind", "delivery"], { common, repoFlag: root, prs: OPEN_ALL })).code).toBe(2);
   });
 });
+
+it("an import over rows nen holds in the code spelling dedupes them rather than parking twice (Bugbot on #516)", async () => {
+  const { root, common } = repo();
+  const id = "0123456789abcdef0123456789abcdef";
+  mkdirSync(join(common, ".nen", "runs"), { recursive: true });
+  writeFileSync(join(common, ".nen", "runs", `${id}.json`), JSON.stringify({ contract: "nen.run/v0.1", id, repo: "zheref/nen", startedAt: "2026-10-22T00:00:00.000Z", idleAnswers: null, prs: [], parked: [{ issue: "NN#482", row: "direct-mismatch", at: "2026-10-22T00:30:00.000Z" }] }));
+  mkdirSync(join(common, "hatsu", "futon"), { recursive: true });
+  writeFileSync(join(common, "hatsu", "futon", `run-${id}.json`), JSON.stringify({ contract: "hatsu.futon.run/v0.2", id, repo: "zheref/nen", invocation: "x", selector: "x", startedAt: "2026-10-22T00:00:00.000Z", idle: null, prs: [], parked: [{ issue: 482, row: "direct-mismatch", at: "2026-10-22T00:30:00.000Z" }] }));
+  const result = await capture(["run", "import", "--id", id, "--json"], { common, repoFlag: root });
+  expect(result.code).toBe(0);
+  const stored = JSON.parse(readFileSync(join(common, ".nen", "runs", `${id}.json`), "utf8"));
+  expect(stored.parked).toEqual([{ issue: "zheref/nen#482", row: "direct-mismatch", at: "2026-10-22T00:30:00.000Z" }]);
+});

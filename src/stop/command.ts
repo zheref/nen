@@ -54,7 +54,7 @@
 // a markdown parser either way. No colour, no OSC-8 hyperlink escapes in the
 // table -- they would corrupt the markdown a caller pastes elsewhere.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   emit,
@@ -476,6 +476,8 @@ function clearMarker(context: CommandContext): number {
   const effort = effortFlag === undefined ? null : assertEffortId(effortFlag);
   const home = resolveMarksHome(root, context.seams);
   const removed: string[] = [];
+  const unreadableRemoved: string[] = [];
+  const unreadableLeft: string[] = [];
   const remove = (path: string): void => {
     try {
       if (removeIfPresent(path)) removed.push(path);
@@ -488,6 +490,23 @@ function clearMarker(context: CommandContext): number {
     if (rung !== null) remove(rung);
     const list = listMarks(home, root);
     for (const mark of list.marks) remove(mark.path);
+    // AN UNREADABLE MARKER IS CLEARED TOO, and named as such (Bugbot on #516):
+    // `--all` means every marker, not every marker that parses. A directory nen
+    // could not list is left and named -- this verb removes files only.
+    for (const bad of list.unreadable) {
+      let isFile = false;
+      try {
+        isFile = !lstatSync(bad.path).isDirectory();
+      } catch {
+        isFile = false;
+      }
+      if (isFile) {
+        remove(bad.path);
+        unreadableRemoved.push(bad.path);
+      } else {
+        unreadableLeft.push(`${bad.path} (${bad.reason})`);
+      }
+    }
     remove(legacyPath);
     remove(join(home.dir, LATEST_FILE));
   } else if (gate !== null) {
@@ -512,7 +531,15 @@ function clearMarker(context: CommandContext): number {
     emit(context.io, context.json, { cleared: false, path: gate !== null ? gateMarkPath(home, effort, gateKey) : legacyPath, removed }, [`${what} -- nothing to clear.`]);
     return 0;
   }
-  emit(context.io, context.json, { cleared: true, path: removed[0], removed }, removed.map((path): string => `cleared ${path}.`));
+  emit(
+    context.io,
+    context.json,
+    { cleared: true, path: removed[0], removed, unreadableRemoved, unreadableLeft },
+    [
+      ...removed.map((path): string => `cleared ${path}${unreadableRemoved.includes(path) ? " (unreadable marker)" : ""}.`),
+      ...unreadableLeft.map((entry): string => `left (not a file): ${entry}`),
+    ],
+  );
   return 0;
 }
 

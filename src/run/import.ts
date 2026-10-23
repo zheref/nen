@@ -43,6 +43,7 @@ import {
   type RunManifest,
 } from "./manifest.js";
 import { readLivePr } from "./verify.js";
+import { normaliseManifest } from "./issue.js";
 import imports from "./imports.json";
 
 /** The contracts a consumer run manifest may carry (./imports.json). */
@@ -153,14 +154,18 @@ export interface ImportOutcome {
  * Plan the import against what nen holds -- every PR read live first, so a
  * refusal happens before anything is planned, let alone written.
  */
-export function planImport(seams: Seams, existing: RunManifest | null, run: ConsumerRun, id: string, now: string): ImportOutcome {
+export function planImport(seams: Seams, existing: RunManifest | null, run: ConsumerRun, id: string, now: string, root: string): ImportOutcome {
+  // ONE SPELLING (Bugbot on #516): rows nen already holds in a `<CODE>#<N>`
+  // spelling are normalised first, so the import's `<owner/name>#<N>` rows
+  // match them rather than parking or appending the same issue twice.
+  const normalised = existing === null ? null : normaliseManifest(root, existing);
   const [owner, name] = run.repo.split("/") as [string, string];
   const target = { owner, repo: name, slug: run.repo };
   const ref = (issue: number): string => `${run.repo}#${issue}`;
-  const start = planStart(existing, id, run.repo, run.startedAt, run.idleAnswers);
+  const start = planStart(normalised === null ? null : normalised.manifest, id, run.repo, run.startedAt, run.idleAnswers);
   if (start.outcome === "conflict") return { outcome: "conflict", manifest: start.manifest, reason: start.reason, prs: [], parked: [] };
   let manifest = start.manifest;
-  let changed = start.outcome === "started";
+  let changed = start.outcome === "started" || normalised?.changed === true;
   const prs: { pr: number; outcome: string }[] = [];
   for (const row of run.prs) {
     const live = readLivePr(seams, target, row.pr);
