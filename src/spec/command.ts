@@ -1,8 +1,9 @@
 // src/spec/command.ts -- the `nen spec` family: number, check, cite-check,
-// index (the first slice), then inventory, diff, converge and coverage
-// (zheref/nen#493 waves A and C). The verbs Hatsu's capture skill
+// index (the first slice), then inventory, diff, converge, coverage, parity,
+// tasks groups and trace (zheref/nen#493). The verbs Hatsu's capture skill
 // (`dowsing-chain`, ruling HR-12) owes to nen: read-only, but for `index
-// --write`, `converge --write` (each behind --dry-run) and `inventory --out`.
+// --write`, `converge --write`, `trace --write` (each behind --dry-run) and
+// `inventory --out`.
 //
 // EVERY VERB REPORTS AND NONE DECIDES. `number` computes the next free
 // `{nnn}` and names collisions without picking a winner; `check` lists
@@ -30,8 +31,9 @@ import { diffInventories, InventoryReadError, loadInventory, renderDiff, unreada
 import { converge, renderConverge } from "./converge.js";
 import { captureCoverage, deliveryCoverage, readReport, renderCaptureCoverage, renderDeliveryCoverage, unreadableDelivery } from "./coverage.js";
 import { readTree, TreeReadError } from "./tree.js";
+import { parity, readParityFolders, renderParity, unreadableParity, type ParityReport } from "./parity.js";
 
-const SUBCOMMANDS = ["number", "check", "cite-check", "index", "inventory", "diff", "converge", "coverage"] as const;
+const SUBCOMMANDS = ["number", "check", "cite-check", "index", "inventory", "diff", "converge", "coverage", "parity"] as const;
 type Subcommand = (typeof SUBCOMMANDS)[number];
 
 export const DEFAULT_SPEC_LAYOUT = "specs/{nnn}-{slug}";
@@ -45,6 +47,7 @@ nen spec diff --from <inventory> --to <inventory> [--json]
 nen spec converge --repo <spec> --folder <dir> --inventory <file> --code <CODE> --checkouts <file> [--date <YYYY-MM-DD>] [--write [--dry-run]] [--json]
 nen spec coverage --repo <spec> --inventory <file>[,<file>...] [--layout <pattern>] [--json]
 nen spec coverage --issue-body <file> --pr-body <file> [--test-report <file>] [--json]
+nen spec parity --repo <spec> (--folder <dir> | --family <name>) [--layout <pattern>] [--target <owner/name>[,<owner/name>...]] [--json]
 
 Read-only verbs over a Spec Kit spec repository. Each
 reports and refuses; none decides. A layout is '<dir>/<final>' whose final
@@ -120,6 +123,15 @@ coverage    Capture form: per member and row kind, covered/total (a row is
             <reason> · <follow-up>'. Exit 1 on an unaccounted criterion, a
             missing or empty section, or an unreadable input; 2 when the PR
             names an id the issue does not carry.
+parity      One row per FR and member from each folder's parity.md (a
+            table: FR column, one product-code column per member), each cell's
+            state held to what SP-6 says it carries -- present/mirror a
+            citation, map one and UX-13, drop-with-note a CL-nnn or PT ruling,
+            target-only a citation and a CL-nnn, differs both citations,
+            absent the files searched -- an FR or member with no cell open.
+            --family reads the members from nen/repos.json families[]; --target
+            reads each row's issues and PRs (bodies naming F<nnn>-FR-###) with
+            gh. Exit 1 unless every row is a handling.
 
 --json shapes (key order as listed):
   number:     { contract: "nen.spec.number/v0.1", repo, target, layout, base, baseSource, baseSha, openPrs, taken, collisions, next, reason }
@@ -130,13 +142,15 @@ coverage    Capture form: per member and row kind, covered/total (a row is
   diff:       { contract: "nen.spec.diff/v0.1", verdict, from, to, origin, added, removed, changed, counts, reason }
   converge:   { contract: "nen.spec.converge/v0.1", verdict, repo, folder, inventory, member, citations, gaps, unrequested, unrequestedReason, claims, writes, action, counts, reason }
   coverage:   { contract: "nen.spec.coverage/v0.1", form: "capture", verdict, repo, layout, folders, members, markers, reason }
-              { contract: "nen.spec.coverage/v0.1", form: "delivery", verdict, issueBody, prBody, testReport, section, criteria, outside, counts, reason }`;
+              { contract: "nen.spec.coverage/v0.1", form: "delivery", verdict, issueBody, prBody, testReport, section, criteria, outside, counts, reason }
+  parity:     { contract: "nen.spec.parity/v0.1", verdict, repo, scope, members, folders, rows, counts, live, reason }`;
 
 const OWNED: Readonly<Record<string, readonly Subcommand[]>> = {
-  layout: ["number", "index", "coverage"],
+  layout: ["number", "index", "coverage", "parity"],
   base: ["number"],
-  target: ["number"],
-  folder: ["check", "cite-check", "converge"],
+  target: ["number", "parity"],
+  folder: ["check", "cite-check", "converge", "parity"],
+  family: ["parity"],
   vocabulary: ["check"],
   max: ["check"],
   checkouts: ["cite-check", "converge"],
@@ -411,13 +425,52 @@ function runCoverage(context: CommandContext): number {
   return report.verdict === "measured" ? 0 : 1;
 }
 
+const FAMILY_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/** The family's member codes from the spec repository's own registry; a usage refusal when it declares no such family. */
+function familyMembers(repo: string, family: string): string[] {
+  if (!FAMILY_NAME.test(family)) throw new VerbUsageError(`--family '${family}' is not a slug.`);
+  let registry: RepoRegistry;
+  try {
+    registry = loadRepoRegistry(repo);
+  } catch (error) {
+    throw new Error(`the spec repository's nen/repos.json could not be read: ${(error as Error).message}`);
+  }
+  const found = (registry.families ?? []).find((entry): boolean => entry.name === family);
+  if (found === undefined) throw new VerbUsageError(`--family '${family}' is not declared in nen/repos.json families[] (declared: ${(registry.families ?? []).map((entry): string => entry.name).join(", ") || "none"}).`);
+  return found.members.map((member): string => member.code);
+}
+
+function runParity(context: CommandContext, repo: string): number {
+  const folderRaw = context.args.values["folder"];
+  const family = context.args.values["family"] ?? null;
+  if ((folderRaw === undefined) === (family === null)) throw new VerbUsageError("give exactly one of --folder <dir> or --family <name>.");
+  const folder = folderRaw === undefined ? null : checkRelativePath("folder", folderRaw);
+  const targets = (context.args.values["target"] ?? "").split(",").map((entry): string => entry.trim()).filter((entry): boolean => entry !== "");
+  for (const target of targets) parseCallerToken((): Target => parseTarget(target), (error): boolean => error instanceof TargetError);
+  const layout = parseLayout(context.args.values["layout"] ?? DEFAULT_SPEC_LAYOUT);
+  const input = { repo, folder, family, familyMembers: null as readonly string[] | null, targets };
+  let report: ParityReport;
+  try {
+    const members = family === null ? null : familyMembers(repo, family);
+    const folders = readParityFolders(repo, layout, folder);
+    report = parity(context.seams, { ...input, familyMembers: members }, folders);
+  } catch (error) {
+    if (error instanceof VerbUsageError) throw error;
+    if (error instanceof SpecContainmentError) throw new VerbUsageError(error.message);
+    report = unreadableParity(input, (error as Error).message);
+  }
+  emit(context.io, context.json, report, renderParity(report));
+  return report.verdict === "handled" ? 0 : 1;
+}
+
 export const specCommand: Command = {
   name: "spec",
-  summary: "Inventory, number, check, cite-check, diff, converge, cover and index a product family's Spec Kit spec repository.",
+  summary: "Inventory, number, check, cite-check, diff, converge, cover, hold to parity and index a product family's Spec Kit spec repository.",
   usage: USAGE,
   subcommands: [...SUBCOMMANDS],
   flags: {
-    values: ["layout", "base", "target", "folder", "vocabulary", "max", "checkouts", "at", "scenario", "lane", "exclude", "out", "from", "to", "inventory", "code", "date", "issue-body", "pr-body", "test-report"],
+    values: ["layout", "base", "target", "folder", "vocabulary", "max", "checkouts", "at", "scenario", "lane", "exclude", "out", "from", "to", "inventory", "code", "date", "issue-body", "pr-body", "test-report", "family"],
     booleans: ["constitution", "markers", "rank", "verify-excerpt", "write", "dry-run"],
   },
   run(context): number {
@@ -443,6 +496,8 @@ export const specCommand: Command = {
         return runInventory(context, repo);
       case "converge":
         return runConverge(context, repo);
+      case "parity":
+        return runParity(context, repo);
     }
     throw new VerbUsageError(`'spec ${subcommand}' is not dispatched here.`);
   },

@@ -12,7 +12,7 @@ repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
 what each version changed: 47 command
-families, 165 verbs, every flag checked against that binary.
+families, 166 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -206,7 +206,7 @@ change from a compatible one.
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **95 shapes** and **98 ids** (`nen.runner.plan`,
+binary carries**, writing or reading — **96 shapes** and **99 ids** (`nen.runner.plan`,
 `nen.stop.mark` and `nen.wc.worktree.copies` each have two versions, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -266,7 +266,7 @@ file formats).
 - **`schema`** — `nen.schema.set/v0.1`
 - **`session`** — `nen.session.ledger/v0.1`
 - **`shu`** — `nen.shu.<verb>/v0.1` · `nen.shu.coverage-capture/v0.1` · `nen.shu.coverage/v0.1` · `nen.shu.detect/v0.1` · `nen.shu.evidence/v0.1` · `nen.shu.proof/v0.1` · `nen.shu.test-report/v0.1` · `nen.shu.tools/v0.1` · `nen.shu.warmup/v0.1`
-- **`spec`** — `nen.spec.check/v0.1` · `nen.spec.cite-check/v0.1` · `nen.spec.converge/v0.1` · `nen.spec.coverage/v0.1` · `nen.spec.diff/v0.1` · `nen.spec.index/v0.1` · `nen.spec.inventory/v0.1` · `nen.spec.number/v0.1`
+- **`spec`** — `nen.spec.check/v0.1` · `nen.spec.cite-check/v0.1` · `nen.spec.converge/v0.1` · `nen.spec.coverage/v0.1` · `nen.spec.diff/v0.1` · `nen.spec.index/v0.1` · `nen.spec.inventory/v0.1` · `nen.spec.number/v0.1` · `nen.spec.parity/v0.1`
 - **`stop`** — `nen.stop.answer/v0.1` · `nen.stop.mark/v0.1` · `nen.stop.mark/v0.2` · `nen.stop.proposed-issue/v0.1`
 - **`surface`** — `nen.surface.capabilities/v0.1` · `nen.surface.install/v0.1` · `nen.surface.mirror.check-installed/v0.1` · `nen.surface.mirror.check-plugin/v0.1` · `nen.surface.mirror.check/v0.1` · `nen.surface.mirror.generate/v0.1` · `nen.surface.status/v0.1`
 - **`usage`** — `nen.usage.ledger/v0.1`
@@ -920,7 +920,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 165 verbs, grouped as the README groups them. **Reads** is what a
+All 166 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -1064,6 +1064,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`spec`](#family-spec) | [`nen spec diff`](#nen-spec-diff) | added, removed and changed rows by stable id between two inventories of one member, each changed field named; a different sha alone is no change, so identical inputs give an empty diff | the two inventory files; no git/gh | yes |
 | [`spec`](#family-spec) | [`nen spec converge`](#nen-spec-converge) | a folder's citations of one member re-read at a newer inventory's sha: gaps missing · partial · contradicts · unrequested (against capture/<CODE>/inventory.json), ticked tasks listed as claims, never evidence; `--write` only appends `[STALE @ <sha>]` companions and one dated convergence phase, and a second run changes nothing | spec.md/tasks.md, nen/repos.json and capture/<CODE>/inventory.json under --repo; the inventory and --checkouts files; git (remote get-url, rev-parse, ls-tree, cat-file) in the member checkout; WRITES spec.md and tasks.md under --write unless --dry-run | yes |
 | [`spec`](#family-spec) | [`nen spec coverage`](#nen-spec-coverage) | capture form: covered/total per row kind per member and requirement↔task/test traceability both ways, each with its denominator; delivery form: every F<nnn>-SC-### of an issue has one `## Spec` row in the PR body, satisfied with a passing test or deferred with a reason and a follow-up — an outside id exits 2 | capture: folders and nen/repos.json under --repo, the inventory files; delivery: the two body files and --test-report; no git/gh | yes |
+| [`spec`](#family-spec) | [`nen spec parity`](#nen-spec-parity) | one row per FR and member from each folder's parity.md, each state held to what SP-6 says it carries (a citation, UX-13, a CL-nnn or PT ruling, both citations, the files searched), a missing row or column open; `--target` adds each row's live issues and PRs | parity.md/spec.md and nen/repos.json under --repo; github (gh issue list, gh pr list) with --target | yes |
 | [`decisions`](#family-decisions) | [`nen decisions summary`](#nen-decisions-summary) | rows per class and per gate and the G5 ids of nen/decisions.json, so prose never carries those numbers | nen/decisions.json under --repo | yes |
 | [`shu`](#family-shu) | [`nen shu detect`](#nen-shu-detect) | read the markers on disk and PROPOSE a nen/contract.json project block; never writes without --write and never overwrites one | the target repo's own files (framework configs, package.json, project files); writes nen/contract.json only with --write | yes |
 | [`shu`](#family-shu) | [`nen shu build`](#nen-shu-build) | compile or assemble a lane, from the invocation its declaration states | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
@@ -12020,6 +12021,83 @@ accounted: 2/2 success criteria accounted for · Spec section present · no test
   F002-SC-002 deferred -- needs a ruling on the threshold · HA#405
 ```
 (exit 0; from `src/spec/coverage.test.ts`)
+
+### `nen spec parity`
+
+One row per **requirement and member**, read from each folder's `parity.md`
+and held to what its state must carry (zheref/nen#493 AC-8; bankai-handbooks
+SP-6, SP-7). `parity.md` holds a Markdown table whose first header cell is
+`FR`, `Requirement` or `Id` and whose other header cells are product codes, one
+column per member; each body row starts with an `FR-###`, and each cell starts
+with its state:
+
+| State | The cell must carry | Settles the row |
+|---|---|---|
+| `present` · `mirror` | the member's own citation | yes |
+| `map` | the member's citation and `UX-13` (the adapt category) | yes |
+| `drop-with-note` | a `CL-nnn` ruling or a `<from>--<to> PT-<n>` port ruling | yes |
+| `target-only` | the member's citation and the `CL-nnn` that made it intentional | yes |
+| `differs` | both citations | no |
+| `absent` | the files the reader searched; "not needed", "n/a" or "intentional" without a `CL-nnn` is a finding (SP-7) | no |
+| `open` (or an empty cell) | nothing — it is the gap | no |
+
+A requirement `spec.md` defines with no row, a member with no column, or a
+folder with no `parity.md` is an **open** row with that reason; a row for an id
+`spec.md` does not define is named. The members are `--family`'s (the spec
+repository's own `nen/repos.json` → `families[]`), else the table's columns and
+every code the folder's requirements cite. With `--target`, each row's **live
+state** is read: every issue and pull request in the named repositories whose
+body carries the row's qualified id (`F<nnn>-FR-###`), through `gh issue|pr
+list --state all --search "F<nnn> in:body"`; a list that fails, is unreadable
+or reaches its 500 limit is listed under `live.unread`, never taken as
+complete.
+
+**Usage**
+
+```text
+nen spec parity --repo <spec> (--folder <dir> | --family <name>) [--layout <pattern>] [--target <owner/name>[,<owner/name>...]] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--repo <path>` | yes | The spec repository's checkout. | Omitted exits 2. |
+| `--folder <dir>` | one of | One folder. | Not a folder matching the layout: `could-not-read`. |
+| `--family <name>` | one of | Every folder, members from `families[]`. | Not a slug, or not declared: exit 2. |
+| `--layout <pattern>` | no | Where the folders live. | Default `specs/{nnn}-{slug}`. |
+| `--target <slugs>` | no | Repositories whose issues and PRs are read live. | A malformed slug exits 2. |
+
+**Output and exit codes** — prints `<verdict>: <h>/<n> requirement x member
+row(s) handled …`, the count per state, then one line per row (`F<nnn>-FR-###
+<code> <state> -- <finding>`, with the live issues and PRs under `--target`).
+`--json` top-level keys: `contract` (`nen.spec.parity/v0.1`), `verdict`
+(`handled` \| `gaps` \| `could-not-read`), `repo`, `scope` (`{ folder, family
+}`), `members`, `folders`, `rows` (`{ folder, id, qualified, code, state,
+citations, rulings, handled, finding, issues, prs }` each; `state` null when the
+cell names no state, counted `malformed`; `issues`/`prs` `[{ repo, number,
+state }]`, null without `--target`), `counts` (per state and `malformed`),
+`live` (`{ targets, unread }`, null without `--target`), `reason`. Exit 0 only
+when every row is a handling carrying its evidence; exit 1 on any open,
+`absent`, `differs` or deficient row, an unread live list, or a folder it could
+not read; exit 2 on a usage error.
+
+**Example**
+
+```bash
+nen spec parity --repo . --folder specs/002-list
+```
+```text
+gaps: 4/6 requirement x member row(s) handled across 1 folder(s), members FA, FW
+  2 present · 1 mirror · 0 map · 0 drop-with-note · 0 target-only · 1 differs · 1 absent · 1 open · 0 malformed
+  F002-FR-001 FA present
+  F002-FR-001 FW mirror
+  F002-FR-002 FA present
+  F002-FR-002 FW differs -- not a handling
+  F002-FR-003 FA open -- no state recorded yet
+  F002-FR-003 FW absent -- not a handling
+```
+(exit 1; from `src/spec/parity.test.ts`)
 
 <a id="family-decisions"></a>
 
