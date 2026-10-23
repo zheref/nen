@@ -158,7 +158,7 @@ nen pr sections resolve --catalogue <path> --kind <kind> --family <family> [--wi
 nen pr sections family --taxonomy <path> --catalogue <path> --jobs <a,b> [--json]
 nen pr fetch --target <owner/name> --pr <n>
 nen pr converge --target <owner/name> --pr <n> [--requirements-from <catalogue.json>] [--json]
-nen pr next-blocker --target <owner/name> --pr <n> --repo <path> [--reviewers a,b] [--policy bounded|strict] [--delivery-pr] [--gates <path>]
+nen pr next-blocker --target <owner/name> --pr <n> --repo <path> [--reviewers a,b] [--policy bounded|strict] [--delivery-pr] [--gates <path>] [--requirements-from <path>]
 nen pr cascade-main --repo <path> [--trunk main] [--no-push] [--dry-run]
 nen pr retarget --target <owner/name> --pr <n> --base <branch> [--dry-run]
 nen pr request-reviews --target <owner/name> --pr <n> [--add-reviewers a,b] [--add-bots login-or-id,...] [--dry-run]
@@ -435,7 +435,9 @@ converge:
 next-blocker:
   The FIRST blocking condition, fixed order: conflict -> red required
   check -> owed reviewer round -> unresolved thread -> missing body
-  requirement ('## How to verify', CON-17). Exits 1 when something blocks,
+  requirement (CON-17): with --requirements-from, the first unsatisfied
+  requirement of the same '{ name, pattern }' file 'pr body-check' reads;
+  without it, a '## How to verify' heading. Exits 1 when something blocks,
   2 on usage or a refused gates file (as pr ready does, zheref/nen#310),
   0 when this check finds nothing -- the adversarial confirmation pass
   stays human. NOTE: the changelog.d/ fragment half of CON-33(a) is
@@ -1090,7 +1092,7 @@ export const PR_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   sections: { values: ["catalogue", "kind", "family", "with", "overrides", "taxonomy", "jobs"] },
   fetch: { values: ["target", "pr"] },
   converge: { values: ["target", "pr", "requirements-from"] },
-  "next-blocker": { values: ["target", "pr", "reviewers", "gates", "policy"], booleans: ["delivery-pr"] },
+  "next-blocker": { values: ["target", "pr", "reviewers", "gates", "policy", "requirements-from"], booleans: ["delivery-pr"] },
   "cascade-main": { values: ["trunk"], booleans: ["no-push", "dry-run"] },
   retarget: { values: ["target", "pr", "base"], booleans: ["dry-run"] },
   "request-reviews": { values: ["target", "pr", "add-reviewers", "add-bots"], booleans: ["dry-run"] },
@@ -1468,6 +1470,23 @@ function blocker(context: CommandContext): number {
       "It is the checkout whose nen/gates.json is read first; the reviewer identities come from nen/gates.json at the pull request's base, and from this file only when the base cannot be read.",
     ),
   });
+  // --requirements-from (zheref/nen#479 AC-4): the SAME `{ name, pattern }`
+  // file `pr body-check` reads, so the two verbs give one verdict for one body
+  // -- a process body headed '## What the guards prove' included. Read and
+  // validated before any network work; a relative path resolves against --repo.
+  const requirementsFlag = context.args.values["requirements-from"];
+  let bodyRequirements: readonly BodyRequirement[] | undefined;
+  if (requirementsFlag !== undefined) {
+    const requirementsPath = requireValue(context.args, "requirements-from", "The body requirements 'pr body-check' reads.");
+    const raw = readJsonFile<unknown>(requirementsPath, root, "--requirements-from names the body requirements next-blocker's last step checks; an unreadable one is refused, never read as none.");
+    try {
+      validateRequirements(raw);
+    } catch (error) {
+      if (error instanceof BodyCheckError) throw new VerbUsageError(`'${requirementsPath}': ${error.message}`);
+      throw error;
+    }
+    bodyRequirements = raw;
+  }
   // `--gates <path>` goes through ../verbs/pr_ready.ts's resolveIdentities --
   // THE SAME resolver `pr ready` uses, never a re-spelled copy -- because
   // zheref/nen#20's defect was exactly the two siblings drifting apart:
@@ -1567,6 +1586,7 @@ function blocker(context: CommandContext): number {
     reviewers,
     policy: context.args.values["policy"] === "strict" ? "strict" : context.args.values["policy"] === "bounded" ? "bounded" : undefined,
     deliveryPr: context.args.booleans.has("delivery-pr"),
+    bodyRequirements,
   });
   if (context.json) {
     // `warnings` and `notes` are additive (hanten round 2, N1/N3); so is

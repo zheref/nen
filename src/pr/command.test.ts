@@ -3184,7 +3184,7 @@ describe("the family's one flag guard (zheref/nen#351)", () => {
       sections: { values: ["catalogue", "kind", "family", "with", "overrides", "taxonomy", "jobs"] },
       fetch: { values: ["target", "pr"] },
       converge: { values: ["target", "pr", "requirements-from"] },
-      "next-blocker": { values: ["target", "pr", "reviewers", "gates", "policy"], booleans: ["delivery-pr"] },
+      "next-blocker": { values: ["target", "pr", "reviewers", "gates", "policy", "requirements-from"], booleans: ["delivery-pr"] },
       "cascade-main": { values: ["trunk"], booleans: ["no-push", "dry-run"] },
       retarget: { values: ["target", "pr", "base"], booleans: ["dry-run"] },
       "request-reviews": { values: ["target", "pr", "add-reviewers", "add-bots"], booleans: ["dry-run"] },

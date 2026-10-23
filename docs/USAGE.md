@@ -2737,10 +2737,25 @@ COVERED-WITH-EVIDENCE  o/n#12/AC-2 partial (line 6)
 
 Reports the FIRST blocking condition, in a fixed order: conflict -> red
 required check -> owed reviewer round -> unresolved thread -> missing body
-requirement (`## How to verify`, CON-17). It does not re-derive the CON-32
+requirement (CON-17). It does not re-derive the CON-32
 predicates; it composes the ported, tested gate engine over one fetched
 snapshot. The changelog.d/ fragment half of CON-33(a) is diff-shaped and not
 checked here.
+
+**The body step reads the caller's requirements ([#479](https://github.com/zheref/nen/issues/479) AC-4).**
+`--requirements-from <path>` takes the same `{ name, pattern }` JSON array
+[`pr body-check`](#nen-pr-body-check) reads (a relative path resolves against
+`--repo`), and the last step then names the first requirement the body does not
+satisfy: `body requirement '<name>' not satisfied (CON-17; --requirements-from)`.
+So the two verbs give one verdict for one body, including a process body headed
+`## What the guards prove` or a library body headed `## How a consumer verifies`
+(Akatsuki CON-17(b)'s three titles). Without the flag the step is the historical
+`## How to verify` heading. An unreadable or malformed file exits 2 before any
+GitHub read.
+
+```text
+nen pr next-blocker --target <owner/name> --pr <n> --repo <path> [--reviewers a,b] [--policy bounded|strict] [--delivery-pr] [--gates <path>] [--requirements-from <path>]
+```
 
 | Exit | Meaning |
 |---|---|
