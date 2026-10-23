@@ -1,0 +1,25 @@
+{
+  "$comment": "Hatsu's spec run record (docs/config/spec-repo.md § The run record, the shape dowsing-chain keeps) as DATA: nen validates and stores it under the caller's own state directory and decides nothing with its values. Field kinds: string, string|null, string[], object, object[], integer; 'enum' closes a string's values; 'keys' names an object row's required keys.",
+  "schema": "hatsu.spec.run/v0.1",
+  "caller": "dowsing-chain",
+  "directory": "hatsu/specs",
+  "runId": "^dowsing-chain-[a-z0-9]+(-[a-z0-9]+)*-(capture|recapture|dispatch|wave)-[0-9]{8}(-[0-9]+)?$",
+  "fields": {
+    "schema": { "kind": "string" },
+    "caller": { "kind": "string" },
+    "runId": { "kind": "string" },
+    "mode": { "kind": "string", "enum": ["capture", "recapture", "dispatch", "wave"] },
+    "family": { "kind": "string" },
+    "specRepo": { "kind": "string", "pattern": "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$" },
+    "members": { "kind": "object[]", "keys": ["code", "platform", "sha"] },
+    "scope": { "kind": "string[]" },
+    "constitutionPr": { "kind": "string|null" },
+    "wavePrs": { "kind": "string[]" },
+    "folders": { "kind": "object[]", "keys": ["nnn", "slug", "status", "markers"] },
+    "targets": { "kind": "object[]", "keys": ["code", "folder", "story", "issue", "pr", "state"], "enumKey": { "state": ["filed", "amended", "started", "stopped", "delivered"] } },
+    "clarify": { "kind": "object", "keys": ["round", "asked", "answered"] },
+    "preAnswered": { "kind": "object[]", "keys": ["row", "option"] },
+    "next": { "kind": "string", "enum": ["setup", "inventory", "constitution", "capture", "clarify", "challenge", "wait", "dispatch", "wave", "converge", "report", "done", "declined"] },
+    "at": { "kind": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$" }
+  }
+}

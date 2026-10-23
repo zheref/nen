@@ -1280,6 +1280,9 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       park: DRY("records a parked effort in the run manifest unless --dry-run is given"),
       verify: RO("reads the run manifest and every recorded PR over gh pr view"),
       budget: RO("reads the run manifest and the usage ledgers; a claim is a question and writes nothing"),
+      // zheref/nen#493: a caller's run record under its XDG state directory.
+      "record read": RO("reads and validates the run record; writes nothing"),
+      "record write": DRY("writes the run record (0600, in a 0700 directory) unless --dry-run is given"),
     },
   },
   // THE RUNNER FAMILY'S HOST ACT IS NEVER A ROW HERE, because nen never

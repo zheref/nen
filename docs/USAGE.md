@@ -12,7 +12,7 @@ repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
 what each version changed: 47 command
-families, 168 verbs, every flag checked against that binary.
+families, 169 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -206,7 +206,7 @@ change from a compatible one.
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **98 shapes** and **101 ids** (`nen.runner.plan`,
+binary carries**, writing or reading — **99 shapes** and **102 ids** (`nen.runner.plan`,
 `nen.stop.mark` and `nen.wc.worktree.copies` each have two versions, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -260,7 +260,7 @@ file formats).
 - **`refusal`** — `nen.refusal/v0.1`
 - **`report`** — `nen.report.data/v0.1` · `nen.report.graph/v0.1` · `nen.report.render/v0.1`
 - **`review`** — `nen.review.scopes/v0.1`
-- **`run`** — `nen.run/v0.1`
+- **`run`** — `nen.run.record/v0.1` · `nen.run/v0.1`
 - **`runner`** — `nen.runner.plan/v0.1` · `nen.runner.plan/v0.2`
 - **`scaffold`** — `nen.scaffold.init/v0.1` · `nen.scaffold.new/v0.1` · `nen.scaffold.template/v0.1`
 - **`schema`** — `nen.schema.set/v0.1`
@@ -920,7 +920,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 168 verbs, grouped as the README groups them. **Reads** is what a
+All 169 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -1027,6 +1027,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`run`](#family-run) | [`nen run park`](#nen-run-park) | record an effort parked on an unanswered ask-once row (HR-5's park state), once | git (rev-parse --git-common-dir), the manifest; writes it unless --dry-run | yes |
 | [`run`](#family-run) | [`nen run verify`](#nen-run-verify) | read every PR the run recorded live and report open, merged and closed-unmerged with the unmerged list; an unread PR is exit 1 and counted nowhere | the manifest, github (gh pr view) | yes |
 | [`run`](#family-run) | [`nen run budget`](#nen-run-budget) | wall-clock minutes since the run's start and the efforts' recorded tokens against a ceiling (flags, or `idle.budget`); an unread token sum is `unevaluated`; `--claim` refuses at exit 1 once reached or unevaluated | the manifest, `.nen/usage/<effort>.json` under --repo, nen/workflow.json (idle.budget, only for a ceiling not flagged) | yes |
+| [`run`](#family-run) | [`nen run record`](#nen-run-record) | a caller's resumable run record (`hatsu.spec.run/v0.1`) validated against a schema shipped as data — the run id matched whole before any path is built, schema, caller and runId before the fields — and read or written whole at 0600 in a 0700 XDG state directory | ${XDG_STATE_HOME:-$HOME/.local/state}/<schema dir>/; the --from file; WRITES the record under `write` unless --dry-run | yes |
 | [`issue`](#family-issue) | [`nen issue search`](#nen-issue-search) | duplicate-search the backlog before filing: four gh passes (open subject, recently-closed subject, files+rule-ids, lane) reported with what each was for | gh (issue list x4) | yes |
 | [`issue`](#family-issue) | [`nen issue open-pr-check`](#nen-issue-open-pr-check) | which candidate issues carry an OPEN pull request that closing would orphan | gh (pr list) | yes |
 | [`issue`](#family-issue) | [`nen issue file`](#nen-issue-file) | file an issue with labels and assignee IN the create call, refusing any label the target taxonomy does not carry or that a forbidden family names | nen/labels.json; gh (issue create) | yes |
@@ -8974,7 +8975,9 @@ read a **batch run's manifest** (`nen.run/v0.1`, Hatsu's ruling HR-5; SDD plan
 findings D3, D5): one futon or kazaana run's identity, its launch-time idle
 answers and every pull request it opened, whatever the base -- the set its
 `then` gate, its resume and its final register used to keep in conversation
-memory. Every flag is refused on the subcommands that do not read it.
+memory. [`record`](#nen-run-record) keeps a third thing, a caller's resumable
+run record under its XDG state directory (zheref/nen#493). Every flag is
+refused on the subcommands that do not read it.
 
 **The manifest** lives at `<git-common-dir>/hatsu/runs/<run-id>.json` -- the
 git **common** dir, so every worktree of the project reads and writes the same
@@ -9290,6 +9293,69 @@ Reconcile against the backlog before writing to it, then file, attach, close
 and classify. Every verb here reaches GitHub, and several of them read it even
 under `--dry-run`; the only schema file any of them opens is the target
 repository's `nen/labels.json`.
+
+### `nen run record`
+
+A caller's **resumable run record**, validated against a schema nen ships as
+data and kept under the caller's own state directory (zheref/nen#493 AC-11;
+Hatsu's `docs/config/spec-repo.md` § *The run record*). It is not the batch
+manifest above: a spec run spans a product family's repositories and outlives
+any one checkout, so its record lives at
+`${XDG_STATE_HOME:-$HOME/.local/state}/<schema directory>/<run-id>.json`
+(a relative `XDG_STATE_HOME` is ignored, as the XDG spec says, and with no
+absolute `HOME` either there is no directory: `could-not-read`). nen validates
+and stores; the record holds pointers, and the caller recomputes its step from
+live state on resume.
+
+One schema today, `hatsu.spec.run/v0.1` (`src/run/schemas/`): caller
+`dowsing-chain`, directory `hatsu/specs`, run id
+`^dowsing-chain-[a-z0-9]+(-[a-z0-9]+)*-(capture|recapture|dispatch|wave)-[0-9]{8}(-[0-9]+)?$`,
+and every field of Hatsu's table (`schema`, `caller`, `runId`, `mode`,
+`family`, `specRepo`, `members[]`, `scope[]`, `constitutionPr`, `wavePrs[]`,
+`folders[]`, `targets[]`, `clarify`, `preAnswered[]`, `next`, `at`) held to its
+type, its closed values and its row keys. **The order of the checks is the
+contract**: `--id` is matched **whole** against the pattern — no newline, no
+partial match — before any path is built (exit 2 otherwise); then the
+record's `schema`, `caller` and `runId` (equal to `--id`) before any field; a
+write is the **whole** document to a temp file at `0600` in a `0700`
+directory (narrowed to `0700` when it was wider), then a rename.
+
+**Usage**
+
+```text
+nen run record read  --schema <id> --id <run-id> [--json]
+nen run record write --schema <id> --id <run-id> --from <file> [--dry-run] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--schema <id>` | yes | The record's schema. | Unknown exits 2. |
+| `--id <run-id>` | yes | The run, and the file's name. | Not matching the schema's pattern whole exits 2. |
+| `--from <file>` | `write` | The whole record to write, as JSON. | Unreadable or not JSON exits 2; on `read`, exit 2. |
+| `--dry-run` | no | `write` only: validate and report `would-write`, write nothing. | On `read`, exit 2. |
+
+The verb reads no checkout and refuses `--repo` (exit 2).
+
+**Output and exit codes** — prints `<verdict>: <schema> <id> -- <path>`, then the
+reason and one line per problem. `--json` top-level keys: `contract`
+(`nen.run.record/v0.1`), `verdict` (`valid` \| `written` \| `would-write` \|
+`absent` \| `invalid` \| `could-not-read`), `schema`, `id`, `path`, `problems`,
+`record` (the validated document, else null), `reason`. Exit 0 when `valid`,
+`written` or `would-write`; exit 1 when `absent` (a run never recorded is not
+a run with nothing in it), `invalid` (nothing written) or `could-not-read`;
+exit 2 on a usage error.
+
+**Example**
+
+```bash
+nen run record write --schema hatsu.spec.run/v0.1 --id dowsing-chain-fixture-family-capture-20261022 --from record.json
+```
+```text
+written: hatsu.spec.run/v0.1 dowsing-chain-fixture-family-capture-20261022 -- /home/me/.local/state/hatsu/specs/dowsing-chain-fixture-family-capture-20261022.json
+```
+(exit 0; shape from `src/run/record.test.ts`, the path shortened)
 
 <a id="family-issue"></a>
 
