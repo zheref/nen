@@ -20,7 +20,7 @@ import { parseTarget, targetFromRemote, TargetError, type Target } from "../gith
 import { resolveRepoRoot } from "../repo/root.js";
 import { loadWorkflow } from "../schema/workflow.js";
 import { checkRelativePath, parseLayout } from "./layout.js";
-import { checkSpec, CONSTITUTION_PATH, parseVocabulary, renderSpecCheck, SpecContainmentError, SpecReadError } from "./check.js";
+import { assertInsideRepo, checkSpec, CONSTITUTION_PATH, parseVocabulary, renderSpecCheck, SpecContainmentError, SpecReadError } from "./check.js";
 import { citeCheck, parseCheckouts, renderCiteCheck } from "./citecheck.js";
 import { computeNext, readBaseFolders, readPrFolders, renderSpecNumber, SPEC_NUMBER_CONTRACT, type SpecNumberReport } from "./number.js";
 import { renderSpecIndex, specIndex } from "./specindex.js";
@@ -32,8 +32,12 @@ import { converge, renderConverge } from "./converge.js";
 import { captureCoverage, deliveryCoverage, readReport, renderCaptureCoverage, renderDeliveryCoverage, unreadableDelivery } from "./coverage.js";
 import { readTree, TreeReadError } from "./tree.js";
 import { parity, readParityFolders, renderParity, unreadableParity, type ParityReport } from "./parity.js";
+import { renderTasks, taskGroups, unreadableTasks, type TasksReport } from "./tasks.js";
+import { GIT, outputLines } from "../seam/exec.js";
+import { lstatSync } from "node:fs";
+import { join } from "node:path";
 
-const SUBCOMMANDS = ["number", "check", "cite-check", "index", "inventory", "diff", "converge", "coverage", "parity"] as const;
+const SUBCOMMANDS = ["number", "check", "cite-check", "index", "inventory", "diff", "converge", "coverage", "parity", "tasks"] as const;
 type Subcommand = (typeof SUBCOMMANDS)[number];
 
 export const DEFAULT_SPEC_LAYOUT = "specs/{nnn}-{slug}";
@@ -48,6 +52,7 @@ nen spec converge --repo <spec> --folder <dir> --inventory <file> --code <CODE> 
 nen spec coverage --repo <spec> --inventory <file>[,<file>...] [--layout <pattern>] [--json]
 nen spec coverage --issue-body <file> --pr-body <file> [--test-report <file>] [--json]
 nen spec parity --repo <spec> (--folder <dir> | --family <name>) [--layout <pattern>] [--target <owner/name>[,<owner/name>...]] [--json]
+nen spec tasks groups --repo <spec> --folder <dir> [--group <id>] [--json]
 
 Read-only verbs over a Spec Kit spec repository. Each
 reports and refuses; none decides. A layout is '<dir>/<final>' whose final
@@ -132,6 +137,15 @@ parity      One row per FR and member from each folder's parity.md (a
             --family reads the members from nen/repos.json families[]; --target
             reads each row's issues and PRs (bodies naming F<nnn>-FR-###) with
             gh. Exit 1 unless every row is a handling.
+tasks groups
+            tasks.md's tasks grouped by story ([US<k>] or the phase heading)
+            and platform ([platform:<p>] or '### Platform: <p>'), each group's
+            state (open, clarifying, captured, delivered), its dependencies
+            (earlier phase groups; 'depends on T<nnn>') and topological order,
+            and for a story group the dispatch title and issue body: the
+            pinned 'Spec: <folder>@<sha>', one '- AC-<n>: …' row per scenario,
+            the scenarios and SCs in a source-data fence. --group prints one
+            body. Exit 1 on a cycle, an unknown dependency or an unread file.
 
 --json shapes (key order as listed):
   number:     { contract: "nen.spec.number/v0.1", repo, target, layout, base, baseSource, baseSha, openPrs, taken, collisions, next, reason }
@@ -143,14 +157,16 @@ parity      One row per FR and member from each folder's parity.md (a
   converge:   { contract: "nen.spec.converge/v0.1", verdict, repo, folder, inventory, member, citations, gaps, unrequested, unrequestedReason, claims, writes, action, counts, reason }
   coverage:   { contract: "nen.spec.coverage/v0.1", form: "capture", verdict, repo, layout, folders, members, markers, reason }
               { contract: "nen.spec.coverage/v0.1", form: "delivery", verdict, issueBody, prBody, testReport, section, criteria, outside, counts, reason }
-  parity:     { contract: "nen.spec.parity/v0.1", verdict, repo, scope, members, folders, rows, counts, live, reason }`;
+  parity:     { contract: "nen.spec.parity/v0.1", verdict, repo, scope, members, folders, rows, counts, live, reason }
+  tasks:      { contract: "nen.spec.tasks/v0.1", verdict, repo, folder, spec, groups, order, reason }`;
 
 const OWNED: Readonly<Record<string, readonly Subcommand[]>> = {
   layout: ["number", "index", "coverage", "parity"],
   base: ["number"],
   target: ["number", "parity"],
-  folder: ["check", "cite-check", "converge", "parity"],
+  folder: ["check", "cite-check", "converge", "parity", "tasks"],
   family: ["parity"],
+  group: ["tasks"],
   vocabulary: ["check"],
   max: ["check"],
   checkouts: ["cite-check", "converge"],
@@ -464,18 +480,56 @@ function runParity(context: CommandContext, repo: string): number {
   return report.verdict === "handled" ? 0 : 1;
 }
 
+function runTasks(context: CommandContext, repo: string): number {
+  const action = context.args.positionals[2];
+  if (action !== "groups") throw new VerbUsageError(`'spec tasks' needs its action: 'spec tasks groups'${action === undefined ? "" : ` (got '${action}')`}.`);
+  refuseExtraPositionals(context.args, 3);
+  const folder = checkRelativePath("folder", requireValue(context.args, "folder", "It names the folder whose tasks.md is grouped."));
+  const only = context.args.values["group"] ?? null;
+  const nnn = /(?:^|\/)[^/]*?(\d{3})[^/]*$/.exec(folder)?.[1] ?? null;
+  const rev = context.seams.run(GIT, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], { cwd: repo });
+  const sha = rev.code === 0 ? (outputLines(rev.stdout)[0] ?? null) : null;
+  const input = { repo, folder, nnn: nnn ?? "000", sha };
+  const read = (name: string): string | null => {
+    const path = join(repo, folder, name);
+    if (lstatSync(path, { throwIfNoEntry: false })?.isFile() !== true) return null;
+    try {
+      assertInsideRepo(repo, path, `${folder}/${name}`);
+    } catch (error) {
+      throw new VerbUsageError((error as Error).message);
+    }
+    return readFileSync(path, "utf8");
+  };
+  let report: TasksReport;
+  const specText = read("spec.md");
+  const tasksText = read("tasks.md");
+  if (nnn === null) report = unreadableTasks(input, `${folder} carries no three-digit folder number to qualify its ids with`);
+  else if (specText === null || tasksText === null) report = unreadableTasks(input, `${folder}/${specText === null ? "spec.md" : "tasks.md"} does not exist`);
+  else report = taskGroups(input, specText, tasksText);
+  if (only !== null) {
+    const group = report.groups.find((entry): boolean => entry.id === only);
+    if (group === undefined) throw new VerbUsageError(`--group '${only}' is not a group of ${folder} (groups: ${report.groups.map((entry): string => entry.id).join(", ") || "none"}).`);
+    if (group.body === null) throw new VerbUsageError(`--group '${only}' is a phase group; only a story group renders as an issue body.`);
+    if (context.json) emit(context.io, true, { contract: report.contract, verdict: report.verdict, group }, []);
+    else for (const line of group.body.replace(/\n$/, "").split("\n")) context.io.out(line);
+    return report.verdict === "grouped" ? 0 : 1;
+  }
+  emit(context.io, context.json, report, renderTasks(report));
+  return report.verdict === "grouped" ? 0 : 1;
+}
+
 export const specCommand: Command = {
   name: "spec",
-  summary: "Inventory, number, check, cite-check, diff, converge, cover, hold to parity and index a product family's Spec Kit spec repository.",
+  summary: "Inventory, number, check, cite-check, diff, converge, cover, hold to parity, group and index a product family's Spec Kit spec repository.",
   usage: USAGE,
   subcommands: [...SUBCOMMANDS],
   flags: {
-    values: ["layout", "base", "target", "folder", "vocabulary", "max", "checkouts", "at", "scenario", "lane", "exclude", "out", "from", "to", "inventory", "code", "date", "issue-body", "pr-body", "test-report", "family"],
+    values: ["layout", "base", "target", "folder", "vocabulary", "max", "checkouts", "at", "scenario", "lane", "exclude", "out", "from", "to", "inventory", "code", "date", "issue-body", "pr-body", "test-report", "family", "group"],
     booleans: ["constitution", "markers", "rank", "verify-excerpt", "write", "dry-run"],
   },
   run(context): number {
     const subcommand = requireSubcommand("spec", context.args, SUBCOMMANDS) as Subcommand;
-    refuseExtraPositionals(context.args, 2);
+    if (subcommand !== "tasks") refuseExtraPositionals(context.args, 2);
     refuseForeignFlags(context, subcommand);
     if (REPOLESS.includes(subcommand)) {
       if (context.repoFlag !== null) throw new VerbUsageError(`'spec ${subcommand}' reads no checkout, so it takes no --repo.`);
@@ -498,6 +552,8 @@ export const specCommand: Command = {
         return runConverge(context, repo);
       case "parity":
         return runParity(context, repo);
+      case "tasks":
+        return runTasks(context, repo);
     }
     throw new VerbUsageError(`'spec ${subcommand}' is not dispatched here.`);
   },

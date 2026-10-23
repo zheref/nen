@@ -12,7 +12,7 @@ repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
 what each version changed: 47 command
-families, 166 verbs, every flag checked against that binary.
+families, 167 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -206,7 +206,7 @@ change from a compatible one.
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **96 shapes** and **99 ids** (`nen.runner.plan`,
+binary carries**, writing or reading — **97 shapes** and **100 ids** (`nen.runner.plan`,
 `nen.stop.mark` and `nen.wc.worktree.copies` each have two versions, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -266,7 +266,7 @@ file formats).
 - **`schema`** — `nen.schema.set/v0.1`
 - **`session`** — `nen.session.ledger/v0.1`
 - **`shu`** — `nen.shu.<verb>/v0.1` · `nen.shu.coverage-capture/v0.1` · `nen.shu.coverage/v0.1` · `nen.shu.detect/v0.1` · `nen.shu.evidence/v0.1` · `nen.shu.proof/v0.1` · `nen.shu.test-report/v0.1` · `nen.shu.tools/v0.1` · `nen.shu.warmup/v0.1`
-- **`spec`** — `nen.spec.check/v0.1` · `nen.spec.cite-check/v0.1` · `nen.spec.converge/v0.1` · `nen.spec.coverage/v0.1` · `nen.spec.diff/v0.1` · `nen.spec.index/v0.1` · `nen.spec.inventory/v0.1` · `nen.spec.number/v0.1` · `nen.spec.parity/v0.1`
+- **`spec`** — `nen.spec.check/v0.1` · `nen.spec.cite-check/v0.1` · `nen.spec.converge/v0.1` · `nen.spec.coverage/v0.1` · `nen.spec.diff/v0.1` · `nen.spec.index/v0.1` · `nen.spec.inventory/v0.1` · `nen.spec.number/v0.1` · `nen.spec.parity/v0.1` · `nen.spec.tasks/v0.1`
 - **`stop`** — `nen.stop.answer/v0.1` · `nen.stop.mark/v0.1` · `nen.stop.mark/v0.2` · `nen.stop.proposed-issue/v0.1`
 - **`surface`** — `nen.surface.capabilities/v0.1` · `nen.surface.install/v0.1` · `nen.surface.mirror.check-installed/v0.1` · `nen.surface.mirror.check-plugin/v0.1` · `nen.surface.mirror.check/v0.1` · `nen.surface.mirror.generate/v0.1` · `nen.surface.status/v0.1`
 - **`usage`** — `nen.usage.ledger/v0.1`
@@ -920,7 +920,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 166 verbs, grouped as the README groups them. **Reads** is what a
+All 167 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -1065,6 +1065,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`spec`](#family-spec) | [`nen spec converge`](#nen-spec-converge) | a folder's citations of one member re-read at a newer inventory's sha: gaps missing · partial · contradicts · unrequested (against capture/<CODE>/inventory.json), ticked tasks listed as claims, never evidence; `--write` only appends `[STALE @ <sha>]` companions and one dated convergence phase, and a second run changes nothing | spec.md/tasks.md, nen/repos.json and capture/<CODE>/inventory.json under --repo; the inventory and --checkouts files; git (remote get-url, rev-parse, ls-tree, cat-file) in the member checkout; WRITES spec.md and tasks.md under --write unless --dry-run | yes |
 | [`spec`](#family-spec) | [`nen spec coverage`](#nen-spec-coverage) | capture form: covered/total per row kind per member and requirement↔task/test traceability both ways, each with its denominator; delivery form: every F<nnn>-SC-### of an issue has one `## Spec` row in the PR body, satisfied with a passing test or deferred with a reason and a follow-up — an outside id exits 2 | capture: folders and nen/repos.json under --repo, the inventory files; delivery: the two body files and --test-report; no git/gh | yes |
 | [`spec`](#family-spec) | [`nen spec parity`](#nen-spec-parity) | one row per FR and member from each folder's parity.md, each state held to what SP-6 says it carries (a citation, UX-13, a CL-nnn or PT ruling, both citations, the files searched), a missing row or column open; `--target` adds each row's live issues and PRs | parity.md/spec.md and nen/repos.json under --repo; github (gh issue list, gh pr list) with --target | yes |
+| [`spec`](#family-spec) | [`nen spec tasks groups`](#nen-spec-tasks-groups) | tasks.md grouped by story and platform, each group's state (open, clarifying, captured, delivered) and dependencies in topological order, and per story group the dispatch title and an issue body quoting its scenarios as fenced source data | spec.md/tasks.md under --repo; git rev-parse HEAD for the pinned sha | yes |
 | [`decisions`](#family-decisions) | [`nen decisions summary`](#nen-decisions-summary) | rows per class and per gate and the G5 ids of nen/decisions.json, so prose never carries those numbers | nen/decisions.json under --repo | yes |
 | [`shu`](#family-shu) | [`nen shu detect`](#nen-shu-detect) | read the markers on disk and PROPOSE a nen/contract.json project block; never writes without --write and never overwrites one | the target repo's own files (framework configs, package.json, project files); writes nen/contract.json only with --write | yes |
 | [`shu`](#family-shu) | [`nen shu build`](#nen-shu-build) | compile or assemble a lane, from the invocation its declaration states | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
@@ -12098,6 +12099,79 @@ gaps: 4/6 requirement x member row(s) handled across 1 folder(s), members FA, FW
   F002-FR-003 FW absent -- not a handling
 ```
 (exit 1; from `src/spec/parity.test.ts`)
+
+### `nen spec tasks groups`
+
+A folder's `tasks.md` as **story-grouped, dependency-ordered task groups**,
+each story group rendered as the issue body a dispatch files (zheref/nen#493
+AC-9; Hatsu's `docs/config/spec-repo.md` § *The issue a dispatch files*). A
+task is a `- [ ] T<nnn> …` or `- [x] T<nnn> …` line. Its **story** is its
+`[US<k>]` tag, else the `User Story <k>` / `US-<k>` its `## Phase <n>:`
+heading names; its **platform** is its `[platform:<name>]` tag, else the
+nearest `### Platform: <name>` heading; a task with neither belongs to its
+phase's group (`phase-<n>`). A story group's id is `US<k>/<platform>` (`all`
+when no platform is named).
+
+| Group state | When |
+|---|---|
+| `clarifying` | it has an open task, and its story heading or a requirement its tasks name carries a marker in `spec.md` — excluded from every dispatch |
+| `open` | it has an open task and no such marker |
+| `delivered` | every task is ticked and says `delivered` |
+| `captured` | every task is ticked, not all `delivered` |
+
+A story group **depends on** every phase group of an earlier phase (Spec Kit:
+stories start after Setup and Foundational) and on the group of any task its
+tasks name with `depends on T<nnn>`; `order` is the topological order, ties by
+first appearance. For a story group, `title` is `spec: <story title>
+(F<nnn>/US<k> · <platform>)` and `body` carries `Spec: <folder>@<sha>` (the
+spec checkout's `HEAD`, `<unread>` outside git), the qualified FR and SC ids,
+the tasks and dependencies, **one unfenced `- AC-<n>: Given … When … Then …
+(F<nnn>-AC-<###>)` row per acceptance scenario**, numbered from 1 and mapped
+onto the folder-global scenario number, and the scenarios and SC lines
+**verbatim inside a `source-data` fence** one character longer than the longest
+backtick run they hold (SP-4). Nothing in the body is reworded but the AC rows'
+markdown, stripped of bold, numbering and annotations.
+
+**Usage**
+
+```text
+nen spec tasks groups --repo <spec> --folder <dir> [--group <id>] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--repo <path>` | yes | The spec repository's checkout. | Omitted exits 2. |
+| `--folder <dir>` | yes | The folder whose `tasks.md` is grouped. | No `spec.md` or `tasks.md`, or no `{nnn}` in its name: `could-not-read`. |
+| `--group <id>` | no | Print one story group's body alone (`--json`: `{ contract, verdict, group }`). | An unknown id, or a phase group, exits 2. |
+
+`spec tasks` with any action but `groups` exits 2.
+
+**Output and exit codes** — prints `<verdict>: <folder> -- <n> group(s) in order
+…`, then one line per group in order (`<id> <state> · <tasks> · after <deps> ·
+<title>`). `--json` top-level keys: `contract` (`nen.spec.tasks/v0.1`),
+`verdict` (`grouped` \| `refused` \| `could-not-read`), `repo`, `folder`,
+`spec` (`<folder>@<sha>` or null), `groups` (`{ id, phase, story, storyTitle,
+platform, state, tasks, requirements, dependsOn, title, body }` each, `title`
+and `body` null for a phase group), `order`, `reason`. Exit 0 when `grouped`;
+exit 1 when `refused` (a dependency cycle, a `depends on` naming no task) or
+`could-not-read`; exit 2 on a usage error.
+
+**Example**
+
+```bash
+nen spec tasks groups --repo . --folder specs/002-list
+```
+```text
+grouped: specs/002-list -- 5 group(s) in order phase-1 -> phase-2 -> US1/web -> US2/android -> US1/android · pinned specs/002-list@<sha>
+  phase-1 captured · T001
+  phase-2 open · T002
+  US1/web clarifying · T003, T004 · after phase-1, phase-2 · spec: A user opens the list (F002/US1 · web)
+  US2/android clarifying · T006 · after phase-1, phase-2 · spec: A user sorts the list (F002/US2 · android)
+  US1/android open · T005 · after phase-1, phase-2, US2/android · spec: A user opens the list (F002/US1 · android)
+```
+(exit 0; from `src/spec/tasks.test.ts`)
 
 <a id="family-decisions"></a>
 
