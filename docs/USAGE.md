@@ -15026,7 +15026,12 @@ batch under the repository's typed idle profile; nen reports it (`idle: yes`, `-
 otherwise `false`) and never acts on it. A quoted label that merely contains the text is never read as
 the flag (an UNQUOTED label whose last word is `--idle` now reads as the flag: quote it to keep it);
 `--idle` after `then` would be indistinguishable from prose and is refused at exit 2 with the line moved
-before `then`; given twice it is refused with one kept. On any other skill it is exit 2.
+before `then`; given twice -- at both ends or twice at the same end (`nen@bug --idle --idle`) -- it is
+refused with one kept, never read as part of the label (zheref/nen#491). On any other skill it is exit 2.
+**Kazaana carries the same flag through the generic grammar**, as a literal-only optional clause:
+`nen parse kazaana --grammar "<repo> [on <line:…>] [--idle]" --line "hatsu on claude --idle"` reports
+`clauses: [{ literal: "--idle", present: true }]` (and `present: false` without it), so a caller reads
+the flag off the parse and strips nothing by hand.
 
 **Arguments**
 
