@@ -12,7 +12,7 @@ repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
 what each version changed: 47 command
-families, 163 verbs, every flag checked against that binary.
+families, 164 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -206,7 +206,7 @@ change from a compatible one.
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **93 shapes** and **96 ids** (`nen.runner.plan`,
+binary carries**, writing or reading — **94 shapes** and **97 ids** (`nen.runner.plan`,
 `nen.stop.mark` and `nen.wc.worktree.copies` each have two versions, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -266,7 +266,7 @@ file formats).
 - **`schema`** — `nen.schema.set/v0.1`
 - **`session`** — `nen.session.ledger/v0.1`
 - **`shu`** — `nen.shu.<verb>/v0.1` · `nen.shu.coverage-capture/v0.1` · `nen.shu.coverage/v0.1` · `nen.shu.detect/v0.1` · `nen.shu.evidence/v0.1` · `nen.shu.proof/v0.1` · `nen.shu.test-report/v0.1` · `nen.shu.tools/v0.1` · `nen.shu.warmup/v0.1`
-- **`spec`** — `nen.spec.check/v0.1` · `nen.spec.cite-check/v0.1` · `nen.spec.diff/v0.1` · `nen.spec.index/v0.1` · `nen.spec.inventory/v0.1` · `nen.spec.number/v0.1`
+- **`spec`** — `nen.spec.check/v0.1` · `nen.spec.cite-check/v0.1` · `nen.spec.converge/v0.1` · `nen.spec.diff/v0.1` · `nen.spec.index/v0.1` · `nen.spec.inventory/v0.1` · `nen.spec.number/v0.1`
 - **`stop`** — `nen.stop.answer/v0.1` · `nen.stop.mark/v0.1` · `nen.stop.mark/v0.2` · `nen.stop.proposed-issue/v0.1`
 - **`surface`** — `nen.surface.capabilities/v0.1` · `nen.surface.install/v0.1` · `nen.surface.mirror.check-installed/v0.1` · `nen.surface.mirror.check-plugin/v0.1` · `nen.surface.mirror.check/v0.1` · `nen.surface.mirror.generate/v0.1` · `nen.surface.status/v0.1`
 - **`usage`** — `nen.usage.ledger/v0.1`
@@ -920,7 +920,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 163 verbs, grouped as the README groups them. **Reads** is what a
+All 164 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -1062,6 +1062,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`spec`](#family-spec) | [`nen spec index`](#nen-spec-index) | `<root>/INDEX.md` regenerated from each folder's spec.md header; reports current / stale / hand-edited / absent; `--write` refuses over a hand edit | spec.md headers and INDEX.md under --repo; WRITES `<root>/INDEX.md` under --write unless --dry-run | yes |
 | [`spec`](#family-spec) | [`nen spec inventory`](#nen-spec-inventory) | one row per owned file fact of a member at a commit — {id, kind, path, lines, sha, excerptSha256, tier, ruleId}, no excerpts — from the build system's own membership (Xcode build phases and synchronized groups, Gradle include list and source sets, tsconfig files/include/extends/references) classified by the scenario handbook's capture-reader appendix; totals per kind, unknown never omitted | git (rev-parse, ls-tree, cat-file, remote get-url) in the member checkout; WRITES --out when given | yes |
 | [`spec`](#family-spec) | [`nen spec diff`](#nen-spec-diff) | added, removed and changed rows by stable id between two inventories of one member, each changed field named; a different sha alone is no change, so identical inputs give an empty diff | the two inventory files; no git/gh | yes |
+| [`spec`](#family-spec) | [`nen spec converge`](#nen-spec-converge) | a folder's citations of one member re-read at a newer inventory's sha: gaps missing · partial · contradicts · unrequested (against capture/<CODE>/inventory.json), ticked tasks listed as claims, never evidence; `--write` only appends `[STALE @ <sha>]` companions and one dated convergence phase, and a second run changes nothing | spec.md/tasks.md, nen/repos.json and capture/<CODE>/inventory.json under --repo; the inventory and --checkouts files; git (remote get-url, rev-parse, ls-tree, cat-file) in the member checkout; WRITES spec.md and tasks.md under --write unless --dry-run | yes |
 | [`decisions`](#family-decisions) | [`nen decisions summary`](#nen-decisions-summary) | rows per class and per gate and the G5 ids of nen/decisions.json, so prose never carries those numbers | nen/decisions.json under --repo | yes |
 | [`shu`](#family-shu) | [`nen shu detect`](#nen-shu-detect) | read the markers on disk and PROPOSE a nen/contract.json project block; never writes without --write and never overwrites one | the target repo's own files (framework configs, package.json, project files); writes nen/contract.json only with --write | yes |
 | [`shu`](#family-shu) | [`nen shu build`](#nen-shu-build) | compile or assemble a lane, from the invocation its declaration states | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
@@ -11838,6 +11839,90 @@ differs: fixture-owner/fixture-app aaaaaaaaaaaa -> aaaaaaaaaaaa -- 1 added, 1 re
   ~ state:src/AFeature.ts (lines, excerptSha256)
 ```
 (exit 0; from `src/spec/diff.test.ts`)
+
+### `nen spec converge`
+
+A merged folder held against a **newer inventory of one member**, its gaps
+classified, and — under `--write` — **only ever appended to** (zheref/nen#493
+AC-6; SP-9, SP-10). Every citation of `--code` on a requirement line (FR, SC,
+story) is re-read: its cited bytes at its own sha, and the same range at the
+inventory's sha, both through git in the checkout the checkouts file names
+(the member chain of [`spec cite-check`](#nen-spec-cite-check), its `origin`
+read back as the inventory's). Each range is `current`, `moved` (the bytes
+are elsewhere in the file now), `changed` (they are nowhere in it),
+`vanished` (the file is gone) or `unreadable` (its own sha does not read).
+Per requirement, the **gap class** is a fact about those bytes:
+
+| Class | When |
+|---|---|
+| `missing` | every cited range of this member vanished |
+| `partial` | some ranges moved or vanished, none changed (or one could not be read at its own sha) |
+| `contradicts` | a cited range changed — a **candidate** for Hatsu's `spec-conflict` gate; whether the code contradicts the sentence is the maintainer's to rule, never nen's |
+| `unrequested` | a row the inventory has and `capture/<CODE>/inventory.json` (the folder's last capture) lacks, in a directory the folder cites: behaviour no line requests yet. With no capture inventory it is not computed, and `unrequestedReason` says why |
+
+**Completion claims are not evidence**: a ticked task (`- [x]`) naming a
+requirement with a gap is listed under `claims` and closes nothing.
+
+`--write` appends **two things and nothing else**: a `[STALE @ <cited sha>]`
+companion right after each moved, changed or vanished citation — the sentence
+and its citation stay byte for byte, and [`spec check`](#nen-spec-check) reads
+the companion as stale — and one `## Phase <N>: Convergence <date> @ <sha12>`
+section at the end of `tasks.md` (created when absent), one open task per gap,
+numbered after the highest `T<nnn>` already there. It never renumbers, never
+deletes, never writes a `supersedes` line (a reversal needs a new id with new
+words, which are the author's). A **second run on the same inputs finds its
+companions and its phase and changes zero bytes**; a folder with no gap is
+left byte-identical.
+
+**Usage**
+
+```text
+nen spec converge --repo <spec> --folder <dir> --inventory <file> --code <CODE> --checkouts <file> [--date <YYYY-MM-DD>] [--write [--dry-run]] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--repo <path>` | yes | The spec repository's checkout. | Omitted exits 2. |
+| `--folder <dir>` | yes | The merged folder, relative to `--repo`. | As `spec check`; one with no `spec.md` is `could-not-read`. |
+| `--inventory <file>` | yes | The newer inventory of one member. | Unreadable, or naming no sha or origin: `could-not-read`. |
+| `--code <CODE>` | yes | The member's product code, as the citations spell it. | `[A-Z][A-Z0-9]{1,7}`, else exit 2; one resolving to another member than the inventory's is `could-not-read`. |
+| `--checkouts <file>` | yes | As `spec cite-check`. | Malformed exits 2. |
+| `--date <YYYY-MM-DD>` | no | The convergence phase's date. | Default today (UTC); malformed exits 2. |
+| `--write` | no | Append the companions and the phase. | |
+| `--dry-run` | no | With `--write`: say `would-write`, write nothing. | Without `--write` exits 2. |
+
+**Output and exit codes** — prints `<verdict>: <folder> against <code>
+<member> @ <sha> -- <n> missing · <n> partial · <n> contradicts · <n>
+unrequested · action <action>`, one line per gap, per claim and per write.
+`--json` top-level keys: `contract` (`nen.spec.converge/v0.1`), `verdict`
+(`converged` \| `gaps` \| `could-not-read`), `repo`, `folder`, `inventory`
+(`{ file, sha, origin }`), `member` (`{ code, repo, path }`), `citations`
+(`{ line, id, text, path, lines, sha, state, now, marked, reason }` each),
+`gaps` (`{ class, id, line, detail }` each), `unrequested` (rows, or null),
+`unrequestedReason`, `claims` (`{ line, text, ids }` each), `writes` (`{ file,
+kind: "stale"|"phase", line, text }` each), `action` (`none` \| `written` \|
+`would-write` \| `refused`), `counts` (per class), `reason`. Exit 0 when
+`converged`; exit 1 on any gap — written or not, it stands until the author
+acts — and when the inputs could not be read; exit 2 on a usage error or a
+spec file resolving outside `--repo`.
+
+**Example**
+
+```bash
+nen spec converge --repo . --folder specs/007-converge --inventory /tmp/FX-now.json --code FX --checkouts ~/.config/hatsu/checkouts --write
+```
+```text
+gaps: specs/007-converge against FX fixture-owner/fixture-app @ 0123456789ab -- 0 missing · 1 partial · 0 contradicts · 0 unrequested · action written
+  partial FR-001 (spec.md:3) -- 1 moved at 0123456789ab
+  unrequested: not computed -- capture/FX/inventory.json does not exist, so there is no earlier capture to tell new rows from old ones
+  claim tasks.md:5 ticks FR-001 -- a tick is not evidence; the gap stands
+  wrote specs/007-converge/spec.md:3 [STALE @ aaaaaaaaaa]
+  wrote specs/007-converge/tasks.md ## Phase 2: Convergence 2026-10-23 @ 0123456789ab
+```
+(exit 1; the shape of `src/spec/converge.test.ts`, which builds a member
+repository with two commits)
 
 <a id="family-decisions"></a>
 

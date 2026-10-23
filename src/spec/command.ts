@@ -23,12 +23,14 @@ import { checkSpec, CONSTITUTION_PATH, parseVocabulary, renderSpecCheck, SpecCon
 import { citeCheck, parseCheckouts, renderCiteCheck } from "./citecheck.js";
 import { computeNext, readBaseFolders, readPrFolders, renderSpecNumber, SPEC_NUMBER_CONTRACT, type SpecNumberReport } from "./number.js";
 import { renderSpecIndex, specIndex } from "./specindex.js";
+import { loadRepoRegistry, type RepoRegistry } from "../schema/repos.js";
 import { parseContract } from "../schema/contract.js";
 import { couldNotRead, GOVERNED_SCENARIOS, inventory, renderInventory, scenarioReader, type InventoryReport } from "./inventory.js";
 import { diffInventories, InventoryReadError, loadInventory, renderDiff, unreadableDiff, type SpecDiffReport } from "./diff.js";
+import { converge, renderConverge } from "./converge.js";
 import { readTree, TreeReadError } from "./tree.js";
 
-const SUBCOMMANDS = ["number", "check", "cite-check", "index", "inventory", "diff"] as const;
+const SUBCOMMANDS = ["number", "check", "cite-check", "index", "inventory", "diff", "converge"] as const;
 type Subcommand = (typeof SUBCOMMANDS)[number];
 
 export const DEFAULT_SPEC_LAYOUT = "specs/{nnn}-{slug}";
@@ -39,6 +41,7 @@ nen spec cite-check --repo <spec> --folder <dir> --checkouts <file> [--at <sha>|
 nen spec index --repo <spec> [--layout <pattern>] [--write [--dry-run]] [--json]
 nen spec inventory --repo <member> --scenario <id> [--lane <lane>] [--at <ref>] [--exclude <glob>[,<glob>...]] [--out <file>] [--json]
 nen spec diff --from <inventory> --to <inventory> [--json]
+nen spec converge --repo <spec> --folder <dir> --inventory <file> --code <CODE> --checkouts <file> [--date <YYYY-MM-DD>] [--write [--dry-run]] [--json]
 
 Read-only verbs over a Spec Kit spec repository. Each
 reports and refuses; none decides. A layout is '<dir>/<final>' whose final
@@ -97,6 +100,14 @@ diff        Added, removed and changed rows by stable id between two
             inventories of one member; a different sha alone is no change.
             Exit 0 identical or differing; 1 when an inventory could not be
             read; 2 when the two name different members.
+converge    A folder's citations of one member (--code) re-read at the
+            inventory's sha in the checkout the checkouts file names: gaps
+            missing · partial · contradicts · unrequested (the last against
+            capture/<CODE>/inventory.json). A ticked task is a claim, never
+            evidence. --write APPENDS ONLY: [STALE @ <sha>] beside a moved,
+            changed or vanished citation, and one '## Phase N: Convergence
+            <date> @ <sha12>' to tasks.md; a second run changes nothing.
+            Exit 1 on any gap or when the inputs could not be read.
 
 --json shapes (key order as listed):
   number:     { contract: "nen.spec.number/v0.1", repo, target, layout, base, baseSource, baseSha, openPrs, taken, collisions, next, reason }
@@ -104,16 +115,17 @@ diff        Added, removed and changed rows by stable id between two
   cite-check: { contract: "nen.spec.cite-check/v0.1", repo, folder, checkouts, at, verifyExcerpt, members, citations, counts }
   index:      { contract: "nen.spec.index/v0.1", repo, layout, path, rows, ignored, state, action, reason }
   inventory:  { contract: "nen.spec.inventory/v0.1", verdict, repo, origin, lane, cwd, scenario, handbook, sha, membership, excluded, rows, totals, unread, reason }
-  diff:       { contract: "nen.spec.diff/v0.1", verdict, from, to, origin, added, removed, changed, counts, reason }`;
+  diff:       { contract: "nen.spec.diff/v0.1", verdict, from, to, origin, added, removed, changed, counts, reason }
+  converge:   { contract: "nen.spec.converge/v0.1", verdict, repo, folder, inventory, member, citations, gaps, unrequested, unrequestedReason, claims, writes, action, counts, reason }`;
 
 const OWNED: Readonly<Record<string, readonly Subcommand[]>> = {
   layout: ["number", "index"],
   base: ["number"],
   target: ["number"],
-  folder: ["check", "cite-check"],
+  folder: ["check", "cite-check", "converge"],
   vocabulary: ["check"],
   max: ["check"],
-  checkouts: ["cite-check"],
+  checkouts: ["cite-check", "converge"],
   at: ["cite-check", "inventory"],
   scenario: ["inventory"],
   lane: ["inventory"],
@@ -121,14 +133,17 @@ const OWNED: Readonly<Record<string, readonly Subcommand[]>> = {
   out: ["inventory"],
   from: ["diff"],
   to: ["diff"],
+  inventory: ["converge"],
+  code: ["converge"],
+  date: ["converge"],
 };
 const OWNED_BOOLEANS: Readonly<Record<string, readonly Subcommand[]>> = {
   constitution: ["check"],
   markers: ["check"],
   rank: ["check"],
   "verify-excerpt": ["cite-check"],
-  write: ["index"],
-  "dry-run": ["index"],
+  write: ["index", "converge"],
+  "dry-run": ["index", "converge"],
 };
 /** The verbs that read no spec or member checkout, and so take no --repo. */
 const REPOLESS: readonly Subcommand[] = ["diff"];
@@ -303,13 +318,38 @@ function runDiff(context: CommandContext): number {
   return report.verdict === "could-not-read" ? 1 : 0;
 }
 
+const DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+function runConverge(context: CommandContext, repo: string): number {
+  const folder = checkRelativePath("folder", requireValue(context.args, "folder", "It names the merged spec folder to converge."));
+  const inventoryFile = requireValue(context.args, "inventory", "It names the newer inventory of one member (nen spec inventory --out).");
+  const code = requireValue(context.args, "code", "It names the member's product code, as the folder's citations spell it.");
+  if (!/^[A-Z][A-Z0-9]{1,7}$/.test(code)) throw new VerbUsageError(`--code '${code}' is not a product code ([A-Z][A-Z0-9]{1,7}).`);
+  const checkoutsFile = requireValue(context.args, "checkouts", "It maps the member's owner/name to its checkout, one tab-separated line each.");
+  const write = context.args.booleans.has("write");
+  const dryRun = context.args.booleans.has("dry-run");
+  if (dryRun && !write) throw new VerbUsageError("--dry-run qualifies --write; without --write nothing is written anyway.");
+  const date = context.args.values["date"] ?? context.seams.now().toISOString().slice(0, 10);
+  if (!DATE.test(date)) throw new VerbUsageError(`--date '${date}' is not YYYY-MM-DD.`);
+  const checkouts = parseCheckouts(readCallerFile("checkouts", checkoutsFile), checkoutsFile);
+  let report;
+  try {
+    report = converge(context.seams, { repo, folder, inventoryFile, code, checkoutsFile, checkouts, date, write, dryRun });
+  } catch (error) {
+    if (error instanceof SpecContainmentError) throw new VerbUsageError(error.message);
+    throw error;
+  }
+  emit(context.io, context.json, report, renderConverge(report));
+  return report.verdict === "converged" ? 0 : 1;
+}
+
 export const specCommand: Command = {
   name: "spec",
-  summary: "Inventory, number, check, cite-check, diff and index a product family's Spec Kit spec repository.",
+  summary: "Inventory, number, check, cite-check, diff, converge and index a product family's Spec Kit spec repository.",
   usage: USAGE,
   subcommands: [...SUBCOMMANDS],
   flags: {
-    values: ["layout", "base", "target", "folder", "vocabulary", "max", "checkouts", "at", "scenario", "lane", "exclude", "out", "from", "to"],
+    values: ["layout", "base", "target", "folder", "vocabulary", "max", "checkouts", "at", "scenario", "lane", "exclude", "out", "from", "to", "inventory", "code", "date"],
     booleans: ["constitution", "markers", "rank", "verify-excerpt", "write", "dry-run"],
   },
   run(context): number {
@@ -332,6 +372,8 @@ export const specCommand: Command = {
         return runIndex(context, repo);
       case "inventory":
         return runInventory(context, repo);
+      case "converge":
+        return runConverge(context, repo);
     }
     throw new VerbUsageError(`'spec ${subcommand}' is not dispatched here.`);
   },
