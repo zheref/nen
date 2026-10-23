@@ -81,7 +81,7 @@ describe("nen spec inventory", () => {
 
   it("reads a gradle member's include list and source sets, with JUnit cases", async () => {
     const member = memberRepo({
-      "settings.gradle.kts": `rootProject.name = "fixture"\ninclude(":app")\n// include(":ghost")\n`,
+      "settings.gradle.kts": `rootProject.name = "fixture"\nincludeBuild("build-logic")\ninclude(":app")\n// include(":ghost")\n`,
       "app/build.gradle.kts": `android {\n  sourceSets { getByName("main").java.srcDirs("src/extra") }\n}\n`,
       "app/src/main/kotlin/list/ListScreen.kt": "fun ListScreen() {}\n",
       "app/src/main/kotlin/list/ListState.kt": "data class ListState(val x: Int)\n",
