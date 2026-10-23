@@ -102,7 +102,7 @@ describe("nen pr converge", () => {
     expect(report.base).toBe("integration/x");
     expect(report.closingIssues.map((issue) => issue.issue)).toEqual(["o/n#12"]);
     const none = await run(prCommand, ["pr", "converge", "--target", "o/n", "--pr", "5"], [view("no keyword", [], "integration/x"), DEFAULT_MAIN]);
-    expect(none.code).toBe(1);
+    expect(none.code).toBe(0); // reported as none-on-non-default-base, never a blocking row (2026-10-23)
     expect(none.out).toMatch(/not the default branch/);
   });
 

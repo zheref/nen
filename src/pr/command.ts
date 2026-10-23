@@ -1416,9 +1416,12 @@ function convergeVerb(context: CommandContext): number {
   }));
   const counts = report.counts;
   const noKeyword = input.closingSource === "none-on-non-default-base";
-  const blocking = noKeyword
-    ? [`${target.slug}#${prNumber}: base '${input.base}' is not the default branch, where GitHub computes no closing references, and the body names no closing issue (Closes/Fixes/Resolves #N)`, ...report.blocking]
-    : report.blocking;
+  // A NON-DEFAULT BASE WITH NO CLOSING ROW IS REPORTED, NOT BLOCKED (the
+  // integrator's ruling, 2026-10-23): `closingSource` says
+  // `none-on-non-default-base` and the head line says it cannot tell what the
+  // pull request closes, but a sub-PR into an integration branch that closes
+  // nothing has no criterion to miss, so the other conjuncts decide (#483 AC-5).
+  const blocking = report.blocking;
   const head =
     input.issues.length === 0
       ? noKeyword
