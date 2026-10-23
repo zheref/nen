@@ -12122,14 +12122,16 @@ and held to what its state must carry (zheref/nen#493 AC-8; bankai-handbooks
 SP-6, SP-7). `parity.md` holds a Markdown table whose first header cell is
 `FR`, `Requirement` or `Id` and whose other header cells are product codes, one
 column per member; each body row starts with an `FR-###`, and each cell starts
-with its state:
+with its state. **That table shape is nen's proposal**: Hatsu's `spec-repo.md`
+names the rows (FR × member) and the states, not a header, and states the shape
+once it adopts one (zheref/hatsu#405).
 
 | State | The cell must carry | Settles the row |
 |---|---|---|
 | `present` · `mirror` | the member's own citation | yes |
 | `map` | the member's citation and `UX-13` (the adapt category) | yes |
 | `drop-with-note` | a `CL-nnn` ruling or a `<from>--<to> PT-<n>` port ruling | yes |
-| `target-only` | the member's citation and the `CL-nnn` that made it intentional | yes |
+| `target-only` | the member's citation and the ruling that made it intentional: a `CL-nnn`, or a `<from>--<to> PT-<n>` for a technology-level reason | yes |
 | `differs` | both citations | no |
 | `absent` | the files the reader searched; "not needed", "n/a" or "intentional" without a `CL-nnn` is a finding (SP-7) | no |
 | `open` (or an empty cell) | nothing — it is the gap | no |
@@ -12316,8 +12318,10 @@ keys: `contract` (`nen.spec.trace/v0.1`), `verdict` (`current` \| `stale` \|
 `path`, `rows` (`{ folder, id, cells, tasks, markers }` each), `action`
 (`none` \| `written` \| `would-write` \| `refused`), `reason`. Without
 `--write`, exit 0 only when `current`; with it, exit 0 unless refused. Exit 1
-too when a folder has no readable `spec.md` or the file is a link or a
-directory; exit 2 on a usage error.
+too, verdict `could-not-read` with its document, when the spec repository's
+`nen/repos.json` cannot be read, a folder has no readable `spec.md` or the file
+is a link or a directory; exit 2 on a usage error (an undeclared family
+included).
 
 **Example**
 

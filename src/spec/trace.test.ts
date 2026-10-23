@@ -59,6 +59,15 @@ describe("nen spec trace", () => {
     expect(gone.json()).toMatchObject({ verdict: "could-not-read", action: "refused" });
   });
 
+  it("says could-not-read, with a --json document, when the spec repository's registry cannot be read (Nobunaga F2)", async () => {
+    const repo = familyRepo();
+    writeFileSync(join(repo, "nen", "repos.json"), "{");
+    const run = await spec(["trace", "--family", "fixture-family"], repo, defaultSeams(), true);
+    expect(run.code).toBe(1);
+    expect(run.json()).toMatchObject({ contract: "nen.spec.trace/v0.1", verdict: "could-not-read", members: [] });
+    expect(String(run.json()["reason"])).toContain("nen/repos.json could not be read");
+  });
+
   it("refuses an undeclared family and --dry-run without --write at exit 2", async () => {
     const repo = familyRepo();
     expect((await spec(["trace", "--family", "other"], repo, defaultSeams())).code).toBe(2);

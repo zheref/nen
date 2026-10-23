@@ -79,7 +79,8 @@ describe("nen spec parity", () => {
     expect(readCell(`map ${cite("FA")}`, "FA").finding).toContain("no UX-13 category");
     expect(readCell("drop-with-note — decided", "FA").finding).toContain("no CL-nnn ruling");
     expect(readCell("drop-with-note — compose-uzf-v2--react-uzf-v1 PT-3", "FA").finding).toBeNull();
-    expect(readCell(`target-only ${cite("FA")}`, "FA").finding).toContain("no CL-nnn ruling");
+    expect(readCell(`target-only ${cite("FA")}`, "FA").finding).toContain("no CL-nnn or");
+    expect(readCell(`target-only ${cite("FA")} — swiftui-tca-uzf-v2--react-uzf-v1 PT-2`, "FA").finding).toBeNull();
     expect(readCell("absent", "FA").finding).toContain("files searched");
     expect(readCell("absent — not needed on web", "FA").finding).toContain("SP-7");
     expect(readCell("absent — not needed, CL-002", "FA").finding).toBeNull();
@@ -89,7 +90,7 @@ describe("nen spec parity", () => {
 
   it("reads each row's live issues and pull requests from --target, and names a list it could not read", async () => {
     const repo = family(TABLE);
-    const issues = JSON.stringify([{ number: 7, state: "OPEN", body: "Spec: specs/002-list@abc\n- F002-FR-001 shows" }, { number: 8, state: "CLOSED", body: "F002-FR-0011 is not an id" }]);
+    const issues = JSON.stringify([{ number: 7, state: "OPEN", body: "Spec: specs/002-list@abc\n- F002-FR-001 shows" }, { number: 8, state: "CLOSED", body: "F002-FR-2 is unpadded and still FR-002" }]);
     const prs = JSON.stringify([{ number: 9, state: "MERGED", body: "Closes #7 · F002-FR-001" }]);
     const ok = (stdout: string): ScriptedCall["result"] => ({ code: 0, stdout, stderr: "", spawnFailed: false });
     const seams = new ScriptedSeams([
@@ -101,7 +102,8 @@ describe("nen spec parity", () => {
     const run = await spec(["parity", "--folder", "specs/002-list", "--target", "fixture-owner/fixture-android,fixture-owner/fixture-web"], repo, seams, true);
     const rows = run.json()["rows"] as { qualified: string; issues: unknown; prs: unknown }[];
     expect(rows[0]).toMatchObject({ qualified: "F002-FR-001", issues: [{ repo: "fixture-owner/fixture-android", number: 7, state: "OPEN" }], prs: [{ repo: "fixture-owner/fixture-android", number: 9, state: "MERGED" }] });
-    expect(rows[2]).toMatchObject({ issues: [], prs: [] });
+    expect(rows[2]).toMatchObject({ qualified: "F002-FR-002", issues: [{ repo: "fixture-owner/fixture-android", number: 8, state: "CLOSED" }], prs: [] });
+    expect(rows[4]).toMatchObject({ qualified: "F002-FR-003", issues: [], prs: [] });
     expect(run.json()["live"]).toEqual({ targets: ["fixture-owner/fixture-android", "fixture-owner/fixture-web"], unread: [{ repo: "fixture-owner/fixture-web", reason: "gh issue list failed: HTTP 404" }] });
   });
 

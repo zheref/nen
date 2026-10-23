@@ -33,7 +33,7 @@ import { captureCoverage, deliveryCoverage, readReport, renderCaptureCoverage, r
 import { readTree, TreeReadError } from "./tree.js";
 import { parity, readParityFolders, renderParity, unreadableParity, type ParityReport } from "./parity.js";
 import { renderTasks, taskGroups, unreadableTasks, type TasksReport } from "./tasks.js";
-import { renderTrace, specTrace } from "./trace.js";
+import { renderTrace, specTrace, unreadableTrace } from "./trace.js";
 import { GIT, outputLines } from "../seam/exec.js";
 
 const SUBCOMMANDS = ["number", "check", "cite-check", "index", "inventory", "diff", "converge", "coverage", "parity", "tasks", "trace"] as const;
@@ -541,13 +541,16 @@ function runTrace(context: CommandContext, repo: string): number {
   const dryRun = context.args.booleans.has("dry-run");
   if (dryRun && !write) throw new VerbUsageError("--dry-run qualifies --write; without --write nothing is written anyway.");
   const layout = parseLayout(context.args.values["layout"] ?? DEFAULT_SPEC_LAYOUT);
-  const members = familyMembers(repo, family);
   let report;
   try {
+    // An unreadable registry is could-not-read with a report, as parity reads it (Nobunaga F2); an
+    // undeclared family stays a usage refusal.
+    const members = familyMembers(repo, family);
     report = specTrace(repo, layout, family, members, { write, dryRun });
   } catch (error) {
+    if (error instanceof VerbUsageError) throw error;
     if (error instanceof SpecContainmentError) throw new VerbUsageError(error.message);
-    throw error;
+    report = unreadableTrace(repo, layout, family, (error as Error).message, write);
   }
   emit(context.io, context.json, report, renderTrace(report));
   if (report.verdict === "could-not-read") return 1;

@@ -2,7 +2,8 @@
 // read from each folder's parity.md and held to what its state must carry
 // (zheref/nen#493 AC-8; bankai-handbooks SP-6, SP-7).
 //
-// THE TABLE'S SHAPE. parity.md holds a Markdown table whose first header cell
+// THE TABLE'S SHAPE -- nen's proposal until Hatsu's spec-repo.md states one
+// (it names "FR x member" and the states, not the header). parity.md holds a Markdown table whose first header cell
 // names the requirement column (`FR`, `Requirement` or `Id`) and whose other
 // header cells are product codes, one column per member. Each body row starts
 // with an `FR-###`; each cell starts with the state and carries what SP-6 says
@@ -31,7 +32,7 @@ import { join } from "node:path";
 import { GH, type Seams } from "../seam/exec.js";
 import { assertInsideRepo } from "./check.js";
 import { matchFolder, type SpecLayout } from "./layout.js";
-import { citationsIn, proseLines, requirementOf } from "./lines.js";
+import { citationsIn, proseLines, qualifiedId, requirementOf } from "./lines.js";
 
 export const SPEC_PARITY_CONTRACT = "nen.spec.parity/v0.1";
 
@@ -166,7 +167,8 @@ export function readCell(cell: string, code: string): { state: ParityState | nul
       if (rulings.length === 0) finding = "drop-with-note carries no CL-nnn ruling and no <from>--<to> PT-<n> port ruling (SP-6)";
       break;
     case "target-only":
-      if (own === 0 || !hasCl) finding = `target-only carries ${own === 0 ? `no ${code} citation` : "no CL-nnn ruling"} (SP-6)`;
+      // SP-6 asks for "the ruling that made it intentional": a CL-nnn, or for a technology-level reason a PT-n.
+      if (own === 0 || rulings.length === 0) finding = `target-only carries ${own === 0 ? `no ${code} citation` : "no CL-nnn or <from>--<to> PT-<n> ruling"} (SP-6)`;
       break;
     case "differs":
       if (citations.length < 2) finding = `differs carries ${citations.length} citation(s); it carries both (SP-6)`;
@@ -240,11 +242,12 @@ export function readLive(seams: Seams, targets: readonly string[], nnns: readonl
         if (list.length >= LIVE_LIMIT) index.unread.push({ repo, reason: `gh ${kind} list reached its ${LIVE_LIMIT} limit for F${nnn}; the list may be incomplete` });
         for (const entry of list) {
           if (typeof entry.number !== "number" || typeof entry.state !== "string" || typeof entry.body !== "string") continue;
-          for (const match of entry.body.matchAll(new RegExp(`\\bF${nnn}-FR-\\d{3}\\b`, "g"))) {
+          for (const match of entry.body.matchAll(new RegExp(`\\bF${nnn}-(FR-\\d+)\\b`, "g"))) {
             const map = kind === "issue" ? index.issues : index.prs;
-            const known = map.get(match[0]) ?? [];
+            const key = qualifiedId(nnn, match[1] as string);
+            const known = map.get(key) ?? [];
             if (!known.some((object): boolean => object.repo === repo && object.number === entry.number)) known.push({ repo, number: entry.number, state: entry.state });
-            map.set(match[0], known);
+            map.set(key, known);
           }
         }
       }
@@ -279,7 +282,7 @@ export function parity(seams: Seams, input: ParityInput, folders: readonly Folde
     const codes = [...new Set([...(input.familyMembers ?? []), ...(parsed?.codes ?? []), ...cited])].sort();
     for (const code of codes) members.add(code);
     for (const id of [...new Set([...ids, ...(parsed === null ? [] : [...parsed.cells.keys()])])]) {
-      const qualified = `F${folder.nnn}-${id}`;
+      const qualified = qualifiedId(folder.nnn, id);
       for (const code of codes) {
         const issues = live === null ? null : (live.issues.get(qualified) ?? []);
         const prs = live === null ? null : (live.prs.get(qualified) ?? []);

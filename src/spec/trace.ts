@@ -16,7 +16,7 @@
 import { lstatSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
 import { sha256 } from "./check.js";
-import { citationsIn, markersIn, proseLines, requirementOf } from "./lines.js";
+import { citationsIn, markersIn, proseLines, qualifiedId, requirementOf } from "./lines.js";
 import type { SpecLayout } from "./layout.js";
 import { parseParity, readCell, readParityFolders } from "./parity.js";
 import { parseTasks } from "./tasks.js";
@@ -66,7 +66,7 @@ export function traceRows(repo: string, layout: SpecLayout, members: readonly st
       }
       rows.push({
         folder: folder.folder,
-        id: `F${folder.nnn}-${requirement.kind}-${requirement.id.slice(3).padStart(3, "0")}`,
+        id: qualifiedId(folder.nnn, requirement.id),
         cells,
         tasks: tasks.filter((task): boolean => task.requirements.includes(requirement.id)).map((task): string => task.id),
         markers: markersIn(line.text).length,
@@ -110,6 +110,11 @@ export function specTrace(repo: string, layout: SpecLayout, family: string, memb
   if (options.dryRun) return make(state, rows, "would-write", null);
   writeFileSync(path, generated);
   return make(state, rows, "written", null);
+}
+
+/** The report for a trace whose inputs could not be read at all (an unreadable registry): never a stale or absent file. */
+export function unreadableTrace(repo: string, layout: SpecLayout, family: string, reason: string, write: boolean): TraceReport {
+  return { contract: SPEC_TRACE_CONTRACT, verdict: "could-not-read", repo, family, members: [], path: `${layout.root}/traceability.md`, rows: [], action: write ? "refused" : "none", reason };
 }
 
 export function renderTrace(report: TraceReport): string[] {
