@@ -12,7 +12,7 @@ repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
 what each version changed: 47 command
-families, 167 verbs, every flag checked against that binary.
+families, 168 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -206,7 +206,7 @@ change from a compatible one.
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **97 shapes** and **100 ids** (`nen.runner.plan`,
+binary carries**, writing or reading — **98 shapes** and **101 ids** (`nen.runner.plan`,
 `nen.stop.mark` and `nen.wc.worktree.copies` each have two versions, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -266,7 +266,7 @@ file formats).
 - **`schema`** — `nen.schema.set/v0.1`
 - **`session`** — `nen.session.ledger/v0.1`
 - **`shu`** — `nen.shu.<verb>/v0.1` · `nen.shu.coverage-capture/v0.1` · `nen.shu.coverage/v0.1` · `nen.shu.detect/v0.1` · `nen.shu.evidence/v0.1` · `nen.shu.proof/v0.1` · `nen.shu.test-report/v0.1` · `nen.shu.tools/v0.1` · `nen.shu.warmup/v0.1`
-- **`spec`** — `nen.spec.check/v0.1` · `nen.spec.cite-check/v0.1` · `nen.spec.converge/v0.1` · `nen.spec.coverage/v0.1` · `nen.spec.diff/v0.1` · `nen.spec.index/v0.1` · `nen.spec.inventory/v0.1` · `nen.spec.number/v0.1` · `nen.spec.parity/v0.1` · `nen.spec.tasks/v0.1`
+- **`spec`** — `nen.spec.check/v0.1` · `nen.spec.cite-check/v0.1` · `nen.spec.converge/v0.1` · `nen.spec.coverage/v0.1` · `nen.spec.diff/v0.1` · `nen.spec.index/v0.1` · `nen.spec.inventory/v0.1` · `nen.spec.number/v0.1` · `nen.spec.parity/v0.1` · `nen.spec.tasks/v0.1` · `nen.spec.trace/v0.1`
 - **`stop`** — `nen.stop.answer/v0.1` · `nen.stop.mark/v0.1` · `nen.stop.mark/v0.2` · `nen.stop.proposed-issue/v0.1`
 - **`surface`** — `nen.surface.capabilities/v0.1` · `nen.surface.install/v0.1` · `nen.surface.mirror.check-installed/v0.1` · `nen.surface.mirror.check-plugin/v0.1` · `nen.surface.mirror.check/v0.1` · `nen.surface.mirror.generate/v0.1` · `nen.surface.status/v0.1`
 - **`usage`** — `nen.usage.ledger/v0.1`
@@ -920,7 +920,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 167 verbs, grouped as the README groups them. **Reads** is what a
+All 168 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -1066,6 +1066,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`spec`](#family-spec) | [`nen spec coverage`](#nen-spec-coverage) | capture form: covered/total per row kind per member and requirement↔task/test traceability both ways, each with its denominator; delivery form: every F<nnn>-SC-### of an issue has one `## Spec` row in the PR body, satisfied with a passing test or deferred with a reason and a follow-up — an outside id exits 2 | capture: folders and nen/repos.json under --repo, the inventory files; delivery: the two body files and --test-report; no git/gh | yes |
 | [`spec`](#family-spec) | [`nen spec parity`](#nen-spec-parity) | one row per FR and member from each folder's parity.md, each state held to what SP-6 says it carries (a citation, UX-13, a CL-nnn or PT ruling, both citations, the files searched), a missing row or column open; `--target` adds each row's live issues and PRs | parity.md/spec.md and nen/repos.json under --repo; github (gh issue list, gh pr list) with --target | yes |
 | [`spec`](#family-spec) | [`nen spec tasks groups`](#nen-spec-tasks-groups) | tasks.md grouped by story and platform, each group's state (open, clarifying, captured, delivered) and dependencies in topological order, and per story group the dispatch title and an issue body quoting its scenarios as fenced source data | spec.md/tasks.md under --repo; git rev-parse HEAD for the pinned sha | yes |
+| [`spec`](#family-spec) | [`nen spec trace`](#nen-spec-trace) | `<root>/traceability.md` for one family: per FR and SC, each member's parity state or citation count, the tasks and open markers; reports current / stale / hand-edited / absent and `--write` refuses a hand edit | spec.md/tasks.md/parity.md and nen/repos.json under --repo; WRITES `<root>/traceability.md` under --write unless --dry-run | yes |
 | [`decisions`](#family-decisions) | [`nen decisions summary`](#nen-decisions-summary) | rows per class and per gate and the G5 ids of nen/decisions.json, so prose never carries those numbers | nen/decisions.json under --repo | yes |
 | [`shu`](#family-shu) | [`nen shu detect`](#nen-shu-detect) | read the markers on disk and PROPOSE a nen/contract.json project block; never writes without --write and never overwrites one | the target repo's own files (framework configs, package.json, project files); writes nen/contract.json only with --write | yes |
 | [`shu`](#family-shu) | [`nen shu build`](#nen-shu-build) | compile or assemble a lane, from the invocation its declaration states | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
@@ -12172,6 +12173,56 @@ grouped: specs/002-list -- 5 group(s) in order phase-1 -> phase-2 -> US1/web -> 
   US1/android open · T005 · after phase-1, phase-2, US2/android · spec: A user opens the list (F002/US1 · android)
 ```
 (exit 0; from `src/spec/tasks.test.ts`)
+
+### `nen spec trace`
+
+`<root>/traceability.md` regenerated for **one product family**
+(zheref/nen#493 AC-10): one row per FR and SC of every folder, by its qualified
+id (`F<nnn>-FR-###`); one column per member of the family's
+`families[].members` — its `parity.md` state when the folder records one, else
+the count of that member's citations on the line, else `—` — then the tasks
+naming the requirement and the line's open markers. Every cell is a word or a
+count read from a file. As [`spec index`](#nen-spec-index)'s file does, its
+first line is a marker holding the sha256 of every byte below it, so the verb
+tells **stale** (nen wrote it, a folder changed since) from **hand-edited**
+(the body no longer hashes to the marker): `--write` regenerates an absent or
+stale file and **refuses a hand edit** as drift.
+
+**Usage**
+
+```text
+nen spec trace --repo <spec> --family <name> [--layout <pattern>] [--write [--dry-run]] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--repo <path>` | yes | The spec repository's checkout. | Omitted exits 2. |
+| `--family <name>` | yes | The family whose members are the columns. | Not a slug, or not in `nen/repos.json` → `families[]`: exit 2. |
+| `--layout <pattern>` | no | Where the folders live. | Default `specs/{nnn}-{slug}`. |
+| `--write` | no | Write the file when absent or stale. | Refused (exit 1) when hand-edited. |
+| `--dry-run` | no | With `--write`: say `would-write`, write nothing. | Without `--write` exits 2. |
+
+**Output and exit codes** — prints `<root>/traceability.md: <verdict> · action
+<action> · family <name> (<members>) · <n> requirement(s)`. `--json` top-level
+keys: `contract` (`nen.spec.trace/v0.1`), `verdict` (`current` \| `stale` \|
+`hand-edited` \| `absent` \| `could-not-read`), `repo`, `family`, `members`,
+`path`, `rows` (`{ folder, id, cells, tasks, markers }` each), `action`
+(`none` \| `written` \| `would-write` \| `refused`), `reason`. Without
+`--write`, exit 0 only when `current`; with it, exit 0 unless refused. Exit 1
+too when a folder has no readable `spec.md` or the file is a link or a
+directory; exit 2 on a usage error.
+
+**Example**
+
+```bash
+nen spec trace --repo . --family fixture-family --write
+```
+```text
+specs/traceability.md: absent · action written · family fixture-family (FA, FW) · 2 requirement(s)
+```
+(exit 0; from `src/spec/trace.test.ts`)
 
 <a id="family-decisions"></a>
 

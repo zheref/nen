@@ -1487,6 +1487,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       coverage: RO("reads the spec folders and inventory files, or an issue body, a PR body and a test report; writes nothing"),
       parity: RO("reads parity.md and spec.md, and with --target the issues and PRs over gh issue list / gh pr list; writes nothing"),
       "tasks groups": RO("reads spec.md and tasks.md and git rev-parse HEAD; writes nothing"),
+      trace: GATED_DRY(["--write"], "reads every folder's spec.md, tasks.md and parity.md; --write writes <root>/traceability.md unless --dry-run is given"),
     },
   },
   split: { subcommands: { verify: RO("proves diff equality over git reads") } },

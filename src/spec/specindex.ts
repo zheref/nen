@@ -117,13 +117,21 @@ export function renderIndexFile(rows: readonly IndexRow[]): string {
 
 /** What the INDEX.md on disk is, against what would be generated now. */
 export function indexState(existing: string | null, generated: string): IndexState {
+  return generatedState(existing, generated, INDEX_MARKER_PREFIX);
+}
+
+/**
+ * The same reading for any file a spec verb generates behind a first-line
+ * `<prefix><sha256 of the body> -->` marker (`spec index`, `spec trace`).
+ */
+export function generatedState(existing: string | null, generated: string, prefix: string): IndexState {
   if (existing === null) return "absent";
   const normalized = existing.replace(/\r\n/g, "\n");
   const newline = normalized.indexOf("\n");
   const first = newline === -1 ? normalized : normalized.slice(0, newline);
   const body = newline === -1 ? "" : normalized.slice(newline + 1);
-  if (!first.startsWith(INDEX_MARKER_PREFIX) || !first.endsWith(" -->")) return "hand-edited";
-  const recorded = first.slice(INDEX_MARKER_PREFIX.length, -" -->".length);
+  if (!first.startsWith(prefix) || !first.endsWith(" -->")) return "hand-edited";
+  const recorded = first.slice(prefix.length, -" -->".length);
   if (recorded !== sha256(body)) return "hand-edited";
   return normalized === generated ? "current" : "stale";
 }

@@ -33,11 +33,12 @@ import { captureCoverage, deliveryCoverage, readReport, renderCaptureCoverage, r
 import { readTree, TreeReadError } from "./tree.js";
 import { parity, readParityFolders, renderParity, unreadableParity, type ParityReport } from "./parity.js";
 import { renderTasks, taskGroups, unreadableTasks, type TasksReport } from "./tasks.js";
+import { renderTrace, specTrace } from "./trace.js";
 import { GIT, outputLines } from "../seam/exec.js";
 import { lstatSync } from "node:fs";
 import { join } from "node:path";
 
-const SUBCOMMANDS = ["number", "check", "cite-check", "index", "inventory", "diff", "converge", "coverage", "parity", "tasks"] as const;
+const SUBCOMMANDS = ["number", "check", "cite-check", "index", "inventory", "diff", "converge", "coverage", "parity", "tasks", "trace"] as const;
 type Subcommand = (typeof SUBCOMMANDS)[number];
 
 export const DEFAULT_SPEC_LAYOUT = "specs/{nnn}-{slug}";
@@ -53,6 +54,7 @@ nen spec coverage --repo <spec> --inventory <file>[,<file>...] [--layout <patter
 nen spec coverage --issue-body <file> --pr-body <file> [--test-report <file>] [--json]
 nen spec parity --repo <spec> (--folder <dir> | --family <name>) [--layout <pattern>] [--target <owner/name>[,<owner/name>...]] [--json]
 nen spec tasks groups --repo <spec> --folder <dir> [--group <id>] [--json]
+nen spec trace --repo <spec> --family <name> [--layout <pattern>] [--write [--dry-run]] [--json]
 
 Read-only verbs over a Spec Kit spec repository. Each
 reports and refuses; none decides. A layout is '<dir>/<final>' whose final
@@ -146,6 +148,11 @@ tasks groups
             pinned 'Spec: <folder>@<sha>', one '- AC-<n>: …' row per scenario,
             the scenarios and SCs in a source-data fence. --group prints one
             body. Exit 1 on a cycle, an unknown dependency or an unread file.
+trace       <root>/traceability.md for one family: one row per FR and SC, one
+            column per member (parity state, else citation count), the tasks
+            and open markers. Without --write: exit 0 only when current;
+            --write regenerates an absent or stale file and refuses a hand
+            edit; --dry-run writes nothing.
 
 --json shapes (key order as listed):
   number:     { contract: "nen.spec.number/v0.1", repo, target, layout, base, baseSource, baseSha, openPrs, taken, collisions, next, reason }
@@ -158,14 +165,15 @@ tasks groups
   coverage:   { contract: "nen.spec.coverage/v0.1", form: "capture", verdict, repo, layout, folders, members, markers, reason }
               { contract: "nen.spec.coverage/v0.1", form: "delivery", verdict, issueBody, prBody, testReport, section, criteria, outside, counts, reason }
   parity:     { contract: "nen.spec.parity/v0.1", verdict, repo, scope, members, folders, rows, counts, live, reason }
-  tasks:      { contract: "nen.spec.tasks/v0.1", verdict, repo, folder, spec, groups, order, reason }`;
+  tasks:      { contract: "nen.spec.tasks/v0.1", verdict, repo, folder, spec, groups, order, reason }
+  trace:      { contract: "nen.spec.trace/v0.1", verdict, repo, family, members, path, rows, action, reason }`;
 
 const OWNED: Readonly<Record<string, readonly Subcommand[]>> = {
-  layout: ["number", "index", "coverage", "parity"],
+  layout: ["number", "index", "coverage", "parity", "trace"],
   base: ["number"],
   target: ["number", "parity"],
   folder: ["check", "cite-check", "converge", "parity", "tasks"],
-  family: ["parity"],
+  family: ["parity", "trace"],
   group: ["tasks"],
   vocabulary: ["check"],
   max: ["check"],
@@ -189,8 +197,8 @@ const OWNED_BOOLEANS: Readonly<Record<string, readonly Subcommand[]>> = {
   markers: ["check"],
   rank: ["check"],
   "verify-excerpt": ["cite-check"],
-  write: ["index", "converge"],
-  "dry-run": ["index", "converge"],
+  write: ["index", "converge", "trace"],
+  "dry-run": ["index", "converge", "trace"],
 };
 /** The verbs that read no spec or member checkout, and so take no --repo. */
 const REPOLESS: readonly Subcommand[] = ["diff"];
@@ -518,9 +526,29 @@ function runTasks(context: CommandContext, repo: string): number {
   return report.verdict === "grouped" ? 0 : 1;
 }
 
+function runTrace(context: CommandContext, repo: string): number {
+  const family = requireValue(context.args, "family", "It names the family whose traceability.md is regenerated.");
+  const write = context.args.booleans.has("write");
+  const dryRun = context.args.booleans.has("dry-run");
+  if (dryRun && !write) throw new VerbUsageError("--dry-run qualifies --write; without --write nothing is written anyway.");
+  const layout = parseLayout(context.args.values["layout"] ?? DEFAULT_SPEC_LAYOUT);
+  const members = familyMembers(repo, family);
+  let report;
+  try {
+    report = specTrace(repo, layout, family, members, { write, dryRun });
+  } catch (error) {
+    if (error instanceof SpecContainmentError) throw new VerbUsageError(error.message);
+    throw error;
+  }
+  emit(context.io, context.json, report, renderTrace(report));
+  if (report.verdict === "could-not-read") return 1;
+  if (write) return report.action === "refused" ? 1 : 0;
+  return report.verdict === "current" ? 0 : 1;
+}
+
 export const specCommand: Command = {
   name: "spec",
-  summary: "Inventory, number, check, cite-check, diff, converge, cover, hold to parity, group and index a product family's Spec Kit spec repository.",
+  summary: "Inventory, number, check, cite-check, diff, converge, cover, hold to parity, group, trace and index a product family's Spec Kit spec repository.",
   usage: USAGE,
   subcommands: [...SUBCOMMANDS],
   flags: {
@@ -554,6 +582,8 @@ export const specCommand: Command = {
         return runParity(context, repo);
       case "tasks":
         return runTasks(context, repo);
+      case "trace":
+        return runTrace(context, repo);
     }
     throw new VerbUsageError(`'spec ${subcommand}' is not dispatched here.`);
   },
