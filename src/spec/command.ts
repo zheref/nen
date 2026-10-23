@@ -147,7 +147,7 @@ tasks groups
             and for a story group the dispatch title and issue body: the
             pinned 'Spec: <folder>@<sha>', one '- AC-<n>: …' row per scenario,
             the scenarios and SCs in a source-data fence. Read at HEAD (SP-8).
-            Hatsu's id-less lines ([ ], [x] captured — <cite>, [x] delivered —
+            Id-less lines ([ ], [x] captured — <cite>, [x] delivered —
             <PR>) are read too. --group prints one body. Exit 1 on no task,
             a cycle, an unknown dependency or an unread file or pin.
 trace       <root>/traceability.md for one family: one row per FR and SC, one
