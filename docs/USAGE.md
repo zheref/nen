@@ -973,7 +973,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`wc`](#family-wc) | [`nen wc worktrees`](#nen-wc-worktrees) | list every checkout of the project, core first: core/in mark, branch or detached, uncommitted count, +ahead/-behind against `origin/<base>`, HEAD, last commit and age, path | git (rev-parse --git-common-dir, worktree list, status, rev-list, log) | yes |
 | [`wc`](#family-wc) | [`nen wc swap`](#nen-wc-swap) | bring a worktree's committed tree into the core checkout (view: HEAD detached; `--take`: the branch), `--return` it with core's parked work restored, `--status`; core's work parked in a pinned commit, never stashed; exit 3 on a dirty tree | git (worktree list, status, read-tree/add/write-tree/commit-tree through a temporary index, update-ref, reset --hard, clean -fd, checkout, diff) | yes |
 | [`wc`](#family-wc) | [`nen wc worktree`](#nen-wc-worktree) | keep ONE detached worktree at `<core>/.nen/worktrees/<name>` at `origin/<base>`'s fetched tip -- created, reused, moved, or (its registration outliving its directory) that one registration dropped and recreated; refused, never discarded, when dirty, and refused for a stray directory, a symlink or a sibling registration; `--copy-from-core` copies gitignored, untracked regular files from core after proving the source in core and the destination at the tip and in the worktree, through a temp file and a rename | git (rev-parse --git-common-dir/--git-dir, check-ref-format, fetch, ls-remote, rev-parse, ls-files, check-ignore, ls-tree, worktree list/add/remove, status -z, diff --name-only, checkout --detach), the files named by --copy-from-core in core, the copy record in the worktree's git dir | yes |
-| [`wc`](#family-wc) | [`nen wc overlap`](#nen-wc-overlap) | file disjointness of parallel efforts, computed: each effort's merge-base diff against `--base` (default `origin/<branch.base>`), plus an always-overlapping list counted as every effort's; verdict `disjoint` / `stack(<order>)` (the branches already chain) / `overlap(<paths>)` / `unknown` | git (diff --name-only -z `<base>...<effort>`, merge-base --is-ancestor), nen/workflow.json under --repo (alwaysOverlaps; branch.base without --base) | yes |
+| [`wc`](#family-wc) | [`nen wc overlap`](#nen-wc-overlap) | file disjointness of parallel efforts, computed: each effort's merge-base diff against `--base` (default `origin/<branch.base>`), plus an always-overlapping list counted as every effort's; verdict `disjoint` / `stack(<order>)` (git's chain when the branches chain, else the `--efforts` order) / `unknown`; `--declared` paths stand in before authoring | git (diff --name-only -z `<base>...<effort>`, merge-base --is-ancestor), nen/workflow.json under --repo (alwaysOverlaps; branch.base without --base), the `--declared` file | yes |
 | [`stage`](#family-stage) | [`nen stage triage`](#nen-stage-triage) | flag secret-shaped, binary, out-of-scope and unmentioned-deletion files before staging; report git-ignored paths separately, never counted toward the exit code; `--range <base>..<head>` triages a committed range instead of the working copy — names and blob sizes over every change any commit made (`in-history` for a finding not in the net change), deletions and mentions over the net diff from the merge base — an unresolved, malformed or unrelated range exit 2 and never a fall back | git status --porcelain; with --range: git rev-parse, merge-base, rev-list --count, log --raw, diff --raw, cat-file --batch-check | yes |
 | [`stage`](#family-stage) | [`nen stage list`](#nen-stage-list) | the exact add list — every modified, added, renamed, deleted and untracked path triage called clean, minus flagged and git-ignored ones, each exclusion named with its reasons, unmerged paths, embedded repositories and undecodable names held off with the list withheld, a worktree rename's original included; `--repo` must be the top; newline (C-quoted where needed) or `--nul` form to feed `git add --pathspec-from-file=-` verbatim, withheld on a flag (exit 1), exit 3 when empty | git status --porcelain | yes |
 | [`stage`](#family-stage) | [`nen stage check`](#nen-stage-check) | `--exclusive`: exit 1 when an issue (or any of `--issues`) carries two stage-family labels at once, the family read from `nen/labels.json` (`<namespace>:stage/<leaf>`), exit 2 when it declares none; names both, picks neither | nen/labels.json under --repo, github (gh issue view --json labels) | yes |
@@ -5077,15 +5077,24 @@ the effort. `--repo`'s `nen/workflow.json` → `alwaysOverlaps` (validated by [`
 delivery touches sooner or later -- a plugin manifest's version, the `CHANGELOG`, generated mirrors --
 whether the branch has touched them yet or not: the bump happens at catch-up or release time. Each is
 counted as touched by **every** effort (an entry ending in `/` is a directory prefix, counted through the
-paths under it some effort changed). The verdict is a fact, never a plan: when the overlapping efforts'
-branches **already chain** -- each contains the one before (`git merge-base --is-ancestor`) -- the
-verdict is `stack(<order>)`, an order git holds rather than one nen chooses (NN#488 AC-1); when they
-overlap and do not chain, which stacks on which is the caller's to decide.
+paths under it some effort changed). **Efforts that share any path stack** -- they never run side by
+side -- so the verdict is `stack(<order>)` (NN#488 AC-2: two efforts that both touch `plugin.json`
+stack). **The order is never nen's choice**: when the branches **already chain** -- each contains the one
+before (`git merge-base --is-ancestor`) -- it is the order git holds (`order: chain`); otherwise it is the
+order the caller listed `--efforts` in, which is the order its epic names (`order: given`).
+
+**Declared paths, before authoring (NN#488 AC-1).** Before an effort is authored there is no branch tip
+to diff, so `--declared <file>` names a JSON object of effort → the repository-relative paths it declares
+(`{ "opus/kurapika/x": ["docs/USAGE.md", "src/a.ts"] }`). An effort whose diff cannot be read yet is
+compared on its declared paths alone, and keeps the reason its diff was not read; after publish the diff
+is read and the declared paths are added to it. Each effort's `sources` says which inputs its files came
+from (AC-3: the verb states what it could not read). Only an effort with **neither** a readable diff nor
+declared paths is unread, and the verdict is then `unknown`.
 
 **Usage**
 
 ```text
-nen wc overlap --efforts <a,b,...> --repo <path> [--base <ref>] [--always-overlaps <paths>] [--json]
+nen wc overlap --efforts <a,b,...> --repo <path> [--base <ref>] [--always-overlaps <paths>] [--declared <file>] [--json]
 ```
 
 **Arguments**
@@ -5096,17 +5105,21 @@ nen wc overlap --efforts <a,b,...> --repo <path> [--base <ref>] [--always-overla
 | `--repo <path>` | yes | The checkout whose refs are read. | Listed unbracketed: omitted, exits 2 by name. |
 | `--base <ref>` | no | What each effort is diffed against. | Default `origin/<branch.base>` from `--repo`'s `nen/workflow.json` (`origin/main` when undeclared); a policy that will not load exits 1, with or without `--base` (its `alwaysOverlaps` would go uncounted). |
 | `--always-overlaps <paths>` | no | Comma-separated paths every effort is counted as touching, added to the workflow's `alwaysOverlaps`. | An entry ending in `/` is a directory prefix. |
+| `--declared <file>` | no | A JSON object of effort → the paths it declares before authoring. | Resolves against `--repo`. Unreadable, not JSON, not an object, a key `--efforts` does not list, or an entry that is not a list of repository-relative paths (no leading `/`, no `..`) exits 2. `$`-keys are skipped. |
 
-**Output and exit codes** -- prints `verdict: disjoint`, `verdict: stack(<a> <- <b> ...)`, `verdict:
-overlap(<path>, ...)` or `verdict: unknown (could not read <effort>, ...)`, then `base: <ref>`, each
-effort's file count, and one `shared <path>: <efforts>[ (always overlaps)]` line per shared path.
-`--json` top-level keys: `verdict` (`disjoint` \| `stack` \| `overlap` \| `unknown`), `base`,
-`alwaysOverlaps` (the workflow's list, then the flag's), `overlaps` (`[{path, efforts, always}]`,
-path-sorted), `efforts` (`[{effort, files, unreadReason}]`, `files: null` when unread), `unread`, `stack`
-(the efforts in chain order on `stack`, else null; a chain git could not confirm reads `overlap`). Exit 0
-on `disjoint`; exit 1 on `stack`, `overlap` and `unknown` -- an effort whose diff could not be read is
-never read as "touches nothing"; exit 2 on a malformed flag or a flag another `wc` verb owns. Writes
-nothing.
+**Output and exit codes** -- prints `verdict: disjoint`, `verdict: stack(<a> <- <b> ...)` followed by
+`order: chain (…)` or `order: given (…)`, or `verdict: unknown (could not read <effort>, ...)`, then
+`base: <ref>`, each effort's file count with its sources (`(diff)`, `(declared)`, `(diff + declared)`)
+and `; diff not read -- <reason>` where declared paths stood in, and one
+`shared <path>: <efforts>[ (always overlaps)]` line per shared path. `--json` top-level keys: `verdict`
+(`disjoint` \| `stack` \| `unknown`), `base`, `alwaysOverlaps` (the workflow's list, then the flag's),
+`overlaps` (`[{path, efforts, always}]`, path-sorted), `efforts` (`[{effort, files, unreadReason,
+sources}]`, `files: null` when unread), `unread`, `stack` (the efforts in stack order on `stack`, else
+null), `stackSource` (`chain` \| `given` on `stack`, else null). Exit 0 on `disjoint`; exit 1 on `stack`
+and `unknown` -- an effort with nothing read is never read as "touches nothing"; exit 2 on a malformed
+flag, an unreadable or malformed `--declared`, or a flag another `wc` verb owns. Writes nothing.
+**Changed from v0.26.0**: the `overlap(<paths>)` verdict is gone; efforts that overlap and do not chain
+now read `stack(<the --efforts order>)` with `stackSource: "given"`, at the same exit 1.
 
 **Example**
 
@@ -5115,14 +5128,15 @@ nen wc overlap --repo . --base origin/integration/sdd-plan-2026-10-22 \
   --efforts origin/opus/kurapika/sdd-n8-schema-keys,origin/opus/kurapika/sdd-n1-loop-ledger
 ```
 ```text
-verdict: overlap(docs/USAGE.md, src/loop/command.ts)
+verdict: stack(origin/opus/kurapika/sdd-n8-schema-keys <- origin/opus/kurapika/sdd-n1-loop-ledger)
+order: given (the --efforts order; the branches do not chain)
 base: origin/integration/sdd-plan-2026-10-22
-  origin/opus/kurapika/sdd-n8-schema-keys: 27 file(s)
-  origin/opus/kurapika/sdd-n1-loop-ledger: 6 file(s)
+  origin/opus/kurapika/sdd-n8-schema-keys: 27 file(s) (diff)
+  origin/opus/kurapika/sdd-n1-loop-ledger: 6 file(s) (diff)
   shared docs/USAGE.md: origin/opus/kurapika/sdd-n8-schema-keys, origin/opus/kurapika/sdd-n1-loop-ledger
   shared src/loop/command.ts: origin/opus/kurapika/sdd-n8-schema-keys, origin/opus/kurapika/sdd-n1-loop-ledger
 ```
-(exit 1; a real run against this repository's own two open SDD sub-PR branches)
+(exit 1; a real run against this repository's own two open SDD sub-PR branches, re-rendered in this build's shape)
 
 <a id="family-stage"></a>
 
