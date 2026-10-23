@@ -151,7 +151,8 @@ export type CanonMirrorRule =
  * its own control, or documents none:
  *
  * - `tools`: the persona's `tools` key is a kept key on this surface, so the
- *   list itself is the control and travels as written.
+ *   list itself is the control: it travels as written, or through the row's
+ *   `toolNames` where the surface names its tools differently (zheref/nen#505).
  * - `key`: the surface documents a frontmatter key of its own, emitted as
  *   `<key>: <value>` on a read-only persona that does not already set it.
  *   Where that key is known not to hold is a capabilities fact
@@ -168,6 +169,34 @@ export type ReadOnlyControl =
       readonly source: string;
     }
   | { readonly kind: "none"; readonly reason: string; readonly source: string };
+
+/**
+ * One source tool name and the name the surface documents for it
+ * (zheref/nen#505). `sources` are the pages the surface name was quoted from;
+ * a row's ruling may require more than one to agree.
+ */
+export interface ToolNameEntry {
+  /** The Claude Code tool name, exactly as a source `tools:` list spells it. */
+  readonly from: string;
+  /** The surface's own name for it. */
+  readonly to: string;
+  readonly sources: readonly string[];
+}
+
+/**
+ * How a persona's `tools:` list is translated for a surface that documents
+ * tool names of its own (zheref/nen#505). A name with no entry -- a scoped
+ * grant such as `Bash(git:*)` included, because its surface name would grant
+ * the whole tool -- is dropped from the mirror and named in the generate
+ * report, never written: the surface warns that a name it does not recognise
+ * may hang the subagent. The list is written in the surface's documented
+ * shape, a YAML block list.
+ */
+export interface ToolNameMap {
+  readonly entries: readonly ToolNameEntry[];
+  /** The rule an entry had to meet to be admitted, for the report and the docs. */
+  readonly ruling: string;
+}
 
 export interface SurfaceRow {
   /** The `--surface` value that selects this row. */
@@ -214,6 +243,12 @@ export interface SurfaceRow {
   } | null;
   /** How a read-only persona's intent reaches this surface (zheref/nen#473). */
   readonly readOnlyControl: ReadOnlyControl;
+  /**
+   * The persona `tools:` list's translation into this surface's own tool
+   * names, or null where the list is not carried (cursor, codex) or is the
+   * source's own (claude-code) (zheref/nen#505).
+   */
+  readonly toolNames: ToolNameMap | null;
   /**
    * The surface's hook manifest, or null where the surface documents no hooks
    * (in which case `--hooks` emits nothing and the report says
@@ -363,6 +398,41 @@ export interface SurfaceRow {
  */
 export const ANTIGRAVITY_RULES_LIMIT = 24_000;
 
+const ANTIGRAVITY_SUBAGENTS = "https://antigravity.google/docs/subagents";
+const ANTIGRAVITY_SDK_TOOLS = "https://antigravity.google/docs/sdk/tools";
+
+/**
+ * Antigravity's own tool names for a persona's `tools:` list (zheref/nen#505),
+ * both pages re-read 2026-10-22.
+ *
+ * The subagents page's `tools` row gives examples only: "Explicit list of
+ * tools permitted for this subagent (for example, view_file,
+ * replace_file_content, grep_search, run_command)", and warns directly under
+ * its table: "Specifying an unmapped or misspelled tool name in the tools list
+ * may cause the subagent process to hang during execution." The SDK's "Built-in
+ * tools reference" (`google.antigravity.types.BuiltinTools`) is the one full
+ * list: list_directory, search_directory, find_file, view_file ("Read file
+ * contents."), create_file, edit_file, run_command ("Execute a shell
+ * command."), ask_question, start_subagent, generate_image, search_web,
+ * read_url_content, finish.
+ *
+ * The two disagree -- `replace_file_content` and `grep_search` are not in the
+ * SDK's list; its `edit_file` and `search_directory` are not on the subagents
+ * page -- and neither says which vocabulary the app's frontmatter accepts. The
+ * maintainer's ruling of 2026-10-22 (zheref/nen#505, OQ-1): an entry is
+ * admitted only when BOTH pages give its name. Today that is two. `Grep`,
+ * `Glob`, `WebSearch`, `WebFetch`, `Edit`, `Write`, `MultiEdit` and
+ * `NotebookEdit` stay unmapped until the pages converge; when they do, the
+ * fix is a new entry here citing both, and nothing else.
+ */
+export const ANTIGRAVITY_TOOL_NAMES: ToolNameMap = {
+  ruling: "a name both Antigravity pages give (the maintainer's ruling of 2026-10-22, zheref/nen#505 OQ-1)",
+  entries: [
+    { from: "Read", to: "view_file", sources: [ANTIGRAVITY_SUBAGENTS, ANTIGRAVITY_SDK_TOOLS] },
+    { from: "Bash", to: "run_command", sources: [ANTIGRAVITY_SUBAGENTS, ANTIGRAVITY_SDK_TOOLS] },
+  ],
+};
+
 /**
  * Codex's `project_doc_max_bytes` default, and the setting a consumer raises
  * to read past it: "Codex skips empty files and stops adding files once the
@@ -426,6 +496,7 @@ export const SURFACES: readonly SurfaceRow[] = [
       reason: "Codex documents no per-agent read-only control (custom agents inherit the parent sandbox)",
       source: "https://learn.chatgpt.com/docs/agent-configuration/subagents",
     },
+    toolNames: null,
     hooks: {
       file: "hooks.json",
       documentedPath: ".codex/hooks.json",
@@ -530,6 +601,7 @@ export const SURFACES: readonly SurfaceRow[] = [
       value: "true",
       source: "https://cursor.com/docs/subagents",
     },
+    toolNames: null,
     hooks: {
       file: "hooks.json",
       documentedPath: ".cursor/hooks.json",
@@ -621,18 +693,19 @@ export const SURFACES: readonly SurfaceRow[] = [
       kind: "files",
       dir: "agents",
       extension: ".md",
-      // The documented persona frontmatter, whole. `tools` is a list on this
-      // surface; a source spelling it as one comma-joined line arrives as that
-      // line, because this mirror carries a kept key verbatim (./frontmatter.ts).
+      // The documented persona frontmatter, whole. `tools` is a `string[]` on
+      // this surface, so it is the one kept key NOT carried verbatim: it is
+      // rewritten through `toolNames` below as a block list, whatever spelling
+      // the source used (zheref/nen#505).
       keys: ["name", "description", "tools", "mainAgent", "subagent", "model", "commandExecutionPolicy", "mcpServers", "skills"],
       required: ["description"],
     },
     agentToml: null,
-    // The `tools` key travels, but in the source's Claude Code names; the page
-    // documents its own (view_file, replace_file_content, run_command), so
-    // whether the carried list restricts anything here is unverified
-    // (./capabilities.ts says so).
+    // The `tools` key travels in this surface's own names (`toolNames`), so
+    // the list restricts the subagent here: "Explicit list of tools permitted
+    // for this subagent".
     readOnlyControl: { kind: "tools", source: "https://antigravity.google/docs/subagents" },
+    toolNames: ANTIGRAVITY_TOOL_NAMES,
     hooks: {
       file: "hooks.json",
       documentedPath: ".agents/hooks.json",
@@ -717,6 +790,7 @@ export const SURFACES: readonly SurfaceRow[] = [
     agentToml: null,
     // Verbatim: the source's own `tools` list is the control.
     readOnlyControl: { kind: "tools", source: "https://code.claude.com/docs/en/sub-agents" },
+    toolNames: null,
     hooks: {
       file: "hooks/hooks.json",
       documentedPath: "hooks/hooks.json (plugin) or .claude/settings.json",

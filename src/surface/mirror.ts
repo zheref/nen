@@ -618,17 +618,88 @@ const TOOL_NAME = /^[A-Za-z0-9_*:.-]+$/;
 export function isReadOnlyPersona(entries: readonly FrontmatterEntry[]): boolean {
   const entry = entries.find((candidate): boolean => candidate.key === "tools");
   if (entry === undefined) return false;
+  const tools = parseToolList(entry);
+  // Fail closed: a list that was not understood is not read-only.
+  if (tools === null) return false;
+  return tools.length > 0 && !tools.some((tool): boolean => WRITE_TOOLS.has(tool.name) || tool.name.startsWith("mcp__"));
+}
+
+/** One entry of a `tools:` list: as written (quotes cut), and its tool name with any `(…)` scope cut. */
+interface ToolListItem {
+  readonly written: string;
+  readonly name: string;
+}
+
+/**
+ * A `tools` entry's items, in either spelling, or null when the list was not
+ * understood: a name that does not look like a tool name (a stray quote, `#`,
+ * space or backslash left by an odd spelling the comment scan misread) means
+ * the parse cannot say what the list grants.
+ */
+function parseToolList(entry: FrontmatterEntry): readonly ToolListItem[] | null {
   const raw = [inlineValue(entry), ...entry.lines.slice(1)].map(withoutYamlComment).join(",");
-  const names = raw
+  const items = raw
     .replace(/[[\]]/g, ",")
     .split(",")
-    .map((part): string => part.trim().replace(/^-\s*/, "").replace(/^["']|["']$/g, "").replace(/\(.*$/, "").trim())
-    .filter((name): boolean => name !== "");
-  // Fail closed: a name that does not look like a tool name (a stray quote,
-  // `#`, space or backslash left by an odd spelling the comment scan misread)
-  // means the list was not understood, so the persona is not read-only.
-  if (names.some((name): boolean => !TOOL_NAME.test(name))) return false;
-  return names.length > 0 && !names.some((name): boolean => WRITE_TOOLS.has(name) || name.startsWith("mcp__"));
+    .map((part): string => part.trim().replace(/^-\s*/, "").replace(/^["']|["']$/g, "").trim())
+    .filter((written): boolean => written !== "")
+    .map((written): ToolListItem => ({ written, name: written.replace(/\(.*$/, "").trim() }));
+  return items.some((item): boolean => !TOOL_NAME.test(item.name)) ? null : items;
+}
+
+/**
+ * The persona's `tools` entry rewritten into the surface's own names through
+ * the row's `toolNames` map (zheref/nen#505), as a YAML block list -- the shape
+ * the surface documents -- with every source name the map does not hold
+ * dropped and named in `notes`. A scoped grant (`Bash(git:*)`) is never mapped:
+ * the surface's name would grant the whole tool. A list this parse cannot read,
+ * or one whose every name is unmapped, is refused: the first cannot be
+ * translated safely, and the second would leave a persona whose source named
+ * tools with none, a restriction nobody wrote. An empty source list and a
+ * persona with no `tools` key pass through unchanged.
+ */
+function withToolNames(
+  row: SurfaceRow,
+  agent: SourceAgent,
+  entries: readonly FrontmatterEntry[],
+  notes: string[],
+): readonly FrontmatterEntry[] {
+  const map = row.toolNames;
+  if (map === null) return entries;
+  const at = entries.findIndex((entry): boolean => entry.key === "tools");
+  const entry = entries[at];
+  if (entry === undefined) return entries;
+  const tools = parseToolList(entry);
+  if (tools === null) {
+    throw new SurfaceMirrorError(
+      `'${agent.relative}' has a 'tools' list that cannot be read as tool names, so it cannot be translated into '${row.surface}''s own tool names (${row.agentSource}); carried as written it would hand the surface names it may hang on. Fix the source rather than the mirror.`,
+    );
+  }
+  if (tools.length === 0) return entries;
+  const mapped: string[] = [];
+  const dropped: string[] = [];
+  for (const tool of tools) {
+    const target = map.entries.find((candidate): boolean => candidate.from === tool.written)?.to;
+    if (target === undefined) {
+      if (!dropped.includes(tool.written)) dropped.push(tool.written);
+    } else if (!mapped.includes(target)) {
+      mapped.push(target);
+    }
+  }
+  if (mapped.length === 0) {
+    throw new SurfaceMirrorError(
+      `'${agent.relative}' names no tool with a documented '${row.surface}' equivalent (unmapped: ${dropped.join(", ")}; admitted: ${map.ruling}). Writing those names may hang the subagent (${row.agentSource}), and writing none would leave it a restriction its source never stated. Add a mapped tool to the source, or map the name in nen's src/surface/rules.ts once the pages document it.`,
+    );
+  }
+  if (dropped.length > 0) {
+    notes.push(
+      `${row.surface}: ${agent.name}: dropped ${dropped.join(", ")} from tools (no documented ${row.surface} name: ${map.ruling}); wrote ${mapped.join(", ")}`,
+    );
+  }
+  // A CRLF source keeps its `\r` on every line it owns (./frontmatter.ts).
+  const eol = (entry.lines[0] ?? "").endsWith("\r") ? "\r" : "";
+  const lines = [`tools:${eol}`, ...mapped.map((name): string => `  - ${name}${eol}`)];
+  return [...entries.slice(0, at), { key: "tools", lines }, ...entries.slice(at + 1)];
 }
 
 /** The line up to a YAML comment: a `#` at the start or after whitespace, outside quotes. */
@@ -650,13 +721,19 @@ function withoutYamlComment(line: string): string {
 /**
  * The persona's entries with the surface's read-only key added, where the
  * surface documents one, the persona is read-only, and the source does not
- * already set that key (an explicit source value wins either way).
+ * already set that key (an explicit source value wins either way). Read-only
+ * is decided on the SOURCE's entries: a list already translated through
+ * `toolNames` has lost its write tools by being translated, not by intent.
  */
-function withReadOnlyKey(row: SurfaceRow, entries: readonly FrontmatterEntry[]): readonly FrontmatterEntry[] {
+function withReadOnlyKey(
+  row: SurfaceRow,
+  entries: readonly FrontmatterEntry[],
+  source: readonly FrontmatterEntry[],
+): readonly FrontmatterEntry[] {
   const control = row.readOnlyControl;
   if (control.kind !== "key") return entries;
   if (entries.some((entry): boolean => entry.key === control.key)) return entries;
-  if (!isReadOnlyPersona(entries)) return entries;
+  if (!isReadOnlyPersona(source)) return entries;
   return [...entries, { key: control.key, lines: [`${control.key}: ${control.value}`] }];
 }
 
@@ -704,12 +781,12 @@ function agentFiles(options: GenerateOptions, relink: Relink): AgentOutput {
           );
         }
       }
-      const kept = mapped(agent, document.entries);
+      const kept = withToolNames(row, agent, mapped(agent, document.entries), notes);
       // The empty-block refusal below reads the SOURCE's kept keys: a derived
       // `readonly` line is not something for the surface to route on, so it
       // must not rescue a persona that carries nothing else.
       const sourceFront = renderFrontmatter(kept, new Set(rule.keys));
-      const front = sourceFront === "" ? "" : renderFrontmatter(withReadOnlyKey(row, kept), new Set(rule.keys));
+      const front = sourceFront === "" ? "" : renderFrontmatter(withReadOnlyKey(row, kept, document.entries), new Set(rule.keys));
       // A `files` surface reads a persona AS frontmatter-bearing markdown, so a
       // mirror with an EMPTY block cannot be one (zheref/nen#149, review).
       // Emitting it anyway would write a persona file with no frontmatter at

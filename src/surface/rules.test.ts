@@ -80,6 +80,31 @@ describe("the surface table", () => {
     }
   });
 
+  it("cites every tool-name map entry's page, and maps only on a surface that keeps the tools key (zheref/nen#505)", () => {
+    for (const row of SURFACES) {
+      const map = row.toolNames;
+      if (map === null) continue;
+      expect(row.agents.keys, `${row.surface} maps tool names but does not keep 'tools'`).toContain("tools");
+      expect(row.verbatim, `${row.surface} is verbatim and cannot rewrite a list`).toBe(false);
+      expect(map.ruling.length).toBeGreaterThan(0);
+      const froms = map.entries.map((entry): string => entry.from);
+      expect(new Set(froms).size, `${row.surface} maps a source name twice`).toBe(froms.length);
+      for (const entry of map.entries) {
+        expect(entry.sources.length, `${row.surface}: ${entry.from} cites no page`).toBeGreaterThan(0);
+        for (const source of entry.sources) expect(source, `${row.surface}: ${entry.from}`).toMatch(/^https:\/\//);
+      }
+    }
+  });
+
+  it("antigravity: maps only the names both of its pages give, citing both (OQ-1, ruled 2026-10-22)", () => {
+    const map = findSurface("antigravity")?.toolNames;
+    expect(map?.entries).toEqual([
+      { from: "Read", to: "view_file", sources: ["https://antigravity.google/docs/subagents", "https://antigravity.google/docs/sdk/tools"] },
+      { from: "Bash", to: "run_command", sources: ["https://antigravity.google/docs/subagents", "https://antigravity.google/docs/sdk/tools"] },
+    ]);
+    for (const surface of ["codex", "cursor", "claude-code"]) expect(findSurface(surface)?.toolNames).toBeNull();
+  });
+
   it("requires only keys it also reads", () => {
     // A surface that REQUIRED a key it then dropped would refuse a source for
     // the sake of a line it was never going to write out.
