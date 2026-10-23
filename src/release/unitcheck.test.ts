@@ -12,6 +12,8 @@ import {
   fetchChangedFiles,
   fetchJsonAtRef,
   fetchTextAtRef,
+  githubTextReader,
+  readTextAtRef,
   fetchMergeBaseSha,
   JsonParseError,
   MergeBaseError,
@@ -962,6 +964,78 @@ describe("complete UTF-8 content reader for JSON and line bounds", () => {
   });
 });
 
+
+describe("files over 1 MB and named refusals (zheref/nen#424)", () => {
+  const SHA = "a".repeat(40);
+  const contentsUrl = "gh api repos/acme/widgets/contents/docs/USAGE.md?ref=head";
+  const blobUrl = `gh api repos/acme/widgets/git/blobs/${SHA}`;
+  // A line-bound text a little over 1 MB, the size class docs/USAGE.md is in.
+  const big = `${"- install line\n".repeat(70_000)}`;
+  const bigBytes = Buffer.byteLength(big);
+  const tooBig = JSON.stringify({ encoding: "none", content: "", size: bigBytes, sha: SHA });
+
+  it("follows the contents API's encoding 'none' answer to the blob and reads the whole file", () => {
+    expect(bigBytes).toBeGreaterThan(1_000_000);
+    const seams = new ScriptedSeams([
+      { match: contentsUrl, result: { code: 0, stdout: tooBig } },
+      { match: blobUrl, result: { code: 0, stdout: JSON.stringify({ encoding: "base64", content: Buffer.from(big).toString("base64").replace(/(.{60})/g, "$1\n"), size: bigBytes }) } },
+    ]);
+    expect(readTextAtRef(seams, TARGET, "docs/USAGE.md", "head")).toEqual({ text: big, reason: null });
+  });
+
+  it("names 'too large for the API' when the blob read fails too, never 'not UTF-8'", () => {
+    const seams = new ScriptedSeams([
+      { match: contentsUrl, result: { code: 0, stdout: tooBig } },
+      { match: blobUrl, result: { code: 1, stdout: "", stderr: "HTTP 403: too large" } },
+    ]);
+    const read = readTextAtRef(seams, TARGET, "docs/USAGE.md", "head");
+    expect(read.text).toBeNull();
+    expect(read.reason).toMatch(new RegExp(`^too large for the API: .*${bigBytes} bytes`));
+  });
+
+  it("refuses a truncated blob, a NUL file and non-UTF-8 bytes, each by its own condition", () => {
+    const cases: [string, number, RegExp][] = [
+      [Buffer.from(big.slice(0, 100)).toString("base64"), bigBytes, /^truncated: the blob answer decoded to 100 of/],
+      [Buffer.from("a\0b").toString("base64"), 3, /^binary: the file contains a NUL byte$/],
+      [Buffer.from([0xff, 0xfe]).toString("base64"), 2, /^not UTF-8 text$/],
+    ];
+    for (const [content, size, reason] of cases) {
+      const seams = new ScriptedSeams([
+        { match: contentsUrl, result: { code: 0, stdout: JSON.stringify({ encoding: "none", content: "", size, sha: SHA }) } },
+        { match: blobUrl, result: { code: 0, stdout: JSON.stringify({ encoding: "base64", content, size }) } },
+      ]);
+      expect(readTextAtRef(seams, TARGET, "docs/USAGE.md", "head").reason).toMatch(reason);
+    }
+  });
+
+  it("refuses an encoding 'none' answer that names no blob", () => {
+    const seams = new ScriptedSeams([{ match: contentsUrl, result: { code: 0, stdout: JSON.stringify({ encoding: "none", content: "", size: 5 }) } }]);
+    expect(readTextAtRef(seams, TARGET, "docs/USAGE.md", "head").reason).toMatch(/^too large for the API: .*named no blob/);
+  });
+
+  it("carries the named reason into the line-scoped refusal, and passes a >1 MB file whose changed lines are bound", () => {
+    const bound = { path: "docs/USAGE.md", lines: ["- install line", "- install line v2"] };
+    const failing = new ScriptedSeams([
+      { match: "gh api repos/acme/widgets/contents/docs/USAGE.md?ref=base", result: { code: 0, stdout: tooBig } },
+      { match: `gh api repos/acme/widgets/git/blobs/${SHA}`, result: { code: 1, stdout: "", stderr: "403" } },
+      { match: contentsUrl, result: { code: 0, stdout: tooBig } },
+    ]);
+    const refused = checkLineScopedPath(bound, "base", "head", githubTextReader(failing, TARGET));
+    expect(refused.ok).toBe(false);
+    expect(refused.reason).toMatch(/^whole file -- too large for the API: .* at its base commit$/);
+    const head = big.replace("- install line\n", "- install line v2\n");
+    const headSha = "b".repeat(40);
+    const passing = new ScriptedSeams([
+      { match: "gh api repos/acme/widgets/contents/docs/USAGE.md?ref=base", result: { code: 0, stdout: tooBig } },
+      { match: blobUrl, result: { code: 0, stdout: JSON.stringify({ encoding: "base64", content: Buffer.from(big).toString("base64"), size: bigBytes }) } },
+      { match: contentsUrl, result: { code: 0, stdout: JSON.stringify({ encoding: "none", content: "", size: Buffer.byteLength(head), sha: headSha }) } },
+      { match: `gh api repos/acme/widgets/git/blobs/${headSha}`, result: { code: 0, stdout: JSON.stringify({ encoding: "base64", content: Buffer.from(head).toString("base64"), size: Buffer.byteLength(head) }) } },
+    ]);
+    const outcome = checkLineScopedPath(bound, "base", "head", githubTextReader(passing, TARGET));
+    expect(outcome.reason).toBeNull();
+    expect(outcome.ok).toBe(true);
+  });
+});
 
 describe("deletion-only release paths (#425)", () => {
   const entry = { path: "changelog.d/", deleteOnly: true } as const;

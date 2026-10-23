@@ -8436,6 +8436,22 @@ exceeding 100,000 lines per file, 2,048 edits or 1,000,000 comparison steps
 fails closed. File additions, deletions and renames without readable content
 at the same exact path at both commits therefore fail this bound.
 
+**Files over 1 MB ([#424](https://github.com/zheref/nen/issues/424)).** For a
+file between 1 MB and 100 MB the contents API answers `"encoding": "none"` with
+an empty `content` and the blob's `sha`. The read follows that `sha` to
+`gh api repos/<slug>/git/blobs/<sha>` (base64, up to 100 MB) and decodes it
+under the same strict rules, so this repository's own `docs/USAGE.md` (about
+1.2 MB) is read in full. The decoded byte count must equal the stated `size`.
+A refusal names **which** condition failed, at which side:
+`whole file -- <reason> at its base|head commit`, where `<reason>` is one of
+`unreadable: …` (the read failed, answered no JSON or no base64),
+`too large for the API: …` (no content and no blob, or the blob read failed
+too), `truncated: …` (fewer bytes than `size`), `not UTF-8 text`, or
+`binary: the file contains a NUL byte`. Checked live on 2026-10-23: at v0.26.0,
+`release unit-check --pr 503` refused `docs/USAGE.md` as "unreadable or not
+UTF-8"; this build reads it and reports `every changed path is inside the
+release unit`.
+
 Nen's own unit bounds the changed lines in `src/version.ts` to version/floor
 literal forms, and those in `README.md` / `docs/USAGE.md` to declared
 install/example forms with numeric pins. Each removed and added line is

@@ -47,7 +47,7 @@ import {
   assembleUnitCheck,
   fetchChangedFiles,
   fetchJsonAtRef,
-  fetchTextAtRef,
+  githubTextReader,
   fetchMergeBaseSha,
   MergeBaseError,
   renderUnitCheck,
@@ -551,7 +551,7 @@ export function runUnitCheckGate(options: RunUnitCheckGate): GateOutcome {
       baseRef: mergeBaseSha,
       headRef: options.prOnce.headRefOid,
       readJson: (filePath, ref): JValue | null => fetchJsonAtRef(options.seams, options.target, filePath, ref),
-      readText: (filePath, ref): string | null => fetchTextAtRef(options.seams, options.target, filePath, ref),
+      readText: githubTextReader(options.seams, options.target),
     };
   }
   const report = assembleUnitCheck(options.target, options.prNumber, unitPaths, changedFiles, keyScoped);
