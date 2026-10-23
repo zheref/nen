@@ -723,6 +723,7 @@ they assumed instead); they come back empty or `null`.
 | `privateNames.namedFile` | the [private-name guard](#the-private-name-guard)'s committed NAMED LIST ([#441](https://github.com/zheref/nen/issues/441)): a repo-relative path (no leading `/`, no `..`, no trailing `/`; a directory or symlink at it names nothing, said) to a file of exact `owner/name` slugs a recorded ruling made public. **The checkout's copy is only the switch**: declared here, every guarded verb reads this policy, the path and the list **at the remote's default branch** (`refs/remotes/origin/HEAD`), never from the checkout, and exempts those slugs beside the caller's ignore file. A non-string or a path outside the allowlist is refused **by pointer** at load; a [gate change](#gate-changes) under `schema set`. `null` or absent means no named list. **No default ever**: the file publishes what it names, and only a ruling may | every guarded verb ([`issue file`](#nen-issue-file) and the rest of the guard's table), `release-publish` |
 | `reports.sections` | which blocks each report VARIANT renders, and with which template. No default ever | [`report render --variant`](#nen-report-render) |
 | `review.scopes` | which reviewer, at which tier, within which budget, over which paths. No default ever | [`review scopes`](#nen-review-scopes) |
+| `review.excludedPersonas` | personas never to be a code reviewer (an intake-only persona); a scope naming one is refused by pointer ([#472](https://github.com/zheref/nen/issues/472)). Default none | [`review scopes`](#nen-review-scopes), [`schema check`](#nen-schema-check) |
 | `reports.dir` / `retain` / `template` / `captures` | where reports go. `dir` is what [`scaffold init`](#nen-scaffold-init) appends to `.gitignore`, beside `.nen/` | callers |
 | `notifications.rungs` / `sound` | which escalation rungs a host hook fires | host hooks |
 | `notifications.turn` | how loud an ORDINARY (no-gate) turn is: `"rung1"` (default) rings only the first rung `rungs` lists, `"all"` rings every rung `rungs` lists on every turn. Never widens what `rungs` grants | host hooks |
@@ -15993,6 +15994,23 @@ exactly like a repository whose diff raised no scope there, and the two are
 opposite findings: one is "nothing to review here", the other is "nobody is
 looking at this".
 
+**A persona the repository declares is never a code reviewer is never raised
+([#472](https://github.com/zheref/nen/issues/472)).** `review.excludedPersonas`
+is an optional list of persona names beside `scopes` -- Hatsu's intake
+examiners (HR-23: `satotz`, `lippo`, `buhara`, `bisky`), which challenge a
+brief at capture intake and nowhere else. A `review.scopes.<scope>.persona`
+naming one, compared after trimming whitespace and case-insensitively, is
+refused by pointer by the policy loader: [`schema check`](#nen-schema-check)
+FAILs the `nen/workflow.json` row naming `review.scopes.<scope>.persona`, and
+this verb exits **2** and raises nothing. The list lives here rather than in
+the consumer's own intake keys (`intake.challenger`), because nen reads no
+consumer vocabulary and every writer of `review.scopes` already passes this
+one loader. An empty or repeated entry is refused by pointer too.
+
+```json
+{ "review": { "excludedPersonas": ["satotz", "lippo", "buhara", "bisky"], "scopes": { "…": "…" } } }
+```
+
 **Usage**
 
 ```text
@@ -16018,7 +16036,7 @@ only, in the declaration's order**, never the diff's) and `unclaimed[]`.
 |---|---|
 | `0` | the classification, whether or not it raised a scope |
 | `1` | the repository declares **no `review` block**, named, with the pointer to write. Not a usage error: the invocation was right and there is nothing here to classify by |
-| `2` | a missing or unresolvable `--base`, or a malformed `review` block — refused by pointer by the policy loader |
+| `2` | a missing or unresolvable `--base`, or a malformed `review` block — refused by pointer by the policy loader, a scope naming a `review.excludedPersonas` persona included |
 
 **Example**
 

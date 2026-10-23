@@ -286,6 +286,11 @@ export interface ReviewScope {
 export interface ReviewPolicy {
   /** Scope name -> its row, in the file's own declaration order. */
   readonly scopes: Readonly<Record<string, ReviewScope>>;
+  /**
+   * Personas the repository declares never to be code reviewers (zheref/nen#472;
+   * Hatsu HR-23's intake examiners), as written. No scope may name one.
+   */
+  readonly excludedPersonas: readonly string[];
   readonly raw: Readonly<Record<string, unknown>>;
 }
 
@@ -699,7 +704,7 @@ export function defaultWorkflow(): Workflow {
     commits: { allowedAttributionTrailers: [], forbiddenTrailers: [], runTrailer: null, subjectCase: null, bodyMaxLineLength: null, raw: empty },
     monitor: { maxCycles: DEFAULT_MAX_CYCLES, pollSeconds: DEFAULT_POLL_SECONDS, localSlotFrees: DEFAULT_LOCAL_SLOT_RULE, localSlotFreesDeclared: false, raw: empty },
     models: { rule: null, surfaces: emptyRecord(), roles: emptyRecord(), raw: empty },
-    review: { scopes: emptyRecord<ReviewScope>(), raw: empty },
+    review: { scopes: emptyRecord<ReviewScope>(), excludedPersonas: [], raw: empty },
     profile: { default: DEFAULT_PROFILE, allowed: PROFILE_NAMES, raw: empty },
     release: { unitPaths: null, raw: empty },
     futon: { advanceGo: emptyRecord<readonly AdvanceGoKind[]>(), raw: empty },
@@ -746,7 +751,7 @@ const LAUNCH_KEYS: readonly string[] = ["default", "fallback"];
 const DEPLOY_KEYS: readonly string[] = ["defaultTarget"];
 const PRIVATE_NAMES_KEYS: readonly string[] = ["namedFile"];
 const REPORTS_KEYS: readonly string[] = ["dir", "retain", "template", "captures", "sections"];
-const REVIEW_KEYS: readonly string[] = ["scopes"];
+const REVIEW_KEYS: readonly string[] = ["scopes", "excludedPersonas"];
 const RELEASE_KEYS: readonly string[] = ["unitPaths"];
 const FUTON_KEYS: readonly string[] = ["advanceGo"];
 const NOTIFICATIONS_KEYS: readonly string[] = ["rungs", "sound", "turn"];
@@ -1212,10 +1217,39 @@ function parseSections(path: string, value: unknown): Readonly<Record<string, Re
  * no effect any diff could produce, which is the silent-default failure this
  * module's near-miss rule exists to prevent one level up.
  */
+/** A persona name as the exclusion compares it: trimmed, case-folded. */
+const personaKey = (name: string): string => name.trim().toLowerCase();
+
+/**
+ * `review.excludedPersonas` (zheref/nen#472): the personas this repository
+ * declares never to be code reviewers -- Hatsu's intake examiners (HR-23),
+ * which challenge a brief at capture intake and nowhere else. THE HOME IS THIS
+ * BLOCK, not the consumer's `intake.challenger` options: that key is Hatsu's
+ * own vocabulary, which nen does not read (names are data), and a list here is
+ * one choke point every writer of `review.scopes` already passes through.
+ * Each entry is a non-empty name, unique after trimming and case-folding.
+ */
+function parseExcludedPersonas(path: string, value: unknown): readonly string[] {
+  if (value === undefined || value === null) return [];
+  const list = requireArray(path, "review.excludedPersonas", value);
+  const seen = new Map<string, number>();
+  return list.map((item, index): string => {
+    const pointer = `review.excludedPersonas[${index}]`;
+    const name = requireString(path, pointer, item);
+    if (name.trim() === "") throw new SchemaError(path, pointer, "is empty. An exclusion that names nobody excludes nobody");
+    const previous = seen.get(personaKey(name));
+    if (previous !== undefined) throw new SchemaError(path, pointer, `repeats review.excludedPersonas[${previous}] (compared trimmed and case-insensitively)`);
+    seen.set(personaKey(name), index);
+    return name;
+  });
+}
+
 function parseReview(path: string, value: unknown): ReviewPolicy {
-  const raw = block(path, "review", value, REVIEW_KEYS, "A review policy's one key is");
+  const raw = block(path, "review", value, REVIEW_KEYS, "A review policy's keys are");
+  const excludedPersonas = parseExcludedPersonas(path, raw["excludedPersonas"]);
+  const excluded = new Set(excludedPersonas.map(personaKey));
   const scopesRaw = raw["scopes"];
-  if (scopesRaw === undefined || scopesRaw === null) return { scopes: emptyRecord<ReviewScope>(), raw };
+  if (scopesRaw === undefined || scopesRaw === null) return { scopes: emptyRecord<ReviewScope>(), excludedPersonas, raw };
   const record = requireRecord(path, "review.scopes", scopesRaw);
   const scopes = emptyRecord<ReviewScope>();
   for (const [name, entry] of Object.entries(record)) {
@@ -1226,6 +1260,13 @@ function parseReview(path: string, value: unknown): ReviewPolicy {
     const persona = requireString(path, `${pointer}.persona`, scope["persona"]);
     if (persona.trim() === "") {
       throw new SchemaError(path, `${pointer}.persona`, `is empty. A scope with no reviewer is a review nobody owes`);
+    }
+    if (excluded.has(personaKey(persona))) {
+      throw new SchemaError(
+        path,
+        `${pointer}.persona`,
+        `names '${persona.trim()}', which review.excludedPersonas declares is never a code reviewer (zheref/nen#472). Name a reviewer persona, or remove the scope`,
+      );
     }
     const tier = requireString(path, `${pointer}.tier`, scope["tier"]);
     if (tier.trim() === "") {
@@ -1259,7 +1300,7 @@ function parseReview(path: string, value: unknown): ReviewPolicy {
     }
     scopes[name] = { persona, tier, budget, paths };
   }
-  return { scopes, raw };
+  return { scopes, excludedPersonas, raw };
 }
 
 /**

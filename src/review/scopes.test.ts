@@ -243,6 +243,28 @@ describe("nen review scopes", () => {
   });
 });
 
+describe("review.excludedPersonas -- an intake-only persona is never raised (zheref/nen#472)", () => {
+  const EXCLUDED = ["satotz", "lippo", "buhara", "bisky"];
+
+  it("exits 2 and raises nothing when a scope names an excluded persona, compared trimmed and case-insensitively", async () => {
+    for (const persona of ["bisky", " Bisky ", "BISKY"]) {
+      const root = repoWith({ excludedPersonas: EXCLUDED, scopes: { ...SCOPES, ui: { persona, tier: "fast", budget: 1, paths: ["**/*.css"] } } });
+      const captured = await capture(["review", "scopes", "--base", "origin/main", "--repo", root, "--json"], script());
+      expect(captured.code, persona).toBe(2);
+      expect(captured.out, persona).toEqual([]);
+      expect(captured.err.join("\n"), persona).toMatch(/review\.scopes\.ui\.persona.*names 'Bisky'|review\.scopes\.ui\.persona.*names 'bisky'|review\.scopes\.ui\.persona.*names 'BISKY'/);
+    }
+  });
+
+  it("still raises a non-excluded persona beside the declared list", async () => {
+    const root = repoWith({ excludedPersonas: [" Satotz", "lippo"], scopes: SCOPES });
+    const captured = await capture(["review", "scopes", "--base", "origin/main", "--repo", root, "--json"], script());
+    expect(captured.code, captured.err.join("\n")).toBe(0);
+    const document = JSON.parse(captured.out.join("\n")) as { scopes: { persona: string }[] };
+    expect(document.scopes.map((row) => row.persona)).toContain("feitan");
+  });
+});
+
 describe("this repository's own review.scopes (zheref/nen#311)", () => {
   it("raises the security scope (Feitan) on the NN-PR-#303 diff -- the parse and watch classifier seams", () => {
     const pr303 = [
