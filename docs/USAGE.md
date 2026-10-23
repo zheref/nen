@@ -8645,12 +8645,33 @@ exit 1
 
 CON-33(b): collates every fragment in `--fragment-dir` into a new dated
 section of `--changelog`. Without `--write`, reports the rendered result
-without touching disk or deleting fragments.
+without touching disk or deleting fragments. The preview and the write render
+the section through one pure function, so they never disagree.
+
+**The anchor rule ([#504](https://github.com/zheref/nen/issues/504)).** Two
+anchors, tried in order:
+
+1. **An `### Unreleased` header.** It must be empty (otherwise exit 1, as
+   before). It is kept with the `_(nothing awaiting release.)_` placeholder and
+   the new `### v<version> — <theme>` section goes directly below it. The
+   Unreleased block runs to the next heading at level 3 **or higher**, so a
+   `## v<prev>` heading under it is never swallowed.
+2. **Otherwise, the top dated release heading** -- the first line shaped
+   `#… v<X.Y.Z> — <suffix>` at any level (this repository's own
+   `## v0.27.0 — 2026-10-22`). The new section goes directly above it, at its
+   level, with its `v` and separator. When that suffix is a `YYYY-MM-DD` date,
+   the new heading carries the release date and `--theme` becomes the
+   section's first paragraph; any other suffix means `--theme` is the suffix.
+   **The date source** is `--date`, else today's date in UTC. Every existing
+   line stays byte-identical: only the new section and its trailing blank line
+   are inserted.
+
+With neither anchor the verb refuses at exit 1 naming both.
 
 **Usage**
 
 ```text
-nen changelog collate --version <vX.Y.Z> --theme <text> --changelog <path> --fragment-dir <dir> [--write]
+nen changelog collate --version <vX.Y.Z> --theme <text> --changelog <path> --fragment-dir <dir> [--date <YYYY-MM-DD>] [--write]
 ```
 
 **Arguments**
@@ -8661,16 +8682,18 @@ nen changelog collate --version <vX.Y.Z> --theme <text> --changelog <path> --fra
 | `--theme <text>` | yes | the release's one-line theme | — |
 | `--changelog <path>` | yes | the `CHANGELOG.md` to rewrite | — |
 | `--fragment-dir <dir>` | yes | the fragment directory | a missing directory contributes zero fragments rather than refusing |
+| `--date <YYYY-MM-DD>` | no | the release date written on a dated heading (anchor 2) | default today's UTC date; not a calendar day exits 2; unused under anchor 1 |
 | `--write` | no | actually rewrite the changelog and delete the collated fragments | default off (dry-run) |
 | `--repo <path>` | no | resolves relative `--changelog`/`--fragment-dir` | default cwd |
 | `--json` | no | machine-readable collation result | — |
 
 **Output and exit codes** — human lines: `(no --write) would collate` or
-`collated <n> fragment(s) into <path> ### v<version> — <theme>`, then each
+`collated <n> fragment(s) into <path> <heading> (anchored below '### Unreleased' | above the top dated section)`, then each
 fragment name **in the order it was written into the section** — newest-first
 by the leading `<n>-` prefix, the same order the section itself reads, so the
 manifest can be cross-checked against it line for line. `--json` top-level
-keys: `version`, `theme`, `fragments[]` (that same order), `written`. Exit 0 on any completed run — there is no "drift" verdict here,
+keys: `version`, `theme`, `fragments[]` (that same order), `written`, `heading` (the
+heading written), `anchor` (`unreleased` \| `dated-section`). Exit 0 on any completed run — there is no "drift" verdict here,
 only "wrote/didn't write". Exit **2** on a missing required flag, and on an
 unreadable `--changelog` or fragment: the read goes through the shared reader,
 so a mistyped path is the named refusal every other path flag gives —
@@ -8685,10 +8708,21 @@ nothing.` It used to escape as a raw errno at exit 1
 nen changelog collate --repo . --version v0.3.0 --theme "readiness and release docs" --changelog CHANGELOG.md --fragment-dir changelog.d
 ```
 ```text
-(no --write) would collate 1 fragment(s) into CHANGELOG.md ### v0.3.0 — readiness and release docs
+(no --write) would collate 1 fragment(s) into CHANGELOG.md ### v0.3.0 — readiness and release docs (anchored below '### Unreleased')
   90-usage-docs.md
 ```
 (from a real run against a scratch `CHANGELOG.md` and a `changelog.d/90-usage-docs.md` fragment; `CHANGELOG.md` was confirmed unchanged on disk afterward since `--write` was not given)
+
+Against this repository's own `CHANGELOG.md`, which has no Unreleased header (2026-10-23):
+
+```bash
+nen changelog collate --repo . --version v0.28.0 --theme "probe" --changelog CHANGELOG.md --fragment-dir changelog.d --date 2026-10-23
+```
+```text
+(no --write) would collate 2 fragment(s) into CHANGELOG.md ## v0.28.0 — 2026-10-23 (anchored above the top dated section)
+  nn-505-antigravity-tool-names.md
+  sdd100-futon-idle-twice.md
+```
 
 ### `nen changelog completeness`
 

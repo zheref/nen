@@ -79,43 +79,124 @@ export class CollateError extends Error {
   }
 }
 
+/** Where the new section was anchored, and the heading it was written under. */
+export interface CollateResult {
+  readonly text: string;
+  readonly heading: string;
+  readonly anchor: "unreleased" | "dated-section";
+}
+
+export interface CollateOptions {
+  /** The release date (`YYYY-MM-DD`), written only where the changelog's dated sections carry one. */
+  readonly date?: string;
+}
+
 /**
- * Rewrite a CHANGELOG's text: empty `### Unreleased`, insert the new dated
- * section immediately below it. Requires an ALREADY-EMPTY `### Unreleased`
- * (see the header) and at least one fragment.
+ * The top dated release heading: `## vX.Y.Z — 2026-10-22` (nen's own shape) or
+ * `### vX.Y.Z — <theme>` (the fragment-era shape), at any level. The level,
+ * the `v`, the separator and whether the suffix is a date are read off it, so
+ * the new section follows the changelog's own form (zheref/nen#504 AC-2).
  */
-export function collateIntoChangelog(
+const DATED_HEADING = /^(#{1,6}) (v?)(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]+)?)( [—–-]+ )(.*)$/;
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Whether `line` is an ATX heading at `level` or above (fewer `#`s), the end of a section opened at `level`. */
+function endsSection(line: string, level: number): boolean {
+  const match = /^(#{1,6})\s/.exec(line);
+  return match !== null && (match[1] as string).length <= level;
+}
+
+/**
+ * Rewrite a CHANGELOG's text with the fragments as a new release section.
+ *
+ * TWO ANCHORS, IN ORDER (zheref/nen#504). An `### Unreleased` header, when the
+ * changelog carries one, must be empty (see the header): it is kept with its
+ * placeholder and the new `### vX.Y.Z — <theme>` section goes directly below
+ * it, the section running to the next heading at its own level OR HIGHER, so a
+ * `## v<prev>` heading under it is never swallowed. With no such header the new
+ * section goes directly above the TOP dated release heading, at that heading's
+ * level and in its form: a date suffix there means the new heading carries
+ * `options.date` and the theme becomes the section's first paragraph; any other
+ * suffix means the theme is the suffix. Every existing line is kept
+ * byte-identical; only the new section and its blank separator are inserted.
+ */
+export function collateChangelog(
   changelog: string,
   version: string,
   theme: string,
   fragments: readonly Fragment[],
-): string {
+  options: CollateOptions = {},
+): CollateResult {
   if (fragments.length === 0) {
     throw new CollateError("no fragment files were given -- nothing to collate.");
   }
   const lines = changelog.split("\n");
   const unreleasedIndex = lines.findIndex((line): boolean => /^### Unreleased/.test(line));
-  if (unreleasedIndex === -1) {
-    throw new CollateError("the changelog has no '### Unreleased' header to anchor the collation on.");
+  if (unreleasedIndex !== -1) {
+    const existing = unreleasedEntryCount(changelog);
+    if (existing > 0) {
+      throw new CollateError(
+        `the changelog still has ${existing} entr${existing === 1 ? "y" : "ies"} under '### Unreleased' -- refusing to overwrite existing content with the fragment placeholder. Migrate the entries by hand before collating fragments.`,
+      );
+    }
+    let nextHeaderIndex = lines.length;
+    for (let index = unreleasedIndex + 1; index < lines.length; index += 1) {
+      if (endsSection(lines[index] ?? "", 3)) {
+        nextHeaderIndex = index;
+        break;
+      }
+    }
+    const before = lines.slice(0, unreleasedIndex + 1);
+    const after = lines.slice(nextHeaderIndex);
+    const section = renderDatedSection(version, theme, sortFragments(fragments));
+    const heading = section.split("\n")[0] as string;
+    return {
+      text: [...before, "_(nothing awaiting release.)_", "", section.replace(/\n$/, ""), ...after].join("\n"),
+      heading,
+      anchor: "unreleased",
+    };
   }
-  const existing = unreleasedEntryCount(changelog);
-  if (existing > 0) {
+
+  const topIndex = lines.findIndex((line): boolean => DATED_HEADING.test(line.replace(/\r$/, "")));
+  if (topIndex === -1) {
     throw new CollateError(
-      `the changelog still has ${existing} entr${existing === 1 ? "y" : "ies"} under '### Unreleased' -- refusing to overwrite existing content with the fragment placeholder. Migrate the entries by hand before collating fragments.`,
+      "the changelog has no '### Unreleased' header and no dated release heading ('## vX.Y.Z — <date or theme>') to anchor the collation on.",
     );
   }
-
-  let nextHeaderIndex = lines.length;
-  for (let index = unreleasedIndex + 1; index < lines.length; index += 1) {
-    if (lines[index]?.startsWith("### ")) {
-      nextHeaderIndex = index;
-      break;
-    }
+  const match = DATED_HEADING.exec((lines[topIndex] as string).replace(/\r$/, "")) as RegExpExecArray;
+  const [, hashes, vee, , separator, suffix] = match as unknown as [string, string, string, string, string, string];
+  const bareVersion = version.startsWith("v") ? version.slice(1) : version;
+  const dated = ISO_DATE.test(suffix.trim());
+  if (dated && options.date === undefined) {
+    throw new CollateError("the top release heading carries a date, and no release date was given to write on the new one.");
   }
+  if (options.date !== undefined && !validIsoDate(options.date)) {
+    throw new CollateError(`'${options.date}' is not a calendar date in YYYY-MM-DD form.`);
+  }
+  const heading = `${hashes} ${vee}${bareVersion}${separator}${dated ? (options.date as string) : theme}`;
+  const body: string[] = [heading, ""];
+  if (dated) body.push(theme, "");
+  for (const fragment of sortFragments(fragments)) {
+    body.push(...fragment.content.replace(/\n+$/, "").split("\n"));
+  }
+  body.push("");
+  return { text: [...lines.slice(0, topIndex), ...body, ...lines.slice(topIndex)].join("\n"), heading, anchor: "dated-section" };
+}
 
-  const before = lines.slice(0, unreleasedIndex + 1);
-  const after = lines.slice(nextHeaderIndex);
-  const section = renderDatedSection(version, theme, sortFragments(fragments));
+/** Whether `value` is a real `YYYY-MM-DD` calendar date. */
+export function validIsoDate(value: string): boolean {
+  if (!ISO_DATE.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
 
-  return [...before, "_(nothing awaiting release.)_", "", section.replace(/\n$/, ""), ...after].join("\n");
+/** {@link collateChangelog}'s text alone, for callers that need no anchor. */
+export function collateIntoChangelog(
+  changelog: string,
+  version: string,
+  theme: string,
+  fragments: readonly Fragment[],
+  options: CollateOptions = {},
+): string {
+  return collateChangelog(changelog, version, theme, fragments, options).text;
 }

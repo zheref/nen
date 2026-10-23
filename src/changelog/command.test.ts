@@ -145,6 +145,38 @@ describe("nen changelog collate", () => {
   });
 });
 
+describe("nen changelog collate -- the dated-section anchor (zheref/nen#504)", () => {
+  const head = "# Changelog\n\n## v0.27.0 — 2026-10-22\n\nRelease unit.\n\n### Added\n\n- old\n";
+  const setup = (): { dir: string; changelog: string } => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-cl-"));
+    const changelog = join(dir, "CHANGELOG.md");
+    writeFileSync(changelog, head);
+    mkdirSync(join(dir, "changelog.d"));
+    writeFileSync(join(dir, "changelog.d", "a.md"), "- new\n");
+    return { dir, changelog };
+  };
+
+  it("previews and writes the same section above the top dated heading, dated by --date", async () => {
+    const { dir, changelog } = setup();
+    const argv = ["changelog", "collate", "--version", "v0.28.0", "--theme", "Theme.", "--changelog", changelog, "--fragment-dir", "changelog.d", "--date", "2026-10-23"];
+    const preview = await capture([...argv, "--json"], dir);
+    expect(preview.code).toBe(0);
+    const report = JSON.parse(preview.out.join("\n")) as { heading: string; anchor: string; written: boolean };
+    expect(report).toMatchObject({ heading: "## v0.28.0 — 2026-10-23", anchor: "dated-section", written: false });
+    const written = await capture([...argv, "--write"], dir);
+    expect(written.code).toBe(0);
+    expect(written.out.join("\n")).toMatch(/## v0\.28\.0 — 2026-10-23 \(anchored above the top dated section\)/);
+    expect(readFileSync(changelog, "utf8")).toBe("# Changelog\n\n## v0.28.0 — 2026-10-23\n\nTheme.\n\n- new\n\n## v0.27.0 — 2026-10-22\n\nRelease unit.\n\n### Added\n\n- old\n");
+  });
+
+  it("refuses a --date that is not a calendar day at exit 2, writing nothing", async () => {
+    const { dir, changelog } = setup();
+    const result = await capture(["changelog", "collate", "--version", "v0.28.0", "--theme", "t", "--changelog", changelog, "--fragment-dir", "changelog.d", "--date", "2026-13-01", "--write"], dir);
+    expect(result.code).toBe(2);
+    expect(readFileSync(changelog, "utf8")).toBe(head);
+  });
+});
+
 describe("nen changelog completeness", () => {
   it("reports missing PRs from the merge log against the changelog", async () => {
     const dir = mkdtempSync(join(tmpdir(), "nen-cl-"));
