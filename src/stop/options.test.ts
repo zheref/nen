@@ -3,13 +3,15 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } fro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
-import type { Seams } from "../seam/exec.js";
+import { spawnRunner, type CommandResult, type Seams } from "../seam/exec.js";
 import { noPortProbe } from "../seam/scripted.js";
 import { MARKER_FILE, STOP_MARK_CONTRACT, STOP_MARK_CONTRACT_V2, stopCommand } from "./command.js";
 
 const SEAMS: Seams = {
-  run: (): never => {
-    throw new Error("must not be called");
+  // Only git, to find the per-gate markers' home (zheref/nen#513).
+  run: (command, args, options): CommandResult => {
+    if (command !== "git" || !args.includes("--git-common-dir")) throw new Error(`must not be called: ${command} ${args.join(" ")}`);
+    return spawnRunner(command, args, options);
   },
   now: (): Date => new Date("2026-01-01T00:00:00Z"),
   env: {},

@@ -241,7 +241,7 @@ change from a compatible one.
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **91 shapes** and **94 ids** (`nen.runner.plan`,
+binary carries**, writing or reading — **92 shapes** and **96 ids** (`nen.runner.plan`,
 `nen.stop.mark` and `nen.wc.worktree.copies` each have two versions, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -302,7 +302,7 @@ file formats).
 - **`session`** — `nen.session.ledger/v0.1`
 - **`shu`** — `nen.shu.<verb>/v0.1` · `nen.shu.coverage-capture/v0.1` · `nen.shu.coverage/v0.1` · `nen.shu.detect/v0.1` · `nen.shu.evidence/v0.1` · `nen.shu.proof/v0.1` · `nen.shu.test-report/v0.1` · `nen.shu.tools/v0.1` · `nen.shu.warmup/v0.1`
 - **`spec`** — `nen.spec.check/v0.1` · `nen.spec.cite-check/v0.1` · `nen.spec.index/v0.1` · `nen.spec.number/v0.1`
-- **`stop`** — `nen.stop.answer/v0.1` · `nen.stop.mark/v0.1` · `nen.stop.mark/v0.2` · `nen.stop.proposed-issue/v0.1`
+- **`stop`** — `nen.stop.answer/v0.1` · `nen.stop.list/v0.1` · `nen.stop.mark/v0.1` · `nen.stop.mark/v0.2` · `nen.stop.mark/v0.3` · `nen.stop.proposed-issue/v0.1`
 - **`surface`** — `nen.surface.capabilities/v0.1` · `nen.surface.install/v0.1` · `nen.surface.mirror.check-installed/v0.1` · `nen.surface.mirror.check-plugin/v0.1` · `nen.surface.mirror.check/v0.1` · `nen.surface.mirror.generate/v0.1` · `nen.surface.status/v0.1`
 - **`usage`** — `nen.usage.ledger/v0.1`
 - **`wc`** — `nen.wc.catch-up/v0.2` · `nen.wc.prune/v0.1` · `nen.wc.publish/v0.1` · `nen.wc.squash/v0.1` · `nen.wc.swap.state/v0.1` · `nen.wc.swap/v0.1` · `nen.wc.worktree.copies/v0.1` · `nen.wc.worktree.copies/v0.2` · `nen.wc.worktree/v0.1` · `nen.wc.worktrees/v0.1`
@@ -484,7 +484,7 @@ verb does by default:
 | [`shu build`](#nen-shu-build), [`shu test`](#nen-shu-test), [`shu ui-test`](#nen-shu-ui-test), [`shu lint`](#nen-shu-lint), [`shu archive`](#nen-shu-archive), [`shu release`](#nen-shu-release), [`shu dev`](#nen-shu-dev), [`shu run`](#nen-shu-run), [`shu coverage`](#nen-shu-coverage), [`shu test-report`](#nen-shu-test-report) | no | `--dry-run` | prints every step's exact argv, cwd and env NAMES and spawns **nothing**. All ten are `dry-run-gated` in izanami's automation-policy table: the bare form classifies **mutating** — the argv comes from a file in the *target* repository, and certifying it read-only sight unseen would certify whatever it happens to contain — and the `--dry-run` form classifies **read-only**, because nen renders and spawns nothing whatever that file says. On `dev` and `run`, `--json` is **refused** without `--dry-run`. `coverage` and `test-report` additionally **parse** what their run produced — and their `--dry-run` parses nothing either, so the report sitting on disk from a previous run is never read. `test-report` and `coverage` each carry a **second** read gate — `--from-artifacts` and `--from-capture` ([#250](https://github.com/zheref/nen/issues/250)) — which never reach the executor at all; `--from-capture` starts only nen's own fixed-argv git reads, and a `--base` beginning with `-` is refused before any of them |
 | [`shu deploy`](#nen-shu-deploy) | **yes** | `--run` | the one executing verb in this family that is **dry-run-first**, and the only one whose blast radius is *other people's users*: every other verb here spawns something inside a directory and can be undone by running it again, and a deploy cannot. Without `--run` it prints the fully resolved plan — the destination substituted into the argv, every precondition asserted, each step as `would run:` — and spawns **nothing**, at exit 0. `--dry-run` is the explicit spelling of that same form, and `--run --dry-run` together is exit 2 rather than a guess about which of two contradicting instructions was meant. **Two flags and no single-flag path to acting**: `--target <name>` says *where* (required, no default ever, resolved after the lane, the verb and the host, so a lane that declares no deploy answers its own refusal first) and `--run` says *now*. So this row is `write-flag-gated` on `--run` in izanami's table — like [`label apply`](#nen-label-apply) and [`wake fire`](#nen-wake-fire), and unlike the nine above: the bare form classifies **read-only** because nen spawns nothing whatever the declaration says, which is a property of nen rather than a claim about that file |
 | [`shu tools`](#nen-shu-tools) | yes — nen writes nothing, but see the note | `--install` | the **only verb in this CLI whose blast radius is the developer's machine**, and the only row with three izanami answers rather than two. The bare check form spawns the version probes the *target repository* declares, so it classifies **`unknown`** — refused, and honestly labelled "not provably a read" rather than mislabelled "writes"; `--install` classifies **mutating**; and `--dry-run` classifies **read-only**, because that form spawns nothing at all, probes included. `--install --dry-run` is refused anyway: the write flag is decisive, because a read-only claim that hinges on one adjacent token still being present is exactly what the write-flag rule exists for |
-| [`stop`](#nen-stop) | **yes** | `--mark` | the banner and the table are a pure render, and this verb fires nothing, ever. `--mark` is the banner form's one write ([`stop answer`](#nen-stop-answer), its own row below, is the ledger writer): `.nen/last-stop.json`, the marker a host hook reads to ring the two rungs nen may not ring itself. So this row is `write-flag-gated` on `--mark` in izanami's table — the bare form is **read-only** because nen provably writes nothing without the flag, which is a property of nen rather than a claim about anybody's file |
+| [`stop`](#nen-stop) | **yes** | `--mark` | the banner and the table are a pure render, and this verb fires nothing, ever. `--mark` is the banner form's one write ([`stop answer`](#nen-stop-answer), its own row below, is the ledger writer): `.nen/last-stop.json`, the marker a host hook reads to ring the two rungs nen may not ring itself, and beside it the per-gate marker under `<git-common-dir>/.nen/marks/` (#513). So this row is `write-flag-gated` on `--mark` in izanami's table — the bare form is **read-only** because nen provably writes nothing without the flag, which is a property of nen rather than a claim about anybody's file |
 | [`stop answer`](#nen-stop-answer) | no | `--dry-run` | reserves an id and creates one record under the git common directory; the dry form still runs `git rev-parse --git-common-dir` and reads the question and typed files, prints the record and the next free id, and writes nothing. `answer show` writes nothing and refuses `--dry-run`. A `stop` subcommand typed after a flag (`nen stop --gate G5 answer ...`) classifies **unknown** in izanami's table, never as the family-wide `--mark` row |
 | [`shu warmup`](#nen-shu-warmup) | no | `--dry-run` | **the only verb in the `shu` family that mutates git state.** `--dry-run` prints every git command *and* every delegated toolchain command, in order, and runs **none** of them — not even the fetch. Unlike the ten rows above, that form still classifies **mutating** in izanami's table, dry run included: nobody watches a warm-up, so the fail-closed answer costs nothing. `--discard` is its *other* dangerous flag, and it is the destructive one: without it a dirty tree is refused at exit 2 with every path listed, and with it the tree is reset and cleaned (`git reset --hard`, then `git clean -fd`) and then **read again**, refusing at 2 if anything survived — but **never** `git clean -x` and never a second `-f`, because an ignored file is the developer's own cache and a nested repository is not this verb's to delete |
 
@@ -1121,7 +1121,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`bootstrap`](#family-bootstrap) | [`nen bootstrap`](#nen-bootstrap) | fetch, checksum-verify and cache a pinned nen binary by running bootstrap/nen.sh, relaying its verified path and exit code unchanged | bootstrap/nen.sh under --repo; network (GitHub release assets + SHA256SUMS) | no *(stdio)* |
 | [`wake`](#family-wake) | [`nen wake verify`](#nen-wake-verify) | scan open PRs whose author matches --author-pattern for a swallowed (action_required/startup_failure, never-executed) workflow run, auto-redriving what is safe and flagging the rest for a human | gh (pulls, actions/runs, issue comments; --run also writes reruns + comments) | yes |
 | [`wake`](#family-wake) | [`nen wake fire`](#nen-wake-fire) | edge-trigger one object by removing then re-applying a label, then post an optional settle comment | gh (issue edit x2, api comment; --run required to write) | yes |
-| [`stop`](#family-stop) | [`nen stop`](#nen-stop) | render the gate-stop banner plus a padded-markdown efforts table read from a file/stdin, or (--template) a blank table to fill in; --mark also records the stop for a host hook | a local efforts.md file or stdin; no git/gh. --mark WRITES .nen/last-stop.json under --repo | yes |
+| [`stop`](#family-stop) | [`nen stop`](#nen-stop) | render the gate-stop banner plus a padded-markdown efforts table read from a file/stdin, or (--template) a blank table to fill in; --mark also records the stop for a host hook | a local efforts.md file or stdin; git rev-parse --git-common-dir under --mark. --mark WRITES .nen/last-stop.json under --repo and `<git-common-dir>/.nen/marks/<effort>/<gate>.json`; `list` reads both, `clear` removes them | yes |
 | [`stop`](#family-stop) | [`nen stop answer`](#nen-stop-answer) | record the answer a stop received -- the question, every option with its consequence, and a picked key or the typed reply verbatim -- as one record with a never-reused id `R-YYYY-MM-DD-nn`; `answer show` lists an effort's records. Records, never chooses | git (rev-parse --git-common-dir); the --question-file/--typed-file under --repo; WRITES `<git common dir>/.nen/stops/<effort>/<n>.json` and `<git common dir>/.nen/stop-ids/<id>` unless --dry-run | yes |
 | [`exits`](#family-exits) | [`nen exits`](#nen-exits) | every exit code above the shared 0/1/2 scheme, verb -> code -> meaning, read from the registry; USAGE's exit table is held to it | nothing outside the binary | yes |
 
@@ -15395,11 +15395,12 @@ The marker goes under the dot-prefixed, gitignored `.nen/` (generated output), n
 **Usage**
 
 ```text
-nen stop [--who <name>] [--gate G1|G1-M|G2|G3|G4|G5] [--notified] [--mark]
+nen stop [--who <name>] [--gate G1|G1-M|G2|G3|G4|G5] [--notified] [--mark [--effort <id>]]
          [--title <line>] [--body <text>] [--report-url <url>]
          [--options <file.json>] [--propose-issue <file.json>]
          [--repo <path>] [efforts.md | -]
-nen stop clear [--repo <path>]
+nen stop clear [--gate <g> [--effort <id>] | --all] [--repo <path>] [--json]
+nen stop list  [--repo <path>] [--json]
 nen stop show  [--repo <path>] [--json]
 nen stop --template
 nen stop answer ...   (see nen stop answer below)
@@ -15414,6 +15415,7 @@ nen stop answer ...   (see nen stop answer below)
 | `--notified` | no | States rung 1 (push notification) was already fired by the caller. | Nen never fires it itself. |
 | `efforts.md \| -` (positional) | no | A markdown pipe table (header + rows) to render below the banner; `-` reads stdin. | Resolved against `--repo` (default cwd) when a relative path is given. |
 | `--mark` | no | Also write `.nen/last-stop.json` under `--repo`: `{ contract, who, gate, notified, at }`. | The banner form's only write ([`stop answer`](#nen-stop-answer) is the ledger writer). The instant is the invocation's own clock, ISO-8601, so a host hook's freshness window is provable rather than raced. `--mark --template` is exit 2: a blank table waits on nothing, so there is no stop to record. A marker that cannot be written is exit **1** with the errno -- a caller who typed `--mark` asked for a rung to be armed, and "the banner rendered and the marker did not" is where somebody waits for a bell that never rings. |
+| `--effort <id>` | no | With `--mark`: the effort this stop belongs to, under the [one effort-id grammar](#effort-ids-and-the-ledgers-durable-home). Recorded as `effort` in the per-gate marker and used as its directory. | Without `--mark` it is exit 2. |
 | `--template` | no | Emit a blank 5-column table (`Effort`, `Open issues & PRs`, `Status (gate)`, `Thought flow`, `Session / lane`) instead of the banner. | Mutually exclusive in effect with the banner mode -- no signal line is printed, since nothing is being waited on. |
 
 **Output and exit codes** -- the banner is `=== YOUR INPUT IS NEEDED ===...`, then `who:`/`gate:` lines if given, the rung-1/rung-2-3 status lines, then the rendered padded-markdown table (or nothing, with a note that "no banner above => nothing needs you right now" -- though the banner itself is unconditional whenever this command runs without `--template`). `--json`: `{ template: true, rows }` for `--template`; otherwise `{ who, gate, notified, rows, marker }` (the banner text itself is not part of the JSON -- only the structured fields are). `marker` is `null` unless `--mark` was given, and otherwise carries `{ path, contract, who, gate, notified, at }`; the file on disk carries every one of those but `path`, since a file that names where it is is wrong the moment a checkout moves. The text form gains one line, `marked: <path> -- a host hook may ring rungs 2-3 off it.` Exit 0 on a normal render; exit 2 on an unrecognised `--gate` value, on `--mark --template`, or when the `efforts.md`/`-` argument names a file that cannot be read; exit 1 when `--mark` could not write the marker.
@@ -15483,6 +15485,30 @@ filing; with `--mark` it is carried in the marker and written beside it at `.nen
 none naming the report -- at exit 1 naming the first defect, so a hook or a report can rely on the shape.
 `nen stop clear` removes `.nen/last-stop.json` when it exists -- the consumption a Stop hook performs on a
 surface that has one, as a verb for the surfaces that do not. Exit 0 either way; the line says which.
+
+**One marker per gate (zheref/nen#513).** The single file is replaced by every mark, so a run whose
+efforts reach several gates left a hook ringing for the last one only. Every `--mark` therefore ALSO
+writes `<git-common-dir>/.nen/marks/<effort>/<gate>.json`, contract **`nen.stop.mark/v0.3`**: every v0.2
+key, each present (null where the stop said nothing), plus `effort`. `<effort>` is `--effort`
+percent-encoded by the one encoder, or `_` when no effort was named (outside the grammar, so it never
+collides); `<gate>` is the gate, or `none`. Marks for different gates, or for one gate of two efforts,
+are separate files; a second mark of the same gate of the same effort replaces only its own file. The
+directory is the git common dir every worktree shares, so a marker written in a worktree survives that
+worktree's removal; outside git it is `<--repo>/.nen/marks/`. **The reader side is unchanged**:
+`.nen/last-stop.json` is still written byte for byte as before (v0.1, or v0.2 when the stop says more)
+and `stop show` still reads it, so a hook that reads only the single file still rings for the latest
+stop. A hook that must ring for every gate reads `stop list` and clears each with `stop clear --gate`.
+
+- `nen stop list [--json]` prints every unrung marker, oldest first: each per-gate marker with its gate,
+  effort, instant, who and title, and the single file as `legacy` when no per-gate marker is the same
+  stop (same `at`, `gate` and `who`), so a marker an older build wrote still reads. `--json`:
+  `{ contract: "nen.stop.list/v0.1", dir, marks: [{ source, path, contract, gate, effort, who, at, title }],
+  unreadable: [{ path, reason }] }`. Exit 0 when every file read, an empty list included; exit **1** when
+  a marker file exists and could not be read, listed under `unreadable` -- never skipped, never "no marker".
+- `nen stop clear --gate <g> [--effort <id>]` removes only that gate's marker for that effort (no
+  `--effort`: the stop marked without one), and the single file too when it records that same stop. Bare
+  `clear` removes the single file and its own per-gate twin. `clear --all` removes every marker. `--effort`
+  without `--gate`, and `--all` with either, are exit 2. `--json`: `{ cleared, path, removed[] }`.
 
 ```
 nen stop --who Kurapika --gate G5 --title "dirty tree at breath" --body "which door?" \
