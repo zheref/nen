@@ -90,6 +90,17 @@ describe("nen pr converge", () => {
     expect(result.err).toMatch(/could not read/);
   });
 
+  it("--composite: a first read at another head is exit 3 at the CLI (a moved head is held at the function layer, convergecomposite.test.ts AC-6)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-converge-"));
+    writeFileSync(join(dir, "req.json"), JSON.stringify([{ name: "verify", pattern: "^## Verify$" }]));
+    const pin = "a".repeat(40);
+    const argv = ["pr", "converge", "--target", "o/n", "--pr", "5", "--composite", "--require-head", pin, "--body-requirements", "req.json"];
+    const other = await run(prCommand, argv, [view(PR_BODY, [ref(12)]), issueRead(12, ISSUE_BODY)], { repoFlag: dir });
+    expect(other.code).toBe(3);
+    expect(other.out).toBe("");
+    expect(other.err).toMatch(/not the pinned/);
+  });
+
   it("exits 1 on an unmatched row, a malformed row, unrequested on a criterion, and a none row with a problem", async () => {
     const cases = [
       "| AC-1 | satisfied | a |\n| AC-2 | satisfied | b |\n| AC-9 | satisfied | c |\n",

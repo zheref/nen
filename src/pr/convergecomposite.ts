@@ -15,8 +15,8 @@
 //
 // NEN REPORTS; IT DECIDES NOTHING ELSE. The verdict is the conjunction: each
 // conjunct says why it holds or does not, and `ready` is true only when all
-// four hold. A read that did not finish is `ConvergeReadError` -- exit 1 with
-// stdout empty at the adapter, never a verdict (AC-7).
+// four hold. A read that did not finish is `ConvergeReadError` -- exit 3 with
+// stdout empty at the adapter (`EXIT_COMPOSITE_UNREAD`), never a verdict (AC-7).
 
 import { checkBody, type BodyRequirement } from "./bodycheck.js";
 import { assertPinnedHead, closingLinksConjunct, ConvergeReadError, criteriaConjunct, readConvergeInput, type ConvergeConjunct, type ConvergeInput } from "./converge.js";

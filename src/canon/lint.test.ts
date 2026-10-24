@@ -13,7 +13,7 @@ import { spawnSync } from "node:child_process";
 import { runFamily, type Io } from "../index.js";
 import { defaultSeams } from "../seam/exec.js";
 import { canonCommand } from "./command.js";
-import { exemptQuoted, parseLintContract, readingClauses, walk } from "./lint.js";
+import { exemptQuoted, MAX_LINT_FILE_BYTES, parseLintContract, readingClauses, walk } from "./lint.js";
 import { parseDoc } from "./markdown.js";
 
 const CONTRACT = join(process.cwd(), "src", "canon", "fixtures", "prose.lint.json");
@@ -542,6 +542,42 @@ describe("nen canon lint -- the guard's later cases (zheref/nen#481, Hatsu main 
   });
 });
 
+describe("nen canon lint -- the size cap and unreadable contract-named files (Nobunaga delta on #526)", () => {
+  it("a file over MAX_LINT_FILE_BYTES is wiring, naming it; a file of exactly the cap is read", async () => {
+    const root = base();
+    const line = `${"x".repeat(1022)}\n\n`;
+    const exact = line.repeat(Math.floor(MAX_LINT_FILE_BYTES / line.length));
+    const padded = exact + "y".repeat(MAX_LINT_FILE_BYTES - exact.length);
+    expect(Buffer.byteLength(padded)).toBe(MAX_LINT_FILE_BYTES);
+    put(root, "docs/big.md", padded);
+    const read = await lint(root);
+    expect(read.code, read.stderr).not.toBe(2);
+    put(root, "docs/big.md", padded + "z");
+    const over = await lint(root);
+    expect(over.code).toBe(2);
+    expect(over.stdout).toBe("");
+    expect(over.stderr).toMatch(/docs\/big\.md is larger than 4194304 bytes/);
+  });
+
+  it("a contract-named file that cannot be read says so by its code; a dangling symlink says dangling", async () => {
+    if (process.getuid?.() !== 0 && process.platform !== "win32") {
+      const root = base();
+      chmodSync(join(root, "nen/decisions.json"), 0o000);
+      const r = await lint(root);
+      chmodSync(join(root, "nen/decisions.json"), 0o644);
+      expect(r.code).toBe(2);
+      expect(r.stderr).toMatch(/cannot read nen\/decisions\.json: .*EACCES/);
+      expect(r.stderr).not.toMatch(/dangling/);
+    }
+    const root = base();
+    rmSync(join(root, "nen/decisions.json"));
+    symlinkSync(join(root, "nen/no-such-target.json"), join(root, "nen/decisions.json"));
+    const d = await lint(root);
+    expect(d.code).toBe(2);
+    expect(d.stderr).toMatch(/symlink nen\/decisions\.json is dangling/);
+  });
+});
+
 describe("canon lint internals", () => {
   it("quoted words are blanked, newlines kept", () => {
     expect(exemptQuoted('a "b c" d\n“e”')).toBe("a       d\n   ");
@@ -550,11 +586,19 @@ describe("canon lint internals", () => {
     expect(exemptQuoted('"a" "b"\n"c"')).toBe("       \n   ");
   });
 
-  it("blanks 40,000 quotations in one paragraph in linear time (Feitan F3 on #526)", () => {
-    const text = '"q" '.repeat(40_000);
-    const t0 = Date.now();
-    expect(exemptQuoted(text).trim()).toBe("");
-    expect(Date.now() - t0).toBeLessThan(2_000);
+  it("blanks quotations in linear time: 8x the quotes costs far less than 64x the time (Feitan F3 on #526)", () => {
+    const time = (count: number): number => {
+      const text = '"q" '.repeat(count);
+      const t0 = performance.now();
+      for (let i = 0; i < 3; i++) expect(exemptQuoted(text).trim()).toBe("");
+      return performance.now() - t0;
+    };
+    time(1_000); // warm up
+    const small = Math.max(time(5_000), 1);
+    const large = time(40_000);
+    // Quadratic growth would be ~64x; linear is ~8x. A generous bound of 32x
+    // separates the two without a wall-clock limit a loaded host could trip.
+    expect(large / small).toBeLessThan(32);
   });
 
   it("reads reading status from a Status column by header and from a (reading) token", () => {

@@ -453,7 +453,8 @@ converge:
   full page of 100 closing references), stdout empty; a non-default base
   whose body names no closing issue is reported, never blocked; 2 usage or a
   malformed catalogue. --require-head <sha> pins every read to one full
-  commit (first read and a closing head re-read; else exit 1, no verdict).
+  commit (first read and a closing head re-read; else exit 1 -- 3 under
+  --composite -- no verdict).
   --composite (zheref/nen#483 AC-1; needs --require-head and
   --body-requirements <path>, the '{ name, pattern }' file 'pr body-check'
   reads): ONE verdict at the pinned head from four conjuncts -- 'pr ready'
@@ -462,8 +463,8 @@ converge:
   closing link and every GitHub closing link is named in the body; on
   another base, read from the body) and the criteria coverage. Exit 0 all
   four hold; 1 any does not; 3 any read did not finish or was at another
-  head (no verdict, stdout empty) -- could-not-look has its own exit here. 'pr merge --delivery' gates on the same
-  criteria and links conjuncts. --json: '{ contract, composite: true, target,
+  head (no verdict, stdout empty) -- could-not-look has its own exit here.
+  'pr merge --delivery' gates on the same criteria and links conjuncts. --json: '{ contract, composite: true, target,
   pr, url, headSha, requiredHead, base, closingSource, ready, conjuncts: [{
   name, ok, lines }], blocking }'. Otherwise --json: '{
   contract: "nen.pr.converge/v0.1", target, pr, url, headSha, base,
@@ -1409,6 +1410,7 @@ export const prCommand: Command = {
     { verb: "pr merge", code: 6, meaning: "gh could not be started" },
     { verb: "pr merge", code: 7, meaning: "--delivery: merged without authority; GitHub reports a base other than the one gated" },
     { verb: "pr ready", code: 8, meaning: "--require-head did not match GitHub's head; no verdict" },
+    { verb: "pr converge", code: 3, meaning: "--composite: a read did not finish, or was at another head than --require-head; no verdict" },
     { verb: "pr mark-ready", code: 3, meaning: "the pull request is CLOSED or MERGED; nothing sent" },
     { verb: "pr mark-ready", code: 8, meaning: "--require-head did not match GitHub's head" },
     { verb: "pr request-reviews", code: 9, meaning: "a bot request GitHub accepted but did not list as pending" },
