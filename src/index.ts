@@ -53,7 +53,7 @@
 
 import { parseArgs, UsageError } from "./cli/args.js";
 import { mergeFlags, VerbUsageError, type Command } from "./cli/command.js";
-import { plainLine } from "./cli/plain.js";
+import { escapeInvisibleJson, plainLine } from "./cli/plain.js";
 import { refuse } from "./cli/refusal.js";
 import { COMMANDS, findCommand } from "./cli/registry.js";
 import { RepoRootError } from "./repo/root.js";
@@ -538,12 +538,20 @@ export async function runFamily(
     return 0;
   }
 
+  // ONE JSON WRITER (zheref/nen#515): under `--json` every line a verb puts on
+  // stdout passes through `escapeInvisibleJson`, so the bidi and zero-width
+  // controls a GitHub or file-sourced string carries reach the document as
+  // `\uXXXX` whichever of the family's writers produced it -- `emit`, the
+  // refusal envelope, or a verb's own `JSON.stringify`. The parsed value is
+  // unchanged.
+  const json = args.booleans.has("json") || headJson;
+  const verbIo: Io = json ? { ...io, out: (line: string): void => io.out(escapeInvisibleJson(line)) } : io;
   try {
     return await family.run({
       args,
       repoFlag: args.values["repo"] ?? headRepo,
-      json: args.booleans.has("json") || headJson,
-      io,
+      json,
+      io: verbIo,
       seams,
     });
   } catch (error) {

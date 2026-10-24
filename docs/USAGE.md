@@ -184,6 +184,17 @@ verdict. [`pr ready`](#nen-pr-ready)'s JSON carries a `contract` field,
 `"nen.pr.ready/v0.1"`, precisely so a consumer can tell a future breaking
 change from a compatible one.
 
+**Invisible characters are escaped in `--json` ([#515](https://github.com/zheref/nen/pull/515)).**
+Under `--json`, every line a verb writes to stdout passes through one writer
+that spells the bidirectional, zero-width and line-separator characters --
+U+00AD, U+061C, U+180E, U+200B–200F, U+2028–202E, U+2060–2064, U+2066–206F and
+U+FEFF -- as `\uXXXX` escapes. The parsed value is unchanged; only what a
+terminal or a log can be made to show differs, so a `U+202E` in an issue body
+cannot reorder a document someone reads. The human rendering strips the same
+class through `plainLine` wherever a verb prints text it did not write,
+including every refusal reason. The raw NUL-delimited stream
+(`stage list --nul`) is not JSON and is not touched.
+
 **Which shapes carry a `contract`, and why not all of them.**
 
 > [#79](https://github.com/zheref/nen/issues/79) asked the question directly, so
