@@ -5121,7 +5121,7 @@ nen wc overlap --efforts <a,b,...> --repo <path> [--base <ref>] [--always-overla
 | `--repo <path>` | yes | The checkout whose refs are read. | Listed unbracketed: omitted, exits 2 by name. |
 | `--base <ref>` | no | What each effort is diffed against. | Default `origin/<branch.base>` from `--repo`'s `nen/workflow.json` (`origin/main` when undeclared); a policy that will not load exits 1, with or without `--base` (its `alwaysOverlaps` would go uncounted). |
 | `--always-overlaps <paths>` | no | Comma-separated paths every effort is counted as touching, added to the workflow's `alwaysOverlaps`. | An entry ending in `/` is a directory prefix. |
-| `--declared <file>` | no | A JSON object of effort → the paths it declares before authoring. | Resolves against `--repo`. Unreadable, not JSON, not an object, a key `--efforts` does not list, or an entry that is not a list of repository-relative paths (no leading `/`, no `..`) exits 2. `$`-keys are skipped. |
+| `--declared <file>` | no | A JSON object of effort → the paths it declares before authoring. | Resolves against `--repo`. Unreadable, not JSON, not an object, a key `--efforts` does not list, or an entry that is not a **non-empty** list of repository-relative paths (no leading `/`, no `..`) exits 2: an empty list would read an unread diff as "touches nothing". `$`-keys are skipped. |
 
 **Output and exit codes** -- prints `verdict: disjoint`, `verdict: stack(<a> <- <b> ...)` followed by
 `order: chain (…)` or `order: given (…)`, or `verdict: unknown (could not read <effort>, ...)`, then

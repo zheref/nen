@@ -159,7 +159,8 @@ describe("nen wc overlap (CLI)", () => {
     writeFileSync(join(root, "bad.json"), "{");
     writeFileSync(join(root, "foreign.json"), JSON.stringify({ other: ["x"] }));
     writeFileSync(join(root, "climb.json"), JSON.stringify({ a: ["../x"] }));
-    for (const file of ["missing.json", "bad.json", "foreign.json", "climb.json"]) {
+    writeFileSync(join(root, "empty.json"), JSON.stringify({ a: [] }));
+    for (const file of ["missing.json", "bad.json", "foreign.json", "climb.json", "empty.json"]) {
       expect((await capture(["wc", "overlap", "--efforts", "a", "--base", "origin/main", "--declared", file], root, { a: [] })).code, file).toBe(2);
     }
     expect((await capture(["wc", "classify", "--declared", "x"], root, {})).code).toBe(2);

@@ -937,8 +937,8 @@ function readDeclaredPaths(root: string, flag: string | undefined, efforts: read
   for (const [effort, paths] of Object.entries(parsed as Record<string, unknown>)) {
     if (effort.startsWith("$")) continue;
     if (!efforts.includes(effort)) throw new VerbUsageError(`--declared names '${effort}', which --efforts does not list.`);
-    if (!Array.isArray(paths) || paths.some((path): boolean => typeof path !== "string" || path.trim() === "" || path.startsWith("/") || path.split("/").includes(".."))) {
-      throw new VerbUsageError(`--declared '${effort}' is not a list of repository-relative paths.`);
+    if (!Array.isArray(paths) || paths.length === 0 || paths.some((path): boolean => typeof path !== "string" || path.trim() === "" || path.startsWith("/") || path.split("/").includes(".."))) {
+      throw new VerbUsageError(`--declared '${effort}' is not a non-empty list of repository-relative paths; an empty list would read an unread diff as "touches nothing".`);
     }
     out[effort] = paths as string[];
   }
