@@ -468,10 +468,19 @@ describe("nen canon lint -- the guard's later cases (zheref/nen#481, Hatsu main 
       const code = await runFamily(canonCommand, argv, null, false, io, defaultSeams());
       return { code, stdout: out.join("\n"), stderr: err.join("\n") };
     };
-    for (const rules of [join(realpathSync(root), "contracts/prose.lint.json"), join(alias, "contracts/prose.lint.json"), into]) {
+    // ONE SPELLING IN THE REFUSAL, ON EVERY HOST (ubuntu red on zheref/nen#527
+    // from #528): the root's absolute spelling takes the lexical branch, the
+    // others the real-path hop, and each names the symlink root-relative. On
+    // Linux /tmp is its own realpath, so the realpath spelling IS the absolute
+    // one and is folded into it rather than run twice; the symlinked root and
+    // the link into the root still cover the hop branch there.
+    const absolute = join(root, "contracts/prose.lint.json");
+    const viaRealpath = join(realpathSync(root), "contracts/prose.lint.json");
+    const spellings = [absolute, ...(viaRealpath === absolute ? [] : [viaRealpath]), join(alias, "contracts/prose.lint.json"), into];
+    for (const rules of spellings) {
       const r = await run(rules);
       expect(r.code, `${rules}\n${r.stdout}${r.stderr}`).toBe(2);
-      expect(r.stderr).toMatch(/symlink contracts\/prose\.lint\.json leaves the root/);
+      expect(r.stderr, rules).toMatch(/: symlink contracts\/prose\.lint\.json leaves the root/);
       expect(r.stdout).toBe("");
     }
     expect((await run(join(trustedDir, "prose.lint.json"))).code).toBe(0);
