@@ -534,7 +534,8 @@ function runTasks(context: CommandContext, repo: string): number {
   else if (sha === null) report = unreadableTasks(input, `${repo} has no HEAD commit to pin the body to (SP-8); nen renders no body at an unread pin`);
   else if (specText === null || tasksText === null) report = unreadableTasks(input, `${folder}/${specText === null ? "spec.md" : "tasks.md"} is not in the commit ${sha.slice(0, 12)} (uncommitted text is never rendered into a pinned body)`);
   else report = taskGroups(input, specText, tasksText);
-  if (only !== null) {
+  // An unread folder is reported as such even when --group filters: "no such group" would hide it (Bugbot on #517).
+  if (only !== null && report.verdict !== "could-not-read") {
     const group = report.groups.find((entry): boolean => entry.id === only);
     if (group === undefined) throw new VerbUsageError(`--group '${only}' is not a group of ${folder} (groups: ${report.groups.map((entry): string => entry.id).join(", ") || "none"}).`);
     if (group.body === null) throw new VerbUsageError(`--group '${only}' renders no issue body: ${group.note ?? "it is a phase group; only a story group renders as an issue body"}.`);

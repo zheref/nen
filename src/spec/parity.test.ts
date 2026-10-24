@@ -73,6 +73,13 @@ describe("nen spec parity", () => {
     expect((none.json()["rows"] as { finding: string }[])[0]?.finding).toBe("specs/002-list has no parity.md");
   });
 
+  it("matches parity.md's FR-1 to spec.md's FR-001 on the padded form (Bugbot on #517)", async () => {
+    const repo = family(["| FR | FA |", "|---|---|", `| FR-1 | present ${cite("FA")} |`, `| FR-2 | present ${cite("FA")} |`, "| FR-3 | drop-with-note — CL-001 |", ""].join("\n"));
+    const run = await spec(["parity", "--folder", "specs/002-list"], repo, defaultSeams(), true);
+    expect(run.code, JSON.stringify(run.json()["rows"])).toBe(0);
+    expect((run.json()["rows"] as { id: string }[]).map((row) => row.id)).toEqual(["FR-001", "FR-002", "FR-003"]);
+  });
+
   it("holds each state to what it must carry", () => {
     expect(readCell("present", "FA").finding).toContain("no FA citation");
     expect(readCell(`present ${cite("FW")}`, "FA").finding).toContain("no FA citation");

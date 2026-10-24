@@ -16,7 +16,7 @@
 import { lstatSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
 import { sha256 } from "./check.js";
-import { citationsIn, markersIn, proseLines, qualifiedId, requirementOf } from "./lines.js";
+import { citationsIn, markersIn, paddedId, proseLines, qualifiedId, requirementOf } from "./lines.js";
 import type { SpecLayout } from "./layout.js";
 import { parseParity, readCell, readParityFolders } from "./parity.js";
 import { parseTasks } from "./tasks.js";
@@ -60,7 +60,7 @@ export function traceRows(repo: string, layout: SpecLayout, members: readonly st
       if (requirement === null || requirement.kind === "US") continue;
       const cells: Record<string, string> = {};
       for (const code of members) {
-        const recorded = parsed?.cells.get(requirement.id)?.get(code);
+        const recorded = parsed?.cells.get(paddedId(requirement.id))?.get(code);
         const cites = citationsIn(line.text).filter((entry): boolean => entry.citation?.code === code).length;
         cells[code] = recorded !== undefined ? (readCell(recorded, code).state ?? "malformed") : cites > 0 ? `${cites} citation(s)` : "—";
       }

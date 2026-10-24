@@ -32,7 +32,7 @@ import { join } from "node:path";
 import { GH, type Seams } from "../seam/exec.js";
 import { assertInsideRepo } from "./check.js";
 import { matchFolder, type SpecLayout } from "./layout.js";
-import { citationsIn, proseLines, qualifiedId, requirementOf } from "./lines.js";
+import { citationsIn, paddedId, proseLines, qualifiedId, requirementOf } from "./lines.js";
 
 export const SPEC_PARITY_CONTRACT = "nen.spec.parity/v0.1";
 
@@ -127,7 +127,9 @@ export function parseParity(text: string): ParsedParity {
     const line = lines[index] as { number: number; text: string };
     const row = cellsOf(line.text);
     if (row === null) break;
-    const id = /^(?:\*\*)?(FR-\d+)(?:\*\*)?$/.exec(row[0] ?? "")?.[1];
+    const written = /^(?:\*\*)?(FR-\d+)(?:\*\*)?$/.exec(row[0] ?? "")?.[1];
+    // Matched on the padded form, so parity.md's `FR-1` is spec.md's `FR-001` (Bugbot on #517).
+    const id = written === undefined ? undefined : paddedId(written);
     if (id === undefined) {
       problems.push(`line ${line.number}: '${row[0] ?? ""}' is not an FR id`);
       continue;
@@ -273,7 +275,7 @@ export function parity(seams: Seams, input: ParityInput, folders: readonly Folde
   for (const folder of folders) {
     const ids = proseLines(folder.spec).map((line): string | null => {
       const requirement = requirementOf(line.text);
-      return requirement?.kind === "FR" ? requirement.id : null;
+      return requirement?.kind === "FR" ? paddedId(requirement.id) : null;
     }).filter((id): id is string => id !== null);
     const parsed = folder.parity === null ? null : parseParity(folder.parity);
     for (const problem of parsed?.problems ?? []) problems.push(`${folder.folder}/parity.md: ${problem}`);

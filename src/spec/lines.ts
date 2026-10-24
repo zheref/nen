@@ -215,6 +215,11 @@ export function requirementOf(line: string): Requirement | null {
  * live lookup keyed by the qualified id matches the id every other verb prints.
  */
 export function qualifiedId(nnn: string, id: string): string {
+  return `F${nnn}-${paddedId(id)}`;
+}
+
+/** An in-folder id in its padded form, `FR-7` -> `FR-007`: the one key two files' spellings are matched on. */
+export function paddedId(id: string): string {
   const match = /^([A-Z]+)-(\d+)$/.exec(id);
-  return match === null ? `F${nnn}-${id}` : `F${nnn}-${match[1] as string}-${(match[2] as string).padStart(3, "0")}`;
+  return match === null ? id : `${match[1] as string}-${(match[2] as string).padStart(3, "0")}`;
 }
