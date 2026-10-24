@@ -29,6 +29,8 @@ import { escapeRegExp, readLines, stripComments, validFenceOpening, type ReadLin
 export const ISSUE_BODY_CHECK_CONTRACT = "nen.issue.body-check/v0.1";
 /** The `--json` contract of `nen issue questions`. */
 export const ISSUE_QUESTIONS_CONTRACT = "nen.issue.questions/v0.1";
+/** The `--json` contract of a comma-separated `--ref` batch: its own id, so a consumer keyed on the contract reads one shape per id (zheref/nen#515 F5). */
+export const ISSUE_QUESTIONS_BATCH_CONTRACT = "nen.issue.questions.batch/v0.1";
 
 /** A catalogue refusal: the caller's file is malformed, or names a kind or section it does not declare. Exit 2. */
 export class IssueShapeError extends Error {

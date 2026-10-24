@@ -209,7 +209,8 @@ describe("nen issue questions", () => {
     const script: ScriptedCall[] = [issue(1, QUESTIONS), issue(2, "- ~~OQ-1~~ → A: yes (2026-10-21, HR-4)\n"), { match: "gh api repos/o/n/issues/3", result: { code: 1, stderr: "HTTP 502" } }];
     const result = await run(issueCommand, ["issue", "questions", "--ref", "NN#1,NN#2,NN#3", "--target", "o/n"], script, { json: true });
     expect(result.code).toBe(1);
-    const report = JSON.parse(result.out) as { counts: unknown; issues: { source?: { number: number }; counts?: { open: number }; ref?: string; unread?: string }[] };
+    const report = JSON.parse(result.out) as { contract: string; counts: unknown; issues: { source?: { number: number }; counts?: { open: number }; ref?: string; unread?: string }[] };
+    expect(report.contract).toBe("nen.issue.questions.batch/v0.1");
     expect(report.counts).toEqual({ issues: 3, blocking: 1, clear: 1, unread: 1 });
     expect(report.issues.map((entry) => entry.source?.number ?? entry.ref)).toEqual([1, 2, "NN#3"]);
     expect(report.issues[0]?.counts?.open).toBe(1);
