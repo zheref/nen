@@ -115,7 +115,7 @@ describe("nen pr converge", () => {
     expect(report.pr).toBe(5);
     expect(report.headSha).toBe("abc1234");
     expect(report.closingIssues).toEqual([{ issue: "o/n#12", criteria: 2, verifiable: true, unrecognised: [] }]);
-    expect(report.blocking).toEqual(["o/n#12/AC-1: contradicts", "o/n#12/AC-2: missing-row"]);
+    expect(report.blocking).toEqual(["o/n#12/AC-1: contradicts -- row line 1: | AC-1 | contradicts | x |", "o/n#12/AC-2: missing-row (no verify row names AC-2)"]);
     expect(report.verifiable).toBe(true);
   });
 

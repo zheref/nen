@@ -2448,6 +2448,8 @@ absent, are **derived** from the repository's own pull-request template.
 ```text
 nen pr body-check --body-from <path> [--requirements-from <path> | --base <ref>]
                   [--exact [--max <n>]] [--prose-budget <words>]
+                  [--criteria <AC-1,AC-2> | --criteria-from <issue-body.md>]
+                  [--criteria-issue <[owner/name]#N>] [--catalogue <path>]
 ```
 
 **Arguments**
@@ -2457,8 +2459,16 @@ nen pr body-check --body-from <path> [--requirements-from <path> | --base <ref>]
 | `--body-from <path>` | yes | the pull-request body to check | plain text |
 | `--requirements-from <path>` | no | a JSON array of `{ name, pattern }` | an empty array is refused, exit 1 — a vacuous pass having checked nothing is never reported as success. Omitted: the set is derived from the PR template (below). Given but empty (`--requirements-from ""`): exit 2, never a fall-through to derivation |
 | `--base <ref>` | no | read the PR template from git at `<ref>`, never from the working tree | only with a derived set; with `--requirements-from` it is refused, exit 2. A ref that does not resolve to a single commit (a range such as `main..feat` included), or that begins with `-`, exits 2 |
+| `--criteria <ids>` | no | the closing issue's acceptance-criterion ids, comma-separated (`AC-1,AC-2`), held to the body's verify rows — one row per id | each id `<PREFIX>-<n>` (`AC`, or the catalogue's prefix), else exit 2. With `--criteria-from`: exit 2 |
+| `--criteria-from <path>` | no | a local copy of the closing issue's body; its `- AC-{n}:` rows are the criteria, read as [`issue criteria`](#nen-issue-criteria) reads them | unreadable exits 2; a body with no criterion is `not-verifiable` and exits 1 |
+| `--criteria-issue <[owner/name]#N>` | no | names the issue the criteria belong to, so a qualified row (`<CODE>#<N>/AC-{n}`, `<owner/name>#<N>/AC-{n}`) matches it and the report names it | only with `--criteria`/`--criteria-from`; another shape exits 2 |
+| `--catalogue <path>` | no | the [issue-sections catalogue](#the-issue-sections-catalogue): the acceptance prefix and sections, and its `coverage` block | only with `--criteria`/`--criteria-from`; absent: `AC` rows anywhere, `missing` and `contradicts` block, evidence required |
 | `--repo <path>` | no | resolves `--body-from`/`--requirements-from` against this root, and is where the PR template is looked for (the working tree, or the git checkout `--base` is read in) | default cwd |
 | `--json` | no | machine-readable report | — |
+
+<a id="one-verify-row-per-acceptance-criterion"></a>
+
+**One verify row per acceptance criterion** ([#479](https://github.com/zheref/nen/issues/479) AC-1–AC-3; Akatsuki CON-17(c), ruled aligned with Hatsu HR-11 on 2026-10-23 — one rule, one verb). With `--criteria` or `--criteria-from`, the body's verify rows ([the grammar `pr converge` reads](#the-verify-row-grammar)) are compared with the criteria by the comparison [`pr converge`](#nen-pr-converge) and [`pr merge --delivery`](#nen-pr-merge) run, so the three verbs give one verdict for one body. Each criterion needs exactly one row carrying exactly one status from `satisfied` · `partial` · `missing` · `contradicts` · `unrequested`. Exit **1**, each named on a `BLOCKING` line: an id with no row (`missing-row (no verify row names AC-2)`); a status outside the five, or a row carrying two (`'satisfied, partial' carries more than one status`), as `malformed-row` with the row quoted; a row reading `missing` or `contradicts`, **quoted** (`AC-2: contradicts -- row line 8: | AC-2 | contradicts | … |`); two rows for one id; an issue body stating no criterion (`not-verifiable`). The lines follow the requirement lines; `--json` adds `criteria`, the converge report (`criteria`, `unrequested`, `unmatched`, `malformed`, `counts`, `blocking`), and `ok` is false when anything blocks. The verb stays local — it reads files and git, never GitHub; the live read of a pull request's closing issues is [`pr converge`](#nen-pr-converge). Without the flags the verdict is unchanged.
 
 **Exact shape and prose measurement** (zheref/nen#448). `--exact` checks
 visible headings outside fenced code and HTML comments. Every level-2 heading
@@ -2676,6 +2686,8 @@ Acceptance-criterion coverage as data (Hatsu's ruling HR-11): compares the crite
 
 ```text
 nen pr converge --target <owner/name> --pr <n> [--requirements-from <catalogue.json>] [--require-head <sha>] [--json]
+nen pr converge --target <owner/name> --pr <n> --composite --require-head <sha> --body-requirements <path>
+                [--requirements-from <catalogue.json>] [--repo <path>] [--json]
 ```
 
 **Arguments**
@@ -2686,9 +2698,24 @@ nen pr converge --target <owner/name> --pr <n> [--requirements-from <catalogue.j
 | `--pr <n>` | yes | The pull-request number. | Missing or not a positive whole number exits 2. |
 | `--requirements-from <path>` | no | The [issue-sections catalogue](#the-issue-sections-catalogue): its acceptance-row prefix and section scope the criteria, and an optional `coverage` block `{ "blocking": [<words>], "none": "<word>", "evidence": "required" \| "optional" }` sets the rules. | Resolves against `--repo`'s root. Absent: `AC` rows anywhere in the issue body, `missing` and `contradicts` block, `unrequested` on `none` rows, evidence required. Unreadable or malformed exits 2. |
 | `--require-head <sha>` | no | Pin the verdict to one head ([#483](https://github.com/zheref/nen/issues/483) AC-6). The first read's `headRefOid` must equal it, and a head-only re-read (`gh pr view <n> --repo <target> --json headRefOid`) **after** every closing issue was read must still equal it. | A full 40- or 64-hex SHA, compared case-insensitively; anything else exits 2 before any read. A first read at another head, a head that moved between the reads, or a re-read that failed exits **1** with stdout empty and stderr naming both heads: a verdict assembled across two heads is refused, never reported. |
+| `--composite` | no | One readiness verdict at the pinned head (below). | Needs `--require-head` and `--body-requirements`, else exit 2. |
+| `--body-requirements <path>` | with `--composite` | The `{ name, pattern }` JSON array [`pr body-check`](#nen-pr-body-check) reads: the body conjunct. | Unreadable, empty or malformed exits 2 before any read. Without `--composite`: exit 2. |
 | `--json` | no | The report as one JSON document. | |
 
-Every other flag is refused at exit 2 before any `gh` call. `--repo` is read only to resolve `--requirements-from`.
+Every other flag is refused at exit 2 before any `gh` call. `--repo` resolves `--requirements-from` and `--body-requirements`, and under `--composite` is `pr ready`'s checkout.
+
+<a id="the-composite-verdict"></a>
+
+**The composite verdict** ([#483](https://github.com/zheref/nen/issues/483) AC-1; Hatsu HR-11, Akatsuki CON-17(c) and CON-32). `--composite` reports **four conjuncts at one head**, and `ready` only when all four hold:
+
+| Conjunct | Holds when | Read |
+|---|---|---|
+| `pr ready` | [`pr ready`](#nen-pr-ready)'s verdict is `ready` at the pin (in-process, `--require-head` passed through — the gate [`pr merge`](#nen-pr-merge) runs) | its own state reads |
+| `pr body-check` | every `--body-requirements` entry matches the live body | the converge read's body |
+| `closing links` | into the default branch: every issue a body closing keyword names is one GitHub links as closing (a Development link), and every issue GitHub links is named in a body closing keyword — the link both ways; on another base GitHub links nothing, so it holds and says the body's keywords were read | the converge read's `closingIssuesReferences` and body |
+| `criteria` | the coverage above blocks nothing | every closing issue |
+
+The pull request is read first and must be at the pin; `pr ready` must judge the pin; and after every other read the head is read once more. A first read at another head, a judged head that differs, a head that moved, or any read that did not finish is exit **1** with stdout empty — no verdict mixes two heads, and "could not read" is never "ready". Exit **0** when all four hold, **1** otherwise; each failing conjunct names why on its own lines, and `blocking` lists them. `--json`: `{ contract: "nen.pr.converge/v0.1", composite: true, target, pr, url, headSha, requiredHead, base, closingSource, ready, conjuncts: [{ name, ok, lines }], blocking }`. [`pr merge --delivery`](#nen-pr-merge) gates on the same `criteria` and `closing links` conjuncts, computed from its own one fetch, so the report a caller quotes and the merge's refusal rest on the same facts.
 
 **What it reads.** The pull request through `gh pr view <n> --repo <target> --json number,url,headRefOid,baseRefName,body,closingIssuesReferences` -- the `gh pr view` read [`pr fetch`](#nen-pr-fetch) and [`issue open-pr-check`](#nen-issue-open-pr-check) make; `closingIssuesReferences` is GitHub's own list of the issues the PR closes, a body keyword and a sidebar link alike -- **but only for a PR into the default branch**. When the list is empty, the default branch is read (`gh repo view <target> --json defaultBranchRef`); on any other base GitHub computes no closing references, so the body's own closing keywords (`Closes`/`Fixes`/`Resolves` and their tenses, with `#N`, `owner/name#N` or an issue URL, outside code and comments) name the closing issues instead (`closingSource: "body-keywords"`), and a body naming none there is reported as `closingSource: "none-on-non-default-base"` with zero criteria -- never "closes no issue" -- and, from 2026-10-23, no longer blocks: the other conjuncts decide. Each closing issue is read over REST (`gh api repos/<owner/name>/issues/<N>`) in **its own repository**, and its criteria extracted as [`issue criteria`](#nen-issue-criteria) extracts them -- the one row grammar, so a list row naming `AC-{n}` in no admitted shape is `unrecognised`.
 
@@ -2713,13 +2740,13 @@ A table line whose first cell mentions `AC-` and is none of those spellings (`AC
 | `covered-with-evidence` | exactly one readable row names it, and its evidence cell says something |
 | `covered-without-evidence` | exactly one readable row names it, with no evidence |
 | `missing-row` | no row names it |
-| `malformed-row` | one row names it and could not be read: an unknown word, or not three cells |
+| `malformed-row` | one row names it and could not be read: an unknown word, two or more words in one cell (`satisfied, partial` — refused by name, never read as either), or not three cells |
 | `duplicate-rows` | two or more rows name it; nen will not pick one |
 | `not-verifiable` | the closing issue states no AC row: one row for the issue, with a null `id` -- **never a pass** |
 
 Beside the coverage, the row's `word` when exactly one readable row names the criterion. Rows that name a criterion no closing issue states, or name one ambiguously, are **unmatched**; `none` rows are listed as **unrequested** with their word and evidence, and a `problem` when the word is not the none word or, with evidence required, the evidence says nothing. A pull request that closes no issue reports `verifiable: false` and no criterion.
 
-**Output and exit codes** -- the line `<n> criterion row(s) across <n> closing issue(s), <n> blocking -- <n> covered with evidence, <n> without, <n> missing-row, <n> malformed-row, <n> duplicate-rows, <n> not-verifiable` (or `<owner/name>#<n> closes no issue: no criterion to compare (not verifiable)`, or, into a base that is not the default branch with no closing keyword in the body, `<owner/name>#<n> into '<base>' (not the default branch): GitHub lists no closing issue and the body names none -- cannot tell what it closes`), then one `<COVERAGE>  <owner/name>#<N>/<AC-n> <word> (line <n>)` line per criterion and `UNRECOGNISED`, `UNREQUESTED`, `UNMATCHED` and `MALFORMED` lines. `--json`: `{ contract, target, pr, url, headSha, base, closingSource, closingIssues, verifiable, criteria, unrequested, unmatched, malformed, counts, blocking }` -- `contract` is `nen.pr.converge/v0.1`; `closingSource` `github`, `body-keywords`, `none-on-non-default-base` or `none`; `closingIssues` each `{ issue, criteria, verifiable, unrecognised }` (`issue` is `owner/name#N`, `criteria` the number of AC rows); `verifiable` false when the PR closes no issue or any closing issue states no criterion; `criteria` each `{ issue, id, text, coverage, word, evidence, rows }` (`id` `AC-{n}` or null on `not-verifiable`, `rows` the verify-row line numbers naming it); `unrequested` each `{ line, word, evidence, problem }`; `unmatched` and `malformed` each `{ line, cell, reason }`; `counts` one count per coverage plus `words: { satisfied, partial, missing, contradicts, unrequested }`; `blocking` one string per row that sets exit 1.
+**Output and exit codes** -- the line `<n> criterion row(s) across <n> closing issue(s), <n> blocking -- <n> covered with evidence, <n> without, <n> missing-row, <n> malformed-row, <n> duplicate-rows, <n> not-verifiable` (or `<owner/name>#<n> closes no issue: no criterion to compare (not verifiable)`, or, into a base that is not the default branch with no closing keyword in the body, `<owner/name>#<n> into '<base>' (not the default branch): GitHub lists no closing issue and the body names none -- cannot tell what it closes`), then one `<COVERAGE>  <owner/name>#<N>/<AC-n> <word> (line <n>)` line per criterion and `UNRECOGNISED`, `UNREQUESTED`, `UNMATCHED` and `MALFORMED` lines. `--json`: `{ contract, target, pr, url, headSha, base, closingSource, closingIssues, verifiable, criteria, unrequested, unmatched, malformed, counts, blocking }` -- `contract` is `nen.pr.converge/v0.1`; `closingSource` `github`, `body-keywords`, `none-on-non-default-base` or `none`; `closingIssues` each `{ issue, criteria, verifiable, unrecognised }` (`issue` is `owner/name#N`, `criteria` the number of AC rows); `verifiable` false when the PR closes no issue or any closing issue states no criterion; `criteria` each `{ issue, id, text, coverage, word, evidence, rows, raw }` (`id` `AC-{n}` or null on `not-verifiable`, `rows` the verify-row line numbers naming it, `raw` the one row as written, else null); `unrequested` each `{ line, word, evidence, problem }`; `unmatched` and `malformed` each `{ line, cell, reason }`; `counts` one count per coverage plus `words: { satisfied, partial, missing, contradicts, unrequested }`; `blocking` one string per row that sets exit 1 — a blocking word or a malformed row quotes the row (`o/n#12/AC-2: contradicts -- row line 8: | AC-2 | contradicts | x |`), a criterion with no row names its id (`o/n#12/AC-2: missing-row (no verify row names AC-2)`).
 
 **Which rows block.** Exit **1** on any of: a criterion that is `missing-row`, `malformed-row` or `duplicate-rows`; a criterion whose word is a blocking word (default `missing`, `contradicts`); a criterion row saying the none word (`unrequested`); a criterion `covered-without-evidence` while evidence is required (the default); a closing issue that states no criterion (`not-verifiable` -- never the pass code); a closing issue carrying an `unrecognised` AC row; a `none` row with a problem; an `unmatched` or `malformed` verify row. `partial` with evidence passes. A non-default base whose body names no closing issue is reported, not blocked (changed 2026-10-23; it exited 1 in v0.26.0). Exit **0** when nothing blocks, a PR into the default branch closing no issue included (`verifiable: false` says so). Exit **1** too when it **could not read**: the pull request, its `body`, `baseRefName` or `closingIssuesReferences`, the default branch, a closing reference naming no number and repository (or a repository that is no `owner/name` GitHub could issue -- a `..`, an extra slash -- refused before any read of it), a closing issue or its body, a closing number that names a pull request, or a full page of 100 closing references (the rest unread); stdout stays empty and stderr names what failed. "Could not read" is never "nothing to cover". Exit **2** on usage and a malformed catalogue.
 
@@ -3865,6 +3892,7 @@ nen pr merge <n|owner/name#n|CODE#n> --delivery --requirements-from <path> --rep
 | `--requirements-from <path>` | **yes** | the `pr body-check` requirements | validated before any `gh` call, exactly as `--release-unit` |
 | `--repo <path>` | **yes** | the checkout whose `origin` names the repository and whose `nen/workflow.json` `branch.base` is one protected name | — |
 | `--require-head <sha>` | no | pin the commit (7–40 hex digits) | passed to `pr ready`, which gives no verdict on any other head; restated on the head-pin gate |
+| `--catalogue <path>` | no | the [issue-sections catalogue](#the-issue-sections-catalogue) the `criteria` gate reads the closing issues with (prefix, sections, `coverage` block) | absent: `AC` rows anywhere in the issue body and the default coverage rules; unreadable or malformed exits 2 before any `gh` call; with `--release-unit`: exit 2 |
 | `--run` | no | execute the merge once every gate passes | omit to see the plan only |
 | `--json` | no | machine-readable result | emitted on a refusal by ruling too |
 
@@ -3911,7 +3939,20 @@ integration branches.
 2. **`pr ready`** — in-process, `--require-head` passed through.
 3. **head pin** — as `--release-unit`'s.
 4. **`pr body-check`** — as `--release-unit`'s.
-5. **whose pr** — author is the viewer, never cross-repository, **and** the
+5. **criteria** ([#479](https://github.com/zheref/nen/issues/479) AC-3; Akatsuki CON-17(c), Hatsu HR-11) — the
+   [`pr converge`](#nen-pr-converge) coverage of every closing issue, from
+   the SAME one fetch (its `closingIssuesReferences` and body; on this
+   non-main base, the body's closing keywords), so at the pinned head. A
+   criterion with no verify row, a row outside the five words or with two, a
+   row reading `missing` or `contradicts` — **quoted**, `BLOCKING
+   o/n#12/AC-2: contradicts -- row line 8: | AC-2 | contradicts | … |` — or a
+   closing issue stating none refuses, whatever `pr ready` said. A body
+   naming no closing issue has no criterion to miss and passes. A closing
+   issue that could not be read fails this gate and the next.
+6. **closing links** — [`pr converge --composite`](#the-composite-verdict)'s
+   links conjunct, over the same fetch (on a non-main base it holds, naming
+   the body's keywords as the source).
+7. **whose pr** — author is the viewer, never cross-repository, **and** the
    head ref is in the run form of `branch.template` read at the base commit:
    every `{token}` is one non-empty segment, so `{model}/{persona}/{descriptor}`
    is three.
@@ -3937,7 +3978,7 @@ unconfirmed.
 
 **`--json`** — `nen.pr.merge-delivery/v0.1`: `{ contract, target, pr, base,
 baseOk, refused, defaultBranch, configuredBase, baseCommitBase,
-defaultBranchBase, baseProtected, baseRulesets, ready, pinOk, bodyOk, wholeOk,
+defaultBranchBase, baseProtected, baseRulesets, ready, pinOk, bodyOk, criteriaOk, linksOk, wholeOk,
 ok, ran, spawnFailed, judgedHead, requiredHead, state, rereadBase, mergedBase,
 outsideAuthority, mergeArgv, gates: [{ name, ok, lines }] }` — `baseRulesets`
 counts DISTINCT `ruleset_id`s (the transcript prints `N rule(s) from M

@@ -2549,7 +2549,7 @@ describe("nen pr merge -- the bounded merge, CLI wiring", () => {
     return new ScriptedSeams([
       { match: "git remote get-url origin", result: { code: 0, stdout: "https://github.com/zheref/example.git\n" } },
       {
-        match: "gh pr view 9 --repo zheref/example --json headRefOid,baseRefOid,baseRefName,headRefName,body,isCrossRepository,author,state",
+        match: "gh pr view 9 --repo zheref/example --json headRefOid,baseRefOid,baseRefName,headRefName,body,isCrossRepository,author,state,closingIssuesReferences,url",
         result: {
           code: 0,
           stdout: JSON.stringify({ headRefOid: "cafebabe", baseRefOid: baseOid, baseRefName: "main", headRefName: "opus/kurapika/x", body: "", isCrossRepository: false, author: { login: "someone" }, state: "OPEN" }),
@@ -3180,10 +3180,10 @@ describe("the family's one flag guard (zheref/nen#351)", () => {
         lists: ["exclude-check", "reviewer-login"],
       },
       staleness: { values: ["wakes-from", "last-activity", "now", "min-verified-wakes", "idle-minutes"], booleans: ["ready"] },
-      "body-check": { values: ["body-from", "requirements-from", "base", "max", "prose-budget"], booleans: ["exact"] },
+      "body-check": { values: ["body-from", "requirements-from", "base", "max", "prose-budget", "criteria", "criteria-from", "criteria-issue", "catalogue"], booleans: ["exact"] },
       sections: { values: ["catalogue", "kind", "family", "with", "overrides", "taxonomy", "jobs"] },
       fetch: { values: ["target", "pr"] },
-      converge: { values: ["target", "pr", "requirements-from", "require-head"] },
+      converge: { values: ["target", "pr", "requirements-from", "require-head", "body-requirements"], booleans: ["composite"] },
       "next-blocker": { values: ["target", "pr", "reviewers", "gates", "policy", "requirements-from"], booleans: ["delivery-pr"] },
       "cascade-main": { values: ["trunk"], booleans: ["no-push", "dry-run"] },
       retarget: { values: ["target", "pr", "base"], booleans: ["dry-run"] },
@@ -3192,7 +3192,7 @@ describe("the family's one flag guard (zheref/nen#351)", () => {
       "mark-ready": { values: ["target", "pr", "require-head"], booleans: ["dry-run"] },
       threads: { values: ["target", "pr", "thread", "body-file", "from", "private-names-ignore-file"], booleans: ["dry-run", "skip-private-name-check", "allow-all-ignored"] },
       open: { values: ["target", "base", "title-file", "body-file", "head", "assignee", "private-names-ignore-file"], booleans: ["draft", "dry-run", "skip-private-name-check", "allow-all-ignored"] },
-      merge: { values: ["requirements-from", "require-head"], booleans: ["release-unit", "delivery", "run"] },
+      merge: { values: ["requirements-from", "require-head", "catalogue"], booleans: ["release-unit", "delivery", "run"] },
     });
     const threadsRow = PR_SUBCOMMAND_FLAGS["threads"] ?? {};
     const own = new Set([...(threadsRow.values ?? []), ...(threadsRow.booleans ?? [])].filter((flag): boolean => flag !== "target" && flag !== "pr"));
