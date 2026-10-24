@@ -106,6 +106,9 @@ export function parseTasks(text: string): Task[] {
         // Hatsu's tasks.md groups gaps under story headings with no phase (docs/config/spec-repo.md, tasks.md row).
         headingStory = Number(story[1] ?? story[2]);
         platform = null;
+        // A story heading is not part of the phase above it: the leftover phase would make the story depend
+        // only on the phases before that one (Bugbot on #517). With no phase it follows every phase group.
+        phase = null;
       }
       continue;
     }

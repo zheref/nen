@@ -261,8 +261,13 @@ function gradle(tree: MemberTree, cwd: string): Membership {
   const text = (tree.read(settings) ?? "").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
   if (/\bprojectDir\b/.test(text)) unread.push({ path: settings, reason: "sets a projectDir; nen reads the include list's default module paths only, so a relocated module is not read" });
   const modules = new Set<string>();
-  for (const call of text.matchAll(/\binclude(?![A-Za-z])\s*\(?([^)\n]*)\)?/g)) {
-    for (const name of (call[1] as string).matchAll(/["']:?([A-Za-z0-9_.:-]+)["']/g)) modules.add((name[1] as string).replace(/:/g, "/"));
+  // Both shapes, each across lines: `include(":a",\n ":b")` and Groovy's `include ':a',\n ':b'` (Bugbot on #514).
+  const calls = [
+    ...[...text.matchAll(/\binclude(?![A-Za-z])\s*\(([^)]*)\)/g)].map((call): string => call[1] as string),
+    ...[...text.matchAll(/\binclude(?![A-Za-z])[ \t]+((?:["'][^"'\n]*["'][ \t]*,\s*)*["'][^"'\n]*["'])/g)].map((call): string => call[1] as string),
+  ];
+  for (const call of calls) {
+    for (const name of call.matchAll(/["']:?([A-Za-z0-9_.:-]+)["']/g)) modules.add((name[1] as string).replace(/:/g, "/"));
   }
   if (modules.size === 0) unread.push({ path: settings, reason: "includes no module" });
   for (const module of [...modules].sort()) {
@@ -370,7 +375,21 @@ function tsconfig(tree: MemberTree, cwd: string): Membership {
         unread.push({ path, reason: `extends '${entry}', outside the checkout` });
         continue;
       }
-      parentProject = load(target, new Set([...chain, path]));
+      // TypeScript 5's array `extends`: later entries override earlier ones key by key, never replace them whole (Bugbot on #514).
+      const next = load(target, new Set([...chain, path]));
+      if (next !== null) parentProject = parentProject === null ? next : {
+        files: next.files ?? parentProject.files,
+        include: next.include ?? parentProject.include,
+        exclude: next.exclude ?? parentProject.exclude,
+        allowJs: next.allowJs ?? parentProject.allowJs,
+        outDir: next.outDir ?? parentProject.outDir,
+        base: {
+          files: next.files !== null ? next.base.files : parentProject.base.files,
+          include: next.include !== null ? next.base.include : parentProject.base.include,
+          exclude: next.exclude !== null ? next.base.exclude : parentProject.base.exclude,
+          outDir: next.outDir !== null ? next.base.outDir : parentProject.base.outDir,
+        },
+      };
     }
     const own = (key: "files" | "include" | "exclude"): string[] | null => strings(key);
     return {

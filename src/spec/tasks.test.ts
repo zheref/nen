@@ -202,6 +202,18 @@ describe("nen spec tasks groups on Hatsu's own shapes", () => {
     expect(body).toContain("Plan: specs/002-list/plan.md § Platform: FW (the section is keyed by member; this group's platform tag is web)");
   });
 
+  it("resets the phase at a story heading, so a story after Setup depends on every phase group (Bugbot on #517)", async () => {
+    const repo = folder(HATSU_SPEC, "## Phase 1: Setup\n\n- [ ] T001 init\n\n## Phase 2: Foundational\n\n- [ ] T002 store\n\n## US-1 — Open\n\n### Platform: web\n\n- [ ] T003 FR-001 page\n");
+    const groups = (await spec(["tasks", "groups", "--folder", "specs/002-list"], repo, defaultSeams(), true)).json()["groups"] as { id: string; phase: number | null; dependsOn: string[] }[];
+    expect(groups.find((group) => group.id === "US1/web")).toMatchObject({ phase: null, dependsOn: ["phase-1", "phase-2"] });
+  });
+
+  it("reports an unread folder even when --group filters (Bugbot on #517)", async () => {
+    const run = await spec(["tasks", "groups", "--folder", "specs/002-list", "--group", "US1/web"], folder(HATSU_SPEC, null), defaultSeams(), true);
+    expect(run.code).toBe(1);
+    expect(run.json()).toMatchObject({ verdict: "could-not-read" });
+  });
+
   it("reads delivered only from 'delivered — <PR>', and a [US-1] tag as story 1", async () => {
     const repo = folder(HATSU_SPEC, "- [x] [US-1] [platform:web] delivered — #12 FR-001\n- [x] [US-1] [platform:ios] FR-001 delivered soon\n");
     const groups = (await spec(["tasks", "groups", "--folder", "specs/002-list"], repo, defaultSeams(), true)).json()["groups"] as { id: string; state: string }[];
