@@ -35,8 +35,8 @@
 //   * A frontmatter finding names the file's own line (the guard reports one
 //     line early there).
 
-import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, statSync } from "node:fs";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { GIT, type Seams } from "../seam/exec.js";
 import { globToRegex, headingNumber, lineAt, parseDoc, titleMatches, type Doc, type Para } from "./markdown.js";
 
@@ -732,6 +732,56 @@ export interface LintOptions {
   readonly baseBaseline?: string | null;
   /** The marker-limit and reading-rule paths when the contract declares no `skillPaths` (from `canon.lint`). */
   readonly skillPaths?: readonly string[] | null;
+  /**
+   * Whether `rules` is caller-named (the `--rules` flag) rather than read from
+   * the tree's `canon.lint.rules`. A caller-named path whose real location is
+   * outside the root is read as named (relative paths resolve against the
+   * root); absent or false, it is held inside the root.
+   */
+  readonly rulesCallerNamed?: boolean;
+}
+
+/**
+ * The rules contract's absolute path. A path the TREE names, or any path that
+ * reaches into the root, is held to SEC-7 by {@link insideRoot}: the pull
+ * request's head controls those bytes, a symlink among them included. A
+ * caller-named `--rules` that lies outside the root (Bugbot on zheref/nen#527:
+ * the sibling-checkout CI form puts the trusted revision beside the head) is
+ * the caller's own file and is read as named -- a deliberate departure from
+ * the ported guard, which holds `--rules` inside the root too.
+ *
+ * "OUTSIDE" IS DECIDED ON REAL PATHS (Nobunaga F1 on zheref/nen#528): the
+ * root's own file spelled through its realpath, through a symlink to the root,
+ * or through an outside symlink that points into it is still the root's file.
+ * Each hop of the final component's symlink chain is tested by the real path
+ * of its directory; the first hop that lands under the real root is checked by
+ * insideRoot under its root-relative spelling, so a head symlink leaving the
+ * root is wiring however the caller spelled the path.
+ */
+function rulesPath(root: string, realRoot: string, rel: string, callerNamed: boolean): string {
+  const abs = resolve(root, rel);
+  if (!callerNamed || abs === root || abs.startsWith(root + sep)) return insideRoot(root, realRoot, rel);
+  let hop = abs;
+  for (let depth = 0; depth < 40; depth++) {
+    let realDir: string;
+    try {
+      realDir = realpathSync(dirname(hop));
+    } catch {
+      return abs; // no such directory: the caller's missing file, named in the caller's words
+    }
+    if (realDir === realRoot || realDir.startsWith(realRoot + sep)) {
+      return insideRoot(root, realRoot, relative(realRoot, join(realDir, basename(hop))).split(sep).join("/"));
+    }
+    let link: boolean;
+    try {
+      link = lstatSync(hop).isSymbolicLink();
+    } catch {
+      return abs;
+    }
+    if (!link) return abs;
+    hop = resolve(realDir, readlinkSync(hop));
+  }
+  return wiring(`rules contract ${rel} is a symlink chain too deep to follow`);
 }
 
 /** The path as git names it from the root: a root-relative, `/`-separated path. */
@@ -744,8 +794,8 @@ export function canonLint(options: LintOptions, seams: Seams): { readonly report
   const root = resolve(options.root);
   if (!existsSync(root) || !statSync(root).isDirectory()) wiring(`root ${options.root} is not a directory`);
   const realRoot = realpathSync(root);
-  const rulesAbs = insideRoot(root, realRoot, options.rules);
-  if (!existsSync(rulesAbs)) wiring(`rules contract ${options.rules} does not exist under ${root}`);
+  const rulesAbs = rulesPath(root, realRoot, options.rules, options.rulesCallerNamed === true);
+  if (!existsSync(rulesAbs)) wiring(`rules contract ${options.rules} does not exist${rulesAbs.startsWith(root + sep) ? ` under ${root}` : ""}`);
   const contract = parseLintContract(readJson(rulesAbs, options.rules), options.rules);
   let min = "";
   let pin = "";

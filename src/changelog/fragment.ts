@@ -41,6 +41,8 @@
 // registry's version field arrive from the caller; the shell had them as
 // constants because it served one repository.
 
+import { versionHeading } from "./completeness.js";
+
 export interface FragmentPaths {
   /** Spec/canon path patterns. A hit means the rule applies. */
   readonly specPaths: readonly string[];
@@ -116,39 +118,62 @@ export function bodyHasOptOut(body: string | null): boolean {
 
 /** `### Unreleased` entries: top-level `- **...` before the next heading at level 3 or higher. */
 export function unreleasedEntryCount(changelog: string): number {
-  return countEntries(changelog, /^### Unreleased/);
+  return countEntries(changelog, /^### Unreleased/, 3);
 }
 
-/** The first dated `### vX.Y.Z` section's version, or null. */
+// THE FIRST DATED RELEASE, READ THROUGH COMPLETENESS'S OWN PREDICATE (Bugbot
+// on zheref/nen#527 and #528). A versioned heading at level 2 or 3 -- `###
+// vX.Y.Z — <theme>`, `## vX.Y.Z — <date>`, `## vX.Y.Z — <theme>`, the forms
+// `collate` writes -- with its pre-release suffix kept, and a `— unreleased`
+// trailer NOT dated: the PR that dates such a heading is the release move, and
+// v1.2.0-rc.1 and v1.2.0-rc.2 are different versions. One helper,
+// ./completeness.ts's `versionHeading`, so the release-PR allowance and
+// CON-33(a) never disagree on which heading opens a release.
+
+/** The first dated `## vX.Y.Z` / `### vX.Y.Z` section's version (an `— unreleased` one skipped), or null. */
 export function firstDatedVersion(changelog: string): string | null {
   for (const line of changelog.split("\n")) {
-    const match = /^### (v\d+\.\d+\.\d+)/.exec(line);
-    if (match !== null) return match[1] ?? null;
+    const heading = versionHeading(line);
+    if (heading?.dated === true) return heading.version;
   }
   return null;
 }
 
-/** Entries under the FIRST dated section. */
+/** Entries under the FIRST dated section, its subsections included, up to the next version heading at level 2 or 3. */
 export function firstDatedEntryCount(changelog: string): number {
-  return countEntries(changelog, /^### v\d+\.\d+\.\d+/);
+  let level = 0;
+  let count = 0;
+  for (const line of changelog.split("\n")) {
+    if (level === 0) {
+      const heading = versionHeading(line);
+      if (heading?.dated === true) level = heading.level;
+      continue;
+    }
+    if (endsSection(line, level) || versionHeading(line) !== null) break;
+    if (line.startsWith("- **")) count += 1;
+  }
+  return count;
 }
 
-function countEntries(changelog: string, header: RegExp): number {
+// A heading at the section's level OR HIGHER ends it (zheref/nen#515 F2), as
+// collate's `endsSection(…, level)` does: a `## v<prev>` heading below an
+// empty Unreleased block is not part of it, and neither are its bullets. A
+// lower `### Added` / `### Fixed` subsection does not.
+function endsSection(line: string, level: number): boolean {
+  const heading = /^(#{1,6}) /.exec(line);
+  return heading !== null && (heading[1] as string).length <= level;
+}
+
+function countEntries(changelog: string, header: RegExp, level: number): number {
   let inside = false;
   let count = 0;
   for (const line of changelog.split("\n")) {
-    if (!inside && header.test(line)) {
-      inside = true;
+    if (!inside) {
+      inside = header.test(line);
       continue;
     }
-    // A heading at level 3 OR HIGHER ends the section (zheref/nen#515 F2), as
-    // collate's `endsSection(…, 3)` does: a `## v<prev>` heading below an
-    // empty Unreleased block is not part of it, and neither are its bullets.
-    if (/^#{1,3} /.test(line)) {
-      if (inside) break;
-      continue;
-    }
-    if (inside && line.startsWith("- **")) count += 1;
+    if (endsSection(line, level)) break;
+    if (line.startsWith("- **")) count += 1;
   }
   return count;
 }

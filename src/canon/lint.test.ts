@@ -207,6 +207,27 @@ describe("nen canon lint -- advisory rules", () => {
   });
 });
 
+// ADVISORIES IN THE HUMAN TRANSCRIPT (Bugbot on zheref/nen#527,
+// PRRT_kwDOUKPjns6v1Ost): printed under --base, whose files are the change's
+// own, and never in a whole-tree run -- --base-baseline's CI form included --
+// where the tree's every advisory would bury the fail lines; --json carries
+// them in advisory[] always. The guard does the same (`if (baseRef)`), and the
+// help now says so rather than "print" unqualified.
+describe("nen canon lint -- advisories in the human transcript", () => {
+  it("a whole-tree run (--base-baseline included) prints no advisory line; --json carries them; the help says when they print", async () => {
+    const root = base();
+    put(root, "claude/skills/plant/SKILL.md", "# P\n\nThis might be fast for now.\n");
+    const trusted = join(root, "contracts/prose.lint.baseline.json");
+    const human = await lint(root, ["--base-baseline", trusted]);
+    expect(human.code, human.stderr).toBe(0);
+    expect(human.stdout).not.toMatch(/^advisory /m);
+    const json = JSON.parse((await lint(root, ["--base-baseline", trusted], true)).stdout) as { advisory: unknown[] };
+    expect(json.advisory.length).toBeGreaterThan(0);
+    const help = (canonCommand.usage ?? "").replace(/\s+/g, " ");
+    expect(help).toContain("'advisory' findings never count, and print one line each under --base only");
+  });
+});
+
 describe("nen canon lint -- hostile cases", () => {
   it("CRLF headings resolve and a CRLF finding names its line", async () => {
     const root = base();
@@ -388,6 +409,79 @@ describe("nen canon lint -- the guard's later cases (zheref/nen#481, Hatsu main 
     put(root, "contracts/prose.lint.baseline.json", JSON.stringify({ findings: [...rows, ...rows] }));
     await expectWiring(root, /repeats the row/, ["--base-baseline", trusted]);
     await expectWiring(root, /--base-baseline .*missing/, ["--base-baseline", join(scratch, "nope.json")]);
+  });
+
+  // THE TRUSTED CONTRACT BESIDE THE ROOT (Bugbot on zheref/nen#527,
+  // PRRT_kwDOUKPjns6v1Osp): --rules is caller-named, like --base-baseline, so a
+  // path outside --root is read as named; a path INSIDE the root stays held to
+  // SEC-7 (a symlink there leaving the root is wiring), and so does every path
+  // the contract itself names.
+  it("the CI form: a --rules contract outside --root is read as named, inside it SEC-7 still holds", async () => {
+    const root = base();
+    const trustedDir = join(scratch, `trusted-dir-${n}`);
+    mkdirSync(trustedDir, { recursive: true });
+    copyFileSync(CONTRACT, join(trustedDir, "prose.lint.json"));
+    const run = async (rules: string): Promise<Run> => {
+      const out: string[] = [];
+      const err: string[] = [];
+      const io: Io = { out: (line): void => void out.push(line), err: (line): void => void err.push(line) };
+      const argv = ["canon", "lint", "--root", root, "--rules", rules, "--baseline", "contracts/prose.lint.baseline.json", "--base-baseline", join(root, "contracts/prose.lint.baseline.json")];
+      const code = await runFamily(canonCommand, argv, null, false, io, defaultSeams());
+      return { code, stdout: out.join("\n"), stderr: err.join("\n") };
+    };
+    const absolute = await run(join(trustedDir, "prose.lint.json"));
+    expect(absolute.code, absolute.stdout + absolute.stderr).toBe(0);
+    expect(absolute.stdout).toMatch(/^canon lint: /m);
+    const relative = await run(`../trusted-dir-${n}/prose.lint.json`);
+    expect(relative.code, relative.stdout + relative.stderr).toBe(0);
+    const missing = await run(join(trustedDir, "nope.json"));
+    expect(missing.code).toBe(2);
+    expect(missing.stderr).toMatch(/rules contract .*nope\.json does not exist/);
+    rmSync(join(root, "contracts/prose.lint.json"));
+    symlinkSync(join(trustedDir, "prose.lint.json"), join(root, "contracts/prose.lint.json"));
+    const linked = await run("contracts/prose.lint.json");
+    expect(linked.code).toBe(2);
+    expect(linked.stderr).toMatch(/symlink contracts\/prose\.lint\.json leaves the root/);
+  });
+
+  // ANOTHER SPELLING OF THE ROOT IS STILL THE ROOT (Nobunaga F1 on
+  // zheref/nen#528, SEC-7): "inside" is decided on real paths, so the root's
+  // own file reached through its realpath, a symlink to the root, or an outside
+  // symlink pointing into it is held to insideRoot, and an in-root symlink
+  // leaving the root is wiring however the caller spelled it.
+  it("SEC-7: the root's file under another spelling (its realpath, a symlinked root, a link into it) is still held inside the root", async () => {
+    const root = base();
+    const trustedDir = join(scratch, `trusted-spell-${n}`);
+    mkdirSync(trustedDir, { recursive: true });
+    copyFileSync(CONTRACT, join(trustedDir, "prose.lint.json"));
+    rmSync(join(root, "contracts/prose.lint.json"));
+    symlinkSync(join(trustedDir, "prose.lint.json"), join(root, "contracts/prose.lint.json"));
+    const alias = join(scratch, `alias-${n}`);
+    symlinkSync(root, alias);
+    const into = join(scratch, `into-${n}.json`);
+    symlinkSync(join(root, "contracts/prose.lint.json"), into);
+    const run = async (rules: string): Promise<Run> => {
+      const out: string[] = [];
+      const err: string[] = [];
+      const io: Io = { out: (line): void => void out.push(line), err: (line): void => void err.push(line) };
+      const argv = ["canon", "lint", "--root", root, "--rules", rules, "--baseline", "contracts/prose.lint.baseline.json"];
+      const code = await runFamily(canonCommand, argv, null, false, io, defaultSeams());
+      return { code, stdout: out.join("\n"), stderr: err.join("\n") };
+    };
+    for (const rules of [join(realpathSync(root), "contracts/prose.lint.json"), join(alias, "contracts/prose.lint.json"), into]) {
+      const r = await run(rules);
+      expect(r.code, `${rules}\n${r.stdout}${r.stderr}`).toBe(2);
+      expect(r.stderr).toMatch(/symlink contracts\/prose\.lint\.json leaves the root/);
+      expect(r.stdout).toBe("");
+    }
+    expect((await run(join(trustedDir, "prose.lint.json"))).code).toBe(0);
+    const loopA = join(scratch, `loop-a-${n}.json`);
+    const loopB = join(scratch, `loop-b-${n}.json`);
+    symlinkSync(loopB, loopA);
+    symlinkSync(loopA, loopB);
+    const looped = await run(loopA);
+    expect(looped.code).toBe(2);
+    expect(looped.stderr).toMatch(/symlink chain too deep to follow/);
   });
 
   it("--base and --base-baseline together are a usage error", async () => {
