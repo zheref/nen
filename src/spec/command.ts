@@ -510,7 +510,18 @@ function runTasks(context: CommandContext, repo: string): number {
   // SP-8: the body pins a commit, so both files are read AT that commit, never from the work tree.
   const rev = context.seams.run(GIT, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], { cwd: repo });
   const sha = rev.code === 0 ? (outputLines(rev.stdout)[0] ?? null) : null;
-  const input = { repo, folder, nnn: nnn ?? "000", sha };
+  // plan.md's sections are keyed by member; the family's registry turns the group's platform into one.
+  let members: readonly { code: string; platform: string | null }[] = [];
+  try {
+    members = (loadRepoRegistry(repo).families ?? []).flatMap((family) => family.members);
+  } catch {
+    members = [];
+  }
+  const memberFor = (platform: string): string | null => {
+    const codes = [...new Set(members.filter((member): boolean => member.platform === platform).map((member): string => member.code))];
+    return codes.length === 1 ? (codes[0] as string) : null;
+  };
+  const input = { repo, folder, nnn: nnn ?? "000", sha, memberFor };
   const read = (file: string): string | null => {
     if (sha === null) return null;
     const blob = context.seams.run(GIT, ["cat-file", "blob", `${sha}:./${folder}/${file}`], { cwd: repo });

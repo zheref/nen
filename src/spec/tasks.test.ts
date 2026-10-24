@@ -191,7 +191,15 @@ describe("nen spec tasks groups on Hatsu's own shapes", () => {
     expect(groups.map((group) => `${group.id} ${group.state} ${group.tasks.join(",")}`)).toEqual(["US1/web open L7,L8", "US1/android captured L12,L13"]);
     expect(groups[0]?.body).toContain("- AC-1: Given an empty fixture list, When the user opens it, Then the empty state is shown. (F002-AC-004)");
     expect(groups[0]?.body).toContain("Parity: specs/002-list/parity.md · F002-FR-001 × web");
-    expect(groups[0]?.body).toContain("Plan: specs/002-list/plan.md § Platform: web");
+    expect(groups[0]?.body).toContain("Plan: specs/002-list/plan.md § Platform: <the member on web, unresolved through families[]> (the section is keyed by member; this group's platform tag is web)");
+  });
+
+  it("names plan.md's member section through families[] when one member is on the platform", async () => {
+    const repo = folder(HATSU_SPEC, HATSU_TASKS);
+    mkdirSync(join(repo, "nen"), { recursive: true });
+    writeFileSync(join(repo, "nen", "repos.json"), JSON.stringify({ consumers: [], product_codes: { FW: "fixture-owner/fixture-web" }, families: [{ name: "fixture-family", spec: { repo: "fixture-owner/fixture-spec" }, members: [{ code: "FW", platform: "web" }] }] }));
+    const body = (await spec(["tasks", "groups", "--folder", "specs/002-list", "--group", "US1/web"], repo, defaultSeams())).out.join("\n");
+    expect(body).toContain("Plan: specs/002-list/plan.md § Platform: FW (the section is keyed by member; this group's platform tag is web)");
   });
 
   it("reads delivered only from 'delivered — <PR>', and a [US-1] tag as story 1", async () => {

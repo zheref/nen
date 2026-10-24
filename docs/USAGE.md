@@ -9315,7 +9315,8 @@ One schema today, `hatsu.spec.run/v0.1` (`src/run/schemas/`): caller
 and every field of Hatsu's table (`schema`, `caller`, `runId`, `mode`,
 `family`, `specRepo`, `members[]`, `scope[]`, `constitutionPr`, `wavePrs[]`,
 `folders[]`, `targets[]`, `clarify`, `preAnswered[]`, `next`, `at`) held to its
-type and closed values, and every row's keys to theirs (`members[].code` a
+type and closed values, and every row to exactly its keys — a key the row
+does not declare is refused, never stored unread — and their values (`members[].code` a
 product code, `members[].sha` hex, `folders[].nnn` three digits,
 `folders[].status` one of the seven folder statuses, `folders[].markers` three
 whole numbers, `targets[].state` one of five, `clarify`'s three counters whole
@@ -12234,8 +12235,11 @@ tasks name with `depends on T<nnn>`; `order` is the topological order, ties by
 first appearance. For a story group, `title` is `spec: <story title>
 (F<nnn>/US<k> · <platform>)` and `body` carries `Spec: <folder>@<sha>` (the
 commit read), the qualified FR and SC ids, the tasks and dependencies, the
-`parity.md` row ids (`F<nnn>-FR-### × <platform>`) and the `plan.md` platform
-section (`§ Platform: <platform>`), **one unfenced `- AC-<n>: Given … When …
+`parity.md` row ids (`F<nnn>-FR-### × <platform>`) and the `plan.md` section
+(`§ Platform: <member>` — Hatsu's `plan.md` keys its `## Platform: <member>`
+sections by **member**, while the group is keyed by its **platform tag**, so the
+member is the one `nen/repos.json` → `families[].members[]` declares on that
+platform, and the line says it is unresolved when no single member is), **one unfenced `- AC-<n>: Given … When …
 Then … (F<nnn>-AC-<###>)` row per acceptance scenario**, numbered from 1, the
 `###` taken from the scenario's own `**AC-###**:` label (SP-10) or, unlabelled,
 from the folder-global count; and the scenarios and SC lines

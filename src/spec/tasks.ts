@@ -193,6 +193,12 @@ export interface TasksInput {
   readonly nnn: string;
   /** The spec repository commit the body pins, or null when unread. */
   readonly sha: string | null;
+  /**
+   * The member a platform names, for the plan.md pointer: Hatsu's plan.md keys its `## Platform: <member>`
+   * sections by MEMBER, while a task's platform is `families[].members[].platform` (spec-repo.md, tasks.md
+   * and plan.md rows). Null when the family declares no single member on that platform.
+   */
+  readonly memberFor?: (platform: string) => string | null;
 }
 
 export function taskGroups(input: TasksInput, specText: string, tasksText: string): TasksReport {
@@ -256,7 +262,7 @@ export function taskGroups(input: TasksInput, specText: string, tasksText: strin
         `Requirements: ${frs.join(", ") || "none"} · Success criteria: ${scs.map(qualify).join(", ") || "none"}`,
         `Tasks: ${members.map((task): string => task.id).join(", ")} · Platform: ${platform} · Depends on: ${deps.join(", ") || "none"}`,
         `Parity: ${input.folder}/parity.md · ${frs.length === 0 ? "no FR row" : frs.map((fr): string => `${fr} × ${platform}`).join(", ")}`,
-        `Plan: ${input.folder}/plan.md § Platform: ${platform}`,
+        `Plan: ${input.folder}/plan.md § Platform: ${input.memberFor?.(platform) ?? `<the member on ${platform}, unresolved through families[]>`} (the section is keyed by member; this group's platform tag is ${platform})`,
         "",
         ...(scenarios.length === 0 ? ["No acceptance scenario is written under this story yet."] : scenarios.map((scenario, index): string => `- AC-${index + 1}: ${scenarioSentence(scenario.text)} (${qualifiedId(input.nnn, `AC-${scenario.ac}`)})`)),
         "",

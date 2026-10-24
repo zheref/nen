@@ -107,6 +107,7 @@ describe("nen run record", () => {
       [{ folders: [{ nnn: "001", slug: "list", status: "bogus", markers: { clarification: 0, ruling: 0, unverified: 0 } }] }, "folders[0].status is \"bogus\""],
       [{ folders: [{ nnn: "001", slug: "list", status: "captured", markers: "x" }] }, "folders[0].markers is not an object"],
       [{ clarify: { round: "a", asked: 0, answered: 0 } }, "clarify.round is not a whole number"],
+      [{ members: [{ code: "FA", platform: "android", sha: "0".repeat(40), shaa: "x" }] }, "members[0].shaa is not a key of this row"],
     ] as const) {
       const result = await run(["record", "write", "--schema", "hatsu.spec.run/v0.1", "--id", ID, "--from", input({ ...RECORD, ...change })], { XDG_STATE_HOME: state });
       expect(result.code, why).toBe(1);

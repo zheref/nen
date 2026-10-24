@@ -93,6 +93,9 @@ function validateValue(rule: FieldRule, value: unknown, where: string, problems:
           problems.push(`${at} is not an object`);
           return;
         }
+        // A row holds its declared keys and no others (Nobunaga delta a3): an extra key is a typo or a field no
+        // schema version admits, refused rather than stored unread.
+        for (const key of Object.keys(row)) if (rule.row !== undefined && !Object.hasOwn(rule.row, key)) problems.push(`${at}.${key} is not a key of this row (${Object.keys(rule.row).join(", ")})`);
         for (const [key, inner] of Object.entries(rule.row ?? {})) {
           const entry = (row as Record<string, unknown>)[key];
           if (entry === undefined) problems.push(`${at}.${key} is missing`);
