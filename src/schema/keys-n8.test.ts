@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describeContract, findPrecedenceRestatements, parseContract, type RepositoryContract } from "./contract.js";
 import { parseRepoRegistry, type RepoRegistry } from "./repos.js";
-import { checkTaxonomy, type SchemaCheck } from "./taxonomy.js";
+import { checkTaxonomy, RESTATEMENT_MAX_BYTES, type SchemaCheck } from "./taxonomy.js";
 import { parseWorkflow } from "./workflow.js";
 
 
@@ -141,6 +141,10 @@ describe("nen schema check's nen/contract.json#precedenceRestatedIn row (zheref/
     mkdirSync(join(root, "docs"));
     symlinkSync(join(outside, "W.md"), join(root, "docs", "WORKFLOW.md"));
     expect(row(root)?.detail).toMatch(/could not read -- it resolves outside the repository/);
+    const dirRoot = repo(declared, {});
+    mkdirSync(join(dirRoot, "docs", "WORKFLOW.md"), { recursive: true });
+    expect(row(dirRoot)?.detail).toMatch(/could not read -- it is not a regular file/);
+    expect(row(repo(declared, { "docs/WORKFLOW.md": "x".repeat(RESTATEMENT_MAX_BYTES + 1) }))?.detail).toMatch(/over the 4194304-byte cap/);
   });
 
   it("fails the whole report through the required row", () => {

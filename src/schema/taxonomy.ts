@@ -459,6 +459,9 @@ function pointerCheck(root: string, pointer: string, describe: (workflow: Workfl
 // override is printed escaped, never raw.
 const DEFAULT_TARGET_POINTER = "deploy.defaultTarget";
 
+/** The largest file `precedenceRestatedIn` may name: a prose page, never a dump (4 MiB). */
+export const RESTATEMENT_MAX_BYTES = 4 * 1024 * 1024;
+
 /**
  * The `precedence` restatement row (zheref/nen#474, Hatsu HR-1): every file
  * `precedenceRestatedIn` names, read and held to the array. A FAIL-capable
@@ -508,6 +511,17 @@ function precedenceRestatementCheck(root: string): SchemaCheck | null {
       const inside = relative(realRoot, real);
       if (inside === "" || inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside)) {
         findings.push(`${file}: could not read -- it resolves outside the repository`);
+        continue;
+      }
+      // A REGULAR FILE, AND A BOUNDED ONE (zheref/nen#515, Feitan 3): the path
+      // is a pull request author's to choose, and this check may run in CI.
+      const stat = statSync(real);
+      if (!stat.isFile()) {
+        findings.push(`${file}: could not read -- it is not a regular file`);
+        continue;
+      }
+      if (stat.size > RESTATEMENT_MAX_BYTES) {
+        findings.push(`${file}: could not read -- ${stat.size} bytes is over the ${RESTATEMENT_MAX_BYTES}-byte cap for a restating file`);
         continue;
       }
       text = new TextDecoder("utf-8", { fatal: true }).decode(readFileSync(real));

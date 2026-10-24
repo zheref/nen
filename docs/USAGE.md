@@ -184,6 +184,17 @@ verdict. [`pr ready`](#nen-pr-ready)'s JSON carries a `contract` field,
 `"nen.pr.ready/v0.1"`, precisely so a consumer can tell a future breaking
 change from a compatible one.
 
+**Invisible characters are escaped in `--json` ([#515](https://github.com/zheref/nen/pull/515)).**
+Under `--json`, every line a verb writes to stdout passes through one writer
+that spells the bidirectional, zero-width and line-separator characters --
+U+00AD, U+061C, U+180E, U+200B–200F, U+2028–202E, U+2060–2064, U+2066–206F and
+U+FEFF -- as `\uXXXX` escapes. The parsed value is unchanged; only what a
+terminal or a log can be made to show differs, so a `U+202E` in an issue body
+cannot reorder a document someone reads. The human rendering strips the same
+class through `plainLine` wherever a verb prints text it did not write,
+including every refusal reason. The raw NUL-delimited stream
+(`stage list --nul`) is not JSON and is not touched.
+
 **Which shapes carry a `contract`, and why not all of them.**
 
 > [#79](https://github.com/zheref/nen/issues/79) asked the question directly, so
@@ -206,7 +217,7 @@ change from a compatible one.
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **91 shapes** and **94 ids** (`nen.runner.plan`,
+binary carries**, writing or reading — **92 shapes** and **95 ids** (`nen.runner.plan`,
 `nen.stop.mark` and `nen.wc.worktree.copies` each have two versions, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -249,7 +260,7 @@ file formats).
 - **`dev`** — `nen.dev.release-publish/v0.1`
 - **`exits`** — `nen.exits/v0.1`
 - **`direct`** — `nen.direct.answer/v0.1` · `nen.direct.matrix/v0.1` · `nen.direct.registry/v0.1` · `nen.direct.resolve/v0.1`
-- **`issue`** — `nen.issue.body-check/v0.1` · `nen.issue.criteria/v0.1` · `nen.issue.edit-body/v0.3` · `nen.issue.questions/v0.1` · `nen.issue.reconcile/v0.1`
+- **`issue`** — `nen.issue.body-check/v0.1` · `nen.issue.criteria/v0.1` · `nen.issue.edit-body/v0.3` · `nen.issue.questions/v0.1` · `nen.issue.questions.batch/v0.1` · `nen.issue.reconcile/v0.1`
 - **`loop`** — `nen.loop.iterate/v0.1`
 - **`phase`** — `nen.phase.ledger/v0.1`
 - **`pr`** — `nen.pr.converge/v0.1` · `nen.pr.edit-body/v0.1` · `nen.pr.mark-ready/v0.1` · `nen.pr.merge-delivery/v0.1` · `nen.pr.merge-unit/v0.1` · `nen.pr.open/v0.1` · `nen.pr.sections/v0.1` · `nen.pr.ready.head-mismatch/v0.1` · `nen.pr.ready/v0.1` · `nen.pr.threads-settle/v0.1` · `nen.pr.threads/v0.1`
@@ -1058,7 +1069,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`issue`](#family-issue) | [`nen issue reconcile`](#nen-issue-reconcile) | read-only, proposes only: which OPEN issues a MERGED pull request already closes, each proposal citing the PR, its merge commit and the closing reference | gh (repo view, issue list, api graphql search and per-PR commit queries, api compare, api labels when --hold-labels is given, pr list for delivery PRs and the open-PR guard) | yes |
 | [`issue`](#family-issue) | [`nen issue edit-body`](#nen-issue-edit-body) | replaces an issue's body outright with a file's bytes, certifying the number is an ISSUE (never a PR) before any write | gh (api read to certify, issue edit unless --dry-run) | yes |
 | [`issue`](#family-issue) | [`nen issue body-check`](#nen-issue-body-check) | read-only: does an issue body carry every section its kind requires in the caller's catalogue, with content patterns, contiguous and measurable numbered rows, and vague-word advisories | --body-file or gh (api read), the --requirements-from catalogue | yes |
-| [`issue`](#family-issue) | [`nen issue questions`](#nen-issue-questions) | read-only: counts an issue body's open OQ-{n} rows, resolved ones and [NEEDS ...] markers; counts, never decides | --body-file or gh (api read) | yes |
+| [`issue`](#family-issue) | [`nen issue questions`](#nen-issue-questions) | read-only: counts an issue body's open OQ-{n} rows, resolved ones and [NEEDS ...] markers, one issue or a comma-separated batch; exits 1 while any question is open, NEEDS-marked or malformed | --body-file or gh (api read) | yes |
 | [`issue`](#family-issue) | [`nen issue criteria`](#nen-issue-criteria) | read-only: lists an issue body's AC-{n} acceptance-criterion rows with their text; a body with none is not verifiable | --body-file or gh (api read) | yes |
 | [`idea`](#family-idea) | [`nen idea file`](#nen-idea-file) | file an idea issue (reusing issue file's own choreography), then read it back over the API and diff title/body/labels against what was submitted | nen/labels.json; gh (issue create + api read) | yes |
 | [`scaffold`](#family-scaffold) | [`nen scaffold init`](#nen-scaffold-init) | stand an EXISTING repository up: the directory skeleton, the trailer-enforcing commit-msg hook, the trunk-guarding pre-commit hook, a canon-values.yml template, nen/contract.json's project block, nen/workflow.json's policy, the schemas/-&gt;nen/ copy migration, the stack's CI workflow, .gitignore upkeep, and a closing `shu tools` CHECK that installs nothing | nen/contract.json + nen/workflow.json (both hooks are generated FROM the policy) + the legacy schemas/ copies; the bundled profiles pack and templates/; writes to disk under --repo; spawns the version probes the target declares (never on --dry-run) | yes |
@@ -5139,7 +5150,9 @@ paths under it some effort changed). **Efforts that share any path stack** -- th
 side -- so the verdict is `stack(<order>)` (NN#488 AC-2: two efforts that both touch `plugin.json`
 stack). **The order is never nen's choice**: when the branches **already chain** -- each contains the one
 before (`git merge-base --is-ancestor`) -- it is the order git holds (`order: chain`); otherwise it is the
-order the caller listed `--efforts` in, which is the order its epic names (`order: given`).
+order the caller listed `--efforts` in, which is the order its epic names (`order: given`), and when git
+could not answer the ancestry question that order is used and said so (`source: "ancestry-unread"`).
+**Only the efforts that share a path are stacked, one stack per connected group**: an effort sharing nothing is left out, and A and B sharing `p` beside C and D sharing `q` read two stacks, `stack(A <- B; C <- D)`, each with its own order line.
 
 **Declared paths, before authoring (NN#488 AC-1).** Before an effort is authored there is no branch tip
 to diff, so `--declared <file>` names a JSON object of effort → the repository-relative paths it declares
@@ -5172,12 +5185,12 @@ and `; diff not read -- <reason>` where declared paths stood in, and one
 `shared <path>: <efforts>[ (always overlaps)]` line per shared path. `--json` top-level keys: `verdict`
 (`disjoint` \| `stack` \| `unknown`), `base`, `alwaysOverlaps` (the workflow's list, then the flag's),
 `overlaps` (`[{path, efforts, always}]`, path-sorted), `efforts` (`[{effort, files, unreadReason,
-sources}]`, `files: null` when unread), `unread`, `stack` (the efforts in stack order on `stack`, else
-null), `stackSource` (`chain` \| `given` on `stack`, else null). Exit 0 on `disjoint`; exit 1 on `stack`
+sources}]`, `files: null` when unread), `unread`,
+`stacks` (`[{efforts, source}]`, one per connected group of sharing efforts, `source` `chain` \| `given` \| `ancestry-unread`; empty unless `stack`). Exit 0 on `disjoint`; exit 1 on `stack`
 and `unknown` -- an effort with nothing read is never read as "touches nothing"; exit 2 on a malformed
 flag, an unreadable or malformed `--declared`, or a flag another `wc` verb owns. Writes nothing.
 **Changed from v0.26.0**: the `overlap(<paths>)` verdict is gone; efforts that overlap and do not chain
-now read `stack(<the --efforts order>)` with `stackSource: "given"`, at the same exit 1.
+now read `stack(<the --efforts order>)` with `stacks[].source: "given"`, at the same exit 1.
 
 **Example**
 
@@ -8760,9 +8773,14 @@ anchors, tried in order:
 
 1. **An `### Unreleased` header.** It must be empty (otherwise exit 1, as
    before). It is kept with the `_(nothing awaiting release.)_` placeholder and
-   the new `### v<version> — <theme>` section goes directly below it. The
-   Unreleased block runs to the next heading at level 3 **or higher**, so a
-   `## v<prev>` heading under it is never swallowed.
+   the new section goes directly below it. The Unreleased block runs to the
+   next heading at level 3 **or higher**, so a `## v<prev>` heading under it is
+   never swallowed, and neither its bullets nor its paragraph count as
+   Unreleased entries. When that next heading is a dated release heading at a
+   **higher** level (`## v0.26.0 — 2026-10-22` under `### Unreleased`), the new
+   section takes **its** form, exactly as anchor 2 below does -- its level, its
+   `v`, its separator, and `--date` when its suffix is a date, with a blank line
+   before the old heading. Otherwise it is `### v<version> — <theme>`.
 2. **Otherwise, the top dated release heading** -- the first line shaped
    `#… v<X.Y.Z> — <suffix>` at any level (this repository's own
    `## v0.27.0 — 2026-10-22`). The new section goes directly above it, at its
@@ -8771,7 +8789,7 @@ anchors, tried in order:
    section's first paragraph; any other suffix means `--theme` is the suffix.
    **The date source** is `--date`, else today's date in UTC. Every existing
    line stays byte-identical: only the new section and its trailing blank line
-   are inserted.
+   are inserted, each with the file's own line ending (a CRLF file stays CRLF).
 
 With neither anchor the verb refuses at exit 1 naming both.
 
@@ -8789,7 +8807,7 @@ nen changelog collate --version <vX.Y.Z> --theme <text> --changelog <path> --fra
 | `--theme <text>` | yes | the release's one-line theme | — |
 | `--changelog <path>` | yes | the `CHANGELOG.md` to rewrite | — |
 | `--fragment-dir <dir>` | yes | the fragment directory | a missing directory contributes zero fragments rather than refusing |
-| `--date <YYYY-MM-DD>` | no | the release date written on a dated heading (anchor 2) | default today's UTC date; not a calendar day exits 2; unused under anchor 1 |
+| `--date <YYYY-MM-DD>` | no | the release date written on a dated heading: anchor 2, and anchor 1 when the Unreleased block ends at a higher-level dated heading | default today's UTC date; not a calendar day exits 2; unused when the new heading carries the theme |
 | `--write` | no | actually rewrite the changelog and delete the collated fragments | default off (dry-run) |
 | `--repo <path>` | no | resolves relative `--changelog`/`--fragment-dir` | default cwd |
 | `--json` | no | machine-readable collation result | — |
@@ -10303,7 +10321,7 @@ nen issue questions (--body-file <path> | --ref <CODE>#<N>[,<CODE>#<N>...] --tar
 
 **Output and exit codes** -- the line `<open> open, <resolved> resolved, <n> [NEEDS] marker(s), <n> unrecognised -- <source>`, then `OPEN`, `RESOLVED`, `NEEDS` and `UNRECOGNISED` rows with their lines. `--json`: `{ contract, source, counts: { open, resolved, needsMarkers, unrecognised }, open, resolved, needsMarkers, unrecognised }` -- `contract` is `nen.issue.questions/v0.1`, `source` as `body-check`'s, `open` each `{ id, number, gate, line }`, `resolved` each `{ id, number, line }`, `needsMarkers` each `{ label, line }`, `unrecognised` each `{ line, text }`.
 
-**A batch** (`--ref` with a comma) reads and counts each issue on its own and prints `<n> issue(s): <n> with an open question, <n> clear, <n> unread -- <owner/name>`, then each issue's block, and `UNREAD    <ref>: <reason>` for one that could not be read -- listed, never zero counts, and the others still reported. `--json`: `{ contract, target, counts: { issues, blocking, clear, unread }, issues }`, each entry the single-issue shape (with its `source`) or `{ ref, unread }`.
+**A batch** (`--ref` with a comma) reads and counts each issue on its own and prints `<n> issue(s): <n> with an open question, <n> clear, <n> unread -- <owner/name>`, then each issue's block, and `UNREAD    <ref>: <reason>` for one that could not be read -- listed, never zero counts, and the others still reported. `--json`, under its own contract `nen.issue.questions.batch/v0.1` (one shape per contract id; a single `--ref` keeps `nen.issue.questions/v0.1`): `{ contract, target, counts: { issues, blocking, clear, unread }, issues }`, each entry the single-issue shape (with its `source`) or `{ ref, unread }`.
 
 **Exit codes** -- **1** when any open row, any `[NEEDS …]` marker or any unrecognised `OQ-{n}` row is found (a malformed row is a question nobody can tell is answered), and when an issue could not be read or carried no body; **0** only when every question read is resolved, or there is none; **2** on usage or a malformed catalogue. **Changed from v0.26.0**, which exited 0 whatever the counts. A `[NEEDS …]` marker blocks because it is an unanswered question in a shape HR-4 does not admit (this delivery's reading; #477 named open and malformed rows).
 

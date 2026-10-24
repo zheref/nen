@@ -670,25 +670,6 @@ export interface KeyScopedOutcome {
 /** Reads and parses a repo file's content at one git ref; `null` when it cannot be read as JSON at all (missing, not JSON, fetch failure) -- every caller treats `null` as fail-closed. */
 export type ReadJsonAt = (path: string, ref: string) => JValue | null;
 
-/**
- * `repos/{slug}/contents/<path>?ref=<sha>` decoded as complete UTF-8 text, or `null`
- * on ANY failure along the way -- a missing file, a malformed response, an
- * unparseable base64 payload, or `gh` itself refusing. FAIL CLOSED (this
- * module's own header): a file this function cannot read as JSON is a file
- * whose change nen cannot prove stayed inside its declared keys, which is
- * exactly the same posture ../pr/mergeunit.ts's `fetchBaseReleasePolicy`
- * already takes for `nen/workflow.json` itself. The JSON reader below parses
- * this same text with `parseJsonPreservingNumbers` for N16's reason.
- *
- * N2: EACH PATH SEGMENT IS PERCENT-ENCODED before it is interpolated into
- * the contents URL -- a segment carrying a `#`, `?`, `%`, or a space would
- * otherwise change what the URL means (a fragment, a second query string, an
- * escape byte, a broken request) rather than naming the file verbatim.
- * `#`/`?`/`%` are ALSO refused outright at schema load
- * (../schema/workflow.ts's `parseUnitPathEntry`), so this encoding is a
- * second, independent layer for the segments GitHub's own path grammar could
- * still contain (spaces, non-ASCII).
- */
 /** A text read: the text, or null with the one condition that stopped it. */
 export interface TextRead {
   readonly text: string | null;
@@ -746,6 +727,24 @@ function ghJson(seams: Seams, endpoint: string): Record<string, unknown> | null 
 }
 
 /**
+ * `repos/{slug}/contents/<path>?ref=<sha>` decoded as complete UTF-8 text, or a
+ * named reason (`null` text) on ANY failure along the way -- a missing file, a malformed response, an
+ * unparseable base64 payload, or `gh` itself refusing. FAIL CLOSED (this
+ * module's own header): a file this function cannot read as JSON is a file
+ * whose change nen cannot prove stayed inside its declared keys, which is
+ * exactly the same posture ../pr/mergeunit.ts's `fetchBaseReleasePolicy`
+ * already takes for `nen/workflow.json` itself. The JSON reader below parses
+ * this same text with `parseJsonPreservingNumbers` for N16's reason.
+ *
+ * N2: EACH PATH SEGMENT IS PERCENT-ENCODED before it is interpolated into
+ * the contents URL -- a segment carrying a `#`, `?`, `%`, or a space would
+ * otherwise change what the URL means (a fragment, a second query string, an
+ * escape byte, a broken request) rather than naming the file verbatim.
+ * `#`/`?`/`%` are ALSO refused outright at schema load
+ * (../schema/workflow.ts's `parseUnitPathEntry`), so this encoding is a
+ * second, independent layer for the segments GitHub's own path grammar could
+ * still contain (spaces, non-ASCII).
+ *
  * The complete UTF-8 text of `path` at `ref`, or the named reason it could
  * not be read.
  *

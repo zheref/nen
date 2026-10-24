@@ -84,6 +84,7 @@ import {
   countQuestions,
   IssueShapeError,
   ISSUE_BODY_CHECK_CONTRACT,
+  ISSUE_QUESTIONS_BATCH_CONTRACT,
   ISSUE_QUESTIONS_CONTRACT,
   parseCatalogue,
   type IssueSectionsCatalogue,
@@ -761,7 +762,8 @@ usage:
       "nen.issue.questions/v0.1", source, counts: { open, resolved,
       needsMarkers, unrecognised }, open: [{ id, number, gate, line }],
       resolved: [{ id, number, line }], needsMarkers: [{ label, line }],
-      unrecognised: [{ line, text }] }'; a batch: '{ contract, target, counts:
+      unrecognised: [{ line, text }] }'; a batch, under its own contract
+      "nen.issue.questions.batch/v0.1": '{ contract, target, counts:
       { issues, blocking, clear, unread }, issues: [<that shape> | { ref,
       unread }] }'.
 
@@ -2397,7 +2399,7 @@ function issueQuestions(context: CommandContext): number {
   emit(
     context.io,
     context.json,
-    { contract: ISSUE_QUESTIONS_CONTRACT, target: target.slug, counts: { issues: refs.length, blocking: blocking.length, clear: counted.length - blocking.length, unread: unread.length }, issues: entries },
+    { contract: ISSUE_QUESTIONS_BATCH_CONTRACT, target: target.slug, counts: { issues: refs.length, blocking: blocking.length, clear: counted.length - blocking.length, unread: unread.length }, issues: entries },
     lines,
   );
   return blocking.length > 0 || unread.length > 0 ? 1 : 0;

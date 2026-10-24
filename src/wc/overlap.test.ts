@@ -9,7 +9,7 @@ import { runFamily, type Io } from "../index.js";
 import type { CommandResult, Seams } from "../seam/exec.js";
 import { noPortProbe } from "../seam/scripted.js";
 import { wcCommand } from "./command.js";
-import { computeOverlap, withDeclared, type EffortFiles } from "./overlap.js";
+import { computeOverlap, renderOverlap as renderOverlapLines, withDeclared, type EffortFiles } from "./overlap.js";
 
 const files = (effort: string, list: readonly string[] | null): EffortFiles => ({ effort, files: list, unreadReason: list === null ? "bad ref" : null });
 
@@ -42,16 +42,30 @@ describe("computeOverlap", () => {
   it("stacks in git's chain when the overlapping branches chain, else in the given --efforts order (NN#488 AC-1, AC-2)", () => {
     const chain = (ancestor: string, descendant: string): boolean => (ancestor === "a" && descendant !== "a") || (ancestor === "b" && descendant === "c");
     const stacked = computeOverlap("origin/main", [files("c", ["x"]), files("a", ["x"]), files("b", ["x"])], [], chain);
-    expect(stacked).toMatchObject({ verdict: "stack", stack: ["a", "b", "c"], stackSource: "chain" });
+    expect(stacked).toMatchObject({ verdict: "stack", stacks: [{ efforts: ["a", "b", "c"], source: "chain" }] });
     const forked = computeOverlap("origin/main", [files("b", ["x"]), files("a", ["x"])], [], () => false);
-    expect(forked).toMatchObject({ verdict: "stack", stack: ["b", "a"], stackSource: "given" });
-    expect(computeOverlap("origin/main", [files("a", ["x"]), files("b", ["x"])], [], () => null)).toMatchObject({ verdict: "stack", stackSource: "given" });
-    expect(computeOverlap("origin/main", [files("a", ["x"]), files("b", ["y"])], [])).toMatchObject({ verdict: "disjoint", stack: null, stackSource: null });
+    expect(forked).toMatchObject({ verdict: "stack", stacks: [{ efforts: ["b", "a"], source: "given" }] });
+    expect(computeOverlap("origin/main", [files("a", ["x"]), files("b", ["x"])], [], () => null)).toMatchObject({ verdict: "stack", stacks: [{ source: "ancestry-unread" }] });
+    // Only the efforts that share a path stack (#515 F7).
+    expect(computeOverlap("origin/main", [files("a", ["x"]), files("solo", ["s"]), files("b", ["x"])], [], () => false)).toMatchObject({ verdict: "stack", stacks: [{ efforts: ["a", "b"], source: "given" }] });
+    expect(computeOverlap("origin/main", [files("a", ["x"]), files("b", ["y"])], [])).toMatchObject({ verdict: "disjoint", stacks: [] });
+  });
+
+  it("builds one stack per connected group of shared paths (#515 delta 10)", () => {
+    const report = computeOverlap("origin/main", [files("a", ["p"]), files("c", ["q"]), files("b", ["p"]), files("d", ["q"]), files("e", ["e"])], [], () => false);
+    expect(report.stacks).toEqual([
+      { efforts: ["a", "b"], source: "given" },
+      { efforts: ["c", "d"], source: "given" },
+    ]);
+    expect(renderOverlapLines(report)[0]).toBe("verdict: stack(a <- b; c <- d)");
+    // A path shared by b and c links the two groups into one.
+    const linked = computeOverlap("origin/main", [files("a", ["p"]), files("b", ["p", "r"]), files("c", ["r", "q"]), files("d", ["q"])], [], () => false);
+    expect(linked.stacks).toEqual([{ efforts: ["a", "b", "c", "d"], source: "given" }]);
   });
 
   it("returns stack(...) for two efforts that both touch plugin.json, touched or declared always-overlapping (NN#488 AC-2)", () => {
     const touched = computeOverlap("origin/main", [files("a", [".claude-plugin/plugin.json", "a.md"]), files("b", [".claude-plugin/plugin.json"])], []);
-    expect(touched).toMatchObject({ verdict: "stack", stack: ["a", "b"], stackSource: "given" });
+    expect(touched).toMatchObject({ verdict: "stack", stacks: [{ efforts: ["a", "b"], source: "ancestry-unread" }] });
     const declared = computeOverlap("origin/main", [files("a", ["a.md"]), files("b", ["b.md"])], [".claude-plugin/plugin.json"]);
     expect(declared.verdict).toBe("stack");
     expect(declared.overlaps).toEqual([{ path: ".claude-plugin/plugin.json", efforts: ["a", "b"], always: true }]);
@@ -125,9 +139,9 @@ describe("nen wc overlap (CLI)", () => {
     const overlap = await capture(["wc", "overlap", "--efforts", "a,b", "--base", "origin/main", "--always-overlaps", "CHANGELOG.md"], root, { a: ["x.ts"], b: ["y.ts"] }, true);
     expect(overlap.code).toBe(1);
     const doc = JSON.parse(overlap.out.join("\n"));
-    expect(Object.keys(doc)).toEqual(["verdict", "base", "alwaysOverlaps", "overlaps", "efforts", "unread", "stack", "stackSource"]);
+    expect(Object.keys(doc)).toEqual(["verdict", "base", "alwaysOverlaps", "overlaps", "efforts", "unread", "stacks"]);
     expect(doc.overlaps[0].path).toBe("CHANGELOG.md");
-    expect(doc).toMatchObject({ verdict: "stack", stack: ["a", "b"], stackSource: "given" });
+    expect(doc).toMatchObject({ verdict: "stack", stacks: [{ efforts: ["a", "b"], source: "ancestry-unread" }] });
     const unknown = await capture(["wc", "overlap", "--efforts", "a,gone"], root, { a: ["x.ts"], gone: null });
     expect(unknown.code).toBe(1);
     expect(unknown.out[0]).toMatch(/^verdict: unknown \(could not read gone\)/);
@@ -150,7 +164,7 @@ describe("nen wc overlap (CLI)", () => {
     const result = await capture(["wc", "overlap", "--efforts", "a,planned", "--base", "origin/main", "--declared", "declared.json"], root, { a: ["docs/USAGE.md"], planned: null });
     expect(result.code).toBe(1);
     expect(result.out[0]).toBe("verdict: stack(a <- planned)");
-    expect(result.out[1]).toBe("order: given (the --efforts order; the branches do not chain)");
+    expect(result.out[1]).toBe("order: given (the --efforts order; ancestry unread -- git could not say whether the branches chain)");
     expect(result.out.join("\n")).toMatch(/planned: 1 file\(s\) \(declared\); diff not read -- fatal: bad revision/);
   });
 
