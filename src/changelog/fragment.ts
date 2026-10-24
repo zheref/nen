@@ -139,7 +139,7 @@ export function firstDatedVersion(changelog: string): string | null {
   return null;
 }
 
-/** Entries under the FIRST dated section, its subsections included, up to the next version heading at any level. */
+/** Entries under the FIRST dated section, its subsections included, up to the next version heading at level 2 or 3. */
 export function firstDatedEntryCount(changelog: string): number {
   let level = 0;
   let count = 0;

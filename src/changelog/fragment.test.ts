@@ -144,10 +144,10 @@ describe("firstDatedVersion agrees with completeness's sectionHeadings", () => {
   });
 });
 
-// A VERSION HEADING CLOSES THE SECTION AT ANY LEVEL (Bugbot on zheref/nen#528,
+// A VERSION HEADING AT LEVEL 2 OR 3 CLOSES THE SECTION (Bugbot on zheref/nen#528,
 // PRRT_kwDOUKPjns6v4kDu): a `### vX.Y.Z` below a `## vX.Y.Z` release is the
 // previous release, not a subsection, and its bullets are not the head's.
-describe("firstDatedEntryCount -- a version heading closes the section at any level", () => {
+describe("firstDatedEntryCount -- a version heading at level 2 or 3 closes the section", () => {
   it("stops a `##` release at a following `### vX.Y.Z`, and still counts a `### Added` subsection", () => {
     const text = "## v2.0.0 — 2026-10-24\n\n### Added\n\n- **A** a\n\n### v1.9.0 — theme\n\n- **B** b\n- **C** c\n";
     expect(firstDatedEntryCount(text)).toBe(1);

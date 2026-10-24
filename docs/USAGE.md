@@ -8877,7 +8877,7 @@ heading whose trailer is `unreleased` is not dated and is skipped, so the PR
 that dates it is the release move. Its version must differ from the base
 changelog's first dated section. Its entries are every top-level `- **…`
 bullet up to the next heading at its own level or higher, or the next version
-heading at any level (a `### vX.Y.Z` below a `## vX.Y.Z` is the previous
+heading at level 2 or 3 (a `### vX.Y.Z` below a `## vX.Y.Z` is the previous
 release); `collate` copies fragment lines verbatim and writes no subsections,
 but a hand-written `##` section's `### Added` / `### Fixed` subsections count
 too. Read at `###` only, a release PR that collated into a `##` form was
