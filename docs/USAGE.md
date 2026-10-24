@@ -396,7 +396,7 @@ The complete list:
 | [`pr mark-ready`](#nen-pr-mark-ready) | `3` | the pull request is CLOSED or MERGED; nothing sent |
 | `review ledger` | `3` / `4` | refused: the branch is the trunk or not a branch, no ledger opened / lost: no ledger here, but one was opened under this key before -- recover it, never a fresh init |
 | [`loop iterate`](#nen-loop-iterate) | `2` | its own meaning of 2, beside usage: the loop's count cannot be established -- a lost ledger, a ledger in two homes, an unreadable ledger, or a git that cannot name the common dir; never retried as a typo |
-| [`canon lint`](#nen-canon-lint) | `2` | its own meaning of 2, beside usage: wiring -- an unreadable or invalid contract, baseline or file, a symlink leaving the root, a failed git read |
+| [`canon lint`](#nen-canon-lint) | `2` | its own meaning of 2, beside usage: wiring -- an unreadable or invalid contract, baseline or file, a symlink leaving the root, a failed git read, a `nen/workflow.json` that does not load |
 | [`canon clause check`](#nen-canon-clause-check) | `2` | its own meaning of 2, beside usage: a tooling failure -- an unreadable file or base, no definitions at all, a leaf pattern matching nothing, a failed git read |
 | [`bootstrap`](#nen-bootstrap) | `3`–`7` | not on the three-code scheme at all: it relays the bootstrap script's own published codes unchanged ([Getting the binary](#getting-the-binary)), and those numbers mean the script's things |
 <!-- exits:end -->
@@ -736,6 +736,7 @@ they assumed instead); they come back empty or `null`.
 | `idle` | a typed **idle profile** (HR-5): `decisions` maps an ask-once row id (`[a-z0-9][a-z0-9-]*`, as `nen/decisions.json` spells one) to `"default"` \| `"hold"` \| `"refuse"`; `terminal` is the terminal state the batch runs to, a non-empty string in the repository's own words; `budget` is `{ "minutes": <n>, "tokens": <n> }`, positive whole numbers, `minutes` being **wall-clock minutes from the run manifest's `startedAt`** (the consumer's catalogue row owns the key's meaning); `localSlotFrees` is the slot rule under an idle profile, the same closed set as `monitor.localSlotFrees`, read by [`loop slots`](#nen-loop-slots) before it (stating both with two values is refused). Every key is optional; a stated one is validated by pointer, a near-miss key is refused, and any other key nen does not read is a warn on the `#idle` row, never accepted silently. **No default**, and nen never runs a batch or picks a resolution. [`schema check`](#nen-schema-check)'s `nen/workflow.json#idle` row cross-checks each id against `nen/decisions.json`: a row declared there with a class other than `ask-once-per-run` is a required FAIL; an id that file does not declare (or no file) is a warn, never a pass — the row may be the canon matrix's, which the checkout cannot see | callers; [`schema check`](#nen-schema-check) |
 | `alwaysOverlaps` | paths every delivery touches sooner or later -- a manifest version, the `CHANGELOG`, generated mirrors -- each a repository-relative path (a trailing `/` for a directory prefix), never empty, absolute, climbing with `..` or repeated; refused by pointer otherwise. **Default empty.** [`schema check`](#nen-schema-check) reports it on the `nen/workflow.json#alwaysOverlaps` row | [`wc overlap`](#nen-wc-overlap) |
 | `models.<surface>.<tier>` / `models.roles` / `models.rule` | which model alias a role gets on a surface. An **open** map at both levels — nen checks that every leaf is a string and reads nothing else | callers |
+| `canon.lint` | the canon prose lint's declared inputs (zheref/nen#481): `rules` (required once `lint` is declared) and `baseline` (optional) are repository-relative paths -- never empty, absolute or climbing with `..` -- and `skillPaths` (optional, non-empty globs) names the files the marker limit and the reading rule apply to when the rules contract declares none. A near-miss key is refused by pointer. **No default.** [`schema check`](#nen-schema-check) validates both files on the `nen/workflow.json#canon.lint` row, which appears only when the block is declared | [`canon lint`](#nen-canon-lint) |
 | `profile.default` / `profile.allowed` | which RUN PROFILE a bare turn runs under, and which a caller may ask for (v0.13.0, [#227](https://github.com/zheref/nen/issues/227)). The names are **closed** — `fast`, `standard`, `thorough` — and their meaning is the turn loop's, not nen's: nen refuses a fourth name by pointer, an empty or repeating `allowed`, and a `default` outside `allowed`. Default `{ "default": "standard", "allowed": ["fast", "standard", "thorough"] }`; an `allowed` with no `default` falls back to `standard` when listed, else its first entry | callers ([`schema check`](#nen-schema-check) prints it as the `nen/workflow.json#profile` row) |
 | `release.unitPaths` | the release-unit bounds: a string `"=README.md"` for one exact path, an existing segment prefix or narrow glob, an object `{"path":"package.json","keys":["version"]}` for JSON leaves, or `{"path":"src/version.ts","lines":["<whole-line regex>"]}` for text; `{"path":"changelog.d/","deleteOnly":true}` permits only removals under that literal path prefix. Both removed and added lines must match. Content-bound object paths are exact; `keys`, `lines` and `deleteOnly` are mutually exclusive, and the first two are non-empty lists. See [release unit-check](#nen-release-unit-check) for validation, full-content reads and fail-closed limits. `null` or absent means undeclared and both unit gates refuse; empty lists and universal string globs (`**`, `**/*`) are refused by pointer. No default | [`release unit-check`](#nen-release-unit-check), [`nen pr merge`](#nen-pr-merge) (policy read from the PR's BASE commit); [`schema check`](#nen-schema-check) reports `nen/workflow.json#release` |
 | `futon.advanceGo` | which repo KINDS (`product` \| `process` \| `library`, `../repo/classify.ts`'s own closed three) a named skill's advance-go step is gated to, keyed by skill name with any `plugin:` prefix stripped and lower-cased. A skill this DECLARED map does not name is UNGATED. When the map itself is EMPTY -- the key absent, the whole file absent, an explicit `{}`, or a body carrying only `$`-prefixed metadata keys (none of which count as a declared skill) -- the gate does not read as "no gate" at all: the built-in `DEFAULT_ADVANCE_GO` policy applies instead, and every step it annotates carries `source: "default"`. A map naming even ONE skill is a genuine declaration and replaces the default wholesale (`source: "declared"`) -- see [`parse futon`](#nen-parse-futon)'s "declared vs. default" section | [`parse futon`](#nen-parse-futon) |
@@ -1067,7 +1068,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`canon`](#family-canon) | [`nen canon checkout`](#nen-canon-checkout) | resolve WHERE the canon checkout is on this machine -- `--canon-checkout`, then the variable the pinned entry's `checkout_env` names, then its `checkout` path template -- and verify it is a clean checkout of the pinned source at the pinned tag, reporting every step | nen/repos.json + the environment; read-only, isolated git (rev-parse, remote get-url on the checkout and the consumer, status, ls-files); fetches nothing | yes |
 | [`canon`](#family-canon) | [`nen canon mirror generate`](#nen-canon-mirror-generate) | render every canonical rule file, {{TOKEN}}s bound, into the rules location of EACH agent surface the consumer declares (a directory of marked files, or one marked block inside AGENTS.md), writing only changed files, deleting marked orphans, refusing to touch a hand-written file | --rules-dir, or --stack-dir/--leaf inside the canon checkout `canon checkout` resolves (read-only git) + --canon-values; the surface table (src/surface/rules.ts); writes under --repo; no gh | yes |
 | [`canon`](#family-canon) | [`nen canon mirror check`](#nen-canon-mirror-check) | render the mirror in memory and diff every declared surface's committed copy against it: ok / missing / extra / stale / hand-edited per file, foreign for the consumer's own | --rules-dir, or --stack-dir/--leaf inside the resolved canon checkout (read-only git) + --canon-values; the surface table; reads under --repo; --markdown-out writes its table (and its parent directory) there; no gh | yes |
-| [`canon`](#family-canon) | [`nen canon lint`](#nen-canon-lint) | a canon repository's prose held to a caller-owned rules contract (each rule's class picks the check) behind a shrink-only baseline; fenced code and quoted words exempt; never green over a file it could not read | the --rules contract and the files it names (version source, decisions, rulings, declared values), the --baseline, the Markdown its include globs match under --root; with --base, git (merge-base, diff, show) | yes |
+| [`canon`](#family-canon) | [`nen canon lint`](#nen-canon-lint) | a canon repository's prose held to a caller-owned rules contract (each rule's class picks the check) behind a shrink-only baseline; fenced code and quoted words exempt; never green over a file it could not read | nen/workflow.json `canon.lint`, the --rules contract and the files it names (version source, decisions, rulings, declared values), the --baseline and --base-baseline, the Markdown its include globs match under --root; with --base, git (merge-base, diff, show) | yes |
 | [`canon`](#family-canon) | [`nen canon clause check`](#nen-canon-clause-check) | a clause id space (HR-{n}, CON-{n}) held unique -- definitions counted, citations never, gaps a notice -- and, with --leaves, every changed clause matched by a change in each file citing it or a `no-leaf-change:` line | --file under --repo; --base as a file or `git show <ref>:<path>`; with --leaves, git (ls-files, diff) and the --body-from file | yes |
 | [`quality`](#family-quality) | [`nen quality tooling`](#nen-quality-tooling) | look up the e2e/adversarial/perf tooling recorded for a scenario in a caller-supplied table | caller's own --table JSON (never a table shipped in nen) | yes |
 | [`quality`](#family-quality) | [`nen quality perf-compare`](#nen-quality-perf-compare) | classify a measured-vs-baseline regression at QA-13's fixed 10%/25% thresholds | none (pure arithmetic over the two numbers given) | yes |
@@ -10917,34 +10918,68 @@ picks the check; nothing dispatches on an id, so a contract may renumber:
 | `reading-cited-as-ruled` | a clause id (`pattern`, capture 1) whose status in `rulingsFile` is `reading`, in a `skillPaths` file, in a paragraph without the word *reading* | `pattern` (`prefix` optional, default `HR`) |
 
 **Exemptions.** Fenced code is never read; quoted words (`"…"`, `“…”`, so also
-`*"…"*`) are blanked unless `exemptions.quotedWords` is `false`; a RETIRED block
-exempts the `stale-residue`, `stale-version`, `bare-ref` and `residue-unfiled`
-classes; a `records.paths` file exempts the `records.rules` ids. `.git`,
+`*"…"*`) are blanked unless `exemptions.quotedWords` is `false` — a quotation
+pairs within one line and never across an inline code span; a RETIRED block (a
+`> **RETIRED…` quote, or a `**RETIRED` paragraph or list item up to a blank line,
+a heading or a list item at the same or a shallower indent) exempts the rule ids
+in `retired.rules` (absent: the rules of the `stale-residue`, `stale-version`,
+`bare-ref` and `residue-unfiled` classes; an id naming no rule exits 2); a
+`records.paths` file exempts the `records.rules` ids. Every `markerRows` entry
+must be an `ask-once-per-run` row of `decisionsFile` (HR-4): absent or of any
+other class exits 2. `.git`,
 `node_modules`, `.nen` and `.claude` at the root are never walked; `paths.exclude`
 adds globs; a symlink is followed only inside the root.
 
-**The baseline** (`--baseline`) is `{ "findings": [{ path, rule, text, count }] }`,
-keyed by path, rule id and the finding's normalised text — never a line number.
-A `fail` finding the baseline holds reads clean; a row no finding uses any more
-is **stale** (red: remove it); with `--base`, a row the base's copy did not carry
-is **grown** (red: the baseline only shrinks). A rule id in `emptyBaseline` is
+**The baseline** (`--baseline`) is `{ "findings": [{ path, rule, text, count }] }`
+(plus `frozenAt` and `$`-keys; any other key, top-level or in a row, exits 2, and
+so does a repeated row key — one row per key, its count the total), keyed by
+path, rule id and the finding's normalised text — never a line number. A `fail`
+finding the baseline holds reads clean; a row no finding uses any more, or whose
+path the walk does not read (deleted, renamed, out of scope), is **stale** (red:
+remove it); with `--base` or `--base-baseline`, a row whose count exceeds the
+base copy's, summed per key, is **grown** (red: the baseline only shrinks). A rule id in `emptyBaseline` is
 refused in any baseline. `advisory` findings print and are never counted or
 baselined.
 
 **Usage**
 
 ```text
-nen canon lint --root <checkout> --rules <contract> [--baseline <file>] [--base <ref>] [--json]
+nen canon lint --root <checkout> [--rules <contract>] [--baseline <file>]
+               [--base <ref> | --base-baseline <file>] [--json]
 ```
+
+**The declared home: `canon.lint` in `nen/workflow.json`.** A repository that
+lints its canon declares the two paths once, so every caller — a CI step, a
+skill, `nen schema check` — reads the same files:
+
+```json
+{ "canon": { "lint": {
+  "rules": "contracts/prose.lint.json",
+  "baseline": "contracts/prose.lint.baseline.json",
+  "skillPaths": ["claude/skills/*/SKILL.md", "claude/agents/*.md", "claude/rules/*.md"]
+} } }
+```
+
+`rules` is required once `lint` is declared; `baseline` and `skillPaths` are
+optional; each path is repository-relative (absolute, empty or climbing `..`
+is refused by pointer). A flag wins over the block; `skillPaths` applies only
+when the contract declares none. A `nen/workflow.json` that is present and
+does not load exits 2: its `skillPaths` could move the verdict, so an unread
+policy is never "nothing declared". [`schema check`](#nen-schema-check) adds the
+row `nen/workflow.json#canon.lint` when the block is declared — the rules
+contract validated as `nen.prose-lint/v0.1` and the baseline's shape, with the
+readers this verb runs; a file absent, outside the root, not UTF-8 or invalid is
+a required FAIL naming it.
 
 **Arguments**
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `--root <checkout>` | yes | The canon checkout to lint. | `--repo <path>` is the same directory; both naming different ones exits 2. |
-| `--rules <contract>` | yes | The rules contract, relative to the root. | Never built in. Missing, unreadable, not JSON or of the wrong shape (a rule without a field its class needs included) exits 2. |
-| `--baseline <file>` | no | The shrink-only baseline, relative to the root. | Absent: every `fail` finding is new. Named and missing, or malformed, exits 2. |
-| `--base <ref>` | no | Lint only the files changed since `git merge-base <ref> HEAD` (working tree included), and refuse a baseline row the base's copy lacks. | The hanten form. A ref starting `-` exits 2; a git read that fails exits 2. |
+| `--rules <contract>` | unless `canon.lint.rules` is declared | The rules contract, relative to the root (an absolute path inside the root is read too). | Never built in. Neither flag nor block: usage, exit 2. Missing, unreadable, not JSON, a symlink leaving the root, or of the wrong shape (a rule without a field its class needs included) exits 2. |
+| `--baseline <file>` | no | The shrink-only baseline, relative to the root. | Default `canon.lint.baseline`. Neither: every `fail` finding is new. Named and missing, or malformed, exits 2. |
+| `--base <ref>` | no | Lint only the files changed since `git merge-base <ref> HEAD` (working tree included), and refuse a baseline row grown over the base's copy. | The hanten form. A base carrying no baseline prints `notice: <ref> carries no <baseline>; baseline growth is not checked` (and `notice` in `--json`), never a silent skip. A ref starting `-` exits 2; a git read that fails exits 2. |
+| `--base-baseline <file>` | no | The whole tree, with growth refused over `<file>`, the trusted base revision's baseline. No git read. | The CI form (Hatsu's `prose-ambiguity-check.yml` passes the trusted revision's copy). Missing or malformed exits 2. Given with `--base`: usage, exit 2. |
 
 **Output and exit codes** — one line per new finding, `path:line · <rule> · text`,
 then `baseline · <rule> · path · text — no longer found; remove the row` per stale
@@ -10955,7 +10990,9 @@ advisory rule). `--json` top-level keys: `contract` (`nen.canon.lint/v0.1`),
 `root`, `rules`, `baseline`, `base`, `files`, `exit`, `counts` (per rule id
 `{ total, baselined, new }`), `findings` (every `fail` finding,
 `{ path, line, rule, severity, text, inBaseline }`), `advisory` (the same without
-`inBaseline`), `staleBaseline`, `grownBaseline` (baseline rows). Exit **0** no
+`inBaseline`), `staleBaseline`, `grownBaseline` (baseline rows), `notice` (the
+`--base` notice, else `null`) — the guard's shape, with `rules` and `baseline`
+added and nen's own `contract` id. Exit **0** no
 `fail` finding outside the baseline and no stale or grown row; **1** at least one;
 **2** wiring — an unreadable or invalid contract, baseline, decisions, rulings or
 version file, an unlistable directory, an unreadable or non-UTF-8 file, a symlink
@@ -10963,26 +11000,34 @@ leaving the root or dangling, a failed git read — and every usage error. **A f
 the lint could not read is never a file it found clean**: nothing is printed on
 stdout under exit 2.
 
-Three deliberate differences from the guard: nen does not probe for a Hatsu
-checkout (the contract's own files are the root's credentials); a finding inside
-YAML frontmatter names the file's own line (the guard reports it one line
-early); and a cited file reached through a symlink that resolves outside the root
-is a `citation` finding (`leaves the root`), never read. Where the guard used built-in `claude/…` and `surfaces/` paths, the
-contract now says so: `skillPaths` (the files the marker limit and the reading
-rule apply to; absent, every linted file) and `paths.exclude`.
+Deliberate differences from the guard, none of which moves a verdict on Hatsu's
+committed contract and baseline: nen does not probe for a Hatsu checkout (the
+contract's own files are the root's credentials); rules dispatch on `class`, so
+a contract may renumber, and a class the contract does not use need not appear;
+`retired` is optional (default above); and the guard's built-in `claude/…` and
+`surfaces/` paths are data — `skillPaths` (the contract's, else `canon.lint`'s;
+neither, every linted file) and `paths.exclude`. A cited file reached through a
+symlink that resolves outside the root exits 2, as in the guard (SEC-7), and a
+JSON file that does not parse is named, never quoted.
+
+**Parity, checked 2026-10-23.** Over an export of Hatsu `main` at `1243b272`
+with `canon.lint` declared as above, `nen canon lint --repo <export> --json` and
+`node scripts/prose_ambiguity_check.mts --root <export> --json` agree on every
+fail and advisory finding, every count and the exit (0); so do the CI forms
+(`--rules <abs> --base-baseline <abs>`). Without `skillPaths` the verb applies
+`PL-12` to `docs/ROSTER.md` too (34 findings), which is why the block names it.
 
 **Example**
 
 ```bash
-nen canon lint --root ../hatsu --rules contracts/prose.lint.json --baseline contracts/prose.lint.baseline.json
+nen canon lint --repo ../hatsu
 ```
 ```text
-claude/skills/ten/SKILL.md:205 · PL-05 · Fixed in #154 last week.
-canon lint: 180 files · 1 new · 0 stale · 0 grown · PL-01 185/185b · PL-02 8/8b · PL-03 0/0b · PL-04 0/0b · PL-05 604/603b · PL-06 387/387b · PL-07 357a · PL-08 441a · PL-09 10a · PL-10 50a · PL-11 1/1b · PL-12 0/0b
+canon lint: 187 files · 0 new · 0 stale · 0 grown · PL-01 189/189b · PL-02 7/7b · PL-03 0/0b · PL-04 0/0b · PL-05 653/653b · PL-06 381/381b · PL-07 387a · PL-08 450a · PL-09 12a · PL-10 57a · PL-11 7/7b · PL-12 0/0b
 ```
-(exit 1; a real run over an export of Hatsu's `opus/kurapika/sdd-p5-prose-lint`
-tree with one bare reference planted — the unplanted tree reads `0 new` at exit 0,
-the guard's verdict and counts exactly)
+(exit 0; a real run over an export of Hatsu `main` at `1243b272` with the
+`canon.lint` block above added to its `nen/workflow.json` — the guard's counts
+exactly)
 
 ### `nen canon clause check`
 

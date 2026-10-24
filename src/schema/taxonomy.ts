@@ -45,6 +45,7 @@ import {
 } from "./workflow.js";
 import { describeDecisions, loadDecisions } from "./decisions.js";
 import { canonMirrorCheck } from "./canonmirror.js";
+import { insideRoot, LintWiringError, parseBaseline, parseLintContract, PROSE_LINT_SCHEMA } from "../canon/lint.js";
 import type { Runner } from "../seam/exec.js";
 import {
   COLORS_FILE,
@@ -521,6 +522,80 @@ function precedenceRestatementCheck(root: string): SchemaCheck | null {
   return row(false, true, new SchemaError(resolved.path, "precedenceRestatedIn", findings.join("; ")).message);
 }
 
+/**
+ * The `canon.lint` row (zheref/nen#481): the rules contract and the baseline
+ * the block names, validated with the very readers `nen canon lint` runs --
+ * the contract as `nen.prose-lint/v0.1` (every rule's class, severity, the
+ * keys its class needs, every pattern compiling) and the baseline's shape
+ * (rows of path, rule, text and count; no unknown key; one row per key; no
+ * row for a rule the contract never baselines). A FAIL-capable pointer row:
+ * a file absent, outside the root, not UTF-8 or invalid is a required FAIL
+ * naming it -- never a pass over a file it could not read. THE ROW APPEARS
+ * ONLY WHEN THE BLOCK IS DECLARED, so every other report is row for row the
+ * same.
+ */
+function canonLintCheck(root: string): SchemaCheck | null {
+  const resolved = resolveSchemaFile(root, WORKFLOW_FILE);
+  const row = (ok: boolean, required: boolean, detail: string): SchemaCheck => ({
+    file: `${resolved.relative}#canon.lint`,
+    path: resolved.path,
+    ok,
+    detail,
+    required,
+    legacy: false,
+    note: null,
+  });
+  let lint: { rules: string; baseline: string | null } | null;
+  try {
+    const loaded = loadWorkflow(root);
+    if (!loaded.present) return null;
+    lint = loaded.workflow.canon?.lint ?? null;
+  } catch {
+    return null; // the policy row says why it did not load
+  }
+  if (lint === null) return null;
+  let realRoot: string;
+  try {
+    realRoot = realpathSync(root);
+  } catch {
+    realRoot = root;
+  }
+  const read = (rel: string): string => {
+    const abs = insideRoot(root, realRoot, rel);
+    let bytes: Buffer;
+    try {
+      bytes = readFileSync(abs);
+    } catch (error) {
+      const code = error !== null && typeof error === "object" && "code" in error ? String((error as { code: unknown }).code) : "unreadable";
+      throw new LintWiringError(`${rel}: could not read (${code})`);
+    }
+    try {
+      return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+      throw new LintWiringError(`${rel} is not valid UTF-8`);
+    }
+  };
+  try {
+    let raw: unknown;
+    const text = read(lint.rules);
+    try {
+      raw = JSON.parse(text) as unknown;
+    } catch {
+      throw new LintWiringError(`${lint.rules} is not valid JSON`);
+    }
+    const contract = parseLintContract(raw, lint.rules);
+    let baselineDetail = "no baseline declared";
+    if (lint.baseline !== null) {
+      const rows = parseBaseline(read(lint.baseline), lint.baseline, contract.emptyBaseline);
+      baselineDetail = `baseline ${lint.baseline}: ${rows.length} row${rows.length === 1 ? "" : "s"}`;
+    }
+    return row(true, false, `rules ${lint.rules} (${PROSE_LINT_SCHEMA}): ${contract.rules.length} rule${contract.rules.length === 1 ? "" : "s"}; ${baselineDetail}`);
+  } catch (error) {
+    if (error instanceof LintWiringError) return row(false, true, new SchemaError(resolved.path, "canon.lint", error.message).message);
+    throw error;
+  }
+}
+
 function defaultTargetCheck(root: string): SchemaCheck {
   const resolved = resolveSchemaFile(root, WORKFLOW_FILE);
   const row = (ok: boolean, required: boolean, detail: string): SchemaCheck => ({
@@ -731,6 +806,8 @@ export function checkTaxonomy(options: CheckOptions = {}): CheckReport {
     idleCheck(root),
     // The paths `nen wc overlap` counts as touched by every effort (NN#488 AC-2).
     pointerCheck(root, "alwaysOverlaps", describeAlwaysOverlaps),
+    // The canon prose lint's rules contract and baseline (zheref/nen#481), only when declared.
+    ...[canonLintCheck(root)].filter((check): check is SchemaCheck => check !== null),
     // `nen/decisions.json` LAST OF THE nen/ FILES: newest file, optional, and read by the
     // stop verb and by every skill that would otherwise ask.
     decisionsCheck(root),

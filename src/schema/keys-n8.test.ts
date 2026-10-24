@@ -205,7 +205,7 @@ describe("nen/workflow.json idle (HR-5)", () => {
 
   it("refuses a near-miss key inside the block and at the root", () => {
     expect(() => parseWorkflow("<doc>", { idle: { decision: {} } })).toThrow(/An idle profile's three keys are/);
-    expect(() => parseWorkflow("<doc>", { idles: {} })).toThrow(/A workflow's twenty-one blocks are/);
+    expect(() => parseWorkflow("<doc>", { idles: {} })).toThrow(/A workflow's twenty-two blocks are/);
   });
 });
 

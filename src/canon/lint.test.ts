@@ -6,7 +6,7 @@
 // contract is Hatsu's own, copied as ./fixtures/prose.lint.json, so the verb is
 // proven against the file it will read.
 import { afterAll, describe, expect, it } from "vitest";
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -172,8 +172,17 @@ describe("nen canon lint -- every fail rule fires on a planted copy, by id", () 
     await planted("PL-11", "# P\n\n[NEEDS missing-argument: which base?]\n", /no OPEN-n/);
     await planted("PL-11", "# P\n\n[NEEDS missing-argument: a?] OPEN-1.\n\n[NEEDS missing-argument: b?] OPEN-2.\n\n[NEEDS missing-argument: c?] OPEN-3.\n\n[NEEDS missing-argument: d?] OPEN-4.\n", /over the limit of 3/);
     const root = base();
-    put(root, "claude/skills/plant/SKILL.md", "# P\n\n[NEEDS missing-configuration: is the cap a catalogue value?] OPEN-9 waits.\n[NEEDS ambiguous-intent: which reading?] (zheref/hatsu#9).\n");
+    put(root, "claude/skills/plant/SKILL.md", "# P\n\n[NEEDS missing-configuration: is the cap a catalogue value?] OPEN-9 waits.\n[NEEDS missing-maintainer-choice: which reading?] (zheref/hatsu#9).\n");
     await expectClean(root);
+    await planted("PL-11", "# P\n\n[NEEDS ambiguous-intent: which reading?] OPEN-1.\n", /row ambiguous-intent is a human gate/);
+  });
+
+  it("a markerRows entry naming a human-gate row is wiring (HR-4)", async () => {
+    const root = base();
+    const c = JSON.parse(readFileSync(join(root, "contracts/prose.lint.json"), "utf8")) as { markerRows: string[] };
+    c.markerRows.push("ambiguous-intent");
+    put(root, "contracts/prose.lint.json", JSON.stringify(c));
+    await expectWiring(root, /markerRows names ambiguous-intent, which is class human-gate/);
   });
 
   it("PL-12 fires on a reading cited as ruled; a reading named as one is clean and HR-2 never matches HR-20", async () => {
@@ -192,7 +201,7 @@ describe("nen canon lint -- advisory rules", () => {
     expect(r.code, r.stderr).toBe(0);
     const j = JSON.parse(r.stdout) as { contract: string; advisory: { rule: string }[]; counts: Record<string, { new: number }> };
     expect(j.contract).toBe("nen.canon.lint/v0.1");
-    expect(Object.keys(j)).toEqual(["contract", "root", "rules", "baseline", "base", "files", "exit", "counts", "findings", "advisory", "staleBaseline", "grownBaseline"]);
+    expect(Object.keys(j)).toEqual(["contract", "root", "rules", "baseline", "base", "files", "exit", "counts", "findings", "advisory", "staleBaseline", "grownBaseline", "notice"]);
     for (const rule of ["PL-07", "PL-08", "PL-09", "PL-10"]) expect(j.advisory.some((f): boolean => f.rule === rule), rule).toBe(true);
     expect(j.counts["PL-09"]?.new).toBe(0);
   });
@@ -234,14 +243,14 @@ describe("nen canon lint -- hostile cases", () => {
     await expectWiring(root, /symlink docs\/linked\.md leaves the root/);
   });
 
-  it("a citation through a symlink that resolves outside the root is a finding, never a read outside", async () => {
+  it("a citation through a symlink that resolves outside the root is wiring, never a read outside", async () => {
     const root = base();
     const outside = join(scratch, `outside-cited-${n}.md`);
     writeFileSync(outside, "# Outside\n\n## 1. Here\n");
     mkdirSync(join(root, "other"), { recursive: true });
     symlinkSync(outside, join(root, "other/linked.md")); // a directory the walk never enters
     put(root, "claude/skills/plant/SKILL.md", "# P\n\nSee [`x`](../../../other/linked.md) § 1.\n");
-    await expectFinding(root, "PL-04", /linked\.md — leaves the root/);
+    await expectWiring(root, /link \.\.\/\.\.\/\.\.\/other\/linked\.md in claude\/skills\/plant\/SKILL\.md resolves through a symlink leaving the root/);
   });
 
   it("an unparseable contract and a contract of the wrong shape are wiring", async () => {
@@ -354,9 +363,170 @@ describe("nen canon lint -- the ratchet", () => {
   });
 });
 
+describe("nen canon lint -- the guard's later cases (zheref/nen#481, Hatsu main 1243b272)", () => {
+  const gitIn = (root: string) => (...a: string[]): void => {
+    const r = spawnSync("git", ["-C", root, "-c", "user.name=f", "-c", "user.email=f@f", "-c", "commit.gpgsign=false", ...a], { encoding: "utf8" });
+    expect(r.status, r.stderr).toBe(0);
+  };
+
+  it("the CI form: --base-baseline refuses growth over the trusted copy with no git read, summed per key", async () => {
+    const root = base();
+    put(root, "claude/skills/plant/SKILL.md", "# P\n\nFixed in #154 last week.\n");
+    const j = JSON.parse((await lint(root, [], true)).stdout) as { findings: { path: string; rule: string; text: string }[] };
+    const rows = j.findings.map((f) => ({ path: f.path, rule: f.rule, text: f.text, count: 1 }));
+    put(root, "contracts/prose.lint.baseline.json", JSON.stringify({ findings: rows }));
+    const trusted = join(scratch, `trusted-${n}.json`);
+    writeFileSync(trusted, '{"findings":[]}\n');
+    const ci = await lint(root, ["--base-baseline", trusted]);
+    expect(ci.code, ci.stdout + ci.stderr).toBe(1);
+    expect(ci.stdout).toMatch(/added over .*trusted-\d+\.json; the baseline only shrinks/);
+    expect((await lint(root)).code).toBe(0);
+    writeFileSync(trusted, JSON.stringify({ findings: rows }));
+    put(root, "claude/skills/plant/SKILL.md", "# P\n\nFixed in #154 last week.\n\nFixed in #154 last week.\n");
+    put(root, "contracts/prose.lint.baseline.json", JSON.stringify({ findings: rows.map((r) => ({ ...r, count: 2 })) }));
+    expect((await lint(root, ["--base-baseline", trusted])).stdout).toMatch(/added over/);
+    put(root, "contracts/prose.lint.baseline.json", JSON.stringify({ findings: [...rows, ...rows] }));
+    await expectWiring(root, /repeats the row/, ["--base-baseline", trusted]);
+    await expectWiring(root, /--base-baseline .*missing/, ["--base-baseline", join(scratch, "nope.json")]);
+  });
+
+  it("--base and --base-baseline together are a usage error", async () => {
+    const r = await lint(base(), ["--base", "main", "--base-baseline", "x.json"]);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/give one/);
+  });
+
+  it("a row whose file the walk does not read is stale, with or without --base; a base with no baseline is said", async () => {
+    const root = base();
+    const git = gitIn(root);
+    git("init", "-q");
+    git("add", "-A");
+    git("commit", "-qm", "base");
+    git("branch", "fixture-scope");
+    put(root, "contracts/prose.lint.baseline.json", JSON.stringify({ findings: [{ path: "docs/deleted.md", rule: "PL-05", text: "x", count: 3 }] }));
+    for (const extra of [[], ["--base", "fixture-scope"]]) {
+      const st = await lint(root, extra);
+      expect(st.code, st.stdout + st.stderr).toBe(1);
+      expect(st.stdout).toMatch(/baseline · PL-05 · docs\/deleted\.md · x — no longer found/);
+    }
+    rmSync(join(root, "contracts/prose.lint.baseline.json"));
+    git("add", "-A");
+    git("commit", "-qm", "no baseline");
+    git("branch", "fixture-bare");
+    put(root, "contracts/prose.lint.baseline.json", '{"findings":[]}\n');
+    const bare = await lint(root, ["--base", "fixture-bare"]);
+    expect(bare.stdout).toMatch(/notice: fixture-bare carries no contracts\/prose\.lint\.baseline\.json; baseline growth is not checked/);
+    const json = JSON.parse((await lint(root, ["--base", "fixture-bare"], true)).stdout) as { notice: string | null };
+    expect(json.notice).toMatch(/carries no/);
+  });
+
+  it("QA-16: a baseline row or top level with an unexpected key is wiring; a PL-04 row is refused", async () => {
+    const root = base();
+    put(root, "contracts/prose.lint.baseline.json", JSON.stringify({ findings: [{ path: "a.md", rule: "PL-05", text: "#1", count: 1, extra: 1 }] }));
+    await expectWiring(root, /a row with an unknown key "extra"/);
+    put(root, "contracts/prose.lint.baseline.json", JSON.stringify({ findings: [], zzz: 1 }));
+    await expectWiring(root, /unknown top-level key "zzz"/);
+    put(root, "contracts/pl04.json", JSON.stringify({ findings: [{ path: "claude/skills/citer/SKILL.md", rule: "PL-04", text: "x — no such file", count: 1 }] }));
+    await expectWiring(root, /PL-04 is never baselined/, ["--baseline", "contracts/pl04.json"]);
+  });
+
+  it("SEC-7: a contract-named read through a symlink leaving the root is wiring, and a file is named, never quoted", async () => {
+    for (const rel of ["nen/zz.json", "nen/decisions.json", "contracts/prose.lint.baseline.json"]) {
+      const root = base();
+      const outside = join(scratch, `contract-leak-${n}.json`);
+      writeFileSync(outside, "SYNTHETIC_PLACEHOLDER\n");
+      rmSync(join(root, rel), { force: true });
+      symlinkSync(outside, join(root, rel));
+      const r = await lint(root);
+      expect(r.code, `${rel}\n${r.stderr}`).toBe(2);
+      expect(r.stderr).toMatch(new RegExp(`symlink ${rel.replace(/[.]/g, "\\.")} leaves the root`));
+      expect(r.stderr).not.toContain("SYNTHETIC");
+    }
+    const root = base();
+    put(root, "nen/zz.json", "SYNTHETIC_PLACEHOLDER\n");
+    const r = await lint(root);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/nen\/zz\.json is not valid JSON/);
+    expect(r.stderr).not.toContain("SYNTHETIC");
+  });
+
+  it("RETIRED: a list item ends at the next item at the same indent", async () => {
+    const root = base();
+    put(root, "docs/t.md", "# T\n\n1. **RETIRED.** The old step.\n2. The pin v0.1.0 is current; fixed in #12.\n");
+    const r = await lint(root);
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    expect(r.stdout).toMatch(/docs\/t\.md:4 · PL-03 · pin v0\.1\.0/);
+    expect(r.stdout).toMatch(/docs\/t\.md:4 · PL-05/);
+  });
+
+  it("quoted words: a quote inside a code span pairs nothing, and quotes pair within one line", async () => {
+    const root = base();
+    put(root, "docs/t.md", '# T\n\nUse `"` as the delimiter. See [gone](nowhere.md) and the pin v0.1.0 here. Then "x" ends.\n');
+    const r = await lint(root);
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    expect(r.stdout).toMatch(/ · PL-04 · nowhere\.md — no such file/);
+    expect(r.stdout).toMatch(/ · PL-03 · pin v0\.1\.0/);
+    put(root, "docs/u.md", '# U\n\nAn opening " and the pin v0.1.0\nhere, closed " on the next line.\n');
+    expect((await lint(root)).stdout).toMatch(/docs\/u\.md:3 · PL-03 · pin v0\.1\.0/);
+  });
+
+  it("slug: GitHub keeps `_` in a code span and drops emphasis underscores", async () => {
+    const root = base();
+    put(root, "docs/t.md", "# T\n\n## The `prose_size_check` lane\n\n## A _stressed_ word\n\nSee [a](#the-prose_size_check-lane) and [b](#a-stressed-word).\n");
+    await expectClean(root);
+    put(root, "docs/t.md", "# T\n\n## The `prose_size_check` lane\n\nSee [a](#the-prosesizecheck-lane).\n");
+    await expectFinding(root, "PL-04", /no anchor #the-prosesizecheck-lane/);
+  });
+
+  it("a RETIRED block is exempt only from retired.rules, and retired.rules naming no rule is wiring", async () => {
+    const root = base();
+    const c = JSON.parse(readFileSync(join(root, "contracts/prose.lint.json"), "utf8")) as { retired: { rules: string[] } };
+    c.retired.rules = ["PL-02", "PL-03", "PL-10"];
+    put(root, "contracts/prose.lint.json", JSON.stringify(c));
+    put(root, "docs/t.md", "# T\n\n> **RETIRED.** Fixed in #9.\n");
+    await expectFinding(root, "PL-05", /#9/);
+    c.retired.rules = ["PL-99"];
+    put(root, "contracts/prose.lint.json", JSON.stringify(c));
+    await expectWiring(root, /retired\.rules names PL-99, which is no rule/);
+  });
+
+  it("canon.lint in nen/workflow.json supplies --rules, --baseline and the skill paths", async () => {
+    const root = base();
+    put(root, "docs/plain.md", "# D\n\nThe push path is HR-2.\n");
+    const run = async (extra: readonly string[] = []): Promise<Run> => {
+      const out: string[] = [];
+      const err: string[] = [];
+      const io: Io = { out: (line): void => void out.push(line), err: (line): void => void err.push(line) };
+      const code = await runFamily(canonCommand, ["canon", "lint", "--repo", root, ...extra], null, false, io, defaultSeams());
+      return { code, stdout: out.join("\n"), stderr: err.join("\n") };
+    };
+    const none = await run();
+    expect(none.code).toBe(2);
+    expect(none.stderr).toMatch(/--rules <contract> is required, or declare nen\/workflow\.json canon\.lint\.rules/);
+    put(root, "nen/workflow.json", JSON.stringify({ canon: { lint: { rules: "contracts/prose.lint.json", baseline: "contracts/prose.lint.baseline.json" } } }));
+    const every = await run();
+    expect(every.code, every.stdout + every.stderr).toBe(1);
+    expect(every.stdout).toMatch(/docs\/plain\.md:3 · PL-12 · HR-2 is status reading/);
+    put(root, "nen/workflow.json", JSON.stringify({ canon: { lint: { rules: "contracts/prose.lint.json", baseline: "contracts/prose.lint.baseline.json", skillPaths: ["claude/skills/*/SKILL.md"] } } }));
+    const skills = await run();
+    expect(skills.code, skills.stdout + skills.stderr).toBe(0);
+    put(root, "claude/skills/plant/SKILL.md", "# P\n\nThe push path is HR-2.\n");
+    expect((await run()).stdout).toMatch(/plant\/SKILL\.md:3 · PL-12/);
+    put(root, "contracts/prose.lint.baseline.json", JSON.stringify({ findings: [{ path: "claude/skills/plant/SKILL.md", rule: "PL-12", text: "HR-2 is status reading", count: 1 }] }));
+    expect((await run()).code).toBe(0);
+    expect((await run(["--baseline", "contracts/missing.json"])).code).toBe(2);
+    put(root, "nen/workflow.json", "{ not json");
+    const broken = await run(["--rules", "contracts/prose.lint.json"]);
+    expect(broken.code).toBe(2);
+    expect(broken.stderr).toMatch(/nen\/workflow\.json did not load/);
+  });
+});
+
 describe("canon lint internals", () => {
   it("quoted words are blanked, newlines kept", () => {
     expect(exemptQuoted('a "b c" d\n“e”')).toBe("a       d\n   ");
+    expect(exemptQuoted('open " here\nclosed " there')).toBe('open " here\nclosed " there');
+    expect(exemptQuoted('`"` then "q"')).toBe('`"` then    ');
   });
 
   it("reads reading status from a Status column by header and from a (reading) token", () => {
