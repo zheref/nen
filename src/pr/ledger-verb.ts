@@ -145,8 +145,9 @@ function readProof(context: CommandContext, root: string): readonly ProofEntry[]
 
 /**
  * Every CALLER-SUPPLIED text in the slice, by field: the effort id, each phase's
- * name, surface, model, dial, note and step argv, each usage total's surface
- * and model, the findings document and the proof paths. The marker, the summary
+ * name, surface, model, dial, note and step verb and argv, each usage total's
+ * surface and model, the findings schema's `$id`, the findings document and the
+ * proof paths. The marker, the summary
  * line and the contract keys are nen's own words and are never in this list
  * (Bugbot on #518): the private-name guard and the secret scan judge what the
  * caller wrote, so nen's boilerplate can neither trip nor hide a hit.
@@ -160,13 +161,21 @@ function callerFields(slice: LedgerSlice): readonly { field: string; text: strin
       const value = phase[key];
       if (typeof value === "string") fields.push({ field: `${at}.${key}`, text: value });
     }
-    (phase.steps ?? []).forEach((step, stepAt): void => { fields.push({ field: `${at}.steps[${stepAt}].argv`, text: step.argv }); });
+    (phase.steps ?? []).forEach((step, stepAt): void => {
+      fields.push({ field: `${at}.steps[${stepAt}].verb`, text: step.verb });
+      fields.push({ field: `${at}.steps[${stepAt}].argv`, text: step.argv });
+    });
   });
   slice.usage.totals.forEach((total, index): void => {
     fields.push({ field: `usage.totals[${index}].surface`, text: total.surface });
     if (total.model !== null) fields.push({ field: `usage.totals[${index}].model`, text: total.model });
   });
-  if (slice.findings !== null) fields.push({ field: "findings.document", text: JSON.stringify(slice.findings.document, null, 2) });
+  if (slice.findings !== null) {
+    // The caller schema's `$id` is printed twice -- in the summary line and in
+    // the fence -- so it is the caller's text too (Nobunaga delta on #518).
+    if (slice.findings.schema.id !== null) fields.push({ field: "findings.schema.id", text: slice.findings.schema.id });
+    fields.push({ field: "findings.document", text: JSON.stringify(slice.findings.document, null, 2) });
+  }
   slice.proof.forEach((entry, index): void => { fields.push({ field: `proof[${index}].path`, text: entry.path }); });
   return fields;
 }

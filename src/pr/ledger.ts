@@ -209,9 +209,13 @@ export interface PrComment {
  */
 export const COMMENTS_QUERY = "query($owner:String!,$name:String!,$number:Int!,$after:String){repository(owner:$owner,name:$name){pullRequest(number:$number){comments(first:100,after:$after){pageInfo{hasNextPage endCursor}nodes{databaseId url body author{login} editor{login}}}}}}";
 
-/** One page's argv; `after` is the previous page's end cursor. */
+/**
+ * One page's argv; `after` is the previous page's end cursor. owner and name go
+ * as raw strings (`-f`): gh's typed `-F` would send an all-digit owner or
+ * repository name -- legal on GitHub -- as an Int (Nobunaga delta on #518).
+ */
 export function commentsArgv(target: Target, pr: number, after: string | null): readonly string[] {
-  return ["api", "graphql", "-f", `query=${COMMENTS_QUERY}`, "-F", `owner=${target.owner}`, "-F", `name=${target.repo}`, "-F", `number=${pr}`, ...(after === null ? [] : ["-f", `after=${after}`])];
+  return ["api", "graphql", "-f", `query=${COMMENTS_QUERY}`, "-f", `owner=${target.owner}`, "-f", `name=${target.repo}`, "-F", `number=${pr}`, ...(after === null ? [] : ["-f", `after=${after}`])];
 }
 
 /** Every conversation comment on the PR, with author and editor, page by page to the end. A failed page is a read error. */

@@ -266,3 +266,16 @@ describe("the private-name guard judges only the caller's text (Bugbot on #518)"
     expect(result.err).toMatch(/phases\[0\]\.note/);
   });
 });
+
+it("refuses at exit 4 a private name in the caller schema's $id, which the comment prints (Nobunaga delta on #518)", async () => {
+  const root = effortRepo();
+  writeFileSync(join(root, "findings.json"), JSON.stringify({ scopes: [] }));
+  writeFileSync(join(root, "id.schema.json"), JSON.stringify({ $id: "https://github.com/someone/ledger/blob/main/findings.schema.json", type: "object" }));
+  const out: string[] = [];
+  const err: string[] = [];
+  const io: Io = { out: (line): void => { out.push(line); }, err: (line): void => { err.push(line); } };
+  const seams = new ScriptedSeams([NOT_A_REPO, visibilityRow("zheref/nen", "public"), FULL_REACH_ROW, privateListRow(["someone/ledger"]), pull(), me, comments([])]);
+  const code = await runFamily(prCommand, [...POST, "--findings", "findings.json", "--findings-schema", "id.schema.json", "--dry-run"], root, false, io, seams);
+  expect(code).toBe(4);
+  expect(err.join("\n")).toMatch(/findings\.schema\.id/);
+});
