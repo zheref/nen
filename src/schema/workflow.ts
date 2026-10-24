@@ -1201,22 +1201,6 @@ function parseSections(path: string, value: unknown): Readonly<Record<string, Re
   return sections;
 }
 
-/**
- * `review.scopes` -- who reads which paths, validated for SHAPE only.
- *
- * SHAPE ONLY, AND THAT IS THE WHOLE POINT. `nen review scopes` classifies a
- * branch diff by these rows and reports which scopes it raised; it never
- * summons anybody, never decides whether a persona exists, and never reads a
- * budget as permission. Nen holds the row to being a row -- a persona, a tier,
- * a whole-number budget, at least one path -- because those are the fields the
- * verb reads, and everything beyond that is the consuming repository's own
- * business, preserved verbatim by `raw` like every other key in this file.
- *
- * AT LEAST ONE PATH, because a scope that claims nothing is a reviewer who can
- * never be raised: the row would sit in the file looking like policy and have
- * no effect any diff could produce, which is the silent-default failure this
- * module's near-miss rule exists to prevent one level up.
- */
 /** A persona name as the exclusion compares it: trimmed, case-folded. */
 const personaKey = (name: string): string => name.trim().toLowerCase();
 
@@ -1244,6 +1228,22 @@ function parseExcludedPersonas(path: string, value: unknown): readonly string[] 
   });
 }
 
+/**
+ * `review.scopes` -- who reads which paths, validated for SHAPE only.
+ *
+ * SHAPE ONLY, AND THAT IS THE WHOLE POINT. `nen review scopes` classifies a
+ * branch diff by these rows and reports which scopes it raised; it never
+ * summons anybody, never decides whether a persona exists, and never reads a
+ * budget as permission. Nen holds the row to being a row -- a persona, a tier,
+ * a whole-number budget, at least one path -- because those are the fields the
+ * verb reads, and everything beyond that is the consuming repository's own
+ * business, preserved verbatim by `raw` like every other key in this file.
+ *
+ * AT LEAST ONE PATH, because a scope that claims nothing is a reviewer who can
+ * never be raised: the row would sit in the file looking like policy and have
+ * no effect any diff could produce, which is the silent-default failure this
+ * module's near-miss rule exists to prevent one level up.
+ */
 function parseReview(path: string, value: unknown): ReviewPolicy {
   const raw = block(path, "review", value, REVIEW_KEYS, "A review policy's keys are");
   const excludedPersonas = parseExcludedPersonas(path, raw["excludedPersonas"]);
