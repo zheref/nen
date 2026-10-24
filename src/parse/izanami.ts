@@ -1212,6 +1212,13 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       // --run merges, and the plan form is not certified read-only here
       // either -- a watchable row for a merge verb is a claim nobody needs.
       merge: MUT("merges ONE pull request via gh pr merge under --release-unit or --delivery when --run is given; classified mutating in every spelling"),
+      // zheref/nen#510. post writes ONE comment (POST or PATCH) unless --dry-run,
+      // which still reads the PR, the login and every comment; read only reads,
+      // and writes the effort's phase ledger under --restore. The bare
+      // "ledger" key catches a missing or unknown action as mutating.
+      "ledger post": DRY("posts or edits ONE ledger comment via gh api unless --dry-run is given; --dry-run still reads the pull request, the login and its comments"),
+      "ledger read": GATED(["--restore"], "reads the pull request, the login and its comments over gh api; --restore additionally writes the effort's phase ledger"),
+      ledger: MUT("an action other than post or read is refused; classified mutating so an unknown spelling is never certified read-only"),
     },
   },
   quality: {
@@ -1278,6 +1285,9 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       start: DRY("writes the run manifest under the git common dir unless --dry-run is given"),
       append: DRY("reads the PR over gh pr view and records it in the run manifest unless --dry-run is given"),
       park: DRY("records a parked effort in the run manifest unless --dry-run is given"),
+      // zheref/nen#486 AC-5: reads the consumer's run manifest (never writes it)
+      // and every PR over gh pr view; writes nen's manifest unless --dry-run.
+      import: DRY("reads the consumer's run manifest and every PR over gh pr view, and writes the run manifest under the git common dir unless --dry-run is given"),
       verify: RO("reads the run manifest and every recorded PR over gh pr view"),
       budget: RO("reads the run manifest and the usage ledgers; a claim is a question and writes nothing"),
       // zheref/nen#493: a caller's run record under its XDG state directory.
@@ -1510,7 +1520,9 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
   // claim about somebody else's file.
   stop: {
     subcommands: {
-      clear: MUT("removes the .nen/last-stop.json marker -- a local delete, but a write"),
+      clear: MUT("removes the .nen/last-stop.json marker and per-gate markers (--gate, --effort, --all) -- a local delete, but a write"),
+      // zheref/nen#513: lists the per-gate markers and the single file; writes nothing.
+      list: RO("lists every unrung per-gate marker under the git common directory's .nen/marks/ and the single .nen/last-stop.json; writes nothing"),
       // `answer` IS A SUBCOMMAND WITH ITS OWN WRITE, so it must never fall to
       // the "*" row below: that row is gated on --mark alone and would certify
       // `nen stop answer --record ...` read-only while it reserves an id and
@@ -1521,7 +1533,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       answer: DRY("reserves an id under .nen/stop-ids/ and creates one record under .nen/stops/<effort>/ in the git common directory unless --dry-run is given"),
       "*": GATED(
         ["--mark"],
-        "renders the gate-stop banner and fires nothing itself; --mark additionally writes the .nen/last-stop.json marker a host hook reads",
+        "renders the gate-stop banner and fires nothing itself; --mark additionally writes the .nen/last-stop.json marker a host hook reads and its per-gate twin under the git common directory's .nen/marks/",
       ),
     },
   },

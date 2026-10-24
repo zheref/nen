@@ -322,6 +322,17 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     expect(classifyCommand("nen run append --id r1 --issue NN#1 --pr 2 --base main --kind delivery --head abcdef1").classification).toBe("mutating");
     expect(classifyCommand("nen run append --id r1 --issue NN#1 --pr 2 --base main --kind delivery --head abcdef1 --dry-run").classification).toBe("read-only");
     expect(classifyCommand("nen run verify --id r1 --target o/r").classification).toBe("read-only");
+    // zheref/nen#486 AC-5, #513, #510: the N-B stack's verbs each have a row.
+    expect(classifyCommand("nen run import --id 0123456789abcdef0123456789abcdef --repo .").classification).toBe("mutating");
+    expect(classifyCommand("nen run import --id 0123456789abcdef0123456789abcdef --repo . --dry-run").classification).toBe("read-only");
+    expect(classifyCommand("nen stop list --repo .").classification).toBe("read-only");
+    expect(classifyCommand("nen stop clear --gate G5 --effort a --repo .").classification).toBe("mutating");
+    expect(classifyCommand("nen stop clear --all --repo .").classification).toBe("mutating");
+    expect(classifyCommand("nen pr ledger post --target o/r --pr 1 --effort a").classification).toBe("mutating");
+    expect(classifyCommand("nen pr ledger post --target o/r --pr 1 --effort a --dry-run").classification).toBe("read-only");
+    expect(classifyCommand("nen pr ledger read --target o/r --pr 1 --effort a").classification).toBe("read-only");
+    expect(classifyCommand("nen pr ledger read --target o/r --pr 1 --effort a --restore").classification).toBe("mutating");
+    expect(classifyCommand("nen pr ledger bogus --target o/r --pr 1").classification).not.toBe("read-only");
     expect(classifyCommand("nen run budget --id r1 --claim --max-minutes 5 --max-tokens 9").classification).toBe("read-only");
     expect(classifyCommand("nen wc overlap --efforts a,b --repo .").classification).toBe("read-only");
     expect(classifyCommand("nen stage check --exclusive --target o/r --issue 7").classification).toBe("read-only");
@@ -909,6 +920,8 @@ describe("write-flag-gated rows -- coupled to what ../cli/args.ts accepts (#31 r
     "classify install": "nen classify install --taxonomy t.json --repo .",
     "direct resolve": "nen direct resolve --registry r.json --taxonomy t.json --repo . --lang a --job b --kind product",
     "epic next-wave": "nen epic next-wave --body-file b.md",
+    // zheref/nen#510: read writes the phase ledger only under --restore.
+    "pr ledger read": "nen pr ledger read --target o/r --pr 1 --effort a",
     "runner plan": "nen runner plan --target o/r --pool p --machine-code NZ --count 1",
     // #340: `--target` is mandatory (a write verb never falls back to a remote).
     "runner relabel": "nen runner relabel --target o/r --pool p",
