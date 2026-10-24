@@ -114,6 +114,15 @@ describe("nen spec converge", () => {
     expect((check.json()["findings"] as { rule: string }[]).map((finding) => finding.rule)).not.toContain("stale-without-citation");
   });
 
+  it("tags a convergence row with the member's platform from families[], else its code", async () => {
+    const w = world();
+    writeFileSync(join(w.spec, "nen", "repos.json"), JSON.stringify({ consumers: [], product_codes: { FX: MEMBER_SLUG }, families: [{ name: "fixture-family", spec: { repo: "fixture-owner/fixture-spec" }, members: [{ code: "FX", platform: "android" }] }] }));
+    const next = commit(w.member, { "app/List.kt": `new 1\n${numbered("list", 30)}` });
+    const result = await run(w, inventoryAt(next), "--write");
+    expect(result.json()["action"]).toBe("written");
+    expect(read(w, "tasks.md")).toContain(`- [ ] T001 [platform:android] [partial] FR-001 — 1 moved at ${next.slice(0, 12)}`);
+  });
+
   it("names new rows in a cited directory as unrequested, against the folder's last capture", async () => {
     const w = world();
     const next = commit(w.member, { "app/Search.kt": "x\n" });
