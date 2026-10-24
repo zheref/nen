@@ -458,6 +458,9 @@ function pointerCheck(root: string, pointer: string, describe: (workflow: Workfl
 // override is printed escaped, never raw.
 const DEFAULT_TARGET_POINTER = "deploy.defaultTarget";
 
+/** The largest file `precedenceRestatedIn` may name: a prose page, never a dump (4 MiB). */
+export const RESTATEMENT_MAX_BYTES = 4 * 1024 * 1024;
+
 /**
  * The `precedence` restatement row (zheref/nen#474, Hatsu HR-1): every file
  * `precedenceRestatedIn` names, read and held to the array. A FAIL-capable
@@ -468,9 +471,6 @@ const DEFAULT_TARGET_POINTER = "deploy.defaultTarget";
  * APPEARS ONLY WHEN THE KEY IS DECLARED, so the report a repository without it
  * reads is unchanged row for row.
  */
-/** The largest file `precedenceRestatedIn` may name: a prose page, never a dump (4 MiB). */
-export const RESTATEMENT_MAX_BYTES = 4 * 1024 * 1024;
-
 function precedenceRestatementCheck(root: string): SchemaCheck | null {
   const resolved = resolveSchemaFile(root, CONTRACT_FILE);
   const row = (ok: boolean, required: boolean, detail: string): SchemaCheck => ({
