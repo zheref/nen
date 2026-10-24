@@ -115,10 +115,12 @@ usage:
       nen/workflow.json -- in CI the tree is the head -- so --baseline and
       --skill-paths <globs> (comma-separated; the paths the marker limit and
       the reading rule apply to when the contract declares no skillPaths;
-      absent, every linted path) are flags. A --rules path outside the root
-      is the caller's own file, read as named like --base-baseline; inside
-      the root (and always for canon.lint.rules) a symlink leaving the root
-      is wiring. --repo names the same directory as --root.
+      absent, every linted path) are flags. A relative --rules resolves
+      against --root; one whose real location is outside the root is the
+      caller's own file, read as named (the sibling-checkout CI form). One
+      that reaches into the root under any spelling, and canon.lint.rules
+      always, is held there: a symlink leaving the root is wiring. --repo
+      names the same directory as --root.
       Exit 0 nothing new, stale or grown; 1 at least one, each printed
       'path:line · <rule> · text'; 2 wiring (an unreadable or invalid
       contract, baseline or file, a symlink leaving the root, a failed git
