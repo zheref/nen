@@ -468,10 +468,22 @@ describe("nen canon lint -- the guard's later cases (zheref/nen#481, Hatsu main 
       const code = await runFamily(canonCommand, argv, null, false, io, defaultSeams());
       return { code, stdout: out.join("\n"), stderr: err.join("\n") };
     };
-    for (const rules of [join(realpathSync(root), "contracts/prose.lint.json"), join(alias, "contracts/prose.lint.json"), into]) {
+    // A ROOT-RELATIVE NAME IN THE REFUSAL, ON EVERY HOST (ubuntu red on
+    // zheref/nen#527 from #528): the root's absolute spelling takes the
+    // lexical branch, which counts from the root as given; the others take the
+    // real-path hop, which counts from the real root. Here the two agree, since
+    // no directory inside the root is a symlink; through one they would name
+    // the same file by different root-relative paths. On
+    // Linux /tmp is its own realpath, so the realpath spelling IS the absolute
+    // one and is folded into it rather than run twice; the symlinked root and
+    // the link into the root still cover the hop branch there.
+    const absolute = join(root, "contracts/prose.lint.json");
+    const viaRealpath = join(realpathSync(root), "contracts/prose.lint.json");
+    const spellings = [absolute, ...(viaRealpath === absolute ? [] : [viaRealpath]), join(alias, "contracts/prose.lint.json"), into];
+    for (const rules of spellings) {
       const r = await run(rules);
       expect(r.code, `${rules}\n${r.stdout}${r.stderr}`).toBe(2);
-      expect(r.stderr).toMatch(/symlink contracts\/prose\.lint\.json leaves the root/);
+      expect(r.stderr, rules).toMatch(/: symlink contracts\/prose\.lint\.json leaves the root/);
       expect(r.stdout).toBe("");
     }
     expect((await run(join(trustedDir, "prose.lint.json"))).code).toBe(0);
@@ -542,6 +554,30 @@ describe("nen canon lint -- the guard's later cases (zheref/nen#481, Hatsu main 
     expect(r.code).toBe(2);
     expect(r.stderr).toMatch(/nen\/zz\.json is not valid JSON/);
     expect(r.stderr).not.toContain("SYNTHETIC");
+    // canon.lint.rules naming an in-root symlink that leaves the root (zheref/nen#529):
+    // relative, the read is refused with the root-relative name; absolute, the
+    // schema refuses the path by pointer before anything is read.
+    const declared = base();
+    const leak = join(scratch, `declared-leak-${n}.json`);
+    copyFileSync(CONTRACT, leak);
+    rmSync(join(declared, "contracts/prose.lint.json"));
+    symlinkSync(leak, join(declared, "contracts/prose.lint.json"));
+    const runDeclared = async (rules: string): Promise<Run> => {
+      put(declared, "nen/workflow.json", JSON.stringify({ canon: { lint: { rules } } }));
+      const out: string[] = [];
+      const err: string[] = [];
+      const io: Io = { out: (line): void => void out.push(line), err: (line): void => void err.push(line) };
+      const code = await runFamily(canonCommand, ["canon", "lint", "--root", declared], null, false, io, defaultSeams());
+      return { code, stdout: out.join("\n"), stderr: err.join("\n") };
+    };
+    const relativeDeclared = await runDeclared("contracts/prose.lint.json");
+    expect(relativeDeclared.code, relativeDeclared.stderr).toBe(2);
+    expect(relativeDeclared.stderr).toMatch(/: symlink contracts\/prose\.lint\.json leaves the root/);
+    expect(relativeDeclared.stdout).toBe("");
+    const absoluteDeclared = await runDeclared(join(declared, "contracts/prose.lint.json"));
+    expect(absoluteDeclared.code, absoluteDeclared.stderr).toBe(2);
+    expect(absoluteDeclared.stderr).toMatch(/at canon\.lint\.rules, .*never empty, absolute or climbing/);
+    expect(absoluteDeclared.stdout).toBe("");
   });
 
   it("RETIRED: a list item ends at the next item at the same indent", async () => {

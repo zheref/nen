@@ -760,7 +760,14 @@ export interface LintOptions {
  */
 function rulesPath(root: string, realRoot: string, rel: string, callerNamed: boolean): string {
   const abs = resolve(root, rel);
-  if (!callerNamed || abs === root || abs.startsWith(root + sep)) return insideRoot(root, realRoot, rel);
+  // A ROOT-RELATIVE NAME IN THE REFUSAL (ubuntu red on zheref/nen#527 from
+  // #528): a path lexically inside the root is checked under its spelling
+  // relative to the root as given, so `symlink <path> leaves the root` never
+  // names an absolute path and does not change with the host's /tmp. The
+  // real-path hop below counts from the real root instead; through a
+  // directory symlink inside the root the two may name one file differently.
+  if (abs.startsWith(root + sep)) return insideRoot(root, realRoot, rootRelative(root, abs));
+  if (!callerNamed || abs === root) return insideRoot(root, realRoot, rel);
   let hop = abs;
   for (let depth = 0; depth < 40; depth++) {
     let realDir: string;
