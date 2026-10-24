@@ -516,9 +516,29 @@ describe("nen canon lint -- the guard's later cases (zheref/nen#481, Hatsu main 
     expect((await run()).code).toBe(0);
     expect((await run(["--baseline", "contracts/missing.json"])).code).toBe(2);
     put(root, "nen/workflow.json", "{ not json");
-    const broken = await run(["--rules", "contracts/prose.lint.json"]);
+    const broken = await run();
     expect(broken.code).toBe(2);
     expect(broken.stderr).toMatch(/nen\/workflow\.json did not load/);
+    // An explicit --rules reads no POLICY from the tree: the file is still read
+    // as the contract's own declaredValues ("nen/*.json"), never as canon.lint.
+    const explicitRun = await run(["--rules", "contracts/prose.lint.json", "--baseline", "contracts/prose.lint.baseline.json"]);
+    expect(explicitRun.code).toBe(2);
+    expect(explicitRun.stderr).toMatch(/nen\/workflow\.json is not valid JSON/);
+    expect(explicitRun.stderr).not.toMatch(/did not load/);
+  });
+
+  it("SEC-7 (Feitan F1 on #526): a head canon.lint block cannot change an explicit --rules verdict; --skill-paths is the flag", async () => {
+    const root = base();
+    put(root, "claude/skills/plant/SKILL.md", "# P\n\nThe push path is HR-2.\n");
+    const before = await lint(root, ["--skill-paths", "claude/skills/*/SKILL.md"], false, false);
+    expect(before.stdout).toMatch(/plant\/SKILL\.md:3 · PL-12/);
+    put(root, "nen/workflow.json", JSON.stringify({ canon: { lint: { rules: "contracts/prose.lint.json", skillPaths: ["nowhere/*.md"] } } }));
+    const after = await lint(root, [], false, true);
+    expect(after.code, after.stdout + after.stderr).toBe(1);
+    expect(after.stdout).toMatch(/plant\/SKILL\.md:3 · PL-12/);
+    const narrowed = await lint(root, ["--skill-paths", "nowhere/*.md"], false, true);
+    expect(narrowed.stdout).not.toMatch(/PL-12 · HR-2/);
+    expect((await lint(root, ["--skill-paths", ","], false, true)).code).toBe(2);
   });
 });
 
@@ -527,6 +547,14 @@ describe("canon lint internals", () => {
     expect(exemptQuoted('a "b c" d\n“e”')).toBe("a       d\n   ");
     expect(exemptQuoted('open " here\nclosed " there')).toBe('open " here\nclosed " there');
     expect(exemptQuoted('`"` then "q"')).toBe('`"` then    ');
+    expect(exemptQuoted('"a" "b"\n"c"')).toBe("       \n   ");
+  });
+
+  it("blanks 40,000 quotations in one paragraph in linear time (Feitan F3 on #526)", () => {
+    const text = '"q" '.repeat(40_000);
+    const t0 = Date.now();
+    expect(exemptQuoted(text).trim()).toBe("");
+    expect(Date.now() - t0).toBeLessThan(2_000);
   });
 
   it("reads reading status from a Status column by header and from a (reading) token", () => {

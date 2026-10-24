@@ -491,6 +491,15 @@ describe("mergeDelivery -- criteria coverage and closing links (zheref/nen#479 A
     expect(outcome.lines).toContain("  BLOCKING zheref/example#12/AC-2: missing-row (no verify row names AC-2)");
   });
 
+  it("a control character in a quoted verify row reaches no transcript line raw (Feitan F2 on #526)", async () => {
+    const body = verify("| AC-1 | missing | x \u001b[2K\u001b[1A\u001b]8;;https://evil.example\u0007 |\n| AC-2 | satisfied | b |\n");
+    const outcome = await run(tmpRoot(), [...script({ pr: prOnceCall({ body }) }), issueCall(ISSUE)]);
+    expect(outcome.report.criteriaOk).toBe(false);
+    const blocking = outcome.lines.filter((line): boolean => line.includes("AC-1: missing"));
+    expect(blocking.length).toBe(1);
+    for (const line of outcome.lines) expect(line).not.toMatch(/[\u0000-\u001f\u007f]/);
+  });
+
   it("a closing issue that cannot be read fails both gates, never passes them", async () => {
     const outcome = await run(tmpRoot(), [...script({ pr: prOnceCall({ body: verify("| AC-1 | satisfied | a |\n") }) }), { match: "gh api repos/zheref/example/issues/12", result: { code: 1, stderr: "HTTP 502" } }]);
     expect(outcome.report.criteriaOk).toBe(false);

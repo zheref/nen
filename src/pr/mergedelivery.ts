@@ -70,6 +70,7 @@ import type { Target } from "../github/target.js";
 import { closingLinksConjunct, ConvergeReadError, convergeInputFromView, criteriaConjunct } from "./converge.js";
 import { DEFAULT_COVERAGE_POLICY, type CoveragePolicy } from "../issue/criteria.js";
 import type { IssueSectionsCatalogue } from "../issue/shape.js";
+import { plainLine } from "../cli/plain.js";
 
 export const MERGE_DELIVERY_CONTRACT = "nen.pr.merge-delivery/v0.1";
 
@@ -182,9 +183,11 @@ function runConvergenceGates(options: MergeDeliveryOptions, target: Target, prNu
     const input = convergeInputFromView(options.seams, target, prNumber, prOnce as unknown as Record<string, unknown>, options.catalogue ?? null, defaultBranch);
     const criteria = criteriaConjunct(input, options.policy ?? DEFAULT_COVERAGE_POLICY);
     const links = closingLinksConjunct(input, target);
+    // PLAIN AT THE BOUNDARY (Feitan F2 on zheref/nen#526): these lines quote
+    // the pull request's body, text this merge did not write.
     return [
-      { name: criteria.name, ok: criteria.ok, lines: criteria.lines },
-      { name: links.name, ok: links.ok, lines: links.lines },
+      { name: criteria.name, ok: criteria.ok, lines: criteria.lines.map(plainLine) },
+      { name: links.name, ok: links.ok, lines: links.lines.map(plainLine) },
     ];
   } catch (error) {
     if (error instanceof ConvergeReadError) return failed(redactRemoteCredentials(error.message));

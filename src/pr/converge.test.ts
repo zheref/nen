@@ -66,8 +66,28 @@ describe("nen pr converge", () => {
     expect((JSON.parse(strict.out) as { blocking: string[] }).blocking).toEqual(["o/n#12/AC-2: no evidence"]);
     const dir = mkdtempSync(join(tmpdir(), "nen-converge-"));
     writeFileSync(join(dir, "cat.json"), JSON.stringify({ sections: [{ id: "ac", title: "Acceptance criteria", rows: { prefix: "AC" } }], kinds: { a: ["ac"] }, coverage: { evidence: "optional" } }));
-    const lenient = await run(prCommand, ["pr", "converge", "--target", "o/n", "--pr", "5", "--requirements-from", "cat.json"], [view(body, [ref(12)]), issueRead(12, ISSUE_BODY)], { repoFlag: dir });
+    const lenient = await run(prCommand, ["pr", "converge", "--target", "o/n", "--pr", "5", "--catalogue", "cat.json"], [view(body, [ref(12)]), issueRead(12, ISSUE_BODY)], { repoFlag: dir });
     expect(lenient.code).toBe(0);
+    // --requirements-from stays a deprecated alias on this verb, said on stderr (Nobunaga 2 on #526).
+    const alias = await run(prCommand, ["pr", "converge", "--target", "o/n", "--pr", "5", "--requirements-from", "cat.json"], [view(body, [ref(12)]), issueRead(12, ISSUE_BODY)], { repoFlag: dir });
+    expect(alias.code).toBe(0);
+    expect(alias.err).toMatch(/deprecated alias of --catalogue/);
+    const both = await run(prCommand, ["pr", "converge", "--target", "o/n", "--pr", "5", "--catalogue", "cat.json", "--requirements-from", "cat.json"], [], { repoFlag: dir });
+    expect(both.code).toBe(2);
+  });
+
+  it("--composite: a read that did not finish is exit 3, stdout empty -- never 1, never ready (Nobunaga 4 on #526)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-converge-"));
+    writeFileSync(join(dir, "req.json"), JSON.stringify([{ name: "verify", pattern: "^## Verify$" }]));
+    const result = await run(
+      prCommand,
+      ["pr", "converge", "--target", "o/n", "--pr", "5", "--composite", "--require-head", "a".repeat(40), "--body-requirements", "req.json"],
+      [{ match: VIEW, result: { code: 1, stderr: "HTTP 502" } }],
+      { repoFlag: dir },
+    );
+    expect(result.code).toBe(3);
+    expect(result.out).toBe("");
+    expect(result.err).toMatch(/could not read/);
   });
 
   it("exits 1 on an unmatched row, a malformed row, unrequested on a criterion, and a none row with a problem", async () => {

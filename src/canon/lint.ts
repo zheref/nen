@@ -151,8 +151,18 @@ const wiring = (message: string): never => {
   throw new LintWiringError(message);
 };
 
+/** The largest file the lint reads (Feitan F3): a larger one is wiring, never read slowly or skipped. */
+export const MAX_LINT_FILE_BYTES = 4 * 1024 * 1024;
+
 function readUtf8(abs: string, rel: string): string {
   let buffer: Buffer;
+  let size = 0;
+  try {
+    size = statSync(abs).size;
+  } catch (error) {
+    return wiring(`cannot read ${rel}: ${(error as Error).message}`);
+  }
+  if (size > MAX_LINT_FILE_BYTES) return wiring(`${rel} is larger than ${MAX_LINT_FILE_BYTES} bytes; the lint reads no file that large`);
   try {
     buffer = readFileSync(abs);
   } catch (error) {
@@ -184,16 +194,21 @@ function readJson(abs: string, rel: string): unknown {
 export function insideRoot(root: string, realRoot: string, rel: string): string {
   const abs = resolve(root, rel);
   if (abs !== root && !abs.startsWith(root + sep)) return wiring(`${rel} leaves the root`);
+  let link: boolean;
   try {
-    lstatSync(abs);
+    link = lstatSync(abs).isSymbolicLink();
   } catch {
     return abs;
   }
   let real = "";
   try {
     real = realpathSync(abs);
-  } catch {
-    return wiring(`symlink ${rel} is dangling`);
+  } catch (error) {
+    // "Dangling" only for a real symlink; any other realpath failure (an
+    // unreadable file or parent on some hosts) is named by its own code.
+    if (link) return wiring(`symlink ${rel} is dangling`);
+    const code = error !== null && typeof error === "object" && "code" in error ? String((error as { code: unknown }).code) : "unreadable";
+    return wiring(`cannot read ${rel}: ${code}`);
   }
   if (real !== realRoot && !real.startsWith(realRoot + sep)) return wiring(`symlink ${rel} leaves the root`);
   return abs;
@@ -355,15 +370,22 @@ export function walk(root: string, realRoot: string, include: readonly string[],
  */
 export function exemptQuoted(text: string): string {
   const probe = text.replace(/`[^`\n]*`/g, (span): string => " ".repeat(span.length));
-  let out = text;
-  for (const re of [/"[^"\n]{1,600}"/g, /“[^”\n]{1,600}”/g]) {
-    for (const m of probe.matchAll(re)) {
-      const start = m.index;
-      const end = start + m[0].length;
-      out = out.slice(0, start) + out.slice(start, end).replace(/[^\n]/g, " ") + out.slice(end);
-    }
+  // LINEAR (Feitan F3 on zheref/nen#526): spans are collected, then the text
+  // is rebuilt in ONE pass -- never re-sliced once per quotation.
+  const spans: [number, number][] = [];
+  for (const re of [/"[^"\n]{1,600}"/g, /“[^”\n]{1,600}”/g]) for (const m of probe.matchAll(re)) spans.push([m.index, m.index + m[0].length]);
+  if (spans.length === 0) return text;
+  spans.sort((a, b): number => a[0] - b[0]);
+  const parts: string[] = [];
+  let at = 0;
+  for (const [start, end] of spans) {
+    const from = Math.max(start, at);
+    if (end <= from) continue;
+    parts.push(text.slice(at, from), text.slice(from, end).replace(/[^\n]/g, " "));
+    at = end;
   }
-  return out;
+  parts.push(text.slice(at));
+  return parts.join("");
 }
 
 interface Ctx {

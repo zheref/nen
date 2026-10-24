@@ -160,8 +160,8 @@ nen pr body-check --body-from <path> [--requirements-from <path> | --base <ref>]
 nen pr sections resolve --catalogue <path> --kind <kind> --family <family> [--with a,b] [--overrides <workflow.json>] [--json]
 nen pr sections family --taxonomy <path> --catalogue <path> --jobs <a,b> [--json]
 nen pr fetch --target <owner/name> --pr <n>
-nen pr converge --target <owner/name> --pr <n> [--requirements-from <catalogue.json>] [--require-head <sha>] [--json]
-nen pr converge --target <owner/name> --pr <n> --composite --require-head <sha> --body-requirements <path> [--requirements-from <catalogue.json>] [--json]
+nen pr converge --target <owner/name> --pr <n> [--catalogue <catalogue.json>] [--require-head <sha>] [--json]
+nen pr converge --target <owner/name> --pr <n> --composite --require-head <sha> --body-requirements <path> [--catalogue <catalogue.json>] [--json]
 nen pr next-blocker --target <owner/name> --pr <n> --repo <path> [--reviewers a,b] [--policy bounded|strict] [--delivery-pr] [--gates <path>] [--requirements-from <path>]
 nen pr cascade-main --repo <path> [--trunk main] [--no-push] [--dry-run]
 nen pr retarget --target <owner/name> --pr <n> --base <branch> [--dry-run]
@@ -392,7 +392,9 @@ body-check:
                               --catalogue <path> gives the issue-sections
                               catalogue (prefix, sections, 'coverage').
                               Local files only, as ever; live reads are
-                              'pr converge'. --json adds 'criteria'.
+                              'pr converge'. One issue per run: several
+                              closing issues are 'pr converge''s job.
+                              --json adds 'criteria'.
   --requirements-from <path>  A JSON array of { name, pattern } -- this
                               repository's own template convention, never a
                               literal shipped here.
@@ -431,7 +433,9 @@ converge:
   <evidence> |', where <criterion> is AC-{n}, <CODE>#<N>/AC-{n},
   <owner/name>#<N>/AC-{n}, #<N>/AC-{n} or none, and <word> is satisfied,
   partial, missing, contradicts or unrequested. Criteria are read as 'nen
-  issue criteria' reads them; --requirements-from <catalogue.json> gives the
+  issue criteria' reads them; --catalogue <catalogue.json> (deprecated alias
+  here: --requirements-from, which on body-check, next-blocker and merge
+  names the body requirements) gives the
   issue-sections catalogue (its acceptance prefix and section) and an
   optional 'coverage' block (blocking words, the none word, evidence
   required or optional) -- with none, the defaults are AC rows anywhere in
@@ -457,8 +461,8 @@ converge:
   links (into the default branch, every body closing keyword is a GitHub
   closing link and every GitHub closing link is named in the body; on
   another base, read from the body) and the criteria coverage. Exit 0 all
-  four hold; 1 any does not, or any read did not finish or was at another
-  head (no verdict, stdout empty). 'pr merge --delivery' gates on the same
+  four hold; 1 any does not; 3 any read did not finish or was at another
+  head (no verdict, stdout empty) -- could-not-look has its own exit here. 'pr merge --delivery' gates on the same
   criteria and links conjuncts. --json: '{ contract, composite: true, target,
   pr, url, headSha, requiredHead, base, closingSource, ready, conjuncts: [{
   name, ok, lines }], blocking }'. Otherwise --json: '{
@@ -1202,7 +1206,7 @@ export const PR_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   "body-check": { values: ["body-from", "requirements-from", "base", "max", "prose-budget", "criteria", "criteria-from", "criteria-issue", "catalogue"], booleans: ["exact"] },
   sections: { values: ["catalogue", "kind", "family", "with", "overrides", "taxonomy", "jobs"] },
   fetch: { values: ["target", "pr"] },
-  converge: { values: ["target", "pr", "requirements-from", "require-head", "body-requirements"], booleans: ["composite"] },
+  converge: { values: ["target", "pr", "catalogue", "requirements-from", "require-head", "body-requirements"], booleans: ["composite"] },
   "next-blocker": { values: ["target", "pr", "reviewers", "gates", "policy", "requirements-from"], booleans: ["delivery-pr"] },
   "cascade-main": { values: ["trunk"], booleans: ["no-push", "dry-run"] },
   retarget: { values: ["target", "pr", "base"], booleans: ["dry-run"] },
@@ -1512,7 +1516,14 @@ function readCriteriaCatalogue(context: CommandContext, flag: string, root: stri
 function convergeVerb(context: CommandContext): number | Promise<number> {
   const target = requireTarget(context);
   const prNumber = requirePr(context);
-  const { catalogue, policy } = readCriteriaCatalogue(context, "requirements-from");
+  // `--catalogue` names the issue-sections catalogue here as on body-check and
+  // merge (Nobunaga 2 on zheref/nen#526); `--requirements-from` is kept as a
+  // DEPRECATED alias on this verb only, said on stderr, and both is refused.
+  const catalogueFlag = context.args.values["catalogue"] !== undefined;
+  const aliasFlag = context.args.values["requirements-from"] !== undefined;
+  if (catalogueFlag && aliasFlag) throw new VerbUsageError("--catalogue and --requirements-from both name the issue-sections catalogue on 'pr converge'; give --catalogue (--requirements-from is its deprecated alias here).");
+  if (aliasFlag) context.io.err("nen pr converge: --requirements-from is a deprecated alias of --catalogue on this verb (on body-check, next-blocker and merge it names the body requirements); pass --catalogue.");
+  const { catalogue, policy } = readCriteriaCatalogue(context, aliasFlag ? "requirements-from" : "catalogue");
   const requireHead = context.args.values["require-head"];
   if (requireHead !== undefined && !/^[0-9a-f]{40}([0-9a-f]{24})?$/i.test(requireHead)) {
     throw new VerbUsageError(`--require-head '${requireHead}' is not a full commit SHA (40 or 64 hex characters).`);
@@ -1574,6 +1585,9 @@ function convergeVerb(context: CommandContext): number | Promise<number> {
   return blocking.length > 0 ? 1 : 0;
 }
 
+/** `pr converge --composite` could not read (or read at another head): no verdict. */
+export const EXIT_COMPOSITE_UNREAD = 3;
+
 /**
  * `pr converge --composite` (zheref/nen#483 AC-1): readiness, the body check,
  * the closing-issue links and the criteria coverage, all at the pinned head.
@@ -1602,8 +1616,10 @@ async function convergeCompositeVerb(
     verdict = await convergeComposite({ seams: context.seams, target, prNumber, requireHead, requirements: raw, catalogue, policy, repoFlag: context.repoFlag });
   } catch (error) {
     if (!(error instanceof ConvergeReadError)) throw error;
+    // COULD NOT LOOK IS ITS OWN EXIT under --composite (Nobunaga 4 on
+    // zheref/nen#526; #483 AS-3): 3, never 1, which is "looked: not ready".
     context.io.err(plainLine(`nen pr converge: ${error.message}`));
-    return 1;
+    return EXIT_COMPOSITE_UNREAD;
   }
   const input = verdict.input;
   const lines = [
@@ -2805,7 +2821,7 @@ async function doMergeDelivery(context: CommandContext, typedRef: string): Promi
     if (error instanceof MergeUnitUsageError) throw new VerbUsageError(error.message);
     throw error;
   }
-  emit(context.io, context.json, outcome.report, outcome.lines);
+  emit(context.io, context.json, outcome.report, outcome.lines.map(plainLine));
   return deliveryExit(outcome.report, mergeExit);
 }
 
