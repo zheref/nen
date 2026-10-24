@@ -5109,8 +5109,8 @@ side -- so the verdict is `stack(<order>)` (NN#488 AC-2: two efforts that both t
 stack). **The order is never nen's choice**: when the branches **already chain** -- each contains the one
 before (`git merge-base --is-ancestor`) -- it is the order git holds (`order: chain`); otherwise it is the
 order the caller listed `--efforts` in, which is the order its epic names (`order: given`), and when git
-could not answer the ancestry question that order is used and said so (`stackSource: "ancestry-unread"`).
-**Only the efforts that share a path are stacked**; an effort sharing nothing is left out of the order.
+could not answer the ancestry question that order is used and said so (`source: "ancestry-unread"`).
+**Only the efforts that share a path are stacked, one stack per connected group**: an effort sharing nothing is left out, and A and B sharing `p` beside C and D sharing `q` read two stacks, `stack(A <- B; C <- D)`, each with its own order line.
 
 **Declared paths, before authoring (NN#488 AC-1).** Before an effort is authored there is no branch tip
 to diff, so `--declared <file>` names a JSON object of effort → the repository-relative paths it declares
@@ -5143,12 +5143,12 @@ and `; diff not read -- <reason>` where declared paths stood in, and one
 `shared <path>: <efforts>[ (always overlaps)]` line per shared path. `--json` top-level keys: `verdict`
 (`disjoint` \| `stack` \| `unknown`), `base`, `alwaysOverlaps` (the workflow's list, then the flag's),
 `overlaps` (`[{path, efforts, always}]`, path-sorted), `efforts` (`[{effort, files, unreadReason,
-sources}]`, `files: null` when unread), `unread`, `stack` (the efforts in stack order on `stack`, else
-null), `stackSource` (`chain` \| `given` \| `ancestry-unread` on `stack`, else null). Exit 0 on `disjoint`; exit 1 on `stack`
+sources}]`, `files: null` when unread), `unread`,
+`stacks` (`[{efforts, source}]`, one per connected group of sharing efforts, `source` `chain` \| `given` \| `ancestry-unread`; empty unless `stack`). Exit 0 on `disjoint`; exit 1 on `stack`
 and `unknown` -- an effort with nothing read is never read as "touches nothing"; exit 2 on a malformed
 flag, an unreadable or malformed `--declared`, or a flag another `wc` verb owns. Writes nothing.
 **Changed from v0.26.0**: the `overlap(<paths>)` verdict is gone; efforts that overlap and do not chain
-now read `stack(<the --efforts order>)` with `stackSource: "given"`, at the same exit 1.
+now read `stack(<the --efforts order>)` with `stacks[].source: "given"`, at the same exit 1.
 
 **Example**
 
@@ -8731,9 +8731,14 @@ anchors, tried in order:
 
 1. **An `### Unreleased` header.** It must be empty (otherwise exit 1, as
    before). It is kept with the `_(nothing awaiting release.)_` placeholder and
-   the new `### v<version> — <theme>` section goes directly below it. The
-   Unreleased block runs to the next heading at level 3 **or higher**, so a
-   `## v<prev>` heading under it is never swallowed.
+   the new section goes directly below it. The Unreleased block runs to the
+   next heading at level 3 **or higher**, so a `## v<prev>` heading under it is
+   never swallowed, and neither its bullets nor its paragraph count as
+   Unreleased entries. When that next heading is a dated release heading at a
+   **higher** level (`## v0.26.0 — 2026-10-22` under `### Unreleased`), the new
+   section takes **its** form, exactly as anchor 2 below does -- its level, its
+   `v`, its separator, and `--date` when its suffix is a date, with a blank line
+   before the old heading. Otherwise it is `### v<version> — <theme>`.
 2. **Otherwise, the top dated release heading** -- the first line shaped
    `#… v<X.Y.Z> — <suffix>` at any level (this repository's own
    `## v0.27.0 — 2026-10-22`). The new section goes directly above it, at its
@@ -8742,7 +8747,7 @@ anchors, tried in order:
    section's first paragraph; any other suffix means `--theme` is the suffix.
    **The date source** is `--date`, else today's date in UTC. Every existing
    line stays byte-identical: only the new section and its trailing blank line
-   are inserted.
+   are inserted, each with the file's own line ending (a CRLF file stays CRLF).
 
 With neither anchor the verb refuses at exit 1 naming both.
 
@@ -8760,7 +8765,7 @@ nen changelog collate --version <vX.Y.Z> --theme <text> --changelog <path> --fra
 | `--theme <text>` | yes | the release's one-line theme | — |
 | `--changelog <path>` | yes | the `CHANGELOG.md` to rewrite | — |
 | `--fragment-dir <dir>` | yes | the fragment directory | a missing directory contributes zero fragments rather than refusing |
-| `--date <YYYY-MM-DD>` | no | the release date written on a dated heading (anchor 2) | default today's UTC date; not a calendar day exits 2; unused under anchor 1 |
+| `--date <YYYY-MM-DD>` | no | the release date written on a dated heading: anchor 2, and anchor 1 when the Unreleased block ends at a higher-level dated heading | default today's UTC date; not a calendar day exits 2; unused when the new heading carries the theme |
 | `--write` | no | actually rewrite the changelog and delete the collated fragments | default off (dry-run) |
 | `--repo <path>` | no | resolves relative `--changelog`/`--fragment-dir` | default cwd |
 | `--json` | no | machine-readable collation result | — |
