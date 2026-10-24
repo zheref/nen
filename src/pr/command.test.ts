@@ -682,6 +682,22 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
     expect(result.err.join("\n")).toMatch(/--repo <path> is required/);
   });
 
+  // zheref/nen#479 AC-4 at the command layer (#515 F6): an unreadable or
+  // malformed --requirements-from is exit 2 before any GitHub read -- the
+  // empty ScriptedSeams throws on the first call, so exit 2 proves zero calls.
+  it("next-blocker refuses a missing or malformed --requirements-from at exit 2 with zero gh calls", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-nb-req-"));
+    writeFileSync(join(dir, "bad.json"), "{");
+    writeFileSync(join(dir, "shape.json"), JSON.stringify([{ name: "verify" }]));
+    for (const file of [join(dir, "missing.json"), join(dir, "bad.json"), join(dir, "shape.json")]) {
+      const seams = new ScriptedSeams([]);
+      const result = await capture(["pr", "next-blocker", "--target", "o/n", "--pr", "1", "--requirements-from", file], BANKAI_REPO, seams);
+      expect(result.code, file).toBe(2);
+      expect(result.err.join("\n"), file).toMatch(/missing\.json|bad\.json|shape\.json/);
+      expect(seams.calls.length, file).toBe(0);
+    }
+  });
+
   it("cascade-main refuses an OMITTED --repo the same way -- it MUTATES what it is pointed at", async () => {
     const result = await capture(["pr", "cascade-main"], null, new ScriptedSeams([]));
     expect(result.code).toBe(2);
