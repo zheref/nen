@@ -19,6 +19,7 @@
 import type { Io } from "../index.js";
 import type { Seams } from "../seam/exec.js";
 import type { FlagSpec, ParsedArgs } from "./args.js";
+import { escapeInvisibleJson } from "./plain.js";
 
 export interface CommandContext {
   /** Positionals with the family name still at index 0, as the family declared it. */
@@ -309,7 +310,7 @@ export function splitIntegerList(entries: readonly string[], flag: string): numb
  */
 export function emit(io: Io, json: boolean, value: unknown, lines: readonly string[]): void {
   if (json) {
-    io.out(JSON.stringify(value, null, 2));
+    io.out(escapeInvisibleJson(JSON.stringify(value, null, 2)));
     return;
   }
   for (const line of lines) io.out(line);

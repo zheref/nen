@@ -69,8 +69,10 @@ import { computeStaleness, type VerifiedWake } from "./staleness.js";
 import { nextBlocker } from "./blocker.js";
 import { cascadeMain } from "./cascade.js";
 import { fetchPullRequest, type PrSnapshot } from "./fetch.js";
-import { ConvergeReadError, readConvergeInput } from "./converge.js";
-import { converge, DEFAULT_COVERAGE_POLICY, PR_CONVERGE_CONTRACT, readCoveragePolicy, type CoveragePolicy } from "../issue/criteria.js";
+import { assertPinnedHead, ConvergeReadError, readConvergeInput } from "./converge.js";
+import { convergeComposite } from "./convergecomposite.js";
+import { converge, DEFAULT_COVERAGE_POLICY, extractCriteria, PR_CONVERGE_CONTRACT, readCoveragePolicy, type ClosingIssue, type ConvergeReport, type CoveragePolicy, type CriteriaReport } from "../issue/criteria.js";
+import { DEFAULT_CRITERIA_PREFIX } from "../issue/shape.js";
 import { parseCatalogue, type IssueSectionsCatalogue } from "../issue/shape.js";
 import { retarget } from "./retarget.js";
 import { requestReviews } from "./reviewers.js";
@@ -103,6 +105,8 @@ import {
 import { certifyPullRequest, editBodyArgv, writePullRequestBody } from "./editbody.js";
 import { blockingExit, blocksWrite, type CheckedText, type IgnoreList, type PrivateNameCheck } from "../issue/privacy.js";
 import { guardPrivateNames, PRIVATE_NAME_FLAGS, readIgnoreFlag } from "../issue/privacyguard.js";
+import { LEDGER_ACTION_FLAGS, ledgerVerb } from "./ledger-verb.js";
+import { GITHUB_COMMENT_LIMIT, PR_LEDGER_CONTRACT } from "./ledger.js";
 import { LOGIN as OPEN_LOGIN, ME as OPEN_ME, OPEN_CONTRACT, openPullRequest } from "./open.js";
 import { sectionsCommand } from "./sections_command.js";
 import { plainLine } from "../cli/plain.js";
@@ -154,11 +158,13 @@ nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [-
 nen pr staleness --wakes-from <path> --last-activity <ISO> --now <ISO> [--ready] [--min-verified-wakes <n>] [--idle-minutes <n>]
 nen pr body-check --body-from <path> [--requirements-from <path> | --base <ref>]
                   [--exact [--max <n>]] [--prose-budget <words>]
+                  [--criteria <AC-1,AC-2> | --criteria-from <issue-body.md>] [--criteria-issue <[owner/name]#N>] [--catalogue <path>]
 nen pr sections resolve --catalogue <path> --kind <kind> --family <family> [--with a,b] [--overrides <workflow.json>] [--json]
 nen pr sections family --taxonomy <path> --catalogue <path> --jobs <a,b> [--json]
 nen pr fetch --target <owner/name> --pr <n>
-nen pr converge --target <owner/name> --pr <n> [--requirements-from <catalogue.json>] [--json]
-nen pr next-blocker --target <owner/name> --pr <n> --repo <path> [--reviewers a,b] [--policy bounded|strict] [--delivery-pr] [--gates <path>]
+nen pr converge --target <owner/name> --pr <n> [--catalogue <catalogue.json>] [--require-head <sha>] [--json]
+nen pr converge --target <owner/name> --pr <n> --composite --require-head <sha> --body-requirements <path> [--catalogue <catalogue.json>] [--json]
+nen pr next-blocker --target <owner/name> --pr <n> --repo <path> [--reviewers a,b] [--policy bounded|strict] [--delivery-pr] [--gates <path>] [--requirements-from <path>]
 nen pr cascade-main --repo <path> [--trunk main] [--no-push] [--dry-run]
 nen pr retarget --target <owner/name> --pr <n> --base <branch> [--dry-run]
 nen pr request-reviews --target <owner/name> --pr <n> [--add-reviewers a,b] [--add-bots login-or-id,...] [--dry-run]
@@ -189,6 +195,8 @@ PRIVATE-NAME FLAGS (zheref/nen#363): [--skip-private-name-check]
   stdin ('--body-file -'), never the path.
 nen pr merge <n|owner/name#n|CODE#n> --release-unit --requirements-from <path> --repo <path> [--run] [--json]
 nen pr merge <n|owner/name#n|CODE#n> --delivery --requirements-from <path> --repo <path> [--require-head <sha>] [--run] [--json]
+nen pr ledger post --target <owner/name> --pr <n> --effort <id> [--findings <path> --findings-schema <path>] [--proof <path>]... [--login <name>] [--dry-run] [--repo <path>] [--json] [PRIVATE-NAME FLAGS]
+nen pr ledger read --target <owner/name> --pr <n> --effort <id> [--restore] [--login <name>] [--repo <path>] [--json]
 
 Flags are PER SUBCOMMAND (zheref/nen#351). Every subcommand refuses, at exit
 2 and before any gh call, each flag it does not read -- another
@@ -371,6 +379,26 @@ body-check:
   --prose-budget warns per section over the budget, excluding tables, code
   (including Mermaid) and comments, without changing the verdict.
   Every requirement is checked; never stops at the first miss.
+  --criteria <ids> | --criteria-from <file>  One verify row per acceptance
+                              criterion (zheref/nen#479; CON-17(c), HR-11):
+                              the closing issue's AC ids, comma-separated, or
+                              read from a local copy of its body ('- AC-{n}:'
+                              rows, as 'nen issue criteria' reads them), held
+                              to the body's '| <criterion> | <word> |
+                              <evidence> |' rows by the comparison 'pr
+                              converge' runs. An id with no row, a word
+                              outside satisfied, partial, missing,
+                              contradicts, unrequested, a row with two words,
+                              a row reading missing or contradicts (quoted),
+                              or an issue body with no criterion is exit 1.
+                              --criteria-issue <[owner/name]#N> names the
+                              issue, so <CODE>#<N>/AC-{n} rows match;
+                              --catalogue <path> gives the issue-sections
+                              catalogue (prefix, sections, 'coverage').
+                              Local files only, as ever; live reads are
+                              'pr converge'. One issue per run: several
+                              closing issues are 'pr converge''s job.
+                              --json adds 'criteria'.
   --requirements-from <path>  A JSON array of { name, pattern } -- this
                               repository's own template convention, never a
                               literal shipped here.
@@ -409,7 +437,9 @@ converge:
   <evidence> |', where <criterion> is AC-{n}, <CODE>#<N>/AC-{n},
   <owner/name>#<N>/AC-{n}, #<N>/AC-{n} or none, and <word> is satisfied,
   partial, missing, contradicts or unrequested. Criteria are read as 'nen
-  issue criteria' reads them; --requirements-from <catalogue.json> gives the
+  issue criteria' reads them; --catalogue <catalogue.json> (deprecated alias
+  here: --requirements-from, which on body-check, next-blocker and merge
+  names the body requirements) gives the
   issue-sections catalogue (its acceptance prefix and section) and an
   optional 'coverage' block (blocking words, the none word, evidence
   required or optional) -- with none, the defaults are AC rows anywhere in
@@ -418,24 +448,42 @@ converge:
   covered-without-evidence, missing-row, malformed-row, duplicate-rows,
   not-verifiable, and the row's word. Exits: 0 nothing blocks (a PR into
   the default branch closing no issue is 0); 1 any blocking row -- a
-  missing-row, malformed-row or duplicate-rows criterion, a blocking word, a
+  missing-row, malformed-row (a word outside the five, or two words, in one
+  row) or duplicate-rows criterion, a blocking word (its row quoted), a
   criterion row saying unrequested, a criterion without evidence, a closing
   issue stating no criterion (not-verifiable) or carrying an unrecognised AC
-  row, a none row with a problem, an unmatched or malformed verify row, a
-  non-default base whose body names no closing issue -- or a read that did
-  not finish (the PR, the default branch, a closing issue, a full page of
-  100 closing references); 2 usage or a malformed catalogue. --json: '{
+  row, a none row with a problem, an unmatched or malformed verify row -- or
+  a read that did not finish (the PR, the default branch, a closing issue, a
+  full page of 100 closing references), stdout empty; a non-default base
+  whose body names no closing issue is reported, never blocked; 2 usage or a
+  malformed catalogue. --require-head <sha> pins every read to one full
+  commit (first read and a closing head re-read; else exit 1 -- 3 under
+  --composite -- no verdict).
+  --composite (zheref/nen#483 AC-1; needs --require-head and
+  --body-requirements <path>, the '{ name, pattern }' file 'pr body-check'
+  reads): ONE verdict at the pinned head from four conjuncts -- 'pr ready'
+  (in-process, as 'pr merge' runs it), the body check, the closing-issue
+  links (into the default branch, every body closing keyword is a GitHub
+  closing link and every GitHub closing link is named in the body; on
+  another base, read from the body) and the criteria coverage. Exit 0 all
+  four hold; 1 any does not; 3 any read did not finish or was at another
+  head (no verdict, stdout empty) -- could-not-look has its own exit here.
+  'pr merge --delivery' gates on the same criteria and links conjuncts. --json: '{ contract, composite: true, target,
+  pr, url, headSha, requiredHead, base, closingSource, ready, conjuncts: [{
+  name, ok, lines }], blocking }'. Otherwise --json: '{
   contract: "nen.pr.converge/v0.1", target, pr, url, headSha, base,
   closingSource, verifiable, closingIssues: [{ issue, criteria, verifiable,
   unrecognised }], criteria: [{ issue, id, text, coverage, word, evidence,
-  rows }], unrequested: [{ line, word, evidence, problem }], unmatched: [{
+  rows, raw }], unrequested: [{ line, word, evidence, problem }], unmatched: [{
   line, cell, reason }], malformed: [{ line, cell, reason }], counts,
   blocking }'.
 
 next-blocker:
   The FIRST blocking condition, fixed order: conflict -> red required
   check -> owed reviewer round -> unresolved thread -> missing body
-  requirement ('## How to verify', CON-17). Exits 1 when something blocks,
+  requirement (CON-17): with --requirements-from, the first unsatisfied
+  requirement of the same '{ name, pattern }' file 'pr body-check' reads;
+  without it, a '## How to verify' heading. Exits 1 when something blocks,
   2 on usage or a refused gates file (as pr ready does, zheref/nen#310),
   0 when this check finds nothing -- the adversarial confirmation pass
   stays human. NOTE: the changelog.d/ fragment half of CON-33(a) is
@@ -696,6 +744,41 @@ open:
   private-name guard found a private repository named in the title or body;
   '{ contract, dryRun, opened: false, privateNameCheck }' under --json.
 
+ledger:
+  An effort's ledger slice as ONE pull request comment (zheref/nen#510),
+  contract '${PR_LEDGER_CONTRACT}': { contract, effort, repo, pr, head, phases[],
+  usage { entries, totals[] }, findings { schema { id, sha256 }, document } |
+  null, proof[] { path, sha256, bytes } }, in a json fence behind the marker
+  '<!-- nen:ledger effort=<encoded id> sha256=<digest of the fenced json> -->'.
+  The phases and usage come from the effort's durable ledgers
+  (<git-common-dir>/.nen/phases|usage/).
+  post: validates --findings against --findings-schema (the caller's own JSON
+    Schema; nen carries no consumer's contract; a keyword nen does not assert,
+    a supported keyword with a malformed value, or a $ref outside subschema
+    positions is refused, exit 2), hashes each --proof file (repo-relative;
+    outside --repo is exit 2), writes the repository root as '.' in notes and
+    step argv, refuses a credential's shape anywhere in the slice
+    (secret-shape, exit 1, the field named), runs the private-name guard,
+    then posts a new comment, or EDITS this login's one marked comment for
+    the effort in place. The comment is as visible as the PR. Verdicts: posted | updated | unchanged (the same
+    bytes are already there) | dry-run (prints the gh call and the body,
+    writes nothing) | findings-invalid (exit 1, the first failing JSON pointer
+    named, nothing posted) | too-large (exit 1: over GitHub's ${GITHUB_COMMENT_LIMIT}-
+    character limit, both sizes named, never truncated) | refused (exit 4,
+    the private-name guard). Two marked comments by this login is exit 1.
+  read: the one marked comment the AUTHENTICATED login (or --login, for a
+    token that cannot read 'user') wrote for the effort AND nobody else
+    edited; marked comments by any other author or editor are counted
+    (foreign: n) and never read. Verdicts: ok (exit 0: its head is the PR's head) | stale (exit 1:
+    the PR moved on) | could-not-read (exit 1: none, two, edited -- the
+    digest does not match -- or not this contract). --restore writes the
+    slice's phases as the effort's phase ledger when there is none
+    ('restored'), 'unchanged' when it agrees, and refuses (exit 1, nothing
+    overwritten) one that disagrees, naming both. A stale slice IS restored
+    and still exits 1.
+  --json: { contract, verdict, ... } (post: posted, url, size, slice,
+  privateNameCheck; read: login, foreign, url, slice, restored).
+
 merge:
   THE BOUNDED MERGE THIS BINARY PERFORMS, in exactly two forms: a release
   unit (--release-unit) and a run's own delivery into a non-main base
@@ -779,7 +862,13 @@ merge --delivery (zheref/nen#286):
   Otherwise evaluates, IN ORDER, every one of: 'base' (fails, exit 1, when
   any read above fails or the pull request answers no base name or a
   baseRefOid that is not a SHA -- "unknown" is never a pass), 'pr ready'
-  (IN-PROCESS, --require-head passed through), 'head pin', 'pr body-check'
+  (IN-PROCESS, --require-head passed through), 'head pin', 'pr body-check',
+  'criteria' and 'closing links' (the conjuncts 'pr converge --composite'
+  reports, from the SAME one fetch, so at the pinned head: a criterion with
+  no verify row, a row reading missing or contradicts -- quoted -- or a
+  closing issue that could not be read refuses; --catalogue <path> gives the
+  issue-sections catalogue, else AC rows anywhere in the issue body and the
+  default coverage rules)
   and 'whose pr' (author is the viewer, never cross-repository, AND the
   head ref is in the run form of branch.template at the base commit:
   '{model}/{persona}/{descriptor}' is three non-empty segments). Plan,
@@ -814,7 +903,7 @@ merge --delivery (zheref/nen#286):
   --json: '{ contract: "nen.pr.merge-delivery/v0.1", target, pr, base,
   baseOk, refused, defaultBranch, configuredBase, baseCommitBase,
   defaultBranchBase, baseProtected, baseRulesets (distinct ruleset_id),
-  ready, pinOk, bodyOk, wholeOk, ok, ran, spawnFailed, judgedHead,
+  ready, pinOk, bodyOk, criteriaOk, linksOk, wholeOk, ok, ran, spawnFailed, judgedHead,
   requiredHead, state, rereadBase, mergedBase, outsideAuthority, mergeArgv,
   gates: [{ name, ok, lines }] }'.`;
 
@@ -940,6 +1029,66 @@ function derivedRequirements(reader: TemplateReader, root: string): { requiremen
   return { requirements, source: { kind: "derived", path: discovery.path, ref: reader.ref, commit: reader.commit } };
 }
 
+/**
+ * `pr body-check --criteria <ids> | --criteria-from <issue body>` (zheref/nen#479
+ * AC-1..AC-3; Akatsuki CON-17(c), Hatsu HR-11 -- one rule, one verb): the closing
+ * issue's acceptance criteria, passed by flag or read from a local copy of its
+ * body, held to the body's verify rows by the same comparison `pr converge` and
+ * `pr merge --delivery` run. Null when neither flag is given. Usage errors are
+ * thrown before the body is read.
+ */
+function criteriaForBody(context: CommandContext, cwd: string): { issue: ClosingIssue; policy: CoveragePolicy } | null {
+  const ids = context.args.values["criteria"];
+  const from = context.args.values["criteria-from"];
+  const issueFlag = context.args.values["criteria-issue"];
+  if (ids === undefined && from === undefined) {
+    if (issueFlag !== undefined) throw new VerbUsageError("--criteria-issue names the issue a --criteria or --criteria-from list belongs to; give one of them.");
+    if (context.args.values["catalogue"] !== undefined) throw new VerbUsageError("--catalogue is read with --criteria or --criteria-from (the acceptance-row prefix, sections and coverage rules).");
+    return null;
+  }
+  if (ids !== undefined && from !== undefined) throw new VerbUsageError("--criteria and --criteria-from both name the criteria; give one.");
+  const { catalogue, policy } = readCriteriaCatalogue(context, "catalogue", cwd);
+  let slug = "(local)";
+  let number = 0;
+  if (issueFlag !== undefined) {
+    const match = /^(?:([A-Za-z0-9-]+\/[A-Za-z0-9._-]+))?#([1-9][0-9]{0,8})$/.exec(issueFlag.trim());
+    if (match === null) throw new VerbUsageError(`--criteria-issue '${issueFlag}' is not '#<N>' or '<owner/name>#<N>'.`);
+    slug = match[1] ?? slug;
+    number = Number(match[2]);
+  }
+  let report: CriteriaReport;
+  let label: string;
+  if (ids !== undefined) {
+    const prefix = catalogue?.criteriaPrefix ?? DEFAULT_CRITERIA_PREFIX;
+    const listed = commaList(ids);
+    if (listed.length === 0) throw new VerbUsageError("--criteria names no criterion; give a comma-separated list such as AC-1,AC-2.");
+    const pattern = new RegExp(`^${prefix}-([1-9][0-9]{0,8})$`);
+    const criteria = listed.map((id, index) => {
+      const match = pattern.exec(id);
+      if (match === null) throw new VerbUsageError(`--criteria '${id}' is not a ${prefix}-<n> id.`);
+      return { id, number: Number(match[1]), text: "", line: index + 1 };
+    });
+    const seen = new Map<string, number[]>();
+    for (const entry of criteria) seen.set(entry.id, [...(seen.get(entry.id) ?? []), entry.line]);
+    report = { verifiable: true, criteria, duplicates: [...seen.entries()].filter(([, at]) => at.length > 1).map(([id, at]) => ({ id, lines: at })), unrecognised: [] };
+    label = number === 0 ? "--criteria" : `${slug}#${number}`;
+  } else {
+    const path = requireValue(context.args, "criteria-from", "A local copy of the closing issue's body, whose acceptance rows are read.");
+    report = extractCriteria(readTextFile(path, cwd).replace(/\r\n?/g, "\n"), catalogue);
+    label = number === 0 ? `--criteria-from ${path}` : `${slug}#${number}`;
+  }
+  return { issue: { target: slug, number, report, label }, policy };
+}
+
+/** The criteria half of a body-check: its lines, its `--json` field, and whether it blocks. */
+function criteriaLines(report: ConvergeReport): string[] {
+  return [
+    `${report.criteria.length} criterion row(s), ${report.blocking.length} blocking (one verify row per acceptance criterion; CON-17(c), HR-11)`,
+    ...report.criteria.map((entry): string => `${entry.coverage.toUpperCase()}  ${entry.id ?? "(no criterion)"}${entry.word === null ? "" : ` ${entry.word}`}${entry.rows.length === 0 ? "" : ` (line ${entry.rows.join(", ")})`}`),
+    ...report.blocking.map((line): string => `BLOCKING ${line}`),
+  ];
+}
+
 function bodyCheck(context: CommandContext): number {
   const integer = (flag: string): number | undefined => {
     const value = context.args.values[flag];
@@ -971,11 +1120,17 @@ function bodyCheck(context: CommandContext): number {
   }
 
   const cwd = resolveRepoRoot({ repoFlag: context.repoFlag });
+  const criteriaInput = criteriaForBody(context, cwd);
   const body = readTextFile(bodyPath, cwd);
+  const criteria = criteriaInput === null ? null : converge([criteriaInput.issue], body.replace(/\r\n?/g, "\n"), criteriaInput.policy);
+  const criteriaOk = criteria === null || criteria.blocking.length === 0;
+  const criteriaField = criteria === null ? {} : { criteria };
+  const criteriaText = criteria === null ? [] : criteriaLines(criteria);
 
   // A SHIPPED FILE: exactly the check it always was, plus the source field.
   if (requirementsPath !== undefined) {
-    const report = checkBody(body, readJsonFile<readonly BodyRequirement[]>(requirementsPath, cwd), options);
+    const checked = checkBody(body, readJsonFile<readonly BodyRequirement[]>(requirementsPath, cwd), options);
+    const report = { ...checked, ok: checked.ok && criteriaOk };
     const source: RequirementSource = { kind: "shipped", path: requirementsPath, ref: null, commit: null };
     const satisfiedCount = report.results.filter((result): boolean => result.satisfied).length;
     // A VERDICT LINE ALWAYS PRINTS (review finding): zero output must never be a
@@ -983,9 +1138,10 @@ function bodyCheck(context: CommandContext): number {
     const lines = [
       `${satisfiedCount}/${report.results.length} requirement(s) satisfied`,
       ...report.results.map((result): string => `${result.satisfied ? "ok" : "MISSING"}  ${result.name}`),
-      ...extraLines(report),
+      ...extraLines(checked),
+      ...criteriaText,
     ].map(plainLine);
-    emit(context.io, context.json, { ...report, source }, lines);
+    emit(context.io, context.json, { ...report, ...criteriaField, source }, lines);
     return report.ok ? 0 : 1;
   }
 
@@ -1010,15 +1166,16 @@ function bodyCheck(context: CommandContext): number {
   const { requirements, source } = derived;
   const derivedReport = checkDerivedBody(body, requirements, { strictFences: exact });
   const extra = exact || proseBudget !== undefined ? checkBody(body, requirements, options) : undefined;
-  const report = { ...derivedReport, ...(extra?.findings === undefined ? {} : { findings: extra.findings }), ...(extra?.warnings === undefined ? {} : { warnings: extra.warnings }), ok: derivedReport.ok && (extra?.ok ?? true) };
+  const report = { ...derivedReport, ...(extra?.findings === undefined ? {} : { findings: extra.findings }), ...(extra?.warnings === undefined ? {} : { warnings: extra.warnings }), ok: derivedReport.ok && (extra?.ok ?? true) && criteriaOk };
   const satisfiedCount = report.results.filter((result): boolean => result.satisfied).length;
   const label = { ok: "ok", missing: "MISSING", empty: "EMPTY" } as const;
   const lines = [
     `${satisfiedCount}/${report.results.length} requirement(s) satisfied (DERIVED from the pull-request template '${source.path}' ${describeReader(reader)}; no --requirements-from given)`,
     ...report.results.map((result): string => `${label[result.status]}  ${result.name}`),
     ...(extra === undefined ? [] : extraLines(extra)),
+    ...criteriaText,
   ].map(plainLine);
-  emit(context.io, context.json, { ...report, source }, lines);
+  emit(context.io, context.json, { ...report, ...criteriaField, source }, lines);
   return report.ok ? 0 : 1;
 }
 
@@ -1086,11 +1243,11 @@ export const PR_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
     lists: [...PR_READY_FLAGS.lists],
   },
   staleness: { values: ["wakes-from", "last-activity", "now", "min-verified-wakes", "idle-minutes"], booleans: ["ready"] },
-  "body-check": { values: ["body-from", "requirements-from", "base", "max", "prose-budget"], booleans: ["exact"] },
+  "body-check": { values: ["body-from", "requirements-from", "base", "max", "prose-budget", "criteria", "criteria-from", "criteria-issue", "catalogue"], booleans: ["exact"] },
   sections: { values: ["catalogue", "kind", "family", "with", "overrides", "taxonomy", "jobs"] },
   fetch: { values: ["target", "pr"] },
-  converge: { values: ["target", "pr", "requirements-from"] },
-  "next-blocker": { values: ["target", "pr", "reviewers", "gates", "policy"], booleans: ["delivery-pr"] },
+  converge: { values: ["target", "pr", "catalogue", "requirements-from", "require-head", "body-requirements"], booleans: ["composite"] },
+  "next-blocker": { values: ["target", "pr", "reviewers", "gates", "policy", "requirements-from"], booleans: ["delivery-pr"] },
   "cascade-main": { values: ["trunk"], booleans: ["no-push", "dry-run"] },
   retarget: { values: ["target", "pr", "base"], booleans: ["dry-run"] },
   "request-reviews": { values: ["target", "pr", "add-reviewers", "add-bots"], booleans: ["dry-run"] },
@@ -1106,7 +1263,13 @@ export const PR_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   },
   // --require-head is read by --delivery only; doMerge refuses it with
   // --release-unit, naming the form that reads it.
-  merge: { values: ["requirements-from", "require-head"], booleans: ["release-unit", "delivery", "run"] },
+  merge: { values: ["requirements-from", "require-head", "catalogue"], booleans: ["release-unit", "delivery", "run"] },
+  // zheref/nen#510; the post/read split of these flags is ./ledger-verb.ts's LEDGER_ACTION_FLAGS.
+  ledger: {
+    values: ["target", "pr", "effort", ...LEDGER_ACTION_FLAGS.post.values],
+    booleans: [...LEDGER_ACTION_FLAGS.post.booleans, ...LEDGER_ACTION_FLAGS.read.booleans],
+    lists: [...LEDGER_ACTION_FLAGS.post.lists],
+  },
 };
 
 /** The subcommand names, read off the table so the two can never differ. */
@@ -1206,6 +1369,7 @@ const TOKEN_ENV_ADVICE: Readonly<Record<string, string>> = {
   "mark-ready": `mark-ready ${GH_RESOLVES}`,
   threads: `threads ${GH_RESOLVES}`,
   open: `open ${GH_RESOLVES}`,
+  ledger: `ledger ${GH_RESOLVES}`,
   merge: "merge judges readiness on GH_TOKEN and merges on whatever credential gh resolves (GH_TOKEN/GITHUB_TOKEN if exported, else its stored login); the variable --token-env names would have changed neither.",
 };
 
@@ -1292,14 +1456,16 @@ export const prCommand: Command = {
     { verb: "pr merge", code: 6, meaning: "gh could not be started" },
     { verb: "pr merge", code: 7, meaning: "--delivery: merged without authority; GitHub reports a base other than the one gated" },
     { verb: "pr ready", code: 8, meaning: "--require-head did not match GitHub's head; no verdict" },
+    { verb: "pr converge", code: 3, meaning: "--composite: a read did not finish, or was at another head than --require-head; no verdict" },
     { verb: "pr mark-ready", code: 3, meaning: "the pull request is CLOSED or MERGED; nothing sent" },
     { verb: "pr mark-ready", code: 8, meaning: "--require-head did not match GitHub's head" },
     { verb: "pr request-reviews", code: 9, meaning: "a bot request GitHub accepted but did not list as pending" },
+    { verb: "pr ledger", code: 4, meaning: "post: a private repository named in the slice bound for a PUBLIC target; nothing written (the private-name guard)" },
   ],
   name: "pr",
   subcommands: PR_SUBCOMMANDS,
   summary:
-    "CON-32 readiness, staleness, body-check, fetch, next-blocker, cascade-main, retarget, request-reviews, edit-body, mark-ready, threads, open, merge.",
+    "CON-32 readiness, staleness, body-check, fetch, next-blocker, cascade-main, retarget, request-reviews, edit-body, mark-ready, threads, open, merge, ledger.",
   usage: USAGE,
   flags: PR_FLAGS,
   run(context: CommandContext): number | Promise<number> {
@@ -1339,6 +1505,8 @@ export const prCommand: Command = {
         return doMerge(context);
       case "mark-ready":
         return doMarkReady(context);
+      case "ledger":
+        return ledgerVerb(context, requireTarget(context), requirePr(context));
       default:
         return editBody(context);
     }
@@ -1375,26 +1543,50 @@ function fetch(context: CommandContext): number {
  * reported on stderr: "could not read" is never "nothing to cover", and it is
  * not a usage error either (the shared exit scheme's 2).
  */
-function convergeVerb(context: CommandContext): number {
+/**
+ * The issue-sections catalogue the criteria are read with, and its coverage
+ * rules, from `--<flag>` (read before any network work); absent: no catalogue
+ * (`AC-{n}` rows anywhere in the body) and the default coverage rules.
+ */
+function readCriteriaCatalogue(context: CommandContext, flag: string, root: string | null = null): { catalogue: IssueSectionsCatalogue | null; policy: CoveragePolicy } {
+  const catalogueFrom = context.args.values[flag];
+  if (catalogueFrom === undefined) return { catalogue: null, policy: DEFAULT_COVERAGE_POLICY };
+  if (catalogueFrom === "") throw new VerbUsageError(`--${flag} names the issue-sections catalogue; it cannot be empty.`);
+  const base = root ?? resolveRepoRoot({ repoFlag: context.repoFlag });
+  const raw = readJsonFile<unknown>(resolveAgainstRepo(base, catalogueFrom), process.cwd(), `--${flag} is the catalogue the criteria and coverage rules are read from.`);
+  try {
+    return {
+      catalogue: parseCatalogue(raw),
+      policy: readCoveragePolicy(raw !== null && typeof raw === "object" ? (raw as Record<string, unknown>)["coverage"] : undefined),
+    };
+  } catch (error) {
+    throw new VerbUsageError(plainLine(`'${catalogueFrom}': ${error instanceof Error ? error.message : String(error)}`));
+  }
+}
+
+function convergeVerb(context: CommandContext): number | Promise<number> {
   const target = requireTarget(context);
   const prNumber = requirePr(context);
-  const catalogueFrom = context.args.values["requirements-from"];
-  let catalogue: IssueSectionsCatalogue | null = null;
-  let policy: CoveragePolicy = DEFAULT_COVERAGE_POLICY;
-  if (catalogueFrom !== undefined) {
-    if (catalogueFrom === "") throw new VerbUsageError("--requirements-from names the issue-sections catalogue; it cannot be empty.");
-    const root = resolveRepoRoot({ repoFlag: context.repoFlag });
-    const raw = readJsonFile<unknown>(resolveAgainstRepo(root, catalogueFrom), process.cwd(), "--requirements-from is the catalogue the criteria and coverage rules are read from.");
-    try {
-      catalogue = parseCatalogue(raw);
-      policy = readCoveragePolicy(raw !== null && typeof raw === "object" ? (raw as Record<string, unknown>)["coverage"] : undefined);
-    } catch (error) {
-      throw new VerbUsageError(plainLine(`'${catalogueFrom}': ${error instanceof Error ? error.message : String(error)}`));
-    }
+  // `--catalogue` names the issue-sections catalogue here as on body-check and
+  // merge (Nobunaga 2 on zheref/nen#526); `--requirements-from` is kept as a
+  // DEPRECATED alias on this verb only, said on stderr, and both is refused.
+  const catalogueFlag = context.args.values["catalogue"] !== undefined;
+  const aliasFlag = context.args.values["requirements-from"] !== undefined;
+  if (catalogueFlag && aliasFlag) throw new VerbUsageError("--catalogue and --requirements-from both name the issue-sections catalogue on 'pr converge'; give --catalogue (--requirements-from is its deprecated alias here).");
+  if (aliasFlag) context.io.err("nen pr converge: --requirements-from is a deprecated alias of --catalogue on this verb (on body-check, next-blocker and merge it names the body requirements); pass --catalogue.");
+  const { catalogue, policy } = readCriteriaCatalogue(context, aliasFlag ? "requirements-from" : "catalogue");
+  const requireHead = context.args.values["require-head"];
+  if (requireHead !== undefined && !/^[0-9a-f]{40}([0-9a-f]{24})?$/i.test(requireHead)) {
+    throw new VerbUsageError(`--require-head '${requireHead}' is not a full commit SHA (40 or 64 hex characters).`);
+  }
+  if (context.args.booleans.has("composite")) return convergeCompositeVerb(context, target, prNumber, catalogue, policy, requireHead);
+  if (context.args.values["body-requirements"] !== undefined) {
+    throw new VerbUsageError("--body-requirements is read by 'pr converge --composite' (the body-check conjunct); pass --composite to say so.");
   }
   let input;
   try {
     input = readConvergeInput(context.seams, target, prNumber, catalogue);
+    if (requireHead !== undefined) assertPinnedHead(context.seams, target, prNumber, input, requireHead);
   } catch (error) {
     if (!(error instanceof ConvergeReadError)) throw error;
     context.io.err(plainLine(`nen pr converge: ${error.message}`));
@@ -1409,9 +1601,12 @@ function convergeVerb(context: CommandContext): number {
   }));
   const counts = report.counts;
   const noKeyword = input.closingSource === "none-on-non-default-base";
-  const blocking = noKeyword
-    ? [`${target.slug}#${prNumber}: base '${input.base}' is not the default branch, where GitHub computes no closing references, and the body names no closing issue (Closes/Fixes/Resolves #N)`, ...report.blocking]
-    : report.blocking;
+  // A NON-DEFAULT BASE WITH NO CLOSING ROW IS REPORTED, NOT BLOCKED (the
+  // integrator's ruling, 2026-10-23): `closingSource` says
+  // `none-on-non-default-base` and the head line says it cannot tell what the
+  // pull request closes, but a sub-PR into an integration branch that closes
+  // nothing has no criterion to miss, so the other conjuncts decide (#483 AC-5).
+  const blocking = report.blocking;
   const head =
     input.issues.length === 0
       ? noKeyword
@@ -1441,6 +1636,69 @@ function convergeVerb(context: CommandContext): number {
   return blocking.length > 0 ? 1 : 0;
 }
 
+/** `pr converge --composite` could not read (or read at another head): no verdict. */
+export const EXIT_COMPOSITE_UNREAD = 3;
+
+/**
+ * `pr converge --composite` (zheref/nen#483 AC-1): readiness, the body check,
+ * the closing-issue links and the criteria coverage, all at the pinned head.
+ * ./convergecomposite.ts holds the reads; this adapter reads flags and renders.
+ */
+async function convergeCompositeVerb(
+  context: CommandContext,
+  target: Target,
+  prNumber: number,
+  catalogue: IssueSectionsCatalogue | null,
+  policy: CoveragePolicy,
+  requireHead: string | undefined,
+): Promise<number> {
+  if (requireHead === undefined) throw new VerbUsageError("--composite reports one verdict at one head: --require-head <sha> is required.");
+  const requirementsPath = requireValue(context.args, "body-requirements", "The '{ name, pattern }' body requirements 'pr body-check' reads -- the body conjunct of the composite verdict.");
+  const root = resolveRepoRoot({ repoFlag: context.repoFlag });
+  const raw = readJsonFile<unknown>(requirementsPath, root, "--body-requirements names the body requirements of the composite verdict; an unreadable one is refused, never read as none.");
+  try {
+    validateRequirements(raw);
+  } catch (error) {
+    if (error instanceof BodyCheckError) throw new VerbUsageError(`'${requirementsPath}': ${error.message}`);
+    throw error;
+  }
+  let verdict;
+  try {
+    verdict = await convergeComposite({ seams: context.seams, target, prNumber, requireHead, requirements: raw, catalogue, policy, repoFlag: context.repoFlag });
+  } catch (error) {
+    if (!(error instanceof ConvergeReadError)) throw error;
+    // COULD NOT LOOK IS ITS OWN EXIT under --composite (Nobunaga 4 on
+    // zheref/nen#526; #483 AS-3): 3, never 1, which is "looked: not ready".
+    context.io.err(plainLine(`nen pr converge: ${error.message}`));
+    return EXIT_COMPOSITE_UNREAD;
+  }
+  const input = verdict.input;
+  const lines = [
+    `${target.slug}#${prNumber} at ${requireHead}: ${verdict.ready ? "READY" : "NOT READY"} -- ${verdict.conjuncts.map((conjunct): string => `${conjunct.name} ${conjunct.ok ? "ok" : "BLOCKED"}`).join(" · ")}`,
+    ...verdict.conjuncts.flatMap((conjunct): readonly string[] => conjunct.lines),
+  ].map(plainLine);
+  emit(
+    context.io,
+    context.json,
+    {
+      contract: PR_CONVERGE_CONTRACT,
+      composite: true,
+      target: target.slug,
+      pr: prNumber,
+      url: input.url,
+      headSha: input.headSha,
+      requiredHead: requireHead,
+      base: input.base,
+      closingSource: input.closingSource,
+      ready: verdict.ready,
+      conjuncts: verdict.conjuncts,
+      blocking: verdict.blocking,
+    },
+    lines,
+  );
+  return verdict.ready ? 0 : 1;
+}
+
 function blocker(context: CommandContext): number {
   const target = requireTarget(context);
   const prNumber = requirePr(context);
@@ -1468,6 +1726,23 @@ function blocker(context: CommandContext): number {
       "It is the checkout whose nen/gates.json is read first; the reviewer identities come from nen/gates.json at the pull request's base, and from this file only when the base cannot be read.",
     ),
   });
+  // --requirements-from (zheref/nen#479 AC-4): the SAME `{ name, pattern }`
+  // file `pr body-check` reads, so the two verbs give one verdict for one body
+  // -- a process body headed '## What the guards prove' included. Read and
+  // validated before any network work; a relative path resolves against --repo.
+  const requirementsFlag = context.args.values["requirements-from"];
+  let bodyRequirements: readonly BodyRequirement[] | undefined;
+  if (requirementsFlag !== undefined) {
+    const requirementsPath = requireValue(context.args, "requirements-from", "The body requirements 'pr body-check' reads.");
+    const raw = readJsonFile<unknown>(requirementsPath, root, "--requirements-from names the body requirements next-blocker's last step checks; an unreadable one is refused, never read as none.");
+    try {
+      validateRequirements(raw);
+    } catch (error) {
+      if (error instanceof BodyCheckError) throw new VerbUsageError(`'${requirementsPath}': ${error.message}`);
+      throw error;
+    }
+    bodyRequirements = raw;
+  }
   // `--gates <path>` goes through ../verbs/pr_ready.ts's resolveIdentities --
   // THE SAME resolver `pr ready` uses, never a re-spelled copy -- because
   // zheref/nen#20's defect was exactly the two siblings drifting apart:
@@ -1567,6 +1842,7 @@ function blocker(context: CommandContext): number {
     reviewers,
     policy: context.args.values["policy"] === "strict" ? "strict" : context.args.values["policy"] === "bounded" ? "bounded" : undefined,
     deliveryPr: context.args.booleans.has("delivery-pr"),
+    bodyRequirements,
   });
   if (context.json) {
     // `warnings` and `notes` are additive (hanten round 2, N1/N3); so is
@@ -2525,6 +2801,9 @@ async function doMerge(context: CommandContext): Promise<number> {
   if (context.args.values["require-head"] !== undefined) {
     throw new VerbUsageError("--require-head is read by 'pr merge --delivery', not by --release-unit, which pins the head 'pr ready' judges.");
   }
+  if (context.args.values["catalogue"] !== undefined) {
+    throw new VerbUsageError("--catalogue is read by 'pr merge --delivery' (the criteria gate), not by --release-unit.");
+  }
   const requirementsPath = requireRequirementsPath(context);
   const root = assertRepoRoot({
     repoFlag: requireRepoFlag(context, "It is the checkout whose nen/workflow.json declares release.unitPaths."),
@@ -2575,12 +2854,15 @@ async function doMergeDelivery(context: CommandContext, typedRef: string): Promi
     repoFlag: requireRepoFlag(context, "It is the checkout whose origin names the repository and whose nen/workflow.json declares branch.base."),
   });
   const requirements = readRequirements(requirementsPath, root);
+  const { catalogue, policy } = readCriteriaCatalogue(context, "catalogue", root);
   let outcome;
   try {
     outcome = await mergeDelivery({
       typedRef,
       repoFlag: context.repoFlag,
       requirements,
+      catalogue,
+      policy,
       requireHead: context.args.values["require-head"] ?? null,
       run: context.args.booleans.has("run"),
       seams: context.seams,
@@ -2590,7 +2872,7 @@ async function doMergeDelivery(context: CommandContext, typedRef: string): Promi
     if (error instanceof MergeUnitUsageError) throw new VerbUsageError(error.message);
     throw error;
   }
-  emit(context.io, context.json, outcome.report, outcome.lines);
+  emit(context.io, context.json, outcome.report, outcome.lines.map(plainLine));
   return deliveryExit(outcome.report, mergeExit);
 }
 

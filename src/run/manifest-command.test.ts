@@ -25,6 +25,9 @@ function repo(): { root: string; common: string } {
   const root = mkdtempSync(join(tmpdir(), "nen-run-cmd-"));
   const common = join(root, ".git");
   mkdirSync(common);
+  // The registry a <CODE>#<N> issue is normalised through (one spelling per issue).
+  mkdirSync(join(root, "nen"));
+  writeFileSync(join(root, "nen", "repos.json"), JSON.stringify({ consumers: [{ repo: "zheref/nen", code: "NN", consumes: [] }], product_codes: { NN: "zheref/nen" } }));
   return { root, common };
 }
 
@@ -43,6 +46,7 @@ async function capture(
         options.env?.(runOptions?.env);
         return options.common === null ? failed("fatal: not a git repository") : ok(`${options.common}\n`);
       }
+      if (command === "git" && args.includes("worktree") && args.includes("list")) return ok("");
       if (command === "gh" && args[0] === "pr" && args[1] === "view") {
         const number = Number(args[2]);
         const live = options.prs?.[number];
@@ -151,7 +155,7 @@ describe("nen run append", () => {
     const doc = JSON.parse(first.out.join("\n"));
     expect(Object.keys(doc)).toEqual(["outcome", "path", "reason", "entry", "previous"]);
     expect(doc.outcome).toBe("appended");
-    expect(doc.entry).toMatchObject({ issue: "NN#80", base: "integration/x", branch: "branch-480", head: "abcdef1000000000000000000000000000000000" });
+    expect(doc.entry).toMatchObject({ issue: "zheref/nen#80", base: "integration/x", branch: "branch-480", head: "abcdef1000000000000000000000000000000000" });
     expect((await capture(append("r1", 480), { common, repoFlag: root, prs: OPEN_ALL })).out[0]).toMatch(/^unchanged:/);
   });
 
@@ -220,10 +224,10 @@ describe("nen run park", () => {
     await capture(START, { common, repoFlag: root });
     const parked = await capture(["run", "park", "--id", "r1", "--issue", "NN#80", "--row", "direct-mismatch"], { common, repoFlag: root, json: true });
     expect(parked.code).toBe(0);
-    expect(JSON.parse(parked.out.join("\n"))).toMatchObject({ outcome: "parked", entry: { issue: "NN#80", row: "direct-mismatch", at: "2026-10-22T00:00:00.000Z" } });
+    expect(JSON.parse(parked.out.join("\n"))).toMatchObject({ outcome: "parked", entry: { issue: "zheref/nen#80", row: "direct-mismatch", at: "2026-10-22T00:00:00.000Z" } });
     expect((await capture(["run", "park", "--id", "r1", "--issue", "NN#80", "--row", "direct-mismatch"], { common, repoFlag: root })).out[0]).toMatch(/^unchanged:/);
     const verified = await capture(["run", "verify", "--id", "r1", "--target", "zheref/nen"], { common, repoFlag: root, json: true });
-    expect(JSON.parse(verified.out.join("\n")).parked).toEqual([{ issue: "NN#80", row: "direct-mismatch", at: "2026-10-22T00:00:00.000Z" }]);
+    expect(JSON.parse(verified.out.join("\n")).parked).toEqual([{ issue: "zheref/nen#80", row: "direct-mismatch", at: "2026-10-22T00:00:00.000Z" }]);
     expect(JSON.parse(readFileSync(join(common, ".nen", "runs", "r1.json"), "utf8")).parked).toHaveLength(1);
     expect((await capture(["run", "park", "--id", "r1", "--issue", "NN#80", "--row", "Bad Row"], { common, repoFlag: root })).code).toBe(2);
   });
@@ -266,7 +270,7 @@ describe("nen run verify", () => {
     });
     expect(result.code).toBe(1);
     expect(result.out[0]).toBe("run r1 on zheref/nen: 4 PR(s) recorded -- 0 open, 3 merged, 0 closed unmerged, 1 unread");
-    expect(result.out.join("\n")).toMatch(/#481 NN#81 \[delivery\] unread:/);
+    expect(result.out.join("\n")).toMatch(/#481 zheref\/nen#81 \[delivery\] unread:/);
     expect(result.out.at(-1)).toBe("unmerged: unknown (1 unread)");
     const json = await capture(["run", "verify", "--id", "r1", "--target", "zheref/nen"], { common, repoFlag: root, json: true, prs: { 480: { state: "MERGED" }, 481: "fail", 482: { state: "MERGED" }, 483: { state: "MERGED" } } });
     expect(JSON.parse(json.out.join("\n")).unmerged).toBeNull();
@@ -388,4 +392,119 @@ describe("nen run budget", () => {
     expect(result.code).toBe(0);
     expect((await capture(["run", "budget", "--id", "r1", "--max-minutes", "0", "--max-tokens", "10"], { common, repoFlag: root })).code).toBe(2);
   });
+});
+
+describe("nen run import -- Hatsu's futon run manifest into nen's (zheref/nen#486 AC-5)", () => {
+  const HATSU_ID = "0123456789abcdef0123456789abcdef";
+  function hatsuRun(common: string, overrides: Record<string, unknown> = {}): string {
+    const dir = join(common, "hatsu", "futon");
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, `run-${HATSU_ID}.json`);
+    writeFileSync(path, JSON.stringify({
+      contract: "hatsu.futon.run/v0.2", id: HATSU_ID, repo: "zheref/nen", invocation: "hatsu:futon nen@bug", selector: "nen@bug",
+      startedAt: "2026-10-22T00:00:00.000Z",
+      idle: { decisions: [{ row: "direct-mismatch", resolution: "default" }, { row: "publish-offer", resolution: "refuse" }], localSlotFrees: "merged", terminal: "ready-at-prompt", budget: { minutes: 60, tokens: 1000 }, source: { ref: "origin/main", commit: "abc" } },
+      prs: [{ issue: 480, pr: 480, base: "integration/x", kind: "delivery", head: "branch-480" }, { issue: null, pr: 483, base: "main", kind: "integration", head: "branch-483" }],
+      parked: [{ issue: 482, row: "direct-mismatch", at: "2026-10-22T00:30:00.000Z" }],
+      ...overrides,
+    }));
+    return path;
+  }
+  const IMPORT = ["run", "import", "--id", HATSU_ID];
+
+  it("imports the start, every PR read live and every parked row, leaving the Hatsu file untouched", async () => {
+    const { root, common } = repo();
+    const source = hatsuRun(common);
+    const before = readFileSync(source, "utf8");
+    const result = await capture([...IMPORT, "--json"], { common, repoFlag: root, prs: OPEN_ALL });
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.out.join("\n")).outcome).toBe("imported");
+    const stored = JSON.parse(readFileSync(join(common, ".nen", "runs", `${HATSU_ID}.json`), "utf8"));
+    expect(stored.repo).toBe("zheref/nen");
+    expect(stored.startedAt).toBe("2026-10-22T00:00:00.000Z");
+    expect(stored.idleAnswers).toEqual({ "direct-mismatch": "default", "publish-offer": "refuse" });
+    expect(stored.prs.map((row: { pr: number; issue: string | null; kind: string; base: string; branch: string }) => [row.pr, row.issue, row.kind, row.base, row.branch])).toEqual([
+      [480, "zheref/nen#480", "delivery", "integration/x", "branch-480"],
+      [483, null, "integration", "main", "branch-483"],
+    ]);
+    expect(stored.parked).toEqual([{ issue: "zheref/nen#482", row: "direct-mismatch", at: "2026-10-22T00:30:00.000Z" }]);
+    expect(readFileSync(source, "utf8")).toBe(before);
+    // verify reads the imported manifest, main-based PR included
+    const verified = await capture(["run", "verify", "--id", HATSU_ID, "--target", "zheref/nen", "--json"], { common, repoFlag: root, prs: OPEN_ALL });
+    expect(verified.code).toBe(0);
+  });
+
+  it("is idempotent, and a dry run writes nothing", async () => {
+    const { root, common } = repo();
+    hatsuRun(common);
+    const dry = await capture([...IMPORT, "--dry-run", "--json"], { common, repoFlag: root, prs: OPEN_ALL });
+    expect(JSON.parse(dry.out.join("\n")).outcome).toBe("dry-run");
+    expect(existsSync(join(common, ".nen", "runs", `${HATSU_ID}.json`))).toBe(false);
+    await capture(IMPORT, { common, repoFlag: root, prs: OPEN_ALL });
+    const again = await capture([...IMPORT, "--json"], { common, repoFlag: root, prs: OPEN_ALL });
+    expect(again.code).toBe(0);
+    expect(JSON.parse(again.out.join("\n")).outcome).toBe("unchanged");
+  });
+
+  it("refuses the whole import at exit 1 when a PR cannot be read, writing nothing", async () => {
+    const { root, common } = repo();
+    hatsuRun(common);
+    const result = await capture(IMPORT, { common, repoFlag: root, prs: { 480: { state: "OPEN" }, 483: "fail" } });
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/could not read zheref\/nen#483/);
+    expect(existsSync(join(common, ".nen", "runs", `${HATSU_ID}.json`))).toBe(false);
+  });
+
+  it("refuses a missing or malformed Hatsu manifest at exit 1, and reads --from", async () => {
+    const { root, common } = repo();
+    expect((await capture(IMPORT, { common, repoFlag: root })).code).toBe(1);
+    hatsuRun(common, { contract: "hatsu.futon.run/v9" });
+    const bad = await capture(IMPORT, { common, repoFlag: root, prs: OPEN_ALL });
+    expect(bad.code).toBe(1);
+    expect(bad.err.join("\n")).toMatch(/not a consumer run manifest/);
+    const elsewhere = join(root, "copy.json");
+    writeFileSync(elsewhere, JSON.stringify({ contract: "hatsu.futon.run/v0.1", id: HATSU_ID, repo: "zheref/nen", invocation: "x", selector: "x", startedAt: "2026-10-22T00:00:00.000Z" }));
+    const v1 = await capture([...IMPORT, "--from", "copy.json", "--json"], { common, repoFlag: root });
+    expect(v1.code).toBe(0);
+    expect(JSON.parse(v1.out.join("\n")).manifest.prs).toEqual([]);
+  });
+
+  it("refuses an import that contradicts the manifest nen already holds", async () => {
+    const { root, common } = repo();
+    hatsuRun(common);
+    await capture(["run", "start", "--id", HATSU_ID, "--target", "zheref/nen", "--idle-answers", '{"direct-mismatch":"hold"}'], { common, repoFlag: root });
+    const result = await capture(IMPORT, { common, repoFlag: root, prs: OPEN_ALL });
+    expect(result.code).toBe(1);
+    expect(result.out.join("\n")).toMatch(/refused: .*fixed at start/);
+  });
+});
+
+describe("one issue spelling per manifest (Nobunaga on #516)", () => {
+  it("records a <CODE>#<N> as <owner/name>#<N>, so an append after an import names the same issue", async () => {
+    const { root, common } = repo();
+    await capture(START, { common, repoFlag: root });
+    await capture(["run", "append", "--id", "r1", "--issue", "NN#80", "--pr", "480", "--kind", "delivery"], { common, repoFlag: root, prs: OPEN_ALL });
+    const again = await capture(["run", "append", "--id", "r1", "--issue", "zheref/nen#80", "--pr", "480", "--kind", "delivery"], { common, repoFlag: root, prs: OPEN_ALL });
+    expect(again.code).toBe(0);
+    expect(again.out[0]).toMatch(/^unchanged:/);
+  });
+
+  it("refuses a code the registry does not resolve, at exit 2", async () => {
+    const { root, common } = repo();
+    await capture(START, { common, repoFlag: root });
+    expect((await capture(["run", "append", "--id", "r1", "--issue", "ZZ#1", "--pr", "480", "--kind", "delivery"], { common, repoFlag: root, prs: OPEN_ALL })).code).toBe(2);
+  });
+});
+
+it("an import over rows nen holds in the code spelling dedupes them rather than parking twice (Bugbot on #516)", async () => {
+  const { root, common } = repo();
+  const id = "0123456789abcdef0123456789abcdef";
+  mkdirSync(join(common, ".nen", "runs"), { recursive: true });
+  writeFileSync(join(common, ".nen", "runs", `${id}.json`), JSON.stringify({ contract: "nen.run/v0.1", id, repo: "zheref/nen", startedAt: "2026-10-22T00:00:00.000Z", idleAnswers: null, prs: [], parked: [{ issue: "NN#482", row: "direct-mismatch", at: "2026-10-22T00:30:00.000Z" }] }));
+  mkdirSync(join(common, "hatsu", "futon"), { recursive: true });
+  writeFileSync(join(common, "hatsu", "futon", `run-${id}.json`), JSON.stringify({ contract: "hatsu.futon.run/v0.2", id, repo: "zheref/nen", invocation: "x", selector: "x", startedAt: "2026-10-22T00:00:00.000Z", idle: null, prs: [], parked: [{ issue: 482, row: "direct-mismatch", at: "2026-10-22T00:30:00.000Z" }] }));
+  const result = await capture(["run", "import", "--id", id, "--json"], { common, repoFlag: root });
+  expect(result.code).toBe(0);
+  const stored = JSON.parse(readFileSync(join(common, ".nen", "runs", `${id}.json`), "utf8"));
+  expect(stored.parked).toEqual([{ issue: "zheref/nen#482", row: "direct-mismatch", at: "2026-10-22T00:30:00.000Z" }]);
 });

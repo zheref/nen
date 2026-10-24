@@ -85,6 +85,8 @@ export type RowCriterion =
 
 export interface VerifyRow {
   readonly line: number;
+  /** The table line as written, trimmed: what a refusal quotes (zheref/nen#479 AC-3). */
+  readonly raw: string;
   /** The first cell as written, trimmed. */
   readonly cell: string;
   readonly criterion: RowCriterion | null;
@@ -155,23 +157,33 @@ export function readVerifyRows(body: string): VerifyRow[] {
     const criterion = parseCriterionCell(first);
     if (criterion === null) {
       if (/AC-/i.test(first)) {
-        rows.push({ line: line.line, cell: first, criterion: null, word: null, evidence: "", problem: `'${first}' is not a criterion: write AC-<n>, <CODE>#<N>/AC-<n>, <owner/name>#<N>/AC-<n> or none` });
+        rows.push({ line: line.line, raw: line.text.trim(), cell: first, criterion: null, word: null, evidence: "", problem: `'${first}' is not a criterion: write AC-<n>, <CODE>#<N>/AC-<n>, <owner/name>#<N>/AC-<n> or none` });
       }
       continue;
     }
     if (cells.length !== 3) {
-      rows.push({ line: line.line, cell: first, criterion, word: null, evidence: "", problem: `the row has ${cells.length} cell(s); a verify row has three: criterion, coverage word, evidence` });
+      rows.push({ line: line.line, raw: line.text.trim(), cell: first, criterion, word: null, evidence: "", problem: `the row has ${cells.length} cell(s); a verify row has three: criterion, coverage word, evidence` });
       continue;
     }
     const rawWord = unwrap(cells[1] as string).toLowerCase();
     const word = (COVERAGE_WORDS as readonly string[]).includes(rawWord) ? (rawWord as CoverageWord) : null;
+    // ONE STATUS PER ROW (zheref/nen#479 AC-2): a cell naming two or more of the
+    // five words ('satisfied, partial', 'partial/missing') is refused by name,
+    // never read as either.
+    const named = word === null ? COVERAGE_WORDS.filter((candidate): boolean => new RegExp(`\\b${candidate}\\b`).test(rawWord)) : [];
     rows.push({
       line: line.line,
+      raw: line.text.trim(),
       cell: first,
       criterion,
       word,
       evidence: cells[2] as string,
-      problem: word === null ? `'${(cells[1] as string).trim()}' is not a coverage word: one of ${COVERAGE_WORDS.join(", ")}` : null,
+      problem:
+        word !== null
+          ? null
+          : named.length > 1
+            ? `'${(cells[1] as string).trim()}' carries more than one status (${named.join(", ")}); a verify row carries exactly one of ${COVERAGE_WORDS.join(", ")}`
+            : `'${(cells[1] as string).trim()}' is not a coverage word: one of ${COVERAGE_WORDS.join(", ")}`,
     });
   }
   return rows;
@@ -191,6 +203,8 @@ export interface ClosingIssue {
   readonly target: string;
   readonly number: number;
   readonly report: CriteriaReport;
+  /** How the issue is named in a report, when it is not `owner/name#N` (a `--criteria` list read off the command line). */
+  readonly label?: string;
 }
 
 export type Coverage =
@@ -213,6 +227,8 @@ export interface CriterionCoverage {
   readonly evidence: string | null;
   /** The verify row lines that name this criterion (several on duplicate-rows). */
   readonly rows: readonly number[];
+  /** The one row as written, when exactly one row names the criterion: quoted by a refusal. */
+  readonly raw: string | null;
 }
 
 export interface UnmatchedRow {
@@ -333,9 +349,9 @@ export function converge(issues: readonly ClosingIssue[], prBody: string, policy
 
   const criteria: CriterionCoverage[] = [];
   for (const issue of issues) {
-    const name = `${issue.target}#${issue.number}`;
+    const name = issue.label ?? `${issue.target}#${issue.number}`;
     if (!issue.report.verifiable) {
-      criteria.push({ issue: name, id: null, text: null, coverage: "not-verifiable", word: null, evidence: null, rows: [] });
+      criteria.push({ issue: name, id: null, text: null, coverage: "not-verifiable", word: null, evidence: null, rows: [], raw: null });
       continue;
     }
     const seen = new Set<number>();
@@ -357,6 +373,7 @@ export function converge(issues: readonly ClosingIssue[], prBody: string, policy
         word: only?.word ?? null,
         evidence: only === null ? null : only.evidence,
         rows: lines,
+        raw: only === null ? null : only.raw,
       });
     }
   }
@@ -376,13 +393,17 @@ export function converge(issues: readonly ClosingIssue[], prBody: string, policy
     coverageCounts[entry.coverage] += 1;
     if (entry.word !== null) words[entry.word] += 1;
     const where = `${entry.issue}/${entry.id ?? "-"}`;
-    if (BLOCKING_COVERAGE.has(entry.coverage)) blocking.push(`${where}: ${entry.coverage === "not-verifiable" ? "not-verifiable (the issue states no criterion)" : entry.coverage}`);
-    else if (entry.word !== null && blockingWords.has(entry.word)) blocking.push(`${where}: ${entry.word}`);
+    // The row is QUOTED wherever it is the reason (zheref/nen#479 AC-3): a
+    // reader of a refused merge sees the line that refused it.
+    const quoted = entry.raw === null ? "" : ` -- row line ${entry.rows[0] ?? "?"}: ${entry.raw}`;
+    if (entry.coverage === "missing-row") blocking.push(`${where}: missing-row (no verify row names ${entry.id ?? "it"})`);
+    else if (BLOCKING_COVERAGE.has(entry.coverage)) blocking.push(`${where}: ${entry.coverage === "not-verifiable" ? "not-verifiable (the issue states no criterion)" : entry.coverage}${quoted}`);
+    else if (entry.word !== null && blockingWords.has(entry.word)) blocking.push(`${where}: ${entry.word}${quoted}`);
     else if (entry.word === policy.noneWord) blocking.push(`${where}: ${entry.word} on a criterion (only a none row says ${policy.noneWord})`);
     else if (entry.coverage === "covered-without-evidence" && policy.evidenceRequired) blocking.push(`${where}: no evidence`);
   }
   for (const issue of issues) {
-    for (const row of issue.report.unrecognised) blocking.push(`${issue.target}#${issue.number}: unrecognised criterion row at line ${row.line}`);
+    for (const row of issue.report.unrecognised) blocking.push(`${issue.label ?? `${issue.target}#${issue.number}`}: unrecognised criterion row at line ${row.line}`);
   }
   for (const row of unrequested) if (row.problem !== null) blocking.push(`none row line ${row.line}: ${row.problem}`);
   for (const row of unmatched) blocking.push(`row line ${row.line} '${row.cell}': unmatched -- ${row.reason}`);

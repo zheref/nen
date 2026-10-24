@@ -94,6 +94,8 @@ export interface LintContract {
   readonly quotedWords: boolean;
   readonly recordPaths: readonly string[];
   readonly recordRules: readonly string[];
+  /** The rule ids a RETIRED block exempts (`retired.rules`; absent: the history classes). */
+  readonly retiredRules: readonly string[];
   readonly versionSource: { readonly file: string; readonly minimum: string; readonly pinned: string } | null;
   readonly decisionsFile: string | null;
   readonly markerRows: readonly string[];
@@ -134,6 +136,8 @@ export interface LintReport {
   readonly advisory: readonly Omit<Finding, "inBaseline">[];
   readonly staleBaseline: readonly BaselineRow[];
   readonly grownBaseline: readonly BaselineRow[];
+  /** Said, never silent: `--base` named a revision carrying no baseline, so growth went unchecked. */
+  readonly notice: string | null;
 }
 
 /** A wiring failure: the lint could not look, so it reports no verdict. Exit 2. */
@@ -147,8 +151,18 @@ const wiring = (message: string): never => {
   throw new LintWiringError(message);
 };
 
+/** The largest file the lint reads (Feitan F3): a larger one is wiring, never read slowly or skipped. */
+export const MAX_LINT_FILE_BYTES = 4 * 1024 * 1024;
+
 function readUtf8(abs: string, rel: string): string {
   let buffer: Buffer;
+  let size = 0;
+  try {
+    size = statSync(abs).size;
+  } catch (error) {
+    return wiring(`cannot read ${rel}: ${(error as Error).message}`);
+  }
+  if (size > MAX_LINT_FILE_BYTES) return wiring(`${rel} is larger than ${MAX_LINT_FILE_BYTES} bytes; the lint reads no file that large`);
   try {
     buffer = readFileSync(abs);
   } catch (error) {
@@ -163,11 +177,41 @@ function readUtf8(abs: string, rel: string): string {
 
 function readJson(abs: string, rel: string): unknown {
   const text = readUtf8(abs, rel);
+  // The file is named, never quoted: a parser's message echoes the bytes it read (SEC-7).
   try {
     return JSON.parse(text) as unknown;
-  } catch (error) {
-    return wiring(`${rel} is not valid JSON: ${(error as Error).message}`);
+  } catch {
+    return wiring(`${rel} is not valid JSON`);
   }
+}
+
+/**
+ * A contract-named path, resolved inside the root (SEC-7): a path climbing
+ * out, a dangling symlink, or a symlink (or symlinked parent) whose real path
+ * leaves the root is wiring. An absent path returns its absolute path, so the
+ * caller names the missing file in its own words.
+ */
+export function insideRoot(root: string, realRoot: string, rel: string): string {
+  const abs = resolve(root, rel);
+  if (abs !== root && !abs.startsWith(root + sep)) return wiring(`${rel} leaves the root`);
+  let link: boolean;
+  try {
+    link = lstatSync(abs).isSymbolicLink();
+  } catch {
+    return abs;
+  }
+  let real = "";
+  try {
+    real = realpathSync(abs);
+  } catch (error) {
+    // "Dangling" only for a real symlink; any other realpath failure (an
+    // unreadable file or parent on some hosts) is named by its own code.
+    if (link) return wiring(`symlink ${rel} is dangling`);
+    const code = error !== null && typeof error === "object" && "code" in error ? String((error as { code: unknown }).code) : "unreadable";
+    return wiring(`cannot read ${rel}: ${code}`);
+  }
+  if (real !== realRoot && !real.startsWith(realRoot + sep)) return wiring(`symlink ${rel} leaves the root`);
+  return abs;
 }
 
 /** RFC 6901, as far as the contract's pointers need it. */
@@ -248,12 +292,19 @@ export function parseLintContract(raw: unknown, rel: string): LintContract {
   const declaredValues = has("number-not-declared") ? stringList(raw["declaredValues"], `${rel}: declaredValues`) : [];
   const emptyBaseline = raw["emptyBaseline"] === undefined ? [] : stringList(raw["emptyBaseline"], `${rel}: emptyBaseline`);
   const skillPaths = raw["skillPaths"] === undefined ? null : stringList(raw["skillPaths"], `${rel}: skillPaths`);
+  const retired = raw["retired"];
+  if (retired !== undefined && (!isRecord(retired) || !Array.isArray(retired["rules"]))) wiring(`${rel} lacks retired.rules[]`);
+  const retiredRules = retired === undefined
+    ? rules.filter((rule): boolean => RETIRED_EXEMPT.includes(rule.class)).map((rule): string => rule.id)
+    : stringList((retired as Record<string, unknown>)["rules"], `${rel}: retired.rules`);
+  for (const id of retiredRules) if (!seen.has(id)) wiring(`${rel}: retired.rules names ${id}, which is no rule`);
   return {
     include,
     exclude,
     quotedWords: exemptions["quotedWords"] !== false,
     recordPaths: records === undefined ? [] : stringList((records as Record<string, unknown>)["paths"], `${rel}: records.paths`),
     recordRules: records === undefined ? [] : stringList((records as Record<string, unknown>)["rules"], `${rel}: records.rules`),
+    retiredRules,
     versionSource,
     decisionsFile,
     markerRows,
@@ -311,15 +362,37 @@ export function walk(root: string, realRoot: string, include: readonly string[],
   return out;
 }
 
-/** Quoted words -- "…" and “…” -- blanked, newlines kept: the maintainer's words are never linted. */
+/**
+ * Quoted words -- "…", “…”, *"…"* -- blanked, newlines kept: the maintainer's
+ * words are never linted (HR-13). A quotation pairs within one line and never
+ * across an inline code span (a `"` in code is no quotation): the spans are
+ * found on a copy with code blanked, then blanked in the text itself.
+ */
 export function exemptQuoted(text: string): string {
-  let out = text;
-  for (const re of [/"[^"]{1,600}"/g, /“[^”]{1,600}”/g]) out = out.replace(re, (match): string => match.replace(/[^\n]/g, " "));
-  return out;
+  const probe = text.replace(/`[^`\n]*`/g, (span): string => " ".repeat(span.length));
+  // LINEAR (Feitan F3 on zheref/nen#526): spans are collected, then the text
+  // is rebuilt in ONE pass -- never re-sliced once per quotation.
+  const spans: [number, number][] = [];
+  for (const re of [/"[^"\n]{1,600}"/g, /“[^”\n]{1,600}”/g]) for (const m of probe.matchAll(re)) spans.push([m.index, m.index + m[0].length]);
+  if (spans.length === 0) return text;
+  spans.sort((a, b): number => a[0] - b[0]);
+  const parts: string[] = [];
+  let at = 0;
+  for (const [start, end] of spans) {
+    const from = Math.max(start, at);
+    if (end <= from) continue;
+    parts.push(text.slice(at, from), text.slice(from, end).replace(/[^\n]/g, " "));
+    at = end;
+  }
+  parts.push(text.slice(at));
+  return parts.join("");
 }
 
 interface Ctx {
   readonly root: string;
+  readonly realRoot: string;
+  /** The paths the marker limit and the reading rule apply to; null: every included path. */
+  readonly skillPaths: readonly string[] | null;
   readonly contract: LintContract;
   readonly min: string;
   readonly pin: string;
@@ -330,10 +403,10 @@ interface Ctx {
   readonly humanGate: ReadonlySet<string>;
 }
 
-function loadDoc(ctx: { root: string; docs: Map<string, Doc> }, rel: string): Doc | null {
+function loadDoc(ctx: { root: string; realRoot: string; docs: Map<string, Doc> }, rel: string): Doc | null {
   const cached = ctx.docs.get(rel);
   if (cached !== undefined) return cached;
-  const abs = join(ctx.root, rel);
+  const abs = insideRoot(ctx.root, ctx.realRoot, rel);
   if (!existsSync(abs) || !statSync(abs).isFile()) return null;
   const doc = parseDoc(rel, readUtf8(abs, rel));
   ctx.docs.set(rel, doc);
@@ -352,11 +425,17 @@ export function resolveLinkTarget(root: string, from: string, target: string): {
   const abs = resolve(root, dirname(from), path);
   if (abs !== root && !abs.startsWith(root + sep)) return { rel: null, why: "leaves the root" };
   if (!existsSync(abs)) return { rel: null, why: "no such file" };
-  // A symlink inside the root that resolves outside it leaves the root too:
-  // nothing outside the checkout is read to answer a citation.
+  // A symlink inside the root that resolves outside it is wiring, as the
+  // guard's SEC-7 reading has it: nothing outside the checkout is read to
+  // answer a citation, and a link that would need to is no verdict.
   const realRoot = realpathSync(root);
-  const real = realpathSync(abs);
-  if (real !== realRoot && !real.startsWith(realRoot + sep)) return { rel: null, why: "leaves the root" };
+  let real = "";
+  try {
+    real = realpathSync(abs);
+  } catch {
+    return wiring(`link ${target} in ${from} cannot be resolved`);
+  }
+  if (real !== realRoot && !real.startsWith(realRoot + sep)) return wiring(`link ${target} in ${from} resolves through a symlink leaving the root`);
   return { rel: relative(root, abs).split(sep).join("/") };
 }
 
@@ -400,12 +479,12 @@ function insideSpan(spans: readonly (readonly [number, number])[], offset: numbe
 function checkDoc(ctx: Ctx, doc: Doc): Finding[] {
   const out: Finding[] = [];
   const c = ctx.contract;
-  const skillRes = c.skillPaths === null ? null : c.skillPaths.map(globToRegex);
+  const skillRes = ctx.skillPaths === null ? null : ctx.skillPaths.map(globToRegex);
   const isSkill = skillRes === null || skillRes.some((re): boolean => re.test(doc.path));
   const isRecord = c.recordPaths.map(globToRegex).some((re): boolean => re.test(doc.path));
   const add = (rule: Rule, para: Para, offset: number, text: string): void => {
     const line = lineAt(para, offset);
-    if (doc.retired.has(line) && RETIRED_EXEMPT.includes(rule.class)) return;
+    if (doc.retired.has(line) && c.retiredRules.includes(rule.id)) return;
     if (isRecord && c.recordRules.includes(rule.id)) return;
     out.push({ path: doc.path, line, rule: rule.id, severity: rule.severity, text: text.replace(/\s+/g, " ").trim().slice(0, 160) });
   };
@@ -579,7 +658,7 @@ export function readingClauses(doc: Doc, prefix: string): Set<string> {
   return out;
 }
 
-function declaredNumbers(root: string, globs: readonly string[]): Set<string> {
+function declaredNumbers(root: string, realRoot: string, globs: readonly string[]): Set<string> {
   const out = new Set<string>();
   const add = (value: unknown): void => {
     if (typeof value === "number") out.add(String(value));
@@ -592,13 +671,14 @@ function declaredNumbers(root: string, globs: readonly string[]): Set<string> {
     const dir = glob.includes("/") ? glob.slice(0, glob.lastIndexOf("/")) : ".";
     let names: string[] = [];
     try {
-      names = readdirSync(join(root, dir));
-    } catch {
+      names = readdirSync(insideRoot(root, realRoot, dir));
+    } catch (error) {
+      if (error instanceof LintWiringError) throw error;
       wiring(`declaredValues directory ${dir} cannot be listed`);
     }
     for (const name of names.sort()) {
       const rel = dir === "." ? name : `${dir}/${name}`;
-      if (re.test(rel)) add(readJson(join(root, rel), rel));
+      if (re.test(rel)) add(readJson(insideRoot(root, realRoot, rel), rel));
     }
   }
   return out;
@@ -611,29 +691,52 @@ function git(seams: Seams, root: string, args: readonly string[]): string {
   return result.stdout;
 }
 
+const keyOf = (path: string, rule: string, text: string): string => `${path}\u0000${rule}\u0000${text.toLowerCase()}`;
+
+/**
+ * A baseline: `{ findings: [{ path, rule, text, count }] }`, plus `frozenAt`
+ * and `$`-keys. An unexpected key, top-level or in a row, is refused, never
+ * ignored (the guard's QA-16); one row per key, its count the total; a rule
+ * the contract never baselines (`emptyBaseline`) is refused.
+ */
 export function parseBaseline(text: string, rel: string, never: readonly string[]): BaselineRow[] {
   let document: unknown;
   try {
     document = JSON.parse(text) as unknown;
-  } catch (error) {
-    return wiring(`${rel} is not valid JSON: ${(error as Error).message}`);
+  } catch {
+    return wiring(`${rel} is not valid JSON`);
   }
-  const rows = isRecord(document) ? document["findings"] : undefined;
+  if (!isRecord(document)) return wiring(`${rel} is not an object`);
+  for (const key of Object.keys(document)) if (!key.startsWith("$") && key !== "frozenAt" && key !== "findings") wiring(`${rel} has an unknown top-level key ${JSON.stringify(key)}`);
+  const rows = document["findings"];
   if (!Array.isArray(rows)) return wiring(`${rel} lacks findings[]`);
+  const keys = new Set<string>();
   for (const row of rows as BaselineRow[]) {
     if (!isRecord(row) || typeof row.path !== "string" || typeof row.rule !== "string" || typeof row.text !== "string" || !Number.isInteger(row.count) || row.count < 1) wiring(`${rel} has a malformed row`);
+    for (const key of Object.keys(row)) if (!["path", "rule", "text", "count"].includes(key)) wiring(`${rel} has a row with an unknown key ${JSON.stringify(key)}`);
+    const key = keyOf(row.path, row.rule, row.text);
+    if (keys.has(key)) wiring(`${rel} repeats the row ${row.path} · ${row.rule} · ${row.text}; one row per key, its count the total`);
+    keys.add(key);
     if (never.includes(row.rule)) wiring(`${rel}: ${row.rule} is never baselined; fix the prose instead`);
   }
   return rows as BaselineRow[];
 }
 
-const keyOf = (path: string, rule: string, text: string): string => `${path}\u0000${rule}\u0000${text.toLowerCase()}`;
 
 export interface LintOptions {
   readonly root: string;
   readonly rules: string;
   readonly baseline: string | null;
   readonly base: string | null;
+  /** The trusted base revision's baseline file (the CI form): growth over it refused, no git read. */
+  readonly baseBaseline?: string | null;
+  /** The marker-limit and reading-rule paths when the contract declares no `skillPaths` (from `canon.lint`). */
+  readonly skillPaths?: readonly string[] | null;
+}
+
+/** The path as git names it from the root: a root-relative, `/`-separated path. */
+function rootRelative(root: string, path: string): string {
+  return relative(root, resolve(root, path)).split(sep).join("/");
 }
 
 /** Run the lint. Throws LintWiringError when it could not look. */
@@ -641,14 +744,14 @@ export function canonLint(options: LintOptions, seams: Seams): { readonly report
   const root = resolve(options.root);
   if (!existsSync(root) || !statSync(root).isDirectory()) wiring(`root ${options.root} is not a directory`);
   const realRoot = realpathSync(root);
-  const rulesAbs = resolve(root, options.rules);
+  const rulesAbs = insideRoot(root, realRoot, options.rules);
   if (!existsSync(rulesAbs)) wiring(`rules contract ${options.rules} does not exist under ${root}`);
   const contract = parseLintContract(readJson(rulesAbs, options.rules), options.rules);
   let min = "";
   let pin = "";
   if (contract.versionSource !== null) {
     const vs = contract.versionSource;
-    const document = readJson(join(root, vs.file), vs.file);
+    const document = readJson(insideRoot(root, realRoot, vs.file), vs.file);
     const minimum = pointer(document, vs.minimum);
     const pinned = pointer(document, vs.pinned);
     if (typeof minimum !== "string" || typeof pinned !== "string") wiring(`${vs.file} lacks the minimum or pinned value the contract names (${vs.minimum}, ${vs.pinned})`);
@@ -657,33 +760,58 @@ export function canonLint(options: LintOptions, seams: Seams): { readonly report
   }
   let humanGate = new Set<string>();
   if (contract.decisionsFile !== null) {
-    const decisions = readJson(join(root, contract.decisionsFile), contract.decisionsFile);
+    const decisions = readJson(insideRoot(root, realRoot, contract.decisionsFile), contract.decisionsFile);
     const rows = isRecord(decisions) ? decisions["rows"] : undefined;
     if (!Array.isArray(rows)) wiring(`${contract.decisionsFile} lacks rows[]`);
     const typed = (rows as unknown[]).filter(isRecord) as { id?: unknown; class?: unknown }[];
-    const ids = new Set(typed.map((row): unknown => row.id));
-    for (const row of contract.markerRows) if (!ids.has(row)) wiring(`markerRows names ${row}, which ${contract.decisionsFile} does not carry`);
-    humanGate = new Set(typed.filter((row): boolean => row.class === "human-gate" && typeof row.id === "string" && !contract.markerRows.includes(row.id)).map((row): string => row.id as string));
+    for (const id of contract.markerRows) {
+      const row = typed.find((candidate): boolean => candidate.id === id);
+      if (row === undefined) wiring(`markerRows names ${id}, which ${contract.decisionsFile} does not carry`);
+      // HR-4: a marker asks a question a run asks once; any other class is wiring.
+      else if (row.class !== "ask-once-per-run") wiring(`markerRows names ${id}, which is class ${String(row.class)} in ${contract.decisionsFile}; a marker row is ask-once-per-run`);
+    }
+    humanGate = new Set(typed.filter((row): boolean => row.class === "human-gate" && typeof row.id === "string").map((row): string => row.id as string));
   }
   const docs = new Map<string, Doc>();
   let reading = new Set<string>();
   if (contract.rulingsFile !== null) {
-    const rulings = loadDoc({ root, docs }, contract.rulingsFile);
+    const rulings = loadDoc({ root, realRoot, docs }, contract.rulingsFile);
     if (rulings === null) wiring(`rulings file ${contract.rulingsFile} is missing`);
     const rule = contract.rules.find((r): boolean => r.class === "reading-cited-as-ruled");
     reading = readingClauses(rulings as Doc, (rule?.["prefix"] as string | undefined) ?? "HR");
   }
-  const ctx: Ctx = { root, contract, min, pin, docs, reading, declared: declaredNumbers(root, contract.declaredValues), markerOk: new Set(contract.markerRows), humanGate };
-  let files = walk(root, realRoot, contract.include, contract.exclude);
+  const ctx: Ctx = {
+    root,
+    realRoot,
+    skillPaths: contract.skillPaths ?? options.skillPaths ?? null,
+    contract,
+    min,
+    pin,
+    docs,
+    reading,
+    declared: declaredNumbers(root, realRoot, contract.declaredValues),
+    markerOk: new Set(contract.markerRows),
+    humanGate,
+  };
+  const walked = walk(root, realRoot, contract.include, contract.exclude);
+  let files = walked;
   let baseRows: BaselineRow[] | null = null;
+  let notice: string | null = null;
   if (options.base !== null) {
     const mergeBase = git(seams, root, ["merge-base", options.base, "HEAD"]).trim();
     const changed = new Set(git(seams, root, ["diff", "--name-only", "--relative", mergeBase]).split("\n").filter((line): boolean => line !== ""));
     files = files.filter((file): boolean => changed.has(file));
     if (options.baseline !== null) {
-      const shown = seams.run(GIT, ["-C", root, "show", `${mergeBase}:./${options.baseline}`]);
-      if (!shown.spawnFailed && shown.code === 0) baseRows = parseBaseline(shown.stdout, `${options.base}:${options.baseline}`, contract.emptyBaseline);
+      const shownPath = rootRelative(root, options.baseline);
+      const shown = seams.run(GIT, ["-C", root, "show", `${mergeBase}:./${shownPath}`]);
+      if (!shown.spawnFailed && shown.code === 0) baseRows = parseBaseline(shown.stdout, `${options.base}:${shownPath}`, contract.emptyBaseline);
+      else notice = `notice: ${options.base} carries no ${shownPath}; baseline growth is not checked`;
     }
+  }
+  if (options.baseBaseline !== undefined && options.baseBaseline !== null) {
+    const abs = resolve(options.baseBaseline);
+    if (!existsSync(abs)) wiring(`--base-baseline ${options.baseBaseline} is missing`);
+    baseRows = parseBaseline(readUtf8(abs, options.baseBaseline), options.baseBaseline, contract.emptyBaseline);
   }
   const findings: Finding[] = [];
   for (const file of files) {
@@ -693,7 +821,7 @@ export function canonLint(options: LintOptions, seams: Seams): { readonly report
   }
   let rows: BaselineRow[] = [];
   if (options.baseline !== null) {
-    const abs = resolve(root, options.baseline);
+    const abs = insideRoot(root, realRoot, options.baseline);
     if (!existsSync(abs)) wiring(`baseline ${options.baseline} is missing`);
     rows = parseBaseline(readUtf8(abs, options.baseline), options.baseline, contract.emptyBaseline);
   }
@@ -706,10 +834,11 @@ export function canonLint(options: LintOptions, seams: Seams): { readonly report
     finding.inBaseline = left > 0;
     if (left > 0) budget.set(key, left - 1);
   }
+  // Stale: a row whose path the walk does not read (deleted, renamed, out of
+  // scope), or a row in a linted file with budget left over.
+  const read = new Set(walked);
   const scoped = new Set(files);
-  const stale = rows
-    .filter((row): boolean => scoped.has(row.path) && (budget.get(keyOf(row.path, row.rule, row.text)) ?? 0) > 0)
-    .filter((row, i, all): boolean => all.findIndex((x): boolean => keyOf(x.path, x.rule, x.text) === keyOf(row.path, row.rule, row.text)) === i);
+  const stale = rows.filter((row): boolean => !read.has(row.path) || (scoped.has(row.path) && (budget.get(keyOf(row.path, row.rule, row.text)) ?? 0) > 0));
   const grown: BaselineRow[] = [];
   if (baseRows !== null) {
     const was = new Map<string, number>();
@@ -739,17 +868,18 @@ export function canonLint(options: LintOptions, seams: Seams): { readonly report
     advisory: findings.filter((f): boolean => f.severity === "advisory").map((f): Omit<Finding, "inBaseline"> => ({ path: f.path, line: f.line, rule: f.rule, severity: f.severity, text: f.text })),
     staleBaseline: stale,
     grownBaseline: grown,
+    notice,
   };
   return { report, rules: contract.rules };
 }
 
 /** The human rendering: new findings, stale and grown rows, then one summary line. */
-export function renderLint(report: LintReport, rules: readonly Rule[]): string[] {
-  const lines: string[] = [];
+export function renderLint(report: LintReport, rules: readonly Rule[], against: string | null = report.base): string[] {
+  const lines: string[] = report.notice === null ? [] : [report.notice];
   const fresh = report.findings.filter((f): boolean => f.inBaseline !== true);
   for (const f of fresh) lines.push(`${f.path}:${f.line} · ${f.rule} · ${f.text}`);
   for (const r of report.staleBaseline) lines.push(`baseline · ${r.rule} · ${r.path} · ${r.text} — no longer found; remove the row`);
-  for (const r of report.grownBaseline) lines.push(`baseline · ${r.rule} · ${r.path} · ${r.text} — added over ${report.base ?? "the base"}; the baseline only shrinks`);
+  for (const r of report.grownBaseline) lines.push(`baseline · ${r.rule} · ${r.path} · ${r.text} — added over ${against ?? "the base"}; the baseline only shrinks`);
   if (report.base !== null) for (const f of report.advisory) lines.push(`advisory ${f.path}:${f.line} · ${f.rule} · ${f.text}`);
   const summary = rules
     .map((rule): string => {

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { renderBoard } from "../board/render.js";
 import { runFamily, type Io } from "../index.js";
-import type { Seams } from "../seam/exec.js";
+import { spawnRunner, type CommandResult, type Seams } from "../seam/exec.js";
 import { MARKER_FILE, STOP_MARK_CONTRACT, stopCommand } from "./command.js";
 import { noPortProbe } from "../seam/scripted.js";
 
@@ -13,8 +13,11 @@ import { noPortProbe } from "../seam/scripted.js";
 // (this verb growing a real `gh` call) into an immediate red test instead of
 // a silent live subprocess call.
 const STUB_SEAMS: Seams = {
-  run: (): never => {
-    throw new Error("must not be called");
+  // Only git, and only to find the per-gate markers' home (zheref/nen#513): a
+  // temp dir is no repository, so they stay under --repo.
+  run: (command, args, options): CommandResult => {
+    if (command !== "git" || !args.includes("--git-common-dir")) throw new Error(`must not be called: ${command} ${args.join(" ")}`);
+    return spawnRunner(command, args, options);
   },
   now: (): Date => new Date("2026-01-01T00:00:00Z"),
   env: {},

@@ -67,6 +67,10 @@ import { SchemaError } from "../schema/errors.js";
 import { GH, mustJson, redactRemoteCredentials, ToolError, type Seams } from "../seam/exec.js";
 import type { PrReadyDeps } from "../verbs/pr_ready.js";
 import type { Target } from "../github/target.js";
+import { closingLinksConjunct, ConvergeReadError, convergeInputFromView, criteriaConjunct } from "./converge.js";
+import { DEFAULT_COVERAGE_POLICY, type CoveragePolicy } from "../issue/criteria.js";
+import type { IssueSectionsCatalogue } from "../issue/shape.js";
+import { plainLine } from "../cli/plain.js";
 
 export const MERGE_DELIVERY_CONTRACT = "nen.pr.merge-delivery/v0.1";
 
@@ -107,6 +111,10 @@ export interface MergeDeliveryReport {
   readonly ready: boolean;
   readonly pinOk: boolean;
   readonly bodyOk: boolean;
+  /** The criteria-coverage conjunct (Hatsu HR-11, Akatsuki CON-17(c); zheref/nen#479 AC-3) at the judged head. */
+  readonly criteriaOk: boolean;
+  /** The closing-issue links conjunct (zheref/nen#483 AC-1), read in the same fetch. */
+  readonly linksOk: boolean;
   readonly wholeOk: boolean;
   readonly ok: boolean;
   readonly ran: boolean;
@@ -142,15 +150,50 @@ export interface MergeDeliveryOptions {
   readonly seams: Seams;
   readonly root: string;
   readonly deps?: PrReadyDeps;
+  /** The issue-sections catalogue the criteria are read with (`--catalogue`); null: `AC-{n}` rows anywhere in the body. */
+  readonly catalogue?: IssueSectionsCatalogue | null;
+  /** The catalogue's coverage rules; absent: the defaults (`missing`, `contradicts` block; evidence required). */
+  readonly policy?: CoveragePolicy;
 }
 
-/** `PrOnce` plus the two NAMES the delivery form adds to the one fetch. */
+/** `PrOnce` plus the NAMES and the closing list the delivery form adds to the one fetch. */
 interface DeliveryPrOnce extends PrOnce {
   readonly baseRefName?: unknown;
   readonly headRefName?: unknown;
+  readonly closingIssuesReferences?: unknown;
+  readonly url?: unknown;
 }
 
-const DELIVERY_PR_ONCE_FIELDS = "headRefOid,baseRefOid,baseRefName,headRefName,body,isCrossRepository,author,state";
+const DELIVERY_PR_ONCE_FIELDS = "headRefOid,baseRefOid,baseRefName,headRefName,body,isCrossRepository,author,state,closingIssuesReferences,url";
+
+/**
+ * The criteria and closing-link conjuncts (zheref/nen#479 AC-3, #483 AC-1):
+ * the very facts `pr converge` reports, computed from the ONE fetch this
+ * module made -- so the body, the closing list and the head are the head pin's
+ * -- with each closing issue then read. A read that did not finish fails both
+ * gates, never passes them.
+ */
+function runConvergenceGates(options: MergeDeliveryOptions, target: Target, prNumber: number, prOnce: DeliveryPrOnce | null, fetchFailure: string | null, defaultBranch: string | null): [GateOutcome, GateOutcome] {
+  const failed = (why: string): [GateOutcome, GateOutcome] => [
+    { name: "criteria", ok: false, lines: [`criteria: ${why} -- refused: could not look is never covered.`] },
+    { name: "closing links", ok: false, lines: [`closing links: ${why} -- refused.`] },
+  ];
+  if (prOnce === null) return failed(fetchFailure ?? "the pull request was never fetched");
+  try {
+    const input = convergeInputFromView(options.seams, target, prNumber, prOnce as unknown as Record<string, unknown>, options.catalogue ?? null, defaultBranch);
+    const criteria = criteriaConjunct(input, options.policy ?? DEFAULT_COVERAGE_POLICY);
+    const links = closingLinksConjunct(input, target);
+    // PLAIN AT THE BOUNDARY (Feitan F2 on zheref/nen#526): these lines quote
+    // the pull request's body, text this merge did not write.
+    return [
+      { name: criteria.name, ok: criteria.ok, lines: criteria.lines.map(plainLine) },
+      { name: links.name, ok: links.ok, lines: links.lines.map(plainLine) },
+    ];
+  } catch (error) {
+    if (error instanceof ConvergeReadError) return failed(redactRemoteCredentials(error.message));
+    throw error;
+  }
+}
 
 /** `refs/heads/main` and `main` name one branch (F7). */
 export function stripHeads(name: string): string {
@@ -526,6 +569,8 @@ export async function mergeDelivery(options: MergeDeliveryOptions): Promise<Merg
         ready: false,
         pinOk: false,
         bodyOk: false,
+        criteriaOk: false,
+        linksOk: false,
         wholeOk: false,
         judgedHead: null,
         ...facts,
@@ -608,10 +653,11 @@ export async function mergeDelivery(options: MergeDeliveryOptions): Promise<Merg
   });
   const pinGate = pinWithRequiredHead(computePinGate(readyGate.judgedHead, prOnce, fetchFailure), options.requireHead, readyGate.judgedHead);
   const bodyGate = runBodyCheckGate(prOnce, fetchFailure, { requirements: options.requirements });
+  const [criteriaGate, linksGate] = runConvergenceGates(options, target, ref.number, prOnce, fetchFailure, defaultBranch);
   const ownGate = runOwnGate(options.seams, prOnce, fetchFailure, baseCommitPolicy.template);
   const policyGate = runPolicyFilesGate(options.seams, target, ref.number);
 
-  const gates: GateOutcome[] = [baseGate, readyGate, pinGate, bodyGate, ownGate, policyGate];
+  const gates: GateOutcome[] = [baseGate, readyGate, pinGate, bodyGate, criteriaGate, linksGate, ownGate, policyGate];
   const ok = gates.every((gate): boolean => gate.ok);
   const judgedHead = readyGate.judgedHead;
   const mergeArgv =
@@ -627,6 +673,8 @@ export async function mergeDelivery(options: MergeDeliveryOptions): Promise<Merg
     ready: readyGate.ok,
     pinOk: pinGate.ok,
     bodyOk: bodyGate.ok,
+    criteriaOk: criteriaGate.ok,
+    linksOk: linksGate.ok,
     wholeOk: ownGate.ok,
     judgedHead,
     mergedBase: null,

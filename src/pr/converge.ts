@@ -25,7 +25,7 @@
 import { GH, outputLines, type Seams } from "../seam/exec.js";
 import type { Target } from "../github/target.js";
 import { readIssue } from "../issue/subissue.js";
-import { extractCriteria, type ClosingIssue } from "../issue/criteria.js";
+import { converge, extractCriteria, type ClosingIssue, type CoveragePolicy, DEFAULT_COVERAGE_POLICY } from "../issue/criteria.js";
 import { maskedLines, type IssueSectionsCatalogue } from "../issue/shape.js";
 
 export class ConvergeReadError extends Error {
@@ -40,6 +40,38 @@ export const CLOSING_PAGE = 100;
 
 export function convergeViewArgv(target: Target, prNumber: number): readonly string[] {
   return ["pr", "view", String(prNumber), "--repo", target.slug, "--json", "number,url,headRefOid,baseRefName,body,closingIssuesReferences"];
+}
+
+/** The head-only re-read `--require-head` closes with (zheref/nen#483 AC-6). */
+export function headViewArgv(target: Target, prNumber: number): readonly string[] {
+  return ["pr", "view", String(prNumber), "--repo", target.slug, "--json", "headRefOid"];
+}
+
+/**
+ * Hold a converge read to one pinned head (zheref/nen#483 AC-6): the first
+ * read's `headRefOid` must equal `requireHead`, and a head-only re-read AFTER
+ * every closing issue was read must still equal it. Either differing -- or the
+ * re-read failing -- throws: a verdict assembled across two heads is refused,
+ * never reported.
+ */
+export function assertPinnedHead(seams: Seams, target: Target, prNumber: number, input: ConvergeInput, requireHead: string): void {
+  const pin = requireHead.toLowerCase();
+  if (input.headSha.toLowerCase() !== pin) {
+    throw new ConvergeReadError(`${target.slug}#${prNumber}'s head is ${input.headSha === "" ? "(unread)" : input.headSha}, not the pinned ${requireHead}; no verdict is reported for a head other than the one pinned.`);
+  }
+  const again = seams.run(GH, headViewArgv(target, prNumber));
+  let head: unknown = null;
+  try {
+    head = again.code === 0 ? record(JSON.parse(again.stdout))?.["headRefOid"] : null;
+  } catch {
+    head = null;
+  }
+  if (typeof head !== "string" || head === "") {
+    throw new ConvergeReadError(`could not re-read ${target.slug}#${prNumber}'s head after the closing issues, so the reads cannot be shown to share one head: ${outputLines(again.stderr).join(" ") || `exit ${again.code}`}`);
+  }
+  if (head.toLowerCase() !== pin) {
+    throw new ConvergeReadError(`${target.slug}#${prNumber}'s head moved from ${requireHead} to ${head} between the reads; refusing to mix two heads in one verdict.`);
+  }
 }
 
 export function defaultBranchViewArgv(target: Target): readonly string[] {
@@ -76,6 +108,8 @@ export interface ConvergeInput {
   readonly body: string;
   readonly issues: readonly ClosingIssue[];
   readonly closingSource: ClosingSource;
+  /** GitHub's own closing references (the Development links), as read; empty on a non-default base. */
+  readonly linked: readonly { readonly slug: string; readonly number: number }[];
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -116,6 +150,25 @@ export function readConvergeInput(seams: Seams, target: Target, prNumber: number
     parsed = null;
   }
   if (parsed === null) throw new ConvergeReadError(`could not read ${target.slug}#${prNumber}: gh pr view did not answer a JSON object.`);
+  return convergeInputFromView(seams, target, prNumber, parsed, catalogue);
+}
+
+/**
+ * The converge input from a `gh pr view` payload already read (its `body`,
+ * `closingIssuesReferences`, `baseRefName`, `headRefOid`, `url`), then each
+ * closing issue read. `defaultBranch`, when the caller has read it, spares the
+ * `gh repo view`; absent, it is read here when the closing list is empty. A
+ * caller that read the payload in ITS one fetch (`pr merge --delivery`)
+ * judges the criteria at the very head it pinned.
+ */
+export function convergeInputFromView(
+  seams: Seams,
+  target: Target,
+  prNumber: number,
+  parsed: Record<string, unknown>,
+  catalogue: IssueSectionsCatalogue | null = null,
+  defaultBranchKnown: string | null = null,
+): ConvergeInput {
   const body = parsed["body"];
   if (typeof body !== "string") throw new ConvergeReadError(`could not read ${target.slug}#${prNumber}'s body: the payload carried no 'body' string.`);
   const references = parsed["closingIssuesReferences"];
@@ -138,15 +191,17 @@ export function readConvergeInput(seams: Seams, target: Target, prNumber: number
   }
   let closingSource: ClosingSource = named.length > 0 ? "github" : "none";
   if (named.length === 0) {
-    const view = seams.run(GH, defaultBranchViewArgv(target));
-    let defaultBranch: unknown = null;
-    try {
-      defaultBranch = view.code === 0 ? record(record(JSON.parse(view.stdout))?.["defaultBranchRef"])?.["name"] : null;
-    } catch {
-      defaultBranch = null;
-    }
-    if (typeof defaultBranch !== "string" || defaultBranch === "") {
-      throw new ConvergeReadError(`could not read ${target.slug}'s default branch, so an empty closing list cannot be told from a non-default base's: ${outputLines(view.stderr).join(" ") || `exit ${view.code}`}`);
+    let defaultBranch: unknown = defaultBranchKnown;
+    if (defaultBranch === null) {
+      const view = seams.run(GH, defaultBranchViewArgv(target));
+      try {
+        defaultBranch = view.code === 0 ? record(record(JSON.parse(view.stdout))?.["defaultBranchRef"])?.["name"] : null;
+      } catch {
+        defaultBranch = null;
+      }
+      if (typeof defaultBranch !== "string" || defaultBranch === "") {
+        throw new ConvergeReadError(`could not read ${target.slug}'s default branch, so an empty closing list cannot be told from a non-default base's: ${outputLines(view.stderr).join(" ") || `exit ${view.code}`}`);
+      }
     }
     if (base === "") throw new ConvergeReadError(`could not read ${target.slug}#${prNumber}'s base: the payload carried no 'baseRefName' string.`);
     if (base !== defaultBranch) {
@@ -174,5 +229,68 @@ export function readConvergeInput(seams: Seams, target: Target, prNumber: number
   }
   const url = parsed["url"];
   const head = parsed["headRefOid"];
-  return { url: typeof url === "string" ? url : "", headSha: typeof head === "string" ? head : "", base, body: body.replace(/\r\n?/g, "\n"), issues, closingSource };
+  return {
+    url: typeof url === "string" ? url : "",
+    headSha: typeof head === "string" ? head : "",
+    base,
+    body: body.replace(/\r\n?/g, "\n"),
+    issues,
+    closingSource,
+    linked: closingSource === "github" ? named.slice() : [],
+  };
+}
+
+/** One conjunct of the convergence verdict: its name, whether it holds, and the lines that say why. */
+export interface ConvergeConjunct {
+  readonly name: string;
+  readonly ok: boolean;
+  readonly lines: readonly string[];
+}
+
+/**
+ * The closing-issue links conjunct (zheref/nen#483 AC-1; Hatsu HA#203): on a
+ * pull request into the default branch, every issue a body closing keyword
+ * names must be one GitHub links as closing (a Development link), and every
+ * issue GitHub links must be named in the body -- the link both ways. On
+ * another base GitHub links nothing, so the conjunct holds and says the body's
+ * keywords were read instead.
+ */
+export function closingLinksConjunct(input: ConvergeInput, target: Target): ConvergeConjunct {
+  const name = "closing links";
+  if (input.closingSource !== "github" && input.closingSource !== "none") {
+    return { name, ok: true, lines: [`closing links: '${input.base}' is not the default branch -- GitHub links no closing issue there, so the body's closing keywords were read (${input.issues.length} issue(s))`] };
+  }
+  const key = (ref: { slug: string; number: number }): string => `${ref.slug.toLowerCase()}#${ref.number}`;
+  const linked = new Set(input.linked.map(key));
+  const named = bodyClosingReferences(input.body, target);
+  const namedKeys = new Set(named.map(key));
+  const unlinked = named.filter((ref): boolean => !linked.has(key(ref)));
+  const unnamed = input.linked.filter((ref): boolean => !namedKeys.has(key(ref)));
+  const lines: string[] = [];
+  for (const ref of unlinked) lines.push(`closing links: the body closes ${ref.slug}#${ref.number}, but GitHub links no such closing issue (no Development link)`);
+  for (const ref of unnamed) lines.push(`closing links: GitHub links ${ref.slug}#${ref.number} as closing, but the body names it in no closing keyword`);
+  if (lines.length > 0) return { name, ok: false, lines };
+  return {
+    name,
+    ok: true,
+    lines: [input.linked.length === 0 ? "closing links: closes no issue, and the body names none" : `closing links: ${input.linked.length} issue(s) linked both ways: ${input.linked.map((ref): string => `${ref.slug}#${ref.number}`).join(", ")}`],
+  };
+}
+
+/**
+ * The criteria-coverage conjunct (Hatsu HR-11; Akatsuki CON-17(c)): every
+ * closing issue's acceptance criteria against the body's verify rows, by the
+ * caller's coverage policy. A blocking row is QUOTED (zheref/nen#479 AC-3).
+ * A non-default base that closes nothing is reported, never blocked (#483
+ * AC-5, the integrator's ruling of 2026-10-23).
+ */
+export function criteriaConjunct(input: ConvergeInput, policy: CoveragePolicy = DEFAULT_COVERAGE_POLICY): ConvergeConjunct & { readonly blocking: readonly string[] } {
+  const report = converge(input.issues, input.body, policy);
+  const head =
+    input.issues.length === 0
+      ? input.closingSource === "none-on-non-default-base"
+        ? "criteria: GitHub lists no closing issue and the body names none on a non-default base -- no criterion to compare"
+        : "criteria: closes no issue -- no criterion to compare"
+      : `criteria: ${report.criteria.length} criterion row(s) across ${input.issues.length} closing issue(s), ${report.blocking.length} blocking`;
+  return { name: "criteria", ok: report.blocking.length === 0, lines: [head, ...report.blocking.map((line): string => `  BLOCKING ${line}`)], blocking: report.blocking };
 }

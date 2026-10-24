@@ -658,6 +658,20 @@ describe("review.scopes", () => {
     );
   });
 
+  it("refuses a scope naming a persona review.excludedPersonas declares, by pointer, trimmed and case-insensitively (zheref/nen#472)", () => {
+    const review = (persona: string, excludedPersonas: unknown = ["satotz", "bisky"]): unknown => ({
+      review: { excludedPersonas, scopes: { code: { persona: "n", tier: "deep", paths: ["**"] }, intake: { persona, tier: "deep", paths: ["docs/**"] } } },
+    });
+    for (const persona of ["bisky", "  BISKY", "Satotz "]) {
+      expect(() => parseWorkflow("<doc>", review(persona)), persona).toThrow(/review\.scopes\.intake\.persona.*review\.excludedPersonas declares is never a code reviewer/);
+    }
+    expect(parseWorkflow("<doc>", review("hisoka")).review.excludedPersonas).toEqual(["satotz", "bisky"]);
+    expect(() => parseWorkflow("<doc>", review("hisoka", ["a", " A "]))).toThrow(/review\.excludedPersonas\[1\].*repeats/);
+    expect(() => parseWorkflow("<doc>", review("hisoka", [" "]))).toThrow(/review\.excludedPersonas\[0\].*empty/);
+    expect(() => parseWorkflow("<doc>", review("hisoka", "bisky"))).toThrow(/review\.excludedPersonas/);
+    expect(() => parseWorkflow("<doc>", { review: { excludedPersona: ["x"] } })).toThrow(/excludedPersona/);
+  });
+
   it("refuses an empty persona, an empty tier and an empty pattern by pointer", () => {
     expect(() => parseWorkflow("<doc>", { review: { scopes: { code: { persona: "  ", tier: "deep", paths: ["**"] } } } })).toThrow(
       /review\.scopes\.code\.persona/,
@@ -863,8 +877,8 @@ describe("futon.advanceGo -- duplicate names after namespace normalization are r
 });
 
 describe("a workflow's NINETEEN blocks", () => {
-  it("says twenty-one, including privateNames, the CI declaration, the idle profile and alwaysOverlaps", () => {
-    expect(() => parseWorkflow("<doc>", { reviews: {} })).toThrow(/A workflow's twenty-one blocks are/);
+  it("says twenty-three, including privateNames, the CI declaration, the idle profile, spec, alwaysOverlaps and canon", () => {
+    expect(() => parseWorkflow("<doc>", { reviews: {} })).toThrow(/A workflow's twenty-three blocks are/);
   });
 });
 

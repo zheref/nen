@@ -1,12 +1,24 @@
 {
-  "$comment": "The ONE root for nen's own durable records under a repository's git common dir (delivery round on zheref/nen#498, reading 7). Every nen ledger that lives in the common dir reads its directory from here: the loop ledger, the stop-answer records and their reserved ids, and the batch-run manifests. The consumer plane's own namespace (for example <common>/hatsu/) stays the consumer's. `legacy` lists the spellings older builds wrote to; each ledger migrates from them once. Data, not a name nen decides with (src/taxonomy-purity.test.ts).",
+  "$comment": "The ONE root for nen's own durable records under a repository's git common dir (delivery round on zheref/nen#498, reading 7). Every nen ledger that lives in the common dir reads its directory from here: the loop ledger, the stop-answer records and their reserved ids, the batch-run manifests, the per-effort phase, usage, session and direct ledgers (zheref/nen#509) and the per-gate stop markers (zheref/nen#513). The consumer plane's own namespace (for example <common>/hatsu/) stays the consumer's. `legacy` lists the spellings older builds wrote to; each ledger migrates from them once. Data, not a name nen decides with (src/taxonomy-purity.test.ts).",
   "root": [".nen"],
   "loop": [".nen", "loop"],
   "stops": [".nen", "stops"],
   "stopIds": [".nen", "stop-ids"],
   "runs": [".nen", "runs"],
+  "phases": [".nen", "phases"],
+  "usage": [".nen", "usage"],
+  "sessions": [".nen", "sessions"],
+  "direct": [".nen", "direct"],
+  "marks": [".nen", "marks"],
   "legacy": {
     "loop": [["nen", "loop"]],
     "runs": [["hatsu", "runs"]]
+  },
+  "worktreeLegacy": {
+    "$comment": "Where the per-effort ledgers lived before zheref/nen#509: under --repo's root, which a worktree cleanup removes. Read and moved from through the 0.28 line; the fallback is removed in 0.29.0.",
+    "phases": [".nen", "phases"],
+    "usage": [".nen", "usage"],
+    "sessions": [".nen", "sessions"],
+    "direct": [".nen", "direct"]
   }
 }

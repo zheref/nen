@@ -105,6 +105,7 @@ export const GUARDED_VERBS: readonly string[] = [
   "pr edit-body",
   "pr threads reply",
   "pr threads settle",
+  "pr ledger post",
   "wake fire",
   "wake verify",
   "release-publish",

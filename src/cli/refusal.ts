@@ -15,6 +15,7 @@
 // (`nen exits <family> <verb>` says what a code above 2 means there).
 
 import type { Io } from "../index.js";
+import { escapeInvisibleJson, plainLine } from "./plain.js";
 
 export const REFUSAL_CONTRACT = "nen.refusal/v0.1";
 
@@ -40,9 +41,12 @@ export function refusalEnvelope(verb: string, code: number, reasons: readonly st
  */
 export function refuse(io: Io, json: boolean, verb: string, code: number, reasons: readonly string[]): number {
   if (json) {
-    io.out(JSON.stringify(refusalEnvelope(verb, code, reasons), null, 2));
+    io.out(escapeInvisibleJson(JSON.stringify(refusalEnvelope(verb, code, reasons), null, 2)));
     return code;
   }
-  for (const reason of reasons) io.err(`nen: ${reason}`);
+  // A reason may quote text nen did not write (a body-shape miss quotes the
+  // body, zheref/nen#515 Feitan 1): one plain line each, as every human
+  // rendering of caller text is.
+  for (const reason of reasons) io.err(`nen: ${plainLine(reason)}`);
   return code;
 }

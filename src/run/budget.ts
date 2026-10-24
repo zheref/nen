@@ -19,8 +19,8 @@
 //
 // TOKENS FAIL CLOSED. Every distinct effort id the manifest's PRs name, plus
 // any `--effort` the caller adds for an effort still without a PR, is read
-// from `.nen/usage/<effort>.json` under --repo exactly as `nen usage show`
-// reads it. Tokens are input + output + cache read + cache write. The token
+// from `<git-common-dir>/.nen/usage/<effort>.json` exactly as `nen usage show`
+// reads it (zheref/nen#509; an older worktree-local copy is read in place). Tokens are input + output + cache read + cache write. The token
 // sum is UNREAD -- verdict `unevaluated`, a claim refused, exit 1 -- when any
 // entry was recorded `--not-reported`, when a recorded delivery PR names no
 // effort, or when a delivery PR's effort has no usage ledger: an absent spend
@@ -29,7 +29,8 @@
 // caller named it as spending (delivery round on zheref/nen#498, verification
 // pass); a ledger that will not read is `unevaluated` too.
 
-import { usageLedgerPath, readUsageLedger, type UsageLedger } from "../usage/ledger.js";
+import { readUsageLedger, type UsageLedger } from "../usage/ledger.js";
+import { locateEffortLedger, type EffortHome } from "../ledger/home.js";
 import { totalsOf } from "../usage/command.js";
 import { existsSync } from "node:fs";
 import type { RunManifest } from "./manifest.js";
@@ -75,7 +76,7 @@ export function runEfforts(manifest: RunManifest, extra: readonly string[]): rea
 
 export function computeBudget(
   manifest: RunManifest,
-  root: string,
+  home: EffortHome,
   efforts: readonly string[],
   ceiling: BudgetCeiling,
   claim: boolean,
@@ -86,7 +87,13 @@ export function computeBudget(
   const noLedger: string[] = [];
   const unread: { effort: string; reason: string }[] = [];
   for (const effort of efforts) {
-    const path = usageLedgerPath(root, effort);
+    let path: string;
+    try {
+      path = locateEffortLedger(home, effort, "read").path;
+    } catch (error) {
+      unread.push({ effort, reason: error instanceof Error ? error.message : String(error) });
+      continue;
+    }
     if (!existsSync(path)) {
       noLedger.push(effort);
       continue;

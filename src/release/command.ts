@@ -30,7 +30,7 @@ import {
   assembleUnitCheck,
   fetchChangedFiles,
   fetchJsonAtRef,
-  fetchTextAtRef,
+  githubTextReader,
   fetchMergeBaseSha,
   fetchPrRefs,
   MergeBaseError,
@@ -559,7 +559,7 @@ function unitCheck(context: CommandContext): number {
       baseRef: mergeBaseSha,
       headRef: refs.headRefOid,
       readJson: (filePath: string, ref_: string): JValue | null => fetchJsonAtRef(context.seams, target, filePath, ref_),
-      readText: (filePath, ref_): string | null => fetchTextAtRef(context.seams, target, filePath, ref_),
+      readText: githubTextReader(context.seams, target),
     };
   }
   const report = assembleUnitCheck(target, ref.number, unitPaths, changedFiles, keyScoped);

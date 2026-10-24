@@ -112,7 +112,7 @@ interface PrFields {
   isCrossRepository: boolean;
 }
 
-const PR_VIEW = "gh pr view 9 --repo zheref/example --json headRefOid,baseRefOid,baseRefName,headRefName,body,isCrossRepository,author,state";
+const PR_VIEW = "gh pr view 9 --repo zheref/example --json headRefOid,baseRefOid,baseRefName,headRefName,body,isCrossRepository,author,state,closingIssuesReferences,url";
 
 function prOnceCall(overrides: Partial<PrFields> = {}): ScriptedCall {
   return {
@@ -128,6 +128,8 @@ function prOnceCall(overrides: Partial<PrFields> = {}): ScriptedCall {
         isCrossRepository: overrides.isCrossRepository ?? false,
         author: { login: overrides.author ?? "someone" },
         state: "OPEN",
+        closingIssuesReferences: [],
+        url: "https://github.com/zheref/example/pull/9",
       }),
     },
   };
@@ -455,6 +457,57 @@ describe("mergeDelivery -- a base nobody could establish is a failed gate (exit 
   });
 });
 
+describe("mergeDelivery -- criteria coverage and closing links (zheref/nen#479 AC-3, #483 AC-1)", () => {
+  const ISSUE = "## Acceptance criteria\n\n- AC-1: lists rows\n- AC-2: exits 2 unread\n";
+  const issueCall = (body: string | null): ScriptedCall => ({
+    match: "gh api repos/zheref/example/issues/12",
+    result: { code: 0, stdout: JSON.stringify({ number: 12, title: "t", state: "open", labels: [], ...(body === null ? {} : { body }) }) },
+  });
+  const verify = (rows: string): string => `## How to verify\n\nCloses zheref/example#12\n\n| Criterion | Coverage | Evidence |\n|---|---|---|\n${rows}`;
+
+  it("a closing issue's criteria all satisfied with evidence: both gates pass", async () => {
+    const body = verify("| AC-1 | satisfied | a.test.ts |\n| AC-2 | partial | b.test.ts |\n");
+    const outcome = await run(tmpRoot(), [...script({ pr: prOnceCall({ body }) }), issueCall(ISSUE)]);
+    expect(outcome.report.criteriaOk, outcome.lines.join("\n")).toBe(true);
+    expect(outcome.report.linksOk).toBe(true);
+    expect(outcome.report.ok).toBe(true);
+    expect(outcome.lines).toContain("criteria: 2 criterion row(s) across 1 closing issue(s), 0 blocking");
+  });
+
+  it("a row reading contradicts refuses the merge, quoting the row, whatever the readiness verdict says", async () => {
+    const body = verify("| AC-1 | satisfied | a.test.ts |\n| AC-2 | contradicts | b.test.ts |\n");
+    const outcome = await run(tmpRoot(), [...script({ pr: prOnceCall({ body }) }), issueCall(ISSUE)]);
+    expect(outcome.report.ready).toBe(true);
+    expect(outcome.report.criteriaOk).toBe(false);
+    expect(outcome.report.ok).toBe(false);
+    expect(exitOf(outcome.report)).toBe(1);
+    expect(outcome.lines).toContain("  BLOCKING zheref/example#12/AC-2: contradicts -- row line 8: | AC-2 | contradicts | b.test.ts |");
+  });
+
+  it("a criterion with no row, and a row reading missing, refuse by id", async () => {
+    const outcome = await run(tmpRoot(), [...script({ pr: prOnceCall({ body: verify("| AC-1 | missing | none yet |\n") }) }), issueCall(ISSUE)]);
+    expect(outcome.report.criteriaOk).toBe(false);
+    expect(outcome.lines).toContain("  BLOCKING zheref/example#12/AC-1: missing -- row line 7: | AC-1 | missing | none yet |");
+    expect(outcome.lines).toContain("  BLOCKING zheref/example#12/AC-2: missing-row (no verify row names AC-2)");
+  });
+
+  it("a control character in a quoted verify row reaches no transcript line raw (Feitan F2 on #526)", async () => {
+    const body = verify("| AC-1 | missing | x \u001b[2K\u001b[1A\u001b]8;;https://evil.example\u0007 |\n| AC-2 | satisfied | b |\n");
+    const outcome = await run(tmpRoot(), [...script({ pr: prOnceCall({ body }) }), issueCall(ISSUE)]);
+    expect(outcome.report.criteriaOk).toBe(false);
+    const blocking = outcome.lines.filter((line): boolean => line.includes("AC-1: missing"));
+    expect(blocking.length).toBe(1);
+    for (const line of outcome.lines) expect(line).not.toMatch(/[\u0000-\u001f\u007f]/);
+  });
+
+  it("a closing issue that cannot be read fails both gates, never passes them", async () => {
+    const outcome = await run(tmpRoot(), [...script({ pr: prOnceCall({ body: verify("| AC-1 | satisfied | a |\n") }) }), { match: "gh api repos/zheref/example/issues/12", result: { code: 1, stderr: "HTTP 502" } }]);
+    expect(outcome.report.criteriaOk).toBe(false);
+    expect(outcome.report.linksOk).toBe(false);
+    expect(outcome.lines.some((line): boolean => /^criteria: .*could not look is never covered/.test(line))).toBe(true);
+  });
+});
+
 describe("mergeDelivery -- a non-main base, every gate reused", () => {
   it("prints the plan without --run, in --release-unit's transcript shape", async () => {
     const outcome = await run(tmpRoot(), script());
@@ -466,7 +519,7 @@ describe("mergeDelivery -- a non-main base, every gate reused", () => {
     expect(outcome.report.baseProtected).toBe(false);
     expect(outcome.report.baseRulesets).toBe(0);
     expect(outcome.report.bodyOk).toBe(true);
-    expect(outcome.report.gates.map((gate) => gate.name)).toEqual(["base", "pr ready", "head pin", "pr body-check", "whose pr", "policy files"]);
+    expect(outcome.report.gates.map((gate) => gate.name)).toEqual(["base", "pr ready", "head pin", "pr body-check", "criteria", "closing links", "whose pr", "policy files"]);
     expect(outcome.lines).toContain("policy files: changes neither 'nen/workflow.json' nor 'nen/gates.json'");
     expect(outcome.lines.at(-1)).toBe(`plan only (pass --run to execute): gh ${MERGE_MATCH.slice(3)}`);
     expect(exitOf(outcome.report)).toBe(0);

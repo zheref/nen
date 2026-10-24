@@ -13,19 +13,20 @@
 // there is no price table here and never will be, because a price is a
 // vendor's number that changes without a release.
 //
-// WHERE IT LIVES. `.nen/usage/<effort>.json`, generated output under the
-// dot-prefixed directory, one file per effort, contract
-// `nen.usage.ledger/v0.1` (./ledger.ts). One ENTRY per invocation, appended.
+// WHERE IT LIVES. `<git-common-dir>/.nen/usage/<effort>.json` since
+// zheref/nen#509 (`<--repo>/.nen/usage/` outside git; ../ledger/home.ts), one
+// file per effort, contract `nen.usage.ledger/v0.1` (./ledger.ts). One ENTRY
+// per invocation, appended.
 
 import { emit, requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import { resolveRepoRoot } from "../repo/root.js";
+import { assertEffortId } from "../ledger/effort.js";
+import { legacyLine, locateEffortLedger, resolveEffortHome } from "../ledger/home.js";
 import {
   appendUsageEntry,
-  EFFORT_ID,
   readUsageLedger,
   USAGE_CONTRACT,
   USAGE_LEDGER_DIR,
-  usageLedgerPath,
   type UsageEntry,
   type UsageLedger,
 } from "./ledger.js";
@@ -37,16 +38,21 @@ const USAGE = `nen usage record --effort <id> --surface <s> [--model <alias>] [-
                  [--minutes <n>] [--source <text>] [--note <text>] [--not-reported]
 nen usage show   --effort <id> [--repo <path>] [--json]
 
-Every form reads and writes the ledger under --repo (default: the current
-directory).
+Every form reads and writes the ledger of --repo's repository (default: the
+current directory): '<git-common-dir>/${USAGE_LEDGER_DIR}/<effort>.json', shared
+by every worktree, so a worktree cleanup never takes an effort's spend with it.
+Outside git it is '<--repo>/${USAGE_LEDGER_DIR}/'. A ledger an older build left at
+'<worktree>/${USAGE_LEDGER_DIR}/' is read in place by 'show' (the old path is
+named) and moved once by 'record'; a copy in both places is refused, exit 1.
+That fallback is read through the 0.28 line and removed in 0.29.0.
 
-The per-effort usage ledger: one JSON file per effort under
-'${USAGE_LEDGER_DIR}/<effort>.json' (generated output, gitignored), contract
+The per-effort usage ledger: one JSON file per effort (generated output),
+contract
 '${USAGE_CONTRACT}'. 'record' appends ONE entry stamped with this invocation's
 clock; 'show' prints the ledger and the totals per surface and model.
 
-  --effort <id>      The effort this usage belongs to -- the same id 'nen phase'
-                     takes, so one effort names both ledgers.
+  --effort <id>      The effort this usage belongs to -- the one effort-id
+                     grammar 'nen phase' takes, so one effort names both.
   --surface <s>      Which surface ran (claude-code, codex, cursor, antigravity).
                      Recorded verbatim.
   --model <alias>    Which model alias ran. Recorded verbatim; null when absent.
@@ -72,16 +78,23 @@ here; nen writes down what you typed and where you said it came from.
 
 const COUNT_FLAGS = ["input", "output", "cache-read", "cache-write"] as const;
 
-function ledgerPathFor(context: CommandContext): { readonly effort: string; readonly path: string } {
+function requireEffortFlag(context: CommandContext): string {
   const effort = context.args.values["effort"];
   if (effort === undefined || effort.trim() === "") throw new VerbUsageError("--effort <id> is required.");
-  if (!EFFORT_ID.test(effort)) throw new VerbUsageError(`--effort '${effort}' is not a ledger id: letters, digits, '.', '_', '-' and '/' only.`);
+  return assertEffortId(effort);
+}
+
+function ledgerPathFor(context: CommandContext, mode: "read" | "write"): { readonly effort: string; readonly path: string } {
+  const effort = requireEffortFlag(context);
   const root = resolveRepoRoot({ repoFlag: context.repoFlag });
-  return { effort, path: usageLedgerPath(root, effort) };
+  const located = locateEffortLedger(resolveEffortHome(root, "usage", context.seams), effort, mode);
+  const note = legacyLine(located);
+  if (note !== null) context.io.err(`nen usage: ${note}`);
+  return { effort, path: located.path };
 }
 
 function ledgerFor(context: CommandContext): { readonly effort: string; readonly path: string; readonly ledger: UsageLedger } {
-  const { effort, path } = ledgerPathFor(context);
+  const { effort, path } = ledgerPathFor(context, "read");
   return { effort, path, ledger: readUsageLedger(path, effort) };
 }
 
@@ -106,7 +119,9 @@ function record(context: CommandContext): number {
   // THE PATH ONLY, HERE: the ledger is read inside the lock, in
   // `appendUsageEntry`, so what is appended to is what is on disk at the
   // moment of the write and not a copy taken before another run's.
-  const { effort, path } = ledgerPathFor(context);
+  // Every refusal comes before the path is located, so a usage error never
+  // moves an older worktree-local ledger (../ledger/home.ts).
+  requireEffortFlag(context);
   const surface = context.args.values["surface"];
   if (surface === undefined || surface.trim() === "") throw new VerbUsageError("--surface <s> is required for 'record'.");
   const notReported = context.args.booleans.has("not-reported");
@@ -124,6 +139,7 @@ function record(context: CommandContext): number {
     );
   }
   const [input, output, cacheRead, cacheWrite] = counts;
+  const { effort, path } = ledgerPathFor(context, "write");
   const entry: UsageEntry = {
     recordedAt: context.seams.now().toISOString(),
     surface,

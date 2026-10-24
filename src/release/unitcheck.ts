@@ -670,9 +670,65 @@ export interface KeyScopedOutcome {
 /** Reads and parses a repo file's content at one git ref; `null` when it cannot be read as JSON at all (missing, not JSON, fetch failure) -- every caller treats `null` as fail-closed. */
 export type ReadJsonAt = (path: string, ref: string) => JValue | null;
 
+/** A text read: the text, or null with the one condition that stopped it. */
+export interface TextRead {
+  readonly text: string | null;
+  /** Null when `text` was read; else which condition failed, named for a reader (zheref/nen#424). */
+  readonly reason: string | null;
+}
+
+const unread = (reason: string): TextRead => ({ text: null, reason });
+
 /**
- * `repos/{slug}/contents/<path>?ref=<sha>` decoded as complete UTF-8 text, or `null`
- * on ANY failure along the way -- a missing file, a malformed response, an
+ * Strictly decode a GitHub base64 payload to UTF-8 text, or name why not.
+ *
+ * Copilot round, item 4: `Buffer.from(str, "base64")` is LENIENT -- it
+ * silently DROPS any byte that is not a base64 alphabet character rather than
+ * refusing the string, so a corrupted or truncated payload would still decode
+ * to SOMETHING. GitHub wraps its base64 body at a fixed column with '\n',
+ * which is legitimate and stripped before validating; what remains must be the
+ * base64 alphabet, optionally padded with 0-2 trailing '=', and a length that
+ * is a multiple of 4 -- anything else is refused rather than handed to
+ * `Buffer.from` to quietly mangle. `size`, when the API states one, must equal
+ * the decoded byte count: an answer shorter than the file is truncated.
+ */
+function decodeBase64Text(content: string, size: number | null, source: string): TextRead {
+  const base64 = content.replace(/\n/g, "");
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(base64) || base64.length % 4 !== 0) return unread(`unreadable: the ${source} answer is not well-formed base64`);
+  const bytes = Buffer.from(base64, "base64");
+  if (bytes.toString("base64") !== base64) return unread(`unreadable: the ${source} answer is not well-formed base64`);
+  if (size !== null && bytes.length !== size) return unread(`truncated: the ${source} answer decoded to ${bytes.length} of the file's ${size} bytes`);
+  // Replacement characters could hide a byte edit from the line diff. Fatal
+  // UTF-8 decoding and the NUL refusal make an unreadable/binary blob fail
+  // closed instead of manufacturing text that was never in the commit.
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+  } catch {
+    return unread("not UTF-8 text");
+  }
+  return text.includes("\0") ? unread("binary: the file contains a NUL byte") : { text, reason: null };
+}
+
+function ghJson(seams: Seams, endpoint: string): Record<string, unknown> | null | "failed" {
+  let response;
+  try {
+    response = must(seams, GH, ["api", endpoint]);
+  } catch (error) {
+    if (error instanceof ToolError) return "failed";
+    throw error;
+  }
+  try {
+    const parsed = JSON.parse(response.stdout) as unknown;
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `repos/{slug}/contents/<path>?ref=<sha>` decoded as complete UTF-8 text, or a
+ * named reason (`null` text) on ANY failure along the way -- a missing file, a malformed response, an
  * unparseable base64 payload, or `gh` itself refusing. FAIL CLOSED (this
  * module's own header): a file this function cannot read as JSON is a file
  * whose change nen cannot prove stayed inside its declared keys, which is
@@ -688,49 +744,53 @@ export type ReadJsonAt = (path: string, ref: string) => JValue | null;
  * (../schema/workflow.ts's `parseUnitPathEntry`), so this encoding is a
  * second, independent layer for the segments GitHub's own path grammar could
  * still contain (spaces, non-ASCII).
+ *
+ * The complete UTF-8 text of `path` at `ref`, or the named reason it could
+ * not be read.
+ *
+ * FILES OVER 1 MB (zheref/nen#424). For a file between 1 MB and 100 MB the
+ * contents API answers `"encoding": "none"` with an EMPTY `content`. That is
+ * not an unreadable file: the answer carries the blob's `sha`, and the git
+ * blobs API serves that blob as base64 up to 100 MB, so the read follows it
+ * and decodes it under the same strict rules. A file the blobs API also
+ * refuses is named `too large for the API`, never `not UTF-8`.
  */
-export function fetchTextAtRef(seams: Seams, target: Target, path: string, ref: string): string | null {
+export function readTextAtRef(seams: Seams, target: Target, path: string, ref: string): TextRead {
   const encodedPath = path
     .split("/")
     .map((segment): string => encodeURIComponent(segment))
     .join("/");
-  let response;
-  try {
-    response = must(seams, GH, ["api", `repos/${target.slug}/contents/${encodedPath}?ref=${ref}`]);
-  } catch (error) {
-    if (error instanceof ToolError) return null;
-    throw error;
+  const contents = ghJson(seams, `repos/${target.slug}/contents/${encodedPath}?ref=${ref}`);
+  if (contents === "failed") return unread("unreadable: the contents API read failed");
+  if (contents === null) return unread("unreadable: the contents API answered with no JSON object");
+  const size = typeof contents["size"] === "number" && Number.isSafeInteger(contents["size"]) ? (contents["size"] as number) : null;
+  const encoding = contents["encoding"];
+  const content = contents["content"];
+  if (encoding === "none") {
+    const sha = contents["sha"];
+    if (typeof content === "string" && content !== "") return unread("unreadable: the contents API answered encoding 'none' with content");
+    if (typeof sha !== "string" || !/^[0-9a-f]{40,64}$/.test(sha)) return unread(`too large for the API: the contents API served no content${size === null ? "" : ` for ${size} bytes`} and named no blob to read instead`);
+    const blob = ghJson(seams, `repos/${target.slug}/git/blobs/${sha}`);
+    if (blob === "failed" || blob === null) return unread(`too large for the API: the contents API served no content${size === null ? "" : ` for ${size} bytes`} and the blob read of ${sha.slice(0, 12)} failed`);
+    if (blob["encoding"] !== "base64" || typeof blob["content"] !== "string") return unread(`unreadable: the blob read of ${sha.slice(0, 12)} answered no base64 content`);
+    const blobSize = typeof blob["size"] === "number" && Number.isSafeInteger(blob["size"]) ? (blob["size"] as number) : size;
+    return decodeBase64Text(blob["content"], blobSize, "blob");
   }
-  let contents: { readonly content?: unknown; readonly encoding?: unknown } | null;
-  try {
-    contents = JSON.parse(response.stdout) as typeof contents;
-  } catch {
-    return null;
-  }
-  if (contents === null || typeof contents.content !== "string" || (contents.encoding !== undefined && contents.encoding !== "base64")) return null;
-  // Copilot round, item 4: `Buffer.from(str, "base64")` is LENIENT -- it
-  // silently DROPS any byte that is not a base64 alphabet character rather
-  // than refusing the string, so a corrupted or truncated payload (or one
-  // this reader misdecoded some other way) would still decode to SOMETHING
-  // rather than failing closed. GitHub's own contents API wraps its base64
-  // body at a fixed column with '\n', which is legitimate and stripped
-  // before validating; what remains must be the base64 alphabet, optionally
-  // padded with 0-2 trailing '=', and a length that is a multiple of 4 --
-  // anything else is refused (`null`) rather than handed to `Buffer.from`
-  // to quietly mangle.
-  const base64 = contents.content.replace(/\n/g, "");
-  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(base64) || base64.length % 4 !== 0) return null;
-  try {
-    const bytes = Buffer.from(base64, "base64");
-    if (bytes.toString("base64") !== base64) return null;
-    // Replacement characters could hide a byte edit from the line diff. Fatal
-    // UTF-8 decoding and the NUL refusal make an unreadable/binary blob fail
-    // closed instead of manufacturing text that was never in the commit.
-    const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
-    return text.includes("\0") ? null : text;
-  } catch {
-    return null;
-  }
+  if (typeof content !== "string" || (encoding !== undefined && encoding !== "base64")) return unread("unreadable: the contents API answered no base64 content");
+  return decodeBase64Text(content, size, "contents API");
+}
+
+/** {@link readTextAtRef}'s text alone, null on any refusal. */
+export function fetchTextAtRef(seams: Seams, target: Target, path: string, ref: string): string | null {
+  return readTextAtRef(seams, target, path, ref).text;
+}
+
+/** A `ReadTextAt` over GitHub that carries the refusal's reason to the line check. */
+export function githubTextReader(seams: Seams, target: Target): ReadTextAt {
+  return (filePath, ref): string | TextUnread => {
+    const read = readTextAtRef(seams, target, filePath, ref);
+    return read.text ?? { unread: read.reason ?? "unreadable" };
+  };
 }
 
 /** The same complete, strictly decoded content read, parsed without losing JSON number precision. */
@@ -778,7 +838,12 @@ export interface KeyScopedContext {
   readonly readText?: ReadTextAt;
 }
 
-export type ReadTextAt = (path: string, ref: string) => string | null;
+/** A side that could not be read, with the condition that stopped it (zheref/nen#424). */
+export interface TextUnread {
+  readonly unread: string;
+}
+
+export type ReadTextAt = (path: string, ref: string) => string | null | TextUnread;
 
 export interface LineScopedOutcome {
   readonly path: string;
@@ -797,8 +862,13 @@ interface LineScopedWork {
 export function checkLineScopedPath(entry: ReleaseUnitLinedPath, baseRef: string, headRef: string, readText?: ReadTextAt, work: LineScopedWork = { file: 0, lines: new Map() }): LineScopedOutcome {
   const refuse = (reason: string): LineScopedOutcome => ({ path: entry.path, ok: false, offendingLines: [], reason });
   if (readText === undefined) return refuse("content not read -- no base/head text reader was available to this check");
-  const base = readText(entry.path, baseRef);
-  const head = readText(entry.path, headRef);
+  const baseRead = readText(entry.path, baseRef);
+  const headRead = readText(entry.path, headRef);
+  for (const [side, read] of [["base", baseRead], ["head", headRead]] as const) {
+    if (read !== null && typeof read === "object") return refuse(`whole file -- ${read.unread} at its ${side} commit`);
+  }
+  const base = baseRead as string | null;
+  const head = headRead as string | null;
   if (base === null || head === null || base.includes("\0") || head.includes("\0")) return refuse("whole file -- unreadable or not UTF-8 text at its base or head commit");
   const diff = changedLines(base, head);
   if (diff === null) return refuse("complete line diff exceeded its work bound (100000 lines per file, 2048 edits, 1000000 comparison steps)");

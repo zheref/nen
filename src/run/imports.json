@@ -1,0 +1,8 @@
+{
+  "$comment": "The consumer-plane run manifests `nen run import` reads into nen.run/v0.1 (zheref/nen#486 AC-5). Data, not a name nen decides with (src/taxonomy-purity.test.ts): the consumer's directory below the git common dir, its file name (`{id}` is the run id), the contracts it may carry, and the one that carries prs[] and parked[]. The file is read only, never written.",
+  "dir": ["hatsu", "futon"],
+  "file": "run-{id}.json",
+  "contracts": ["hatsu.futon.run/v0.1", "hatsu.futon.run/v0.2"],
+  "manifestContract": "hatsu.futon.run/v0.2",
+  "idPattern": "^[0-9a-f]{32}$"
+}

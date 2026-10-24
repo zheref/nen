@@ -19,6 +19,7 @@ import {
   writeLedger,
   type PhaseStep,
 } from "./ledger.js";
+import { localEffortHome } from "../ledger/home.js";
 
 const step = (n: number, who: string): PhaseStep => ({ verb: "build", argv: `${who} ${n}`, exitCode: 0, durationMs: n, stalled: false });
 
@@ -42,15 +43,17 @@ describe("appendStepsToOpenPhase under contention (zheref/nen#231)", () => {
     const root = mkdtempSync(join(tmpdir(), "nen-ledger-race-"));
     const path = openLedgerAt(root, "race");
     const ledgerModule = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), "ledger.ts")).href;
+    const homeModule = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), "..", "ledger", "home.ts")).href;
     const script = join(root, "append.ts");
     // Each process appends COUNT single-step batches, one lock cycle per batch,
     // so the two interleave at the lock rather than once at the start.
     const COUNT = 40;
     writeFileSync(script, [
       `import { appendStepsToOpenPhase } from ${JSON.stringify(ledgerModule)};`,
+      `import { localEffortHome } from ${JSON.stringify(homeModule)};`,
       `const who = process.argv[2];`,
       `for (let n = 0; n < ${COUNT}; n += 1) {`,
-      `  if (!appendStepsToOpenPhase(${JSON.stringify(root)}, "race", [{ verb: "build", argv: who + " " + n, exitCode: 0, durationMs: n, stalled: false }])) process.exit(3);`,
+      `  if (!appendStepsToOpenPhase(localEffortHome(${JSON.stringify(root)}, "phases"), "race", [{ verb: "build", argv: who + " " + n, exitCode: 0, durationMs: n, stalled: false }])) process.exit(3);`,
       `}`,
     ].join("\n"));
     const run = (who: string): Promise<{ code: number | null; stderr: string }> =>
@@ -79,7 +82,7 @@ describe("appendStepsToOpenPhase under contention (zheref/nen#231)", () => {
     const before = readFileSync(path, "utf8");
     const warned: string[] = [];
     const started = Date.now();
-    expect(() => appendStepsToOpenPhase(root, "held", [step(1, "late")], { waitMs: 150, warn: (l): void => { warned.push(l); } }))
+    expect(() => appendStepsToOpenPhase(localEffortHome(root, "phases"), "held", [step(1, "late")], { waitMs: 150, warn: (l): void => { warned.push(l); } }))
       .toThrow(/'.*held\.json\.lock' is held by another nen run and was not released within 150ms/);
     expect(Date.now() - started).toBeGreaterThanOrEqual(100);
     expect(readFileSync(path, "utf8")).toBe(before);
@@ -95,7 +98,7 @@ describe("appendStepsToOpenPhase under contention (zheref/nen#231)", () => {
     const old = (Date.now() - 60_000) / 1000;
     utimesSync(lock, old, old);
     const warned: string[] = [];
-    expect(appendStepsToOpenPhase(root, "stale", [step(7, "after")], { warn: (l): void => { warned.push(l); } })).toBe(true);
+    expect(appendStepsToOpenPhase(localEffortHome(root, "phases"), "stale", [step(7, "after")], { warn: (l): void => { warned.push(l); } })).toBe(true);
     expect(warned).toHaveLength(1);
     expect(warned[0]).toMatch(/broke the stale ledger lock '.*stale\.json\.lock' \(\d+s old; a holder that old has crashed\)/);
     expect(readLedger(path, "stale").phases[0]?.steps).toEqual([step(7, "after")]);
@@ -105,7 +108,7 @@ describe("appendStepsToOpenPhase under contention (zheref/nen#231)", () => {
   it("writes through a temp file and a rename: the ledger is whole and no temp file is left", () => {
     const root = mkdtempSync(join(tmpdir(), "nen-ledger-atomic-"));
     const path = openLedgerAt(root, "atomic");
-    expect(appendStepsToOpenPhase(root, "atomic", [step(1, "x"), step(2, "x")])).toBe(true);
+    expect(appendStepsToOpenPhase(localEffortHome(root, "phases"), "atomic", [step(1, "x"), step(2, "x")])).toBe(true);
     expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({ contract: PHASE_CONTRACT, effort: "atomic" });
     expect(readdirSync(dirname(path))).toEqual(["atomic.json"]);
   });

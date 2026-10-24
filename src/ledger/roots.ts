@@ -20,3 +20,20 @@ export const RUNS_COMMON_SEGMENTS: readonly string[] = roots.runs;
 export const LOOP_LEGACY_SEGMENTS: readonly (readonly string[])[] = roots.legacy.loop;
 /** Spellings older builds wrote run manifests to, relative to the common dir. */
 export const RUNS_LEGACY_SEGMENTS: readonly (readonly string[])[] = roots.legacy.runs;
+/** `<common>/.nen/phases/` -- `nen phase` ledgers (zheref/nen#509). */
+export const PHASES_COMMON_SEGMENTS: readonly string[] = roots.phases;
+/** `<common>/.nen/usage/` -- `nen usage` ledgers (zheref/nen#509). */
+export const USAGE_COMMON_SEGMENTS: readonly string[] = roots.usage;
+/** `<common>/.nen/sessions/` -- `nen session` ledgers (zheref/nen#509). */
+export const SESSIONS_COMMON_SEGMENTS: readonly string[] = roots.sessions;
+/** `<common>/.nen/direct/` -- `nen direct resolve --record` records (zheref/nen#509). */
+export const DIRECT_COMMON_SEGMENTS: readonly string[] = roots.direct;
+/** `<common>/.nen/marks/` -- `nen stop --mark` per-gate markers (zheref/nen#513). */
+export const MARKS_COMMON_SEGMENTS: readonly string[] = roots.marks;
+/** Where each per-effort ledger lived under --repo before #509; read and moved from through 0.28.x. */
+export const EFFORT_WORKTREE_LEGACY: Readonly<Record<"phases" | "usage" | "sessions" | "direct", readonly string[]>> = {
+  phases: roots.worktreeLegacy.phases,
+  usage: roots.worktreeLegacy.usage,
+  sessions: roots.worktreeLegacy.sessions,
+  direct: roots.worktreeLegacy.direct,
+};

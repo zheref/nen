@@ -21,8 +21,9 @@
 //   * A paragraph's bold lead (`**Lead**` at its start, after an optional list
 //     marker or blockquote) is citable by title or by number like a heading.
 //   * A RETIRED block -- a `> **RETIRED` quote while lines start with `>`, or a
-//     `**RETIRED` paragraph or list item up to the next blank line or heading --
-//     records its lines so a rule may exempt them.
+//     `**RETIRED` paragraph or list item up to the next blank line, heading, or
+//     list item at the same or a shallower indent -- records its lines so a
+//     rule may exempt them.
 
 /** One paragraph a rule reads: prose, a heading line, a table row or a frontmatter line. */
 export interface Para {
@@ -45,16 +46,23 @@ export interface Doc {
   readonly retired: ReadonlySet<number>;
 }
 
-/** GitHub's heading slug, as the guard computes it. */
+/**
+ * GitHub's heading slug, as the guard computes it: lower case, drop what is not
+ * a letter, mark, number, connector punctuation (`_`), space or hyphen, spaces
+ * to hyphens. `_` is kept inside code spans always, and outside them unless it
+ * is emphasis markup at a word edge. Link labels are bounded (600) and targets
+ * (2048), so a hostile line costs linear time.
+ */
 export function slug(heading: string): string {
-  return heading
+  const text = heading
     .trim()
     .toLowerCase()
     .replace(/<[^>]+>/g, "")
-    .replace(/[`*_~]/g, "")
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/[^\p{L}\p{N} _-]/gu, "")
-    .replace(/ /g, "-");
+    .replace(/\[([^\]]{0,600})\]\([^)]{0,2048}\)/g, "$1")
+    .split(/(`[^`]*`)/)
+    .map((part): string => (part.startsWith("`") ? part.replace(/`/g, "") : part.replace(/[*~]/g, "").replace(/(?<![\p{L}\p{N}])_+|_+(?![\p{L}\p{N}])/gu, "")))
+    .join("");
+  return text.replace(/[^\p{L}\p{M}\p{N}\p{Pc} -]/gu, "").replace(/ /g, "-");
 }
 
 /**
@@ -64,7 +72,7 @@ export function slug(heading: string): string {
  */
 export function norm(text: string): string {
   return text
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]{0,600})\]\([^)]{0,2048}\)/g, "$1")
     .replace(/[*`_"“”‘’']/g, "")
     .replace(/…/g, "")
     .replace(/\s+/g, " ")
@@ -95,6 +103,7 @@ export function parseDoc(path: string, raw: string): Doc {
   let fence: string | null = null;
   let cur: Para | null = null;
   let retiredKind: "quote" | "para" | null = null;
+  let retiredIndent = 0;
   const flush = (): void => {
     if (cur !== null) {
       cur.text = cur.lines.join("\n");
@@ -116,10 +125,13 @@ export function parseDoc(path: string, raw: string): Doc {
     }
     for (const match of line.matchAll(/<a\s+(?:id|name)="([^"]+)"/g)) anchors.add(match[1] ?? "");
     const heading = /^(#{1,6})\s+(.*?)\s*#*\s*$/.exec(line);
+    const item = /^(\s*)(?:\d+\.|[-*+])\s+/.exec(line);
     if (/^\s*>\s*(?:#+\s*)?\**\s*RETIRED/.test(line)) retiredKind = "quote";
-    else if (/^\s*(?:\d+\.\s+|-\s+)?\*\*RETIRED/.test(line)) retiredKind = "para";
-    else if (retiredKind === "quote" && !/^\s*>/.test(line)) retiredKind = null;
-    else if (retiredKind === "para" && (line.trim() === "" || heading !== null)) retiredKind = null;
+    else if (/^\s*(?:\d+\.\s+|[-*+]\s+)?\*\*RETIRED/.test(line)) {
+      retiredKind = "para";
+      retiredIndent = (/^\s*/.exec(line) ?? [""])[0].length;
+    } else if (retiredKind === "quote" && !/^\s*>/.test(line)) retiredKind = null;
+    else if (retiredKind === "para" && (line.trim() === "" || heading !== null || (item !== null && (item[1] ?? "").length <= retiredIndent))) retiredKind = null;
     if (retiredKind !== null) retired.add(i + 1);
     if (heading !== null) {
       flush();

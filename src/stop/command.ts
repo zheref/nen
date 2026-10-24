@@ -54,7 +54,7 @@
 // a markdown parser either way. No colour, no OSC-8 hyperlink escapes in the
 // table -- they would corrupt the markdown a caller pastes elsewhere.
 
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   emit,
@@ -66,22 +66,25 @@ import { readTextFile } from "../cli/inputs.js";
 import { parsePipeTable, renderPipeTable } from "../cli/table.js";
 import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
 import { normalizeEol } from "../seam/exec.js";
+import { assertEffortId } from "../ledger/effort.js";
+import { gateMarkPath, LATEST_DIR, listMarks, NO_GATE_FILE, readLegacy, removeIfPresent, resolveMarksHome, rungTwins, sameStop, STOP_LIST_CONTRACT, twinsOf, writeGateMark, writeLatest } from "./marks.js";
 import { ANSWER_BOOLEAN_FLAGS, ANSWER_LIST_FLAGS, ANSWER_VALUE_FLAGS, runAnswer } from "./answer.js";
 import type { GateId } from "../schema/decisions.js";
 
 import {
-  GATE_NAMES, MARKER_FILE, STOP_MARK_CONTRACT, STOP_MARK_CONTRACT_V2,
+  GATE_NAMES, MARKER_FILE, STOP_MARK_CONTRACT, STOP_MARK_CONTRACT_V2, STOP_MARK_CONTRACT_V3,
   parseMarker, parseOptions as validateOptions, parseProposedIssue as validateProposedIssue,
   type StopOption, type ProposedIssue,
 } from "./marker.js";
-export { MARKER_FILE, STOP_MARK_CONTRACT, STOP_MARK_CONTRACT_V2, parseMarker } from "./marker.js";
+export { MARKER_FILE, STOP_MARK_CONTRACT, STOP_MARK_CONTRACT_V2, STOP_MARK_CONTRACT_V3, parseMarker } from "./marker.js";
 export type { StopOption, ProposedIssue } from "./marker.js";
 
-const USAGE = `nen stop [--who <name>] [--gate G1|G1-M|G2|G3|G4|G5] [--notified] [--mark]
+const USAGE = `nen stop [--who <name>] [--gate G1|G1-M|G2|G3|G4|G5] [--notified] [--mark [--effort <id>]]
          [--title <line>] [--body <text>] [--report-url <url>]
          [--options <file.json>] [--propose-issue <file.json>]
          [--repo <path>] [efforts.md | -]
-nen stop clear [--repo <path>]
+nen stop clear [--gate <g> [--effort <id>] | --all] [--repo <path>] [--json]
+nen stop list  [--repo <path>] [--json]
 nen stop show  [--repo <path>] [--json]
 nen stop --template
 nen stop answer --record <effort-id> (--gate G1|G1-M|G2|G3|G4|G5 | --row <id>) [--row <id>] --who <name>
@@ -101,8 +104,20 @@ one renderer.
                       { contract, who, gate, notified, at }, where 'contract'
                       is '${STOP_MARK_CONTRACT}' -- the marker's own versioned
                       shape, so a hook can tell a future change from a
-                      compatible one. The banner form's only write;
+                      compatible one. The banner form's only writes;
                       'stop answer' is the stop-answer ledger's writer.
+                      ALSO writes the PER-GATE marker
+                      '<git-common-dir>/.nen/marks/<effort>/<gate>.json'
+                      (zheref/nen#513), contract '${STOP_MARK_CONTRACT_V3}':
+                      the v0.2 keys plus 'effort'. One file per gate per
+                      effort, so marks for several gates in one run never
+                      replace each other; '<effort>' is the percent-encoded
+                      --effort or '_', '<gate>' the gate or 'none'. The
+                      common dir every worktree shares, so a worktree
+                      removal keeps it; under --repo outside git.
+  --effort <id>       With --mark: the effort this stop belongs to (the one
+                      effort-id grammar), recorded as 'effort' and used as
+                      the per-gate marker's directory.
   efforts.md | -       A markdown pipe table (header + rows); '-' reads stdin.
   --title <line>      One line naming the stop, carried into the marker for a
                       host notification to show.
@@ -151,9 +166,27 @@ answer:
   'answer show <effort-id>' lists the effort's records; one that is not JSON
   or not this contract's is exit 1, never skipped.
 
+list:
+  Every unrung marker, oldest first: each per-gate marker (gate, effort, at,
+  who, title, path), and '${MARKER_FILE}' as 'legacy' when no per-gate marker
+  is the same stop (same at, gate and who) -- a marker an older build wrote
+  still reads. A per-gate marker whose single-file twin a hook already removed
+  (rang and consumed) is not listed, and the next --mark removes it; markers
+  whose single file was only REPLACED by a later mark stay unrung.
+  --json: { contract: '${STOP_LIST_CONTRACT}', dir, marks[],
+  unreadable[] }. Exit 0 when every file read (an empty list included); exit 1
+  when any marker file exists and could not be read -- listed under
+  'unreadable', never skipped and never counted as no marker.
+
 clear:
-  Remove '${MARKER_FILE}' when it exists. A surface with no Stop hook consumes
-  the marker itself once the bell has rung; this is that consumption as a verb.
+  Bare: remove '${MARKER_FILE}' when it exists, and the per-gate marker that
+  is the same stop -- the consumption a Stop hook performs, as a verb, exactly
+  as before. --gate <g> [--effort <id>]: remove ONLY that gate's marker for
+  that effort (no --effort: the stop marked without one; --gate none: the
+  stop marked with no gate), and the single
+  file too when it is that same stop; every other gate's marker stays.
+  --all: every per-gate marker and the single file. Nothing to remove is
+  exit 0 saying so.
 
 Rungs 2-3 of the escalation ladder (an OS notification, an audible cue) are
 NOT fired by this command: nen requires only git and gh (a surface's own
@@ -169,7 +202,8 @@ own machine reads '${MARKER_FILE}' and rings whatever that platform has. Nen
 still fires nothing. The file lives under the dot-prefixed, gitignored '.nen/'
 (generated output), never under the committed 'nen/'; the directory is created
 if it is absent, and an existing marker is replaced, because the latest stop is
-the one a hook should ring for.`;
+the one a hook should ring for. A hook that must ring for EVERY gate of a run
+reads 'nen stop list' instead and clears each with 'stop clear --gate'.`;
 
 const TEMPLATE_TABLE = [
   ["Effort", "Open issues & PRs", "Status (gate)", "Thought flow", "Session / lane"],
@@ -194,8 +228,8 @@ export const stopCommand: Command = {
   // as an unknown subcommand (review finding on zheref/nen#216). `clear` and
   // `show` are recognised in run() instead.
   flags: {
-    values: ["who", "gate", "title", "body", "report-url", "options", "propose-issue", ...ANSWER_VALUE_FLAGS],
-    booleans: ["notified", "template", "mark", ...ANSWER_BOOLEAN_FLAGS],
+    values: ["who", "gate", "title", "body", "report-url", "options", "propose-issue", "effort", ...ANSWER_VALUE_FLAGS],
+    booleans: ["notified", "template", "mark", "all", ...ANSWER_BOOLEAN_FLAGS],
     lists: [...ANSWER_LIST_FLAGS],
   },
   run(context: CommandContext): number {
@@ -214,6 +248,8 @@ export const stopCommand: Command = {
       if (context.args.booleans.has(flag)) throw new VerbUsageError(`--${flag} belongs to 'nen stop answer' only.`);
     }
     if (context.args.positionals[1] === "clear") return clearMarker(context);
+    if (context.args.booleans.has("all")) throw new VerbUsageError("--all belongs to 'nen stop clear' only.");
+    if (context.args.positionals[1] === "list") return listCommand(context);
     if (context.args.positionals[1] === "show") return showMarker(context);
     const gate = context.args.values["gate"] ?? null;
     if (gate !== null && !Object.hasOwn(GATE_NAMES, gate)) {
@@ -225,6 +261,11 @@ export const stopCommand: Command = {
     const notified = context.args.booleans.has("notified");
     const template = context.args.booleans.has("template");
     const mark = context.args.booleans.has("mark");
+    const effortFlag = context.args.values["effort"];
+    if (effortFlag !== undefined && !mark) {
+      throw new VerbUsageError("--effort names the effort a MARKED stop belongs to: give --mark with it (or use 'nen stop clear --gate <g> --effort <id>').");
+    }
+    const effort = effortFlag === undefined ? null : assertEffortId(effortFlag);
     // `--template` EMITS A BLANK TABLE AND WAITS ON NOTHING, so there is no
     // stop for a marker to be about: writing one would leave a hook ringing for
     // an event that never happened, and the next real stop's marker would be
@@ -302,10 +343,11 @@ export const stopCommand: Command = {
     // unreadable efforts file is a stop that did not render, and a hook ringing
     // for a banner nobody saw is worse than one that never rang.
     const marker = mark
-      ? writeMarker(context, { who, gate, notified, title, body, reportUrl, options, proposedIssue })
+      ? writeMarker(context, { who, gate, notified, title, body, reportUrl, options, proposedIssue, effort })
       : null;
     if (marker !== null) {
       lines.push(`marked: ${marker.path} (${marker.contract}) -- a host hook may ring rungs 2-3 off it.`);
+      lines.push(`marked gate: ${marker.gatePath} (${STOP_MARK_CONTRACT_V3}) -- kept until 'nen stop clear --gate ${gate ?? "<g>"}${effort === null ? "" : ` --effort ${effort}`}'.`);
       if (marker.proposedPath !== null) lines.push(`proposed issue written: ${marker.proposedPath}`);
     }
 
@@ -330,6 +372,10 @@ interface StopMarker {
   readonly proposedIssue: ProposedIssue | null;
   /** Where the proposed issue was written beside the marker, or null. */
   readonly proposedPath: string | null;
+  /** The effort the stop belongs to (`--effort`), or null. */
+  readonly effort: string | null;
+  /** The per-gate marker written beside the single file (zheref/nen#513). */
+  readonly gatePath: string;
 }
 
 /** Keep the command's usage-error contract around the shared pure validator. */
@@ -400,20 +446,103 @@ function showMarker(context: CommandContext): number {
   return 0;
 }
 
-/** `nen stop clear` -- consume the marker, on a surface with no hook to do it. */
+/** `nen stop list` -- every unrung marker, per gate, plus an older single one (zheref/nen#513). */
+function listCommand(context: CommandContext): number {
+  const root = assertRepoRoot({ repoFlag: context.repoFlag });
+  const home = resolveMarksHome(root, context.seams);
+  const list = listMarks(home, root);
+  const lines = [`markers: ${list.marks.length} unrung under ${home.dir}${home.durable ? " (git common dir)" : ""}`];
+  for (const mark of list.marks) {
+    lines.push(`  ${mark.at}  ${(mark.gate ?? "-").padEnd(4)} ${(mark.effort ?? "-").padEnd(24)} ${mark.source === "legacy" ? "legacy " : ""}${mark.who ?? "-"}${mark.title === null ? "" : ` · ${mark.title}`}`);
+  }
+  for (const bad of list.unreadable) lines.push(`  could not read: ${bad.path} (${bad.reason})`);
+  emit(context.io, context.json, { contract: STOP_LIST_CONTRACT, dir: home.dir, marks: list.marks, unreadable: list.unreadable }, lines);
+  return list.unreadable.length === 0 ? 0 : 1;
+}
+
+/** `nen stop clear` -- consume a marker, on a surface with no hook to do it. */
 function clearMarker(context: CommandContext): number {
   const root = assertRepoRoot({ repoFlag: context.repoFlag });
-  const path = join(root, ...MARKER_FILE.split("/"));
-  if (!existsSync(path)) {
-    emit(context.io, context.json, { cleared: false, path }, [`no marker at ${path} -- nothing to clear.`]);
+  const legacyPath = join(root, ...MARKER_FILE.split("/"));
+  const gateFlag = context.args.values["gate"] ?? null;
+  const effortFlag = context.args.values["effort"];
+  const all = context.args.booleans.has("all");
+  // `--gate none` names a stop marked with no --gate (its file is `none.json`; Nobunaga on #516).
+  if (gateFlag !== null && gateFlag !== NO_GATE_FILE && !Object.hasOwn(GATE_NAMES, gateFlag)) throw new VerbUsageError(`--gate must be one of ${Object.keys(GATE_NAMES).join(", ")} or ${NO_GATE_FILE}, got '${gateFlag}'.`);
+  const gate = gateFlag;
+  const gateKey = gateFlag === NO_GATE_FILE ? null : gateFlag;
+  if (all && (gate !== null || effortFlag !== undefined)) throw new VerbUsageError("--all clears every marker; it takes no --gate or --effort.");
+  if (effortFlag !== undefined && gate === null) throw new VerbUsageError("--effort names which effort's marker to clear: give the --gate too.");
+  const effort = effortFlag === undefined ? null : assertEffortId(effortFlag);
+  const home = resolveMarksHome(root, context.seams);
+  const removed: string[] = [];
+  const unreadableRemoved: string[] = [];
+  const unreadableLeft: string[] = [];
+  const remove = (path: string): void => {
+    try {
+      if (removeIfPresent(path)) removed.push(path);
+    } catch (error) {
+      throw new StopMarkError(`clear could not remove '${path}' (${(error as NodeJS.ErrnoException).code ?? String(error)}).`);
+    }
+  };
+  if (all) {
+    for (const rung of rungTwins(home)) remove(rung);
+    const list = listMarks(home, root);
+    for (const mark of list.marks) remove(mark.path);
+    // AN UNREADABLE MARKER IS CLEARED TOO, and named as such (Bugbot on #516):
+    // `--all` means every marker, not every marker that parses. A directory nen
+    // could not list is left and named -- this verb removes files only.
+    for (const bad of list.unreadable) {
+      let isFile = false;
+      try {
+        isFile = !lstatSync(bad.path).isDirectory();
+      } catch {
+        isFile = false;
+      }
+      if (isFile) {
+        remove(bad.path);
+        unreadableRemoved.push(bad.path);
+      } else {
+        unreadableLeft.push(`${bad.path} (${bad.reason})`);
+      }
+    }
+    remove(legacyPath);
+    try {
+      for (const name of readdirSync(join(home.dir, LATEST_DIR))) remove(join(home.dir, LATEST_DIR, name));
+    } catch {
+      // no pointers yet
+    }
+  } else if (gate !== null) {
+    const path = gateMarkPath(home, effort, gateKey);
+    const legacy = readLegacy(root);
+    let target: Record<string, unknown> | null = null;
+    try {
+      target = existsSync(path) ? (JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>) : null;
+    } catch {
+      target = null;
+    }
+    remove(path);
+    // The single file goes too only when it records this same stop.
+    if (legacy !== null && target !== null && sameStop(legacy, target)) remove(legacyPath);
+  } else {
+    const legacy = readLegacy(root);
+    if (legacy !== null) for (const twin of twinsOf(home, root, legacy)) remove(twin);
+    remove(legacyPath);
+  }
+  if (removed.length === 0) {
+    const what = all ? "no marker" : gate !== null ? `no ${gate} marker${effort === null ? "" : ` for '${effort}'`}` : `no marker at ${legacyPath}`;
+    emit(context.io, context.json, { cleared: false, path: gate !== null ? gateMarkPath(home, effort, gateKey) : legacyPath, removed }, [`${what} -- nothing to clear.`]);
     return 0;
   }
-  try {
-    unlinkSync(path);
-  } catch (error) {
-    throw new StopMarkError(`clear could not remove '${path}' (${(error as NodeJS.ErrnoException).code ?? String(error)}).`);
-  }
-  emit(context.io, context.json, { cleared: true, path }, [`cleared ${path}.`]);
+  emit(
+    context.io,
+    context.json,
+    { cleared: true, path: removed[0], removed, unreadableRemoved, unreadableLeft },
+    [
+      ...removed.map((path): string => `cleared ${path}${unreadableRemoved.includes(path) ? " (unreadable marker)" : ""}.`),
+      ...unreadableLeft.map((entry): string => `left (not a file): ${entry}`),
+    ],
+  );
   return 0;
 }
 
@@ -441,10 +570,18 @@ function writeMarker(
     reportUrl: string | null;
     options: readonly StopOption[] | null;
     proposedIssue: ProposedIssue | null;
+    effort: string | null;
   },
 ): StopMarker {
   const root = assertRepoRoot({ repoFlag: context.repoFlag });
   const path = join(root, ...MARKER_FILE.split("/"));
+  // The per-gate marker's home is asked of git BEFORE either file is written,
+  // so a git refusal (exit 2) leaves no half-written stop behind.
+  const marksHome = resolveMarksHome(root, context.seams);
+  const gatePath = gateMarkPath(marksHome, stop.effort, stop.gate);
+  // A twin a hook already rang (the single file removed) is consumed now, before
+  // the single file is rewritten and the evidence is gone (./marks.ts).
+  const rung = rungTwins(marksHome);
   const at = context.seams.now().toISOString();
   const rich =
     stop.title !== null || stop.body !== null || stop.reportUrl !== null || stop.options !== null || stop.proposedIssue !== null;
@@ -462,6 +599,8 @@ function writeMarker(
     options: stop.options,
     proposedIssue: stop.proposedIssue,
     proposedPath,
+    effort: stop.effort,
+    gatePath,
   };
   try {
     mkdirSync(dirname(path), { recursive: true });
@@ -492,6 +631,23 @@ function writeMarker(
           at: marker.at,
         };
     writeFileSync(path, `${JSON.stringify(document, null, 2)}\n`, "utf8");
+    // THE PER-GATE MARKER (zheref/nen#513): always the full v0.3 shape, every
+    // v0.2 key present (null where the stop said nothing) plus `effort`.
+    for (const twin of rung) removeIfPresent(twin);
+    writeGateMark(gatePath, {
+      contract: STOP_MARK_CONTRACT_V3,
+      who: marker.who,
+      gate: marker.gate,
+      notified: marker.notified,
+      at: marker.at,
+      title: marker.title,
+      body: marker.body,
+      reportUrl: marker.reportUrl,
+      options: marker.options,
+      proposedIssue: marker.proposedIssue,
+      effort: marker.effort,
+    });
+    writeLatest(marksHome, gatePath, at, path);
     if (proposedPath !== null && stop.proposedIssue !== null) {
       mkdirSync(dirname(proposedPath), { recursive: true });
       writeFileSync(

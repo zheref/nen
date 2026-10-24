@@ -682,6 +682,22 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
     expect(result.err.join("\n")).toMatch(/--repo <path> is required/);
   });
 
+  // zheref/nen#479 AC-4 at the command layer (#515 F6): an unreadable or
+  // malformed --requirements-from is exit 2 before any GitHub read -- the
+  // empty ScriptedSeams throws on the first call, so exit 2 proves zero calls.
+  it("next-blocker refuses a missing or malformed --requirements-from at exit 2 with zero gh calls", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-nb-req-"));
+    writeFileSync(join(dir, "bad.json"), "{");
+    writeFileSync(join(dir, "shape.json"), JSON.stringify([{ name: "verify" }]));
+    for (const file of [join(dir, "missing.json"), join(dir, "bad.json"), join(dir, "shape.json")]) {
+      const seams = new ScriptedSeams([]);
+      const result = await capture(["pr", "next-blocker", "--target", "o/n", "--pr", "1", "--requirements-from", file], BANKAI_REPO, seams);
+      expect(result.code, file).toBe(2);
+      expect(result.err.join("\n"), file).toMatch(/missing\.json|bad\.json|shape\.json/);
+      expect(seams.calls.length, file).toBe(0);
+    }
+  });
+
   it("cascade-main refuses an OMITTED --repo the same way -- it MUTATES what it is pointed at", async () => {
     const result = await capture(["pr", "cascade-main"], null, new ScriptedSeams([]));
     expect(result.code).toBe(2);
@@ -2417,11 +2433,11 @@ describe("nen pr edit-body -- replaces a pull request's body outright, byte for 
     expect(result.err.join("\n")).toMatch(/could not replace zheref\/nen#12's body/);
   });
 
-  it("refuses --dry-run on any subcommand that does not read it, naming all seven that do", async () => {
+  it("refuses --dry-run on any subcommand that does not read it, naming all eight that do", async () => {
     const result = await capture(["pr", "ready", "--dry-run"], null, new ScriptedSeams([]));
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toContain(
-      "--dry-run is only read by 'pr cascade-main', 'pr retarget', 'pr request-reviews', 'pr edit-body', 'pr mark-ready', 'pr threads' and 'pr open'.",
+      "--dry-run is only read by 'pr cascade-main', 'pr retarget', 'pr request-reviews', 'pr edit-body', 'pr mark-ready', 'pr threads', 'pr open' and 'pr ledger'.",
     );
   });
 
@@ -2549,7 +2565,7 @@ describe("nen pr merge -- the bounded merge, CLI wiring", () => {
     return new ScriptedSeams([
       { match: "git remote get-url origin", result: { code: 0, stdout: "https://github.com/zheref/example.git\n" } },
       {
-        match: "gh pr view 9 --repo zheref/example --json headRefOid,baseRefOid,baseRefName,headRefName,body,isCrossRepository,author,state",
+        match: "gh pr view 9 --repo zheref/example --json headRefOid,baseRefOid,baseRefName,headRefName,body,isCrossRepository,author,state,closingIssuesReferences,url",
         result: {
           code: 0,
           stdout: JSON.stringify({ headRefOid: "cafebabe", baseRefOid: baseOid, baseRefName: "main", headRefName: "opus/kurapika/x", body: "", isCrossRepository: false, author: { login: "someone" }, state: "OPEN" }),
@@ -3077,7 +3093,7 @@ describe("the family's one flag guard (zheref/nen#351)", () => {
       [[...mark, "--base", "main"], "--base is only read by 'pr body-check', 'pr retarget' and 'pr open'."],
       [[...mark, "--body-file", BODY], "--body-file is only read by 'pr edit-body', 'pr threads reply' and 'pr open'."],
       [["pr", "fetch", "--target", "zheref/nen", "--pr", "12", "--from", SETTLE], "--from is only read by 'pr threads settle'."],
-      [["pr", "fetch", "--target", "zheref/nen", "--pr", "12", "--require-head", "abcdef1"], "--require-head is only read by 'pr ready', 'pr mark-ready' and 'pr merge --delivery'."],
+      [["pr", "fetch", "--target", "zheref/nen", "--pr", "12", "--require-head", "abcdef1"], "--require-head is only read by 'pr ready', 'pr converge', 'pr mark-ready' and 'pr merge --delivery'."],
     ];
     for (const [argv, message] of cases) {
       const result = await capture(argv, null, new ScriptedSeams([]));
@@ -3160,7 +3176,7 @@ describe("the family's one flag guard (zheref/nen#351)", () => {
 
   // Nobunaga 9 (hanten round 1): the form that reads it, not the one that refuses it.
   it("names 'pr merge --delivery' for --require-head", () => {
-    expect(prFlagOwners("require-head")).toEqual(["'pr ready'", "'pr mark-ready'", "'pr merge --delivery'"]);
+    expect(prFlagOwners("require-head")).toEqual(["'pr ready'", "'pr converge'", "'pr mark-ready'", "'pr merge --delivery'"]);
   });
 
   // Nobunaga 6 (hanten round 1): no default credential claim.
@@ -3180,11 +3196,11 @@ describe("the family's one flag guard (zheref/nen#351)", () => {
         lists: ["exclude-check", "reviewer-login"],
       },
       staleness: { values: ["wakes-from", "last-activity", "now", "min-verified-wakes", "idle-minutes"], booleans: ["ready"] },
-      "body-check": { values: ["body-from", "requirements-from", "base", "max", "prose-budget"], booleans: ["exact"] },
+      "body-check": { values: ["body-from", "requirements-from", "base", "max", "prose-budget", "criteria", "criteria-from", "criteria-issue", "catalogue"], booleans: ["exact"] },
       sections: { values: ["catalogue", "kind", "family", "with", "overrides", "taxonomy", "jobs"] },
       fetch: { values: ["target", "pr"] },
-      converge: { values: ["target", "pr", "requirements-from"] },
-      "next-blocker": { values: ["target", "pr", "reviewers", "gates", "policy"], booleans: ["delivery-pr"] },
+      converge: { values: ["target", "pr", "catalogue", "requirements-from", "require-head", "body-requirements"], booleans: ["composite"] },
+      "next-blocker": { values: ["target", "pr", "reviewers", "gates", "policy", "requirements-from"], booleans: ["delivery-pr"] },
       "cascade-main": { values: ["trunk"], booleans: ["no-push", "dry-run"] },
       retarget: { values: ["target", "pr", "base"], booleans: ["dry-run"] },
       "request-reviews": { values: ["target", "pr", "add-reviewers", "add-bots"], booleans: ["dry-run"] },
@@ -3192,7 +3208,8 @@ describe("the family's one flag guard (zheref/nen#351)", () => {
       "mark-ready": { values: ["target", "pr", "require-head"], booleans: ["dry-run"] },
       threads: { values: ["target", "pr", "thread", "body-file", "from", "private-names-ignore-file"], booleans: ["dry-run", "skip-private-name-check", "allow-all-ignored"] },
       open: { values: ["target", "base", "title-file", "body-file", "head", "assignee", "private-names-ignore-file"], booleans: ["draft", "dry-run", "skip-private-name-check", "allow-all-ignored"] },
-      merge: { values: ["requirements-from", "require-head"], booleans: ["release-unit", "delivery", "run"] },
+      merge: { values: ["requirements-from", "require-head", "catalogue"], booleans: ["release-unit", "delivery", "run"] },
+      ledger: { values: ["target", "pr", "effort", "findings", "findings-schema", "login", "private-names-ignore-file"], booleans: ["dry-run", "skip-private-name-check", "allow-all-ignored", "restore"], lists: ["proof"] },
     });
     const threadsRow = PR_SUBCOMMAND_FLAGS["threads"] ?? {};
     const own = new Set([...(threadsRow.values ?? []), ...(threadsRow.booleans ?? [])].filter((flag): boolean => flag !== "target" && flag !== "pr"));
