@@ -114,7 +114,7 @@ export function bodyHasOptOut(body: string | null): boolean {
   return body !== null && OPT_OUT.test(body);
 }
 
-/** `### Unreleased` entries: top-level `- **...` before the next `### ` header. */
+/** `### Unreleased` entries: top-level `- **...` before the next heading at level 3 or higher. */
 export function unreleasedEntryCount(changelog: string): number {
   return countEntries(changelog, /^### Unreleased/);
 }
@@ -141,7 +141,10 @@ function countEntries(changelog: string, header: RegExp): number {
       inside = true;
       continue;
     }
-    if (line.startsWith("### ")) {
+    // A heading at level 3 OR HIGHER ends the section (zheref/nen#515 F2), as
+    // collate's `endsSection(…, 3)` does: a `## v<prev>` heading below an
+    // empty Unreleased block is not part of it, and neither are its bullets.
+    if (/^#{1,3} /.test(line)) {
       if (inside) break;
       continue;
     }

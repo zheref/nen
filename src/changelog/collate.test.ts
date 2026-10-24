@@ -69,8 +69,24 @@ describe("collateIntoChangelog", () => {
 
   it("never drops a '## v<prev>' heading under an empty Unreleased (zheref/nen#504)", () => {
     const mixed = "# Changelog\n\n### Unreleased\n\n## v0.26.0 — 2026-10-22\n\nRelease unit paragraph.\n\n### Added\n\n- old\n";
-    const out = collateIntoChangelog(mixed, "v0.27.0", "theme", [{ name: "1-a.md", content: "- new\n" }]);
-    expect(out).toContain("## v0.26.0 — 2026-10-22\n\nRelease unit paragraph.\n\n### Added\n\n- old\n");
+    const result = collateChangelog(mixed, "v0.27.0", "theme", [{ name: "1-a.md", content: "- new\n" }], { date: "2026-10-23" });
+    // The new section takes the dated heading's form and level, with a blank line before it (#515 F1).
+    expect(result.heading).toBe("## v0.27.0 — 2026-10-23");
+    expect(result.text).toBe(
+      "# Changelog\n\n### Unreleased\n_(nothing awaiting release.)_\n\n## v0.27.0 — 2026-10-23\n\ntheme\n\n- new\n\n## v0.26.0 — 2026-10-22\n\nRelease unit paragraph.\n\n### Added\n\n- old\n",
+    );
+  });
+
+  it("does not count a '## v<prev>' section's bullets as Unreleased entries (#515 F2)", () => {
+    const shaped = "### Unreleased\n\n## v0.26.0 — 2026-10-22\n\n- **old** one\n- **old** two\n";
+    expect(collateChangelog(shaped, "v0.27.0", "t", [{ name: "a.md", content: "- new\n" }], { date: "2026-10-23" }).heading).toBe("## v0.27.0 — 2026-10-23");
+  });
+
+  it("writes the inserted lines with a CRLF file's own line ending (#515 F11)", () => {
+    const crlf = "# C\r\n\r\n## v1.0.0 — 2026-01-01\r\n\r\n- old\r\n";
+    const text = collateChangelog(crlf, "v1.1.0", "t", [{ name: "a.md", content: "- new\n" }], { date: "2026-02-01" }).text;
+    expect(text.replace(/\r\n/g, "")).not.toContain("\n");
+    expect(text).toBe("# C\r\n\r\n## v1.1.0 — 2026-02-01\r\n\r\nt\r\n\r\n- new\r\n\r\n## v1.0.0 — 2026-01-01\r\n\r\n- old\r\n");
   });
 });
 
