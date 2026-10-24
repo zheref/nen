@@ -54,7 +54,7 @@
 // a markdown parser either way. No colour, no OSC-8 hyperlink escapes in the
 // table -- they would corrupt the markdown a caller pastes elsewhere.
 
-import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   emit,
@@ -67,7 +67,7 @@ import { parsePipeTable, renderPipeTable } from "../cli/table.js";
 import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
 import { normalizeEol } from "../seam/exec.js";
 import { assertEffortId } from "../ledger/effort.js";
-import { gateMarkPath, LATEST_FILE, listMarks, NO_GATE_FILE, readLegacy, removeIfPresent, resolveMarksHome, rungTwin, sameStop, STOP_LIST_CONTRACT, twinsOf, writeGateMark, writeLatest } from "./marks.js";
+import { gateMarkPath, LATEST_DIR, listMarks, NO_GATE_FILE, readLegacy, removeIfPresent, resolveMarksHome, rungTwins, sameStop, STOP_LIST_CONTRACT, twinsOf, writeGateMark, writeLatest } from "./marks.js";
 import { ANSWER_BOOLEAN_FLAGS, ANSWER_LIST_FLAGS, ANSWER_VALUE_FLAGS, runAnswer } from "./answer.js";
 import type { GateId } from "../schema/decisions.js";
 
@@ -486,8 +486,7 @@ function clearMarker(context: CommandContext): number {
     }
   };
   if (all) {
-    const rung = rungTwin(home);
-    if (rung !== null) remove(rung);
+    for (const rung of rungTwins(home)) remove(rung);
     const list = listMarks(home, root);
     for (const mark of list.marks) remove(mark.path);
     // AN UNREADABLE MARKER IS CLEARED TOO, and named as such (Bugbot on #516):
@@ -508,7 +507,11 @@ function clearMarker(context: CommandContext): number {
       }
     }
     remove(legacyPath);
-    remove(join(home.dir, LATEST_FILE));
+    try {
+      for (const name of readdirSync(join(home.dir, LATEST_DIR))) remove(join(home.dir, LATEST_DIR, name));
+    } catch {
+      // no pointers yet
+    }
   } else if (gate !== null) {
     const path = gateMarkPath(home, effort, gateKey);
     const legacy = readLegacy(root);
@@ -578,7 +581,7 @@ function writeMarker(
   const gatePath = gateMarkPath(marksHome, stop.effort, stop.gate);
   // A twin a hook already rang (the single file removed) is consumed now, before
   // the single file is rewritten and the evidence is gone (./marks.ts).
-  const rung = rungTwin(marksHome);
+  const rung = rungTwins(marksHome);
   const at = context.seams.now().toISOString();
   const rich =
     stop.title !== null || stop.body !== null || stop.reportUrl !== null || stop.options !== null || stop.proposedIssue !== null;
@@ -630,7 +633,7 @@ function writeMarker(
     writeFileSync(path, `${JSON.stringify(document, null, 2)}\n`, "utf8");
     // THE PER-GATE MARKER (zheref/nen#513): always the full v0.3 shape, every
     // v0.2 key present (null where the stop said nothing) plus `effort`.
-    if (rung !== null) removeIfPresent(rung);
+    for (const twin of rung) removeIfPresent(twin);
     writeGateMark(gatePath, {
       contract: STOP_MARK_CONTRACT_V3,
       who: marker.who,

@@ -9280,7 +9280,7 @@ nen run park --id <run-id> --issue <ref> --row <decisions-row-id> [--repo <path>
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `--id <run-id>` | yes | The run. | As `run start`. |
-| `--issue <ref>` | yes | The issue whose effort is parked. | `<CODE>#<N>` or `<owner/name>#<N>`; otherwise exit 2. **Recorded as `<owner/name>#<N>`**: a code is resolved through `--repo`'s `nen/repos.json`, one that does not resolve to one `owner/name` is exit 2 (the one spelling `run append` and `run import` record too). **Recorded as `<owner/name>#<N>`** (one spelling per manifest): a code is resolved through `--repo`'s `nen/repos.json`; one that does not resolve to one `owner/name` is exit 2. |
+| `--issue <ref>` | yes | The issue whose effort is parked. | `<CODE>#<N>` or `<owner/name>#<N>`; otherwise exit 2. **Recorded as `<owner/name>#<N>`** (one spelling per manifest): a code is resolved through `--repo`'s `nen/repos.json`; one that does not resolve to one `owner/name` is exit 2. |
 | `--row <id>` | yes | The ask-once row it is parked on. | `[a-z0-9-]+`, as `nen/decisions.json` spells a row; otherwise exit 2. |
 | `--repo <path>` | no | Any checkout of the project. | Default the current directory. |
 | `--dry-run` | no | Report the outcome; write nothing. | Outcome `dry-run`. |
@@ -15652,8 +15652,9 @@ stop. A hook that must ring for every gate reads `stop list` and clears each wit
   effort, instant, who and title, and the single file as `legacy` when no per-gate marker is the same
   stop (same `at`, `gate` and `who`), so a marker an older build wrote still reads. A per-gate marker
   whose single-file twin a hook removed itself (it rang and consumed it, e.g. `rm -f .nen/last-stop.json`)
-  is not listed, and the next `--mark` deletes it; `<marks>/.latest.json` records which marker the single
-  file twins. Markers whose single file was only replaced by a later mark stay unrung. `--json`:
+  is not listed, and the next `--mark` deletes it; `<marks>/.latest/<hash>.json`, one per checkout, records
+  which marker that checkout's single file twins. A checkout removed whole, or a `.nen` removed by `git
+  clean`, consumed nothing, so its markers stay listed. Markers whose single file was only replaced by a later mark stay unrung. `--json`:
   `{ contract: "nen.stop.list/v0.1", dir, marks: [{ source, path, contract, gate, effort, who, at, title }],
   unreadable: [{ path, reason }] }`. Exit 0 when every file read, an empty list included; exit **1** when
   a marker file exists and could not be read, listed under `unreadable` -- never skipped, never "no marker".

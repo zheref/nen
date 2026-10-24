@@ -24,7 +24,9 @@
 // `at`, `gate` and `who`) -- a marker an older build wrote still reads.
 
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, unlinkSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { createHash } from "node:crypto";
+import { dirname, isAbsolute, join, relative } from "node:path";
+import { realContainment } from "../repo/contain.js";
 import { encodeEffortId } from "../ledger/effort.js";
 import { commonDirOrNull } from "../ledger/home.js";
 import { writeLedgerAtomically } from "../ledger/lock.js";
@@ -36,13 +38,13 @@ import { MARKER_FILE, parseMarker } from "./marker.js";
  * THE RUNG TWIN (Nobunaga on #516). A Stop hook that rings off the single file
  * and removes it (`rm -f .nen/last-stop.json`, as Hatsu's stop-bell does)
  * never consumes the per-gate twin. So every mark also records which per-gate
- * marker the single file currently twins, in `<marks>/.latest.json` { path, at, single }.
+ * marker the single file currently twins, in `<marks>/.latest/<hash of the single file's path>.json` { path, at, single }, one per checkout.
  * When the single file is GONE and that marker still carries the same `at`, the
  * hook consumed it: `list` does not report it, and the next `--mark` removes
  * it. A single file that was REPLACED by a later mark consumed nothing, so the
  * earlier gates stay listed as unrung.
  */
-export const LATEST_FILE = ".latest.json";
+export const LATEST_DIR = ".latest";
 
 /** `nen.stop.list/v0.1` -- `nen stop list --json`'s document. */
 export const STOP_LIST_CONTRACT = "nen.stop.list/v0.1";
@@ -128,9 +130,9 @@ export function listMarks(home: MarksHome, root: string): MarkList {
       return [];
     }
   };
-  const rung = rungTwin(home);
+  const rung = new Set(rungTwins(home));
   for (const effortDir of entries(home.dir)) {
-    if (effortDir === LATEST_FILE) continue;
+    if (effortDir.startsWith(".")) continue;
     const directory = join(home.dir, effortDir);
     if (!lstatSync(directory).isDirectory()) {
       unreadable.push({ path: directory, reason: "not a directory" });
@@ -144,7 +146,7 @@ export function listMarks(home: MarksHome, root: string): MarkList {
         unreadable.push({ path, reason: verdict.reason });
         continue;
       }
-      if (rung !== null && path === rung) continue;
+      if (rung.has(path)) continue;
       documents.push(verdict.marker);
       marks.push(listed("gate", path, verdict.marker));
     }
@@ -182,26 +184,47 @@ export function readLegacy(root: string): Record<string, unknown> | null {
   return verdict.ok ? verdict.marker : null;
 }
 
-/** The per-gate marker the single file twinned, when the single file is gone (consumed) and the marker is still that stop; else null. */
-export function rungTwin(home: MarksHome): string | null {
-  const latest = join(home.dir, LATEST_FILE);
-  let pointer: { path?: unknown; at?: unknown; single?: unknown };
-  try {
-    pointer = JSON.parse(readFileSync(latest, "utf8")) as { path?: unknown; at?: unknown; single?: unknown };
-  } catch {
-    return null;
-  }
-  if (typeof pointer.path !== "string" || typeof pointer.at !== "string" || typeof pointer.single !== "string" || !pointer.path.startsWith(home.dir) || !existsSync(pointer.path)) return null;
-  // CONSUMED only when the checkout that held the single file still exists and
-  // the file is gone from it: a removed worktree took the file without anyone
-  // ringing, so its markers stay unrung (AC-4).
-  const checkout = dirname(dirname(pointer.single));
-  if (!existsSync(checkout) || existsSync(pointer.single)) return null;
-  const verdict = readMarker(pointer.path);
-  return verdict.ok && verdict.marker["at"] === pointer.at ? pointer.path : null;
+/** One pointer file per checkout's single file, so worktrees marking in turn never overwrite each other's twin. */
+export function latestPath(home: MarksHome, single: string): string {
+  return join(home.dir, LATEST_DIR, `${createHash("sha256").update(single).digest("hex").slice(0, 32)}.json`);
 }
 
-/** Record which per-gate marker the single file now twins. */
+/**
+ * Every per-gate marker whose single file a hook consumed: a pointer under
+ * `<marks>/.latest/` whose single file is gone while its `.nen` directory still
+ * exists (a removed worktree, or a `.nen` a `git clean` removed, consumed
+ * nothing), and whose marker still carries the pointer's `at`. A pointer path
+ * that does not really sit under `<marks>` -- a `..` segment, a link out -- is
+ * ignored, never deleted (Nobunaga on #516, SEC-7).
+ */
+export function rungTwins(home: MarksHome): readonly string[] {
+  const dir = join(home.dir, LATEST_DIR);
+  let names: string[];
+  try {
+    names = readdirSync(dir).filter((name): boolean => name.endsWith(".json"));
+  } catch {
+    return [];
+  }
+  const rung: string[] = [];
+  for (const name of names) {
+    let pointer: { path?: unknown; at?: unknown; single?: unknown };
+    try {
+      pointer = JSON.parse(readFileSync(join(dir, name), "utf8")) as { path?: unknown; at?: unknown; single?: unknown };
+    } catch {
+      continue;
+    }
+    if (typeof pointer.path !== "string" || typeof pointer.at !== "string" || typeof pointer.single !== "string") continue;
+    const rel = relative(home.dir, pointer.path);
+    if (rel === "" || isAbsolute(rel) || rel.split(/[\\/]/).some((segment): boolean => segment === ".." || segment === "") || rel.startsWith(LATEST_DIR)) continue;
+    if (!realContainment(home.dir, pointer.path).contained || !existsSync(pointer.path)) continue;
+    if (!existsSync(dirname(pointer.single)) || existsSync(pointer.single)) continue;
+    const verdict = readMarker(pointer.path);
+    if (verdict.ok && verdict.marker["at"] === pointer.at) rung.push(pointer.path);
+  }
+  return rung;
+}
+
+/** Record which per-gate marker this checkout's single file now twins. */
 export function writeLatest(home: MarksHome, path: string, at: string, single: string): void {
-  writeLedgerAtomically(join(home.dir, LATEST_FILE), { path, at, single });
+  writeLedgerAtomically(latestPath(home, single), { path, at, single });
 }
