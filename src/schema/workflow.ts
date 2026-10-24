@@ -601,6 +601,8 @@ export interface Workflow {
   readonly runners: RunnersPolicy | null;
   /** `idle` -- the typed idle profile (HR-5), or null when none is declared. No default. */
   readonly idle?: IdlePolicy | null;
+  /** `spec` -- a spec repository's capture and autonomy keys (zheref/nen#493), defaults filled; `declared` false when the block is absent. */
+  readonly spec?: SpecPolicy;
   /**
    * `alwaysOverlaps` -- paths every delivery touches sooner or later (a
    * manifest version, the CHANGELOG, generated mirrors), read by `nen wc
@@ -707,6 +709,7 @@ export function defaultWorkflow(): Workflow {
     runners: null,
     ci: null,
     idle: null,
+    spec: defaultSpecPolicy(),
     alwaysOverlaps: [],
     raw: empty,
   };
@@ -735,6 +738,7 @@ const ROOT_KEYS: readonly string[] = [
   "futon",
   "runners", "ci",
   "idle",
+  "spec",
   "alwaysOverlaps",
 ];
 
@@ -763,6 +767,13 @@ const IDLE_BUDGET_KEYS: readonly string[] = ["minutes", "tokens"];
 /** A decisions.json row id, as ../schema/decisions.ts spells one. */
 const DECISION_ROW_ID = /^[a-z0-9][a-z0-9-]*$/;
 const PROFILE_KEYS: readonly string[] = ["default", "allowed"];
+const SPEC_KEYS: readonly string[] = ["clarify", "capture", "maxBytes", "autonomy"];
+const SPEC_CLARIFY_KEYS: readonly string[] = ["maxQuestions", "maxRounds"];
+const SPEC_CAPTURE_KEYS: readonly string[] = ["foldersPerPr"];
+const SPEC_AUTONOMY_KEYS: readonly string[] = ["platformOrder", "referencePlatform", "maxInFlight", "unmetSc", "convergeFiling", "waveEnds"];
+export const SPEC_UNMET_SC = ["refuse"] as const;
+export const SPEC_CONVERGE_FILING = ["propose", "file"] as const;
+export const SPEC_WAVE_ENDS = ["all-at-prompt"] as const;
 
 /**
  * A key one typo away from a key nen reads, refused by the name it meant.
@@ -2389,8 +2400,109 @@ export function parseWorkflow(path: string, value: unknown): Workflow {
     runners: parseRunners(path, raw["runners"]),
     ci: parseCi(path, raw["ci"]),
     idle,
+    spec: parseSpecPolicy(path, raw["spec"]),
     alwaysOverlaps: parseAlwaysOverlaps(path, raw["alwaysOverlaps"]),
     raw,
+  };
+}
+
+/**
+ * `spec` -- the keys a product family's spec repository states for its
+ * capture skill (Hatsu docs/config/spec-repo.md § The spec repository's keys;
+ * zheref/nen#493's catalogue domain). Every key is optional; a stated key is
+ * held to its type and range, a near-miss refused by the name it meant. Three
+ * carry the catalogue's defaults (clarify.maxQuestions 5, clarify.maxRounds 3,
+ * capture.foldersPerPr 4) and two their one safe value (autonomy.unmetSc
+ * refuse, autonomy.convergeFiling propose); the rest are TYPED by the
+ * maintainer and have none -- null here, and a reader that needs one says it
+ * is missing rather than inventing it.
+ */
+export interface SpecPolicy {
+  readonly declared: boolean;
+  /**
+   * Every key path the file STATES (`clarify.maxQuestions`, `autonomy.unmetSc`, …), so a reader can tell a
+   * stated value from a filled default: Hatsu reads an absent key at wave time as missing-configuration,
+   * never as the default (spec-repo.md § The spec repository's keys; Nobunaga F13).
+   */
+  readonly stated: readonly string[];
+  readonly clarify: { readonly maxQuestions: number; readonly maxRounds: number };
+  readonly capture: { readonly foldersPerPr: number };
+  readonly maxBytes: number | null;
+  readonly autonomy: {
+    readonly platformOrder: readonly string[] | null;
+    readonly referencePlatform: string | null;
+    readonly maxInFlight: Readonly<Record<string, number>> | null;
+    readonly unmetSc: (typeof SPEC_UNMET_SC)[number];
+    readonly convergeFiling: (typeof SPEC_CONVERGE_FILING)[number];
+    readonly waveEnds: (typeof SPEC_WAVE_ENDS)[number] | null;
+  };
+}
+
+export function defaultSpecPolicy(): SpecPolicy {
+  return {
+    declared: false,
+    stated: [],
+    clarify: { maxQuestions: 5, maxRounds: 3 },
+    capture: { foldersPerPr: 4 },
+    maxBytes: null,
+    autonomy: { platformOrder: null, referencePlatform: null, maxInFlight: null, unmetSc: "refuse", convergeFiling: "propose", waveEnds: null },
+  };
+}
+
+function parseSpecPolicy(path: string, value: unknown): SpecPolicy {
+  const defaults = defaultSpecPolicy();
+  if (value === undefined || value === null) return defaults;
+  const raw = block(path, "spec", value, SPEC_KEYS, "A spec block's four keys are");
+  const positive = (pointer: string, at: unknown, fallback: number): number => {
+    if (at === undefined) return fallback;
+    if (!Number.isSafeInteger(at) || (at as number) < 1) throw new SchemaError(path, pointer, `expected a positive whole number, got ${describeValue(at)}`);
+    return at as number;
+  };
+  const clarify = block(path, "spec.clarify", raw["clarify"], SPEC_CLARIFY_KEYS, "spec.clarify's two keys are");
+  const capture = block(path, "spec.capture", raw["capture"], SPEC_CAPTURE_KEYS, "spec.capture's one key is");
+  const autonomy = block(path, "spec.autonomy", raw["autonomy"], SPEC_AUTONOMY_KEYS, "spec.autonomy's six keys are");
+  const word = (pointer: string, at: unknown): string => {
+    const text = requireString(path, pointer, at);
+    if (text.trim() === "") throw new SchemaError(path, pointer, "is an empty string");
+    return text;
+  };
+  let platformOrder: string[] | null = null;
+  if (autonomy["platformOrder"] !== undefined) {
+    platformOrder = requireArray(path, "spec.autonomy.platformOrder", autonomy["platformOrder"]).map((item, index): string => word(`spec.autonomy.platformOrder[${index}]`, item));
+    if (platformOrder.length === 0 || new Set(platformOrder).size !== platformOrder.length) throw new SchemaError(path, "spec.autonomy.platformOrder", "expected a non-empty list of distinct platforms");
+  }
+  const referencePlatform = autonomy["referencePlatform"] === undefined ? null : word("spec.autonomy.referencePlatform", autonomy["referencePlatform"]);
+  if (referencePlatform !== null && platformOrder !== null && !platformOrder.includes(referencePlatform)) throw new SchemaError(path, "spec.autonomy.referencePlatform", `'${referencePlatform}' is not in spec.autonomy.platformOrder (${platformOrder.join(", ")})`);
+  // "an integer per platform" (Hatsu spec-repo.md): a map, each key a platform of platformOrder when it is stated (Nobunaga F19).
+  let maxInFlight: Record<string, number> | null = null;
+  const inFlight = autonomy["maxInFlight"];
+  if (inFlight !== undefined) {
+    const map = requireRecord(path, "spec.autonomy.maxInFlight", inFlight);
+    maxInFlight = Object.fromEntries(Object.entries(map).filter(([key]): boolean => !key.startsWith("$")).map(([key, at]): [string, number] => {
+      if (platformOrder !== null && !platformOrder.includes(key)) throw new SchemaError(path, `spec.autonomy.maxInFlight.${key}`, `'${key}' is not in spec.autonomy.platformOrder (${platformOrder.join(", ")})`);
+      return [key, positive(`spec.autonomy.maxInFlight.${key}`, at, 1)];
+    }));
+  }
+  const stated = [
+    ...SPEC_CLARIFY_KEYS.filter((key): boolean => clarify[key] !== undefined).map((key): string => `clarify.${key}`),
+    ...SPEC_CAPTURE_KEYS.filter((key): boolean => capture[key] !== undefined).map((key): string => `capture.${key}`),
+    ...(raw["maxBytes"] === undefined ? [] : ["maxBytes"]),
+    ...SPEC_AUTONOMY_KEYS.filter((key): boolean => autonomy[key] !== undefined).map((key): string => `autonomy.${key}`),
+  ];
+  return {
+    declared: true,
+    stated,
+    clarify: { maxQuestions: positive("spec.clarify.maxQuestions", clarify["maxQuestions"], defaults.clarify.maxQuestions), maxRounds: positive("spec.clarify.maxRounds", clarify["maxRounds"], defaults.clarify.maxRounds) },
+    capture: { foldersPerPr: positive("spec.capture.foldersPerPr", capture["foldersPerPr"], defaults.capture.foldersPerPr) },
+    maxBytes: raw["maxBytes"] === undefined ? null : positive("spec.maxBytes", raw["maxBytes"], 1),
+    autonomy: {
+      platformOrder,
+      referencePlatform,
+      maxInFlight,
+      unmetSc: autonomy["unmetSc"] === undefined ? "refuse" : requireEnum(path, "spec.autonomy.unmetSc", autonomy["unmetSc"], SPEC_UNMET_SC),
+      convergeFiling: autonomy["convergeFiling"] === undefined ? "propose" : requireEnum(path, "spec.autonomy.convergeFiling", autonomy["convergeFiling"], SPEC_CONVERGE_FILING),
+      waveEnds: autonomy["waveEnds"] === undefined ? null : requireEnum(path, "spec.autonomy.waveEnds", autonomy["waveEnds"], SPEC_WAVE_ENDS),
+    },
   };
 }
 

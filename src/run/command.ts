@@ -10,6 +10,7 @@
 import { parseTarget, type Target } from "../github/target.js";
 import {
   emit,
+  refuseExtraPositionals,
   requireRepoFlag,
   requireSubcommand,
   requireValue,
@@ -45,8 +46,10 @@ import {
 } from "./manifest.js";
 import { readLivePr, renderVerify, verifyRun } from "./verify.js";
 import { computeBudget, renderBudget, runEfforts, type BudgetCeiling } from "./budget.js";
+import { readFileSync } from "node:fs";
+import { readRecord, RECORD_SCHEMAS, recordSchema, renderRecord, runIdMatches, unreadableRecord, writeRecord } from "./record.js";
 
-const SUBCOMMANDS = ["rerun-failed", "start", "append", "verify", "budget", "park"] as const;
+const SUBCOMMANDS = ["rerun-failed", "start", "append", "verify", "budget", "park", "record"] as const;
 type Subcommand = (typeof SUBCOMMANDS)[number];
 
 const USAGE = `nen run rerun-failed -- re-run a workflow run's failed jobs, senkei's dead-reviewer recovery.
@@ -64,6 +67,8 @@ usage:
   nen run verify --id <run-id> --target <owner/name> [--repo <path>] [--json]
   nen run budget --id <run-id> [--claim] [--max-minutes <n>] [--max-tokens <n>]
                  [--effort <id,...>] [--repo <path>] [--json]
+  nen run record read  --schema <id> --id <run-id> [--json]
+  nen run record write --schema <id> --id <run-id> --from <file> [--dry-run] [--json]
 
 rerun-failed: 'gh run rerun <n> --failed', exactly. senkei's own instruction:
 re-run the failed job when a reviewer job dies mid-run, NEVER re-label to force
@@ -113,12 +118,25 @@ GIT_WORK_TREE dropped. nen records and reads; it decides nothing.
           ledger will not read. With --claim: exit 1 once either ceiling is reached -- an
           answer, not a failure, the loop cap's shape. Nothing is written.
 
+  record  A caller's resumable run record (zheref/nen#493), validated against
+          a schema nen ships as data (${RECORD_SCHEMAS.join(", ")}) and kept at
+          \${XDG_STATE_HOME:-$HOME/.local/state}/<schema dir>/<run-id>.json.
+          The run id is matched WHOLE against the schema's pattern before any
+          path is built; the record's schema, caller and runId are checked
+          before its fields. 'write' reads the document from --from and writes
+          it whole (a temp file at 0600 in a 0700 directory, then a rename);
+          --dry-run validates and writes nothing. 'read' validates the stored
+          record. Verdicts valid, written, would-write, absent, invalid,
+          could-not-read; exit 0 for the first three, 1 otherwise.
+
 Exit 2 for a malformed flag or a flag another subcommand owns.`;
 
 const OWNED: Readonly<Record<string, readonly Subcommand[]>> = {
   "run-id": ["rerun-failed"],
   target: ["rerun-failed", "start", "verify"],
-  id: ["start", "append", "verify", "budget", "park"],
+  id: ["start", "append", "verify", "budget", "park", "record"],
+  schema: ["record"],
+  from: ["record"],
   "idle-answers": ["start"],
   issue: ["append", "park"],
   pr: ["append"],
@@ -131,7 +149,7 @@ const OWNED: Readonly<Record<string, readonly Subcommand[]>> = {
   "max-tokens": ["budget"],
 };
 const OWNED_BOOLEANS: Readonly<Record<string, readonly Subcommand[]>> = {
-  "dry-run": ["rerun-failed", "start", "append", "park"],
+  "dry-run": ["rerun-failed", "start", "append", "park", "record"],
   claim: ["budget"],
 };
 
@@ -152,10 +170,10 @@ function refuseForeignFlags(context: CommandContext, subcommand: Subcommand): vo
 export const runCommand: Command = {
   name: "run",
   subcommands: [...SUBCOMMANDS],
-  summary: "Re-run a workflow run's failed jobs; keep and read a batch run's manifest.",
+  summary: "Re-run a workflow run's failed jobs; keep and read a batch run's manifest and a caller's run record.",
   usage: USAGE,
   flags: {
-    values: ["target", "run-id", "id", "idle-answers", "issue", "pr", "base", "kind", "head", "row", "effort", "max-minutes", "max-tokens"],
+    values: ["target", "run-id", "id", "idle-answers", "issue", "pr", "base", "kind", "head", "row", "effort", "max-minutes", "max-tokens", "schema", "from"],
     booleans: ["dry-run", "claim"],
   },
   run(context: CommandContext): number {
@@ -166,9 +184,41 @@ export const runCommand: Command = {
     if (subcommand === "append") return doAppend(context);
     if (subcommand === "verify") return doVerify(context);
     if (subcommand === "park") return doPark(context);
+    if (subcommand === "record") return doRecord(context);
     return doBudget(context);
   },
 };
+
+function doRecord(context: CommandContext): number {
+  const action = context.args.positionals[2];
+  if (action !== "read" && action !== "write") throw new VerbUsageError(`'run record' needs its action: 'run record read' or 'run record write'${action === undefined ? "" : ` (got '${action}')`}.`);
+  refuseExtraPositionals(context.args, 3);
+  if (context.repoFlag !== null) throw new VerbUsageError("'run record' keeps the record under the caller's XDG state directory and reads no checkout, so it takes no --repo.");
+  const schemaId = requireValue(context.args, "schema", `It names the record's schema: ${RECORD_SCHEMAS.join(", ")}.`);
+  const schema = recordSchema(schemaId);
+  if (schema === null) throw new VerbUsageError(`--schema '${schemaId}' is not a schema nen keeps records for (${RECORD_SCHEMAS.join(", ")}).`);
+  const id = requireValue(context.args, "id", "It names the run, and the record's file name.");
+  if (!runIdMatches(schema, id)) throw new VerbUsageError(`--id '${id.replace(/[\r\n]/g, "\\n")}' does not match ${schema.schema}'s run id pattern ${schema.runId} whole; no path is built from it.`);
+  const input = { schema, id, env: context.seams.env };
+  let report;
+  if (action === "read") {
+    if (context.args.values["from"] !== undefined || context.args.booleans.has("dry-run")) throw new VerbUsageError("--from and --dry-run belong to 'run record write'.");
+    report = readRecord(input);
+  } else {
+    const from = requireValue(context.args, "from", "It names the file holding the whole record to write.");
+    let value: unknown;
+    let unread: string | null = null;
+    try {
+      value = JSON.parse(readFileSync(from, "utf8"));
+    } catch (error) {
+      unread = `--from '${from}' could not be read as JSON: ${(error as Error).message}; nothing was written`;
+    }
+    // An unreadable input is the record's could-not-read, with its report, never a usage error (Nobunaga F14).
+    report = unread === null ? writeRecord(input, value, context.args.booleans.has("dry-run")) : unreadableRecord(input, unread);
+  }
+  emit(context.io, context.json, report, renderRecord(report));
+  return report.verdict === "valid" || report.verdict === "written" || report.verdict === "would-write" ? 0 : 1;
+}
 
 function doRerun(context: CommandContext): number {
   const targetRaw = context.args.values["target"];

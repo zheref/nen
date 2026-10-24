@@ -208,3 +208,13 @@ export function requirementOf(line: string): Requirement | null {
   if (definition === null) return null;
   return { kind: definition[1] as RequirementKind, id: `${definition[1] as string}-${definition[2] as string}` };
 }
+
+/**
+ * An in-folder id qualified for use outside the folder (Hatsu docs/config/spec-repo.md § The id grammar):
+ * `FR-7` in folder `002` is `F002-FR-007`. The one padding rule every spec verb uses (SP-10), so a
+ * live lookup keyed by the qualified id matches the id every other verb prints.
+ */
+export function qualifiedId(nnn: string, id: string): string {
+  const match = /^([A-Z]+)-(\d+)$/.exec(id);
+  return match === null ? `F${nnn}-${id}` : `F${nnn}-${match[1] as string}-${(match[2] as string).padStart(3, "0")}`;
+}

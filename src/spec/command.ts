@@ -1,8 +1,9 @@
 // src/spec/command.ts -- the `nen spec` family: number, check, cite-check,
-// index (the first slice), then inventory, diff, converge and coverage
-// (zheref/nen#493 waves A and C). The verbs Hatsu's capture skill
+// index (the first slice), then inventory, diff, converge, coverage, parity,
+// tasks groups and trace (zheref/nen#493). The verbs Hatsu's capture skill
 // (`dowsing-chain`, ruling HR-12) owes to nen: read-only, but for `index
-// --write`, `converge --write` (each behind --dry-run) and `inventory --out`.
+// --write`, `converge --write`, `trace --write` (each behind --dry-run) and
+// `inventory --out`.
 //
 // EVERY VERB REPORTS AND NONE DECIDES. `number` computes the next free
 // `{nnn}` and names collisions without picking a winner; `check` lists
@@ -18,7 +19,7 @@ import { emit, parseCallerToken, refuseExtraPositionals, requireRepoFlag, requir
 import { parseTarget, targetFromRemote, TargetError, type Target } from "../github/target.js";
 import { resolveRepoRoot } from "../repo/root.js";
 import { loadWorkflow } from "../schema/workflow.js";
-import { checkRelativePath, parseLayout } from "./layout.js";
+import { checkRelativePath, matchFolder, parseLayout } from "./layout.js";
 import { checkSpec, CONSTITUTION_PATH, parseVocabulary, renderSpecCheck, SpecContainmentError, SpecReadError } from "./check.js";
 import { citeCheck, parseCheckouts, renderCiteCheck } from "./citecheck.js";
 import { computeNext, readBaseFolders, readPrFolders, renderSpecNumber, SPEC_NUMBER_CONTRACT, type SpecNumberReport } from "./number.js";
@@ -30,8 +31,12 @@ import { diffInventories, InventoryReadError, loadInventory, renderDiff, unreada
 import { converge, renderConverge } from "./converge.js";
 import { captureCoverage, deliveryCoverage, readReport, renderCaptureCoverage, renderDeliveryCoverage, unreadableDelivery } from "./coverage.js";
 import { readTree, TreeReadError } from "./tree.js";
+import { parity, readParityFolders, renderParity, unreadableParity, type ParityReport } from "./parity.js";
+import { renderTasks, taskGroups, unreadableTasks, type TasksReport } from "./tasks.js";
+import { renderTrace, specTrace, unreadableTrace } from "./trace.js";
+import { GIT, outputLines } from "../seam/exec.js";
 
-const SUBCOMMANDS = ["number", "check", "cite-check", "index", "inventory", "diff", "converge", "coverage"] as const;
+const SUBCOMMANDS = ["number", "check", "cite-check", "index", "inventory", "diff", "converge", "coverage", "parity", "tasks", "trace"] as const;
 type Subcommand = (typeof SUBCOMMANDS)[number];
 
 export const DEFAULT_SPEC_LAYOUT = "specs/{nnn}-{slug}";
@@ -45,6 +50,9 @@ nen spec diff --from <inventory> --to <inventory> [--json]
 nen spec converge --repo <spec> --folder <dir> --inventory <file> --code <CODE> --checkouts <file> [--date <YYYY-MM-DD>] [--write [--dry-run]] [--json]
 nen spec coverage --repo <spec> --inventory <file>[,<file>...] [--layout <pattern>] [--json]
 nen spec coverage --issue-body <file> --pr-body <file> [--test-report <file>] [--json]
+nen spec parity --repo <spec> (--folder <dir> | --family <name>) [--layout <pattern>] [--target <owner/name>[,<owner/name>...]] [--json]
+nen spec tasks groups --repo <spec> --folder <dir> [--layout <pattern>] [--group <id>] [--json]
+nen spec trace --repo <spec> --family <name> [--layout <pattern>] [--write [--dry-run]] [--json]
 
 Read-only verbs over a Spec Kit spec repository. Each
 reports and refuses; none decides. A layout is '<dir>/<final>' whose final
@@ -122,6 +130,31 @@ coverage    Capture form: per member and row kind, covered/total (a row is
             <reason> · <follow-up>'. Exit 1 on an unaccounted criterion, a
             missing or empty section, or an unreadable input; 2 when the PR
             names an id the issue does not carry.
+parity      One row per FR and member from each folder's parity.md (a
+            table: FR column, one product-code column per member), each cell's
+            state held to what SP-6 says it carries -- present/mirror a
+            citation, map one and UX-13, drop-with-note a CL-nnn or PT ruling,
+            target-only a citation and a CL-nnn, differs both citations,
+            absent the files searched -- an FR or member with no cell open.
+            --family reads the members from nen/repos.json families[]; --target
+            reads each row's issues and PRs (bodies naming F<nnn>-FR-###) with
+            gh. Exit 1 unless every row is a handling.
+tasks groups
+            tasks.md's tasks grouped by story ([US<k>] or the phase heading)
+            and platform ([platform:<p>] or '### Platform: <p>'), each group's
+            state (open, clarifying, captured, delivered), its dependencies
+            (earlier phase groups; 'depends on T<nnn>') and topological order,
+            and for a story group the dispatch title and issue body: the
+            pinned 'Spec: <folder>@<sha>', one '- AC-<n>: …' row per scenario,
+            the scenarios and SCs in a source-data fence. Read at HEAD (SP-8).
+            Id-less lines ([ ], [x] captured — <cite>, [x] delivered —
+            <PR>) are read too. --group prints one body. Exit 1 on no task,
+            a cycle, an unknown dependency or an unread file or pin.
+trace       <root>/traceability.md for one family: one row per FR and SC, one
+            column per member (parity state, else citation count), the tasks
+            and open markers. Without --write: exit 0 only when current;
+            --write regenerates an absent or stale file and refuses a hand
+            edit; --dry-run writes nothing.
 
 --json shapes (key order as listed):
   number:     { contract: "nen.spec.number/v0.1", repo, target, layout, base, baseSource, baseSha, openPrs, taken, collisions, next, reason }
@@ -132,13 +165,18 @@ coverage    Capture form: per member and row kind, covered/total (a row is
   diff:       { contract: "nen.spec.diff/v0.1", verdict, from, to, origin, added, removed, changed, counts, reason }
   converge:   { contract: "nen.spec.converge/v0.1", verdict, repo, folder, inventory, member, citations, gaps, unrequested, unrequestedReason, claims, writes, action, counts, reason }
   coverage:   { contract: "nen.spec.coverage/v0.1", form: "capture", verdict, repo, layout, folders, members, markers, reason }
-              { contract: "nen.spec.coverage/v0.1", form: "delivery", verdict, issueBody, prBody, testReport, section, criteria, outside, counts, reason }`;
+              { contract: "nen.spec.coverage/v0.1", form: "delivery", verdict, issueBody, prBody, testReport, section, criteria, outside, counts, reason }
+  parity:     { contract: "nen.spec.parity/v0.1", verdict, repo, scope, members, folders, rows, counts, live, reason }
+  tasks:      { contract: "nen.spec.tasks/v0.1", verdict, repo, folder, spec, groups, order, reason }
+  trace:      { contract: "nen.spec.trace/v0.1", verdict, repo, family, members, path, rows, action, reason }`;
 
 const OWNED: Readonly<Record<string, readonly Subcommand[]>> = {
-  layout: ["number", "index", "coverage"],
+  layout: ["number", "index", "coverage", "parity", "trace", "tasks"],
   base: ["number"],
-  target: ["number"],
-  folder: ["check", "cite-check", "converge"],
+  target: ["number", "parity"],
+  folder: ["check", "cite-check", "converge", "parity", "tasks"],
+  family: ["parity", "trace"],
+  group: ["tasks"],
   vocabulary: ["check"],
   max: ["check"],
   checkouts: ["cite-check", "converge"],
@@ -161,8 +199,8 @@ const OWNED_BOOLEANS: Readonly<Record<string, readonly Subcommand[]>> = {
   markers: ["check"],
   rank: ["check"],
   "verify-excerpt": ["cite-check"],
-  write: ["index", "converge"],
-  "dry-run": ["index", "converge"],
+  write: ["index", "converge", "trace"],
+  "dry-run": ["index", "converge", "trace"],
 };
 /** The verbs that read no spec or member checkout, and so take no --repo. */
 const REPOLESS: readonly Subcommand[] = ["diff"];
@@ -221,6 +259,11 @@ function runCheck(context: CommandContext, repo: string): number {
   if (rank && !markers) throw new VerbUsageError("--rank orders the open markers, so it needs --markers.");
   if (maxRaw !== undefined && !rank) throw new VerbUsageError("--max caps the ranked list, so it needs --rank.");
   if (maxRaw !== undefined && !/^[1-9][0-9]{0,5}$/.test(maxRaw)) throw new VerbUsageError(`--max '${maxRaw}' is not a positive whole number.`);
+  // The spec repository's own `spec` keys (zheref/nen#493's domain): a stated
+  // clarify.maxQuestions caps an uncapped --rank, a stated maxBytes is a ceiling.
+  const workflow = loadWorkflow(repo);
+  const specPolicy = workflow.present ? workflow.workflow.spec : undefined;
+  const rankCap = maxRaw !== undefined ? Number(maxRaw) : rank && specPolicy?.stated.includes("clarify.maxQuestions") === true ? specPolicy.clarify.maxQuestions : null;
   const vocabularyPath = context.args.values["vocabulary"];
   const vocabulary = vocabularyPath === undefined ? null : { path: vocabularyPath, terms: parseVocabulary(readCallerFile("vocabulary", vocabularyPath)) };
   try {
@@ -231,7 +274,8 @@ function runCheck(context: CommandContext, repo: string): number {
       vocabulary,
       markers,
       rank,
-      max: maxRaw === undefined ? null : Number(maxRaw),
+      max: rankCap,
+      maxBytes: specPolicy?.maxBytes ?? null,
     });
     emit(context.io, context.json, report, renderSpecCheck(report));
     return report.counts.CRITICAL > 0 ? 1 : 0;
@@ -413,18 +457,130 @@ function runCoverage(context: CommandContext): number {
   return report.verdict === "measured" ? 0 : 1;
 }
 
+const FAMILY_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/** The family's member codes from the spec repository's own registry; a usage refusal when it declares no such family. */
+function familyMembers(repo: string, family: string): string[] {
+  if (!FAMILY_NAME.test(family)) throw new VerbUsageError(`--family '${family}' is not a slug.`);
+  let registry: RepoRegistry;
+  try {
+    registry = loadRepoRegistry(repo);
+  } catch (error) {
+    throw new Error(`the spec repository's nen/repos.json could not be read: ${(error as Error).message}`);
+  }
+  const found = (registry.families ?? []).find((entry): boolean => entry.name === family);
+  if (found === undefined) throw new VerbUsageError(`--family '${family}' is not declared in nen/repos.json families[] (declared: ${(registry.families ?? []).map((entry): string => entry.name).join(", ") || "none"}).`);
+  return found.members.map((member): string => member.code);
+}
+
+function runParity(context: CommandContext, repo: string): number {
+  const folderRaw = context.args.values["folder"];
+  const family = context.args.values["family"] ?? null;
+  if ((folderRaw === undefined) === (family === null)) throw new VerbUsageError("give exactly one of --folder <dir> or --family <name>.");
+  const folder = folderRaw === undefined ? null : checkRelativePath("folder", folderRaw);
+  const targets = (context.args.values["target"] ?? "").split(",").map((entry): string => entry.trim()).filter((entry): boolean => entry !== "");
+  for (const target of targets) parseCallerToken((): Target => parseTarget(target), (error): boolean => error instanceof TargetError);
+  const layout = parseLayout(context.args.values["layout"] ?? DEFAULT_SPEC_LAYOUT);
+  const input = { repo, folder, family, familyMembers: null as readonly string[] | null, targets };
+  let report: ParityReport;
+  try {
+    const members = family === null ? null : familyMembers(repo, family);
+    const folders = readParityFolders(repo, layout, folder);
+    report = parity(context.seams, { ...input, familyMembers: members }, folders);
+  } catch (error) {
+    if (error instanceof VerbUsageError) throw error;
+    if (error instanceof SpecContainmentError) throw new VerbUsageError(error.message);
+    report = unreadableParity(input, (error as Error).message);
+  }
+  emit(context.io, context.json, report, renderParity(report));
+  return report.verdict === "handled" ? 0 : 1;
+}
+
+function runTasks(context: CommandContext, repo: string): number {
+  const action = context.args.positionals[2];
+  if (action !== "groups") throw new VerbUsageError(`'spec tasks' needs its action: 'spec tasks groups'${action === undefined ? "" : ` (got '${action}')`}.`);
+  refuseExtraPositionals(context.args, 3);
+  const folder = checkRelativePath("folder", requireValue(context.args, "folder", "It names the folder whose tasks.md is grouped."));
+  const only = context.args.values["group"] ?? null;
+  const layout = parseLayout(context.args.values["layout"] ?? DEFAULT_SPEC_LAYOUT);
+  // The folder number is the layout's, as parity and trace read it (Nobunaga F17).
+  const parent = folder.includes("/") ? folder.slice(0, folder.lastIndexOf("/")) : "";
+  const name = matchFolder(layout, folder.slice(folder.lastIndexOf("/") + 1));
+  const nnn = parent === layout.root ? (name?.nnn ?? null) : null;
+  // SP-8: the body pins a commit, so both files are read AT that commit, never from the work tree.
+  const rev = context.seams.run(GIT, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], { cwd: repo });
+  const sha = rev.code === 0 ? (outputLines(rev.stdout)[0] ?? null) : null;
+  // plan.md's sections are keyed by member; the family's registry turns the group's platform into one.
+  let members: readonly { code: string; platform: string | null }[] = [];
+  try {
+    members = (loadRepoRegistry(repo).families ?? []).flatMap((family) => family.members);
+  } catch {
+    members = [];
+  }
+  const memberFor = (platform: string): string | null => {
+    const codes = [...new Set(members.filter((member): boolean => member.platform === platform).map((member): string => member.code))];
+    return codes.length === 1 ? (codes[0] as string) : null;
+  };
+  const input = { repo, folder, nnn: nnn ?? "000", sha, memberFor };
+  const read = (file: string): string | null => {
+    if (sha === null) return null;
+    const blob = context.seams.run(GIT, ["cat-file", "blob", `${sha}:./${folder}/${file}`], { cwd: repo });
+    return blob.code === 0 ? blob.stdout : null;
+  };
+  let report: TasksReport;
+  const specText = read("spec.md");
+  const tasksText = read("tasks.md");
+  if (nnn === null) report = unreadableTasks(input, `${folder} is not a folder matching ${layout.pattern}, so it carries no {nnn} to qualify its ids with`);
+  else if (sha === null) report = unreadableTasks(input, `${repo} has no HEAD commit to pin the body to (SP-8); nen renders no body at an unread pin`);
+  else if (specText === null || tasksText === null) report = unreadableTasks(input, `${folder}/${specText === null ? "spec.md" : "tasks.md"} is not in the commit ${sha.slice(0, 12)} (uncommitted text is never rendered into a pinned body)`);
+  else report = taskGroups(input, specText, tasksText);
+  if (only !== null) {
+    const group = report.groups.find((entry): boolean => entry.id === only);
+    if (group === undefined) throw new VerbUsageError(`--group '${only}' is not a group of ${folder} (groups: ${report.groups.map((entry): string => entry.id).join(", ") || "none"}).`);
+    if (group.body === null) throw new VerbUsageError(`--group '${only}' renders no issue body: ${group.note ?? "it is a phase group; only a story group renders as an issue body"}.`);
+    if (context.json) emit(context.io, true, { contract: report.contract, verdict: report.verdict, group }, []);
+    else for (const line of group.body.replace(/\n$/, "").split("\n")) context.io.out(line);
+    return report.verdict === "grouped" ? 0 : 1;
+  }
+  emit(context.io, context.json, report, renderTasks(report));
+  return report.verdict === "grouped" ? 0 : 1;
+}
+
+function runTrace(context: CommandContext, repo: string): number {
+  const family = requireValue(context.args, "family", "It names the family whose traceability.md is regenerated.");
+  const write = context.args.booleans.has("write");
+  const dryRun = context.args.booleans.has("dry-run");
+  if (dryRun && !write) throw new VerbUsageError("--dry-run qualifies --write; without --write nothing is written anyway.");
+  const layout = parseLayout(context.args.values["layout"] ?? DEFAULT_SPEC_LAYOUT);
+  let report;
+  try {
+    // An unreadable registry is could-not-read with a report, as parity reads it (Nobunaga F2); an
+    // undeclared family stays a usage refusal.
+    const members = familyMembers(repo, family);
+    report = specTrace(repo, layout, family, members, { write, dryRun });
+  } catch (error) {
+    if (error instanceof VerbUsageError) throw error;
+    if (error instanceof SpecContainmentError) throw new VerbUsageError(error.message);
+    report = unreadableTrace(repo, layout, family, (error as Error).message, write);
+  }
+  emit(context.io, context.json, report, renderTrace(report));
+  if (report.verdict === "could-not-read") return 1;
+  if (write) return report.action === "refused" ? 1 : 0;
+  return report.verdict === "current" ? 0 : 1;
+}
+
 export const specCommand: Command = {
   name: "spec",
-  summary: "Inventory, number, check, cite-check, diff, converge, cover and index a product family's Spec Kit spec repository.",
+  summary: "Inventory, number, check, cite-check, diff, converge, cover, hold to parity, group, trace and index a product family's Spec Kit spec repository.",
   usage: USAGE,
   subcommands: [...SUBCOMMANDS],
   flags: {
-    values: ["layout", "base", "target", "folder", "vocabulary", "max", "checkouts", "at", "scenario", "lane", "exclude", "out", "from", "to", "inventory", "code", "date", "issue-body", "pr-body", "test-report"],
+    values: ["layout", "base", "target", "folder", "vocabulary", "max", "checkouts", "at", "scenario", "lane", "exclude", "out", "from", "to", "inventory", "code", "date", "issue-body", "pr-body", "test-report", "family", "group"],
     booleans: ["constitution", "markers", "rank", "verify-excerpt", "write", "dry-run"],
   },
   run(context): number {
     const subcommand = requireSubcommand("spec", context.args, SUBCOMMANDS) as Subcommand;
-    refuseExtraPositionals(context.args, 2);
+    if (subcommand !== "tasks") refuseExtraPositionals(context.args, 2);
     refuseForeignFlags(context, subcommand);
     if (REPOLESS.includes(subcommand)) {
       if (context.repoFlag !== null) throw new VerbUsageError(`'spec ${subcommand}' reads no checkout, so it takes no --repo.`);
@@ -445,6 +601,12 @@ export const specCommand: Command = {
         return runInventory(context, repo);
       case "converge":
         return runConverge(context, repo);
+      case "parity":
+        return runParity(context, repo);
+      case "tasks":
+        return runTasks(context, repo);
+      case "trace":
+        return runTrace(context, repo);
     }
     throw new VerbUsageError(`'spec ${subcommand}' is not dispatched here.`);
   },

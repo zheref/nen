@@ -1280,6 +1280,9 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       park: DRY("records a parked effort in the run manifest unless --dry-run is given"),
       verify: RO("reads the run manifest and every recorded PR over gh pr view"),
       budget: RO("reads the run manifest and the usage ledgers; a claim is a question and writes nothing"),
+      // zheref/nen#493: a caller's run record under its XDG state directory.
+      "record read": RO("reads and validates the run record; writes nothing"),
+      "record write": DRY("writes the run record (0600, in a 0700 directory) unless --dry-run is given"),
     },
   },
   // THE RUNNER FAMILY'S HOST ACT IS NEVER A ROW HERE, because nen never
@@ -1485,6 +1488,9 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       diff: RO("reads two inventory files; writes nothing"),
       converge: GATED_DRY(["--write"], "reads the folder, the inventories and the member checkout through git; --write appends [STALE] companions to spec.md and a convergence phase to tasks.md unless --dry-run is given"),
       coverage: RO("reads the spec folders and inventory files, or an issue body, a PR body and a test report; writes nothing"),
+      parity: RO("reads parity.md and spec.md, and with --target the issues and PRs over gh issue list / gh pr list; writes nothing"),
+      "tasks groups": RO("reads spec.md and tasks.md and git rev-parse HEAD; writes nothing"),
+      trace: GATED_DRY(["--write"], "reads every folder's spec.md, tasks.md and parity.md; --write writes <root>/traceability.md unless --dry-run is given"),
     },
   },
   split: { subcommands: { verify: RO("proves diff equality over git reads") } },

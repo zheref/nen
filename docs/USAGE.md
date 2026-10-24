@@ -12,7 +12,7 @@ repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
 what each version changed: 47 command
-families, 165 verbs, every flag checked against that binary.
+families, 169 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -206,7 +206,7 @@ change from a compatible one.
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **95 shapes** and **98 ids** (`nen.runner.plan`,
+binary carries**, writing or reading — **99 shapes** and **102 ids** (`nen.runner.plan`,
 `nen.stop.mark` and `nen.wc.worktree.copies` each have two versions, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -260,13 +260,13 @@ file formats).
 - **`refusal`** — `nen.refusal/v0.1`
 - **`report`** — `nen.report.data/v0.1` · `nen.report.graph/v0.1` · `nen.report.render/v0.1`
 - **`review`** — `nen.review.scopes/v0.1`
-- **`run`** — `nen.run/v0.1`
+- **`run`** — `nen.run.record/v0.1` · `nen.run/v0.1`
 - **`runner`** — `nen.runner.plan/v0.1` · `nen.runner.plan/v0.2`
 - **`scaffold`** — `nen.scaffold.init/v0.1` · `nen.scaffold.new/v0.1` · `nen.scaffold.template/v0.1`
 - **`schema`** — `nen.schema.set/v0.1`
 - **`session`** — `nen.session.ledger/v0.1`
 - **`shu`** — `nen.shu.<verb>/v0.1` · `nen.shu.coverage-capture/v0.1` · `nen.shu.coverage/v0.1` · `nen.shu.detect/v0.1` · `nen.shu.evidence/v0.1` · `nen.shu.proof/v0.1` · `nen.shu.test-report/v0.1` · `nen.shu.tools/v0.1` · `nen.shu.warmup/v0.1`
-- **`spec`** — `nen.spec.check/v0.1` · `nen.spec.cite-check/v0.1` · `nen.spec.converge/v0.1` · `nen.spec.coverage/v0.1` · `nen.spec.diff/v0.1` · `nen.spec.index/v0.1` · `nen.spec.inventory/v0.1` · `nen.spec.number/v0.1`
+- **`spec`** — `nen.spec.check/v0.1` · `nen.spec.cite-check/v0.1` · `nen.spec.converge/v0.1` · `nen.spec.coverage/v0.1` · `nen.spec.diff/v0.1` · `nen.spec.index/v0.1` · `nen.spec.inventory/v0.1` · `nen.spec.number/v0.1` · `nen.spec.parity/v0.1` · `nen.spec.tasks/v0.1` · `nen.spec.trace/v0.1`
 - **`stop`** — `nen.stop.answer/v0.1` · `nen.stop.mark/v0.1` · `nen.stop.mark/v0.2` · `nen.stop.proposed-issue/v0.1`
 - **`surface`** — `nen.surface.capabilities/v0.1` · `nen.surface.install/v0.1` · `nen.surface.mirror.check-installed/v0.1` · `nen.surface.mirror.check-plugin/v0.1` · `nen.surface.mirror.check/v0.1` · `nen.surface.mirror.generate/v0.1` · `nen.surface.status/v0.1`
 - **`usage`** — `nen.usage.ledger/v0.1`
@@ -715,6 +715,7 @@ they assumed instead); they come back empty or `null`.
 | `monitor.maxCycles` / `pollSeconds` | how long a monitoring loop may run | callers |
 | `monitor.localSlotFrees` | when a LOCAL concurrency slot frees (Hatsu's ruling HR-5), a **closed** set: `"ready+prompted"` (the default — the PR is ready and the human has been prompted), `"merged"` (only once the PR merged), `"stacked-open"` (a PR open and stacked onto another effort's branch frees; every other effort as `ready+prompted`). Any other value is refused by pointer | [`loop slots`](#nen-loop-slots) |
 | `idle` | a typed **idle profile** (HR-5): `decisions` maps an ask-once row id (`[a-z0-9][a-z0-9-]*`, as `nen/decisions.json` spells one) to `"default"` \| `"hold"` \| `"refuse"`; `terminal` is the terminal state the batch runs to, a non-empty string in the repository's own words; `budget` is `{ "minutes": <n>, "tokens": <n> }`, positive whole numbers, `minutes` being **wall-clock minutes from the run manifest's `startedAt`** (the consumer's catalogue row owns the key's meaning); `localSlotFrees` is the slot rule under an idle profile, the same closed set as `monitor.localSlotFrees`, read by [`loop slots`](#nen-loop-slots) before it (stating both with two values is refused). Every key is optional; a stated one is validated by pointer, a near-miss key is refused, and any other key nen does not read is a warn on the `#idle` row, never accepted silently. **No default**, and nen never runs a batch or picks a resolution. [`schema check`](#nen-schema-check)'s `nen/workflow.json#idle` row cross-checks each id against `nen/decisions.json`: a row declared there with a class other than `ask-once-per-run` is a required FAIL; an id that file does not declare (or no file) is a warn, never a pass — the row may be the canon matrix's, which the checkout cannot see | callers; [`schema check`](#nen-schema-check) |
+| `spec` | a **spec repository's** capture and autonomy keys (zheref/nen#493; Hatsu's `docs/config/spec-repo.md` § *The spec repository's keys*): `clarify.maxQuestions` (default `5`) and `clarify.maxRounds` (default `3`), `capture.foldersPerPr` (default `4`), `maxBytes`, each a positive whole number; `autonomy.platformOrder` (a non-empty list of distinct platforms), `autonomy.referencePlatform` (one of them), `autonomy.maxInFlight` (a positive whole number per platform, each key in `platformOrder` when that is stated), `autonomy.unmetSc` (`refuse`, its only value and default), `autonomy.convergeFiling` (`propose`, the default, \| `file`) and `autonomy.waveEnds` (`all-at-prompt`). `maxBytes` and the `autonomy` keys but the two named have **no default**: they are the maintainer's to type, and a reader that needs one says it is missing. **The parsed policy's `stated` lists every key path the file states**, so a reader can tell a stated value from a filled default — Hatsu reads an absent key at wave time as `missing-configuration`, never as the default (its `spec-repo.md` § *The spec repository's keys*), and nen's defaults are the catalogue's proposals, used by nen only where this row says. Every key is optional; a stated one is validated by pointer and a near-miss key is refused. Read by [`spec check`](#nen-spec-check): a stated `clarify.maxQuestions` caps an uncapped `--rank`, and a stated `maxBytes` makes a folder file over it a HIGH `over-max-bytes` finding | [`spec check`](#nen-spec-check); callers (Hatsu's `dowsing-chain`) |
 | `alwaysOverlaps` | paths every delivery touches sooner or later -- a manifest version, the `CHANGELOG`, generated mirrors -- each a repository-relative path (a trailing `/` for a directory prefix), never empty, absolute, climbing with `..` or repeated; refused by pointer otherwise. **Default empty.** [`schema check`](#nen-schema-check) reports it on the `nen/workflow.json#alwaysOverlaps` row | [`wc overlap`](#nen-wc-overlap) |
 | `models.<surface>.<tier>` / `models.roles` / `models.rule` | which model alias a role gets on a surface. An **open** map at both levels — nen checks that every leaf is a string and reads nothing else | callers |
 | `profile.default` / `profile.allowed` | which RUN PROFILE a bare turn runs under, and which a caller may ask for (v0.13.0, [#227](https://github.com/zheref/nen/issues/227)). The names are **closed** — `fast`, `standard`, `thorough` — and their meaning is the turn loop's, not nen's: nen refuses a fourth name by pointer, an empty or repeating `allowed`, and a `default` outside `allowed`. Default `{ "default": "standard", "allowed": ["fast", "standard", "thorough"] }`; an `allowed` with no `default` falls back to `standard` when listed, else its first entry | callers ([`schema check`](#nen-schema-check) prints it as the `nen/workflow.json#profile` row) |
@@ -920,7 +921,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 165 verbs, grouped as the README groups them. **Reads** is what a
+All 169 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -1027,6 +1028,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`run`](#family-run) | [`nen run park`](#nen-run-park) | record an effort parked on an unanswered ask-once row (HR-5's park state), once | git (rev-parse --git-common-dir), the manifest; writes it unless --dry-run | yes |
 | [`run`](#family-run) | [`nen run verify`](#nen-run-verify) | read every PR the run recorded live and report open, merged and closed-unmerged with the unmerged list; an unread PR is exit 1 and counted nowhere | the manifest, github (gh pr view) | yes |
 | [`run`](#family-run) | [`nen run budget`](#nen-run-budget) | wall-clock minutes since the run's start and the efforts' recorded tokens against a ceiling (flags, or `idle.budget`); an unread token sum is `unevaluated`; `--claim` refuses at exit 1 once reached or unevaluated | the manifest, `.nen/usage/<effort>.json` under --repo, nen/workflow.json (idle.budget, only for a ceiling not flagged) | yes |
+| [`run`](#family-run) | [`nen run record`](#nen-run-record) | a caller's resumable run record (`hatsu.spec.run/v0.1`) validated against a schema shipped as data — the run id matched whole before any path is built, schema, caller and runId before the fields — and read or written whole at 0600 in a 0700 XDG state directory | ${XDG_STATE_HOME:-$HOME/.local/state}/<schema dir>/; the --from file; WRITES the record under `write` unless --dry-run | yes |
 | [`issue`](#family-issue) | [`nen issue search`](#nen-issue-search) | duplicate-search the backlog before filing: four gh passes (open subject, recently-closed subject, files+rule-ids, lane) reported with what each was for | gh (issue list x4) | yes |
 | [`issue`](#family-issue) | [`nen issue open-pr-check`](#nen-issue-open-pr-check) | which candidate issues carry an OPEN pull request that closing would orphan | gh (pr list) | yes |
 | [`issue`](#family-issue) | [`nen issue file`](#nen-issue-file) | file an issue with labels and assignee IN the create call, refusing any label the target taxonomy does not carry or that a forbidden family names | nen/labels.json; gh (issue create) | yes |
@@ -1064,6 +1066,9 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`spec`](#family-spec) | [`nen spec diff`](#nen-spec-diff) | added, removed and changed rows by stable id between two inventories of one member, each changed field named; a different sha alone is no change, so identical inputs give an empty diff | the two inventory files; no git/gh | yes |
 | [`spec`](#family-spec) | [`nen spec converge`](#nen-spec-converge) | a folder's citations of one member re-read at a newer inventory's sha: gaps missing · partial · contradicts · unrequested (against capture/<CODE>/inventory.json), ticked tasks listed as claims, never evidence; `--write` only appends `[STALE @ <sha>]` companions and one dated convergence phase, and a second run changes nothing | spec.md/tasks.md, nen/repos.json and capture/<CODE>/inventory.json under --repo; the inventory and --checkouts files; git (remote get-url, rev-parse, ls-tree, cat-file) in the member checkout; WRITES spec.md and tasks.md under --write unless --dry-run | yes |
 | [`spec`](#family-spec) | [`nen spec coverage`](#nen-spec-coverage) | capture form: covered/total per row kind per member and requirement↔task/test traceability both ways, each with its denominator; delivery form: every F<nnn>-SC-### of an issue has one `## Spec` row in the PR body, satisfied with a passing test or deferred with a reason and a follow-up — an outside id exits 2 | capture: folders and nen/repos.json under --repo, the inventory files; delivery: the two body files and --test-report; no git/gh | yes |
+| [`spec`](#family-spec) | [`nen spec parity`](#nen-spec-parity) | one row per FR and member from each folder's parity.md, each state held to what SP-6 says it carries (a citation, UX-13, a CL-nnn or PT ruling, both citations, the files searched), a missing row or column open; `--target` adds each row's live issues and PRs | parity.md/spec.md and nen/repos.json under --repo; github (gh issue list, gh pr list) with --target | yes |
+| [`spec`](#family-spec) | [`nen spec tasks groups`](#nen-spec-tasks-groups) | tasks.md grouped by story and platform, each group's state (open, clarifying, captured, delivered) and dependencies in topological order, and per story group the dispatch title and an issue body quoting its scenarios as fenced source data | spec.md/tasks.md under --repo; git rev-parse HEAD for the pinned sha | yes |
+| [`spec`](#family-spec) | [`nen spec trace`](#nen-spec-trace) | `<root>/traceability.md` for one family: per FR and SC, each member's parity state or citation count, the tasks and open markers; reports current / stale / hand-edited / absent and `--write` refuses a hand edit | spec.md/tasks.md/parity.md and nen/repos.json under --repo; WRITES `<root>/traceability.md` under --write unless --dry-run | yes |
 | [`decisions`](#family-decisions) | [`nen decisions summary`](#nen-decisions-summary) | rows per class and per gate and the G5 ids of nen/decisions.json, so prose never carries those numbers | nen/decisions.json under --repo | yes |
 | [`shu`](#family-shu) | [`nen shu detect`](#nen-shu-detect) | read the markers on disk and PROPOSE a nen/contract.json project block; never writes without --write and never overwrites one | the target repo's own files (framework configs, package.json, project files); writes nen/contract.json only with --write | yes |
 | [`shu`](#family-shu) | [`nen shu build`](#nen-shu-build) | compile or assemble a lane, from the invocation its declaration states | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
@@ -8971,7 +8976,9 @@ read a **batch run's manifest** (`nen.run/v0.1`, Hatsu's ruling HR-5; SDD plan
 findings D3, D5): one futon or kazaana run's identity, its launch-time idle
 answers and every pull request it opened, whatever the base -- the set its
 `then` gate, its resume and its final register used to keep in conversation
-memory. Every flag is refused on the subcommands that do not read it.
+memory. [`record`](#nen-run-record) keeps a third thing, a caller's resumable
+run record under its XDG state directory (zheref/nen#493). Every flag is
+refused on the subcommands that do not read it.
 
 **The manifest** lives at `<git-common-dir>/hatsu/runs/<run-id>.json` -- the
 git **common** dir, so every worktree of the project reads and writes the same
@@ -9287,6 +9294,78 @@ Reconcile against the backlog before writing to it, then file, attach, close
 and classify. Every verb here reaches GitHub, and several of them read it even
 under `--dry-run`; the only schema file any of them opens is the target
 repository's `nen/labels.json`.
+
+### `nen run record`
+
+A caller's **resumable run record**, validated against a schema nen ships as
+data and kept under the caller's own state directory (zheref/nen#493 AC-11;
+Hatsu's `docs/config/spec-repo.md` § *The run record*). It is not the batch
+manifest above: a spec run spans a product family's repositories and outlives
+any one checkout, so its record lives at
+`${XDG_STATE_HOME:-$HOME/.local/state}/<schema directory>/<run-id>.json`
+(a relative `XDG_STATE_HOME` is ignored, as the XDG spec says, so
+`$HOME/.local/state` applies; with no absolute `HOME` either there is no
+directory: `could-not-read`). nen validates
+and stores; the record holds pointers, and the caller recomputes its step from
+live state on resume.
+
+One schema today, `hatsu.spec.run/v0.1` (`src/run/schemas/`): caller
+`dowsing-chain`, directory `hatsu/specs`, run id
+`^dowsing-chain-[a-z0-9]+(-[a-z0-9]+)*-(capture|recapture|dispatch|wave)-[0-9]{8}(-[0-9]+)?$`,
+and every field of Hatsu's table (`schema`, `caller`, `runId`, `mode`,
+`family`, `specRepo`, `members[]`, `scope[]`, `constitutionPr`, `wavePrs[]`,
+`folders[]`, `targets[]`, `clarify`, `preAnswered[]`, `next`, `at`) held to its
+type and closed values, and every row to exactly its keys — a key the row
+does not declare is refused, never stored unread — and their values (`members[].code` a
+product code, `members[].sha` hex, `folders[].nnn` three digits,
+`folders[].status` one of the seven folder statuses, `folders[].markers` three
+whole numbers, `targets[].state` one of five, `clarify`'s three counters whole
+numbers). **The order of the checks is the
+contract**: `--id` is matched **whole** against the pattern — no newline, no
+partial match — before any path is built (exit 2 otherwise); then the
+record's `schema`, `caller` and `runId` (equal to `--id`) before any field; a
+write is the **whole** document to a temp file created exclusively (`wx`) at
+`0600` in a `0700` directory (narrowed to `0700` when it was wider), then a
+rename. A record directory that is a link, not a directory, or owned by
+another user is refused, nothing written through it; a failed write removes
+its temp file and is `could-not-read`, never a crash.
+
+**Usage**
+
+```text
+nen run record read  --schema <id> --id <run-id> [--json]
+nen run record write --schema <id> --id <run-id> --from <file> [--dry-run] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--schema <id>` | yes | The record's schema. | Unknown exits 2. |
+| `--id <run-id>` | yes | The run, and the file's name. | Not matching the schema's pattern whole exits 2. |
+| `--from <file>` | `write` | The whole record to write, as JSON. | Unreadable or not JSON: `could-not-read`, exit 1, nothing written; on `read`, exit 2. |
+| `--dry-run` | no | `write` only: validate and report `would-write`, write nothing. | On `read`, exit 2. |
+
+The verb reads no checkout and refuses `--repo` (exit 2).
+
+**Output and exit codes** — prints `<verdict>: <schema> <id> -- <path>`, then the
+reason and one line per problem. `--json` top-level keys: `contract`
+(`nen.run.record/v0.1`), `verdict` (`valid` \| `written` \| `would-write` \|
+`absent` \| `invalid` \| `could-not-read`), `schema`, `id`, `path`, `problems`,
+`record` (the validated document, else null), `reason`. Exit 0 when `valid`,
+`written` or `would-write`; exit 1 when `absent` (a run never recorded is not
+a run with nothing in it), `invalid` (nothing written) or `could-not-read`;
+exit 2 on a usage error.
+
+**Example**
+
+```bash
+nen run record write --schema hatsu.spec.run/v0.1 --id dowsing-chain-fixture-family-capture-20261022 --from record.json
+```
+```text
+written: hatsu.spec.run/v0.1 dowsing-chain-fixture-family-capture-20261022 -- /home/me/.local/state/hatsu/specs/dowsing-chain-fixture-family-capture-20261022.json
+```
+(exit 0; shape from `src/run/record.test.ts`, the path shortened)
 
 <a id="family-issue"></a>
 
@@ -11977,6 +12056,24 @@ says a test ran, never that it exercises the criterion.
 | `deferred-incomplete` · `malformed` | no | a row off the grammar |
 | `duplicate` · `unaccounted` | no | two rows, or none |
 
+**The PR Spec section row.** Nen ships no section catalogue; a consumer's
+`pr sections resolve` catalogue carries the section as a conditional row
+admitted by the run fact `spec` — `{ "id": "spec", "title": "Spec", "when":
+"spec" }` (its own glyph and `pattern` are the catalogue's) — so a
+spec-derived delivery PR gets the heading in its resolved order. The heading
+alone does not prove the section is filled, so the requirement a
+`pr body-check --requirements-from` file adds beside the resolved ones is this
+one (from `src/spec/coverage.ts`, quoted whole and held by
+`src/spec/domain.test.ts`), which a missing section and an empty one both
+fail:
+
+```json
+{"name":"spec-rows","pattern":"^ {0,3}##[ \\t]+(?:[^A-Za-z0-9#\\r\\n]+[ \\t]*)?Spec[ \\t]*\\r?\\n(?:[ \\t]*\\r?\\n)*[ \\t]*(?:[-*+][ \\t]+)?F\\d{3}-SC-\\d{3}[ \\t]+[—–-]"}
+```
+
+It proves the section is there and not empty; this verb's delivery form
+proves every criterion is accounted for.
+
 **Usage**
 
 ```text
@@ -12026,6 +12123,227 @@ accounted: 2/2 success criteria accounted for · Spec section present · no test
   F002-SC-002 deferred -- needs a ruling on the threshold · HA#405
 ```
 (exit 0; from `src/spec/coverage.test.ts`)
+
+### `nen spec parity`
+
+One row per **requirement and member**, read from each folder's `parity.md`
+and held to what its state must carry (zheref/nen#493 AC-8; bankai-handbooks
+SP-6, SP-7). `parity.md` holds a Markdown table whose first header cell is
+`FR`, `Requirement` or `Id` and whose other header cells are product codes, one
+column per member; each body row starts with an `FR-###`, and each cell starts
+with its state. **That table shape is nen's proposal**: Hatsu's `spec-repo.md`
+names the rows (FR × member) and the states, not a header, and states the shape
+once it adopts one (zheref/hatsu#405).
+
+| State | The cell must carry | Settles the row |
+|---|---|---|
+| `present` · `mirror` | the member's own citation | yes |
+| `map` | the member's citation and `UX-13` (the adapt category) | yes |
+| `drop-with-note` | a `CL-nnn` ruling or a `<from>--<to> PT-<n>` port ruling | yes |
+| `target-only` | the member's citation and the ruling that made it intentional: a `CL-nnn`, or a `<from>--<to> PT-<n>` for a technology-level reason | yes |
+| `differs` | both citations | no |
+| `absent` | the files the reader searched; "not needed", "n/a" or "intentional" without a `CL-nnn` is a finding (SP-7) | no |
+| `open` (or an empty cell) | nothing — it is the gap | no |
+
+A requirement `spec.md` defines with no row, a member with no column, or a
+folder with no `parity.md` is an **open** row with that reason; a row for an id
+`spec.md` does not define is named. The members are `--family`'s (the spec
+repository's own `nen/repos.json` → `families[]`), else the table's columns and
+every code the folder's requirements cite. With `--target`, each row's **live
+state** is read: every issue and pull request in the named repositories whose
+body carries the row's qualified id (`F<nnn>-FR-###`), through `gh issue|pr
+list --state all --search "F<nnn> in:body"`; a list that fails, is unreadable
+or reaches its 500 limit is listed under `live.unread`, never taken as
+complete.
+
+**Usage**
+
+```text
+nen spec parity --repo <spec> (--folder <dir> | --family <name>) [--layout <pattern>] [--target <owner/name>[,<owner/name>...]] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--repo <path>` | yes | The spec repository's checkout. | Omitted exits 2. |
+| `--folder <dir>` | one of | One folder. | Not a folder matching the layout: `could-not-read`. |
+| `--family <name>` | one of | Every folder, members from `families[]`. | Not a slug, or not declared: exit 2. |
+| `--layout <pattern>` | no | Where the folders live. | Default `specs/{nnn}-{slug}`. |
+| `--target <slugs>` | no | Repositories whose issues and PRs are read live. | A malformed slug exits 2. |
+
+**Output and exit codes** — prints `<verdict>: <h>/<n> requirement x member
+row(s) handled …`, the count per state, then one line per row (`F<nnn>-FR-###
+<code> <state> -- <finding>`, with the live issues and PRs under `--target`).
+`--json` top-level keys: `contract` (`nen.spec.parity/v0.1`), `verdict`
+(`handled` \| `gaps` \| `could-not-read`), `repo`, `scope` (`{ folder, family
+}`), `members`, `folders`, `rows` (`{ folder, id, qualified, code, state,
+citations, rulings, handled, finding, issues, prs }` each; `state` null when the
+cell names no state, counted `malformed`; `issues`/`prs` `[{ repo, number,
+state }]`, null without `--target`), `counts` (per state and `malformed`),
+`live` (`{ targets, unread }`, null without `--target`), `reason`. Exit 0 only
+when every row is a handling carrying its evidence; exit 1 on any open,
+`absent`, `differs` or deficient row, an unread live list, or a folder it could
+not read; exit 2 on a usage error.
+
+**Example**
+
+```bash
+nen spec parity --repo . --folder specs/002-list
+```
+```text
+gaps: 4/6 requirement x member row(s) handled across 1 folder(s), members FA, FW
+  2 present · 1 mirror · 0 map · 0 drop-with-note · 0 target-only · 1 differs · 1 absent · 1 open · 0 malformed
+  F002-FR-001 FA present
+  F002-FR-001 FW mirror
+  F002-FR-002 FA present
+  F002-FR-002 FW differs -- not a handling
+  F002-FR-003 FA open -- no state recorded yet
+  F002-FR-003 FW absent -- not a handling
+```
+(exit 1; from `src/spec/parity.test.ts`)
+
+### `nen spec tasks groups`
+
+A folder's `tasks.md` as **story-grouped, dependency-ordered task groups**,
+each story group rendered as the issue body a dispatch files (zheref/nen#493
+AC-9; Hatsu's `docs/config/spec-repo.md` § *The issue a dispatch files*). Both
+files are read **at the spec checkout's `HEAD` commit** through `git cat-file`,
+never from the work tree, because the body pins that commit (SP-8); no commit,
+or a file not in it, is `could-not-read`. A task is a `- [ ] …` or `- [x] …`
+line: Spec Kit's `T<nnn> …`, or Hatsu's id-less `[ ]` gap, `[x] captured —
+<cite>` and `[x] delivered — <PR>`, whose id is then `L<line>`. Its **story**
+is its `[US<k>]` / `[US-<k>]` tag, else the `User Story <k>` / `US-<k>` its
+nearest phase or story heading names; its **platform** is its
+`[platform:<name>]` tag, else the nearest `### Platform: <name>` heading; a
+task with neither belongs to its phase's group (`phase-<n>`). A story group's
+id is `US<k>/<platform>` (`US<k>/all` when no platform is named). **The two
+platform spellings and `depends on T<nnn>` are nen's proposal**: Hatsu's
+`spec-repo.md` says gaps are "grouped by story and platform" without naming a
+form, and states them once it adopts one (zheref/hatsu#405).
+
+| Group state | When |
+|---|---|
+| `clarifying` | it has an open task, and its story heading or a requirement its tasks name carries a marker in `spec.md` — excluded from every dispatch |
+| `open` | it has an open task and no such marker |
+| `delivered` | every task is ticked and reads `delivered — <PR>` (a `#<n>`, `<CODE>-PR-#<n>`, `<CODE>#<n>`, `<owner>/<name>#<n>` or pull URL) — the claim Hatsu writes only from a merged PR's Development link; the word alone is not it |
+| `captured` | every task is ticked, not all `delivered` |
+
+A story group **depends on** every phase group of an earlier phase (Spec Kit:
+stories start after Setup and Foundational) and on the group of any task its
+tasks name with `depends on T<nnn>`; `order` is the topological order, ties by
+first appearance. For a story group, `title` is `spec: <story title>
+(F<nnn>/US<k> · <platform>)` and `body` carries `Spec: <folder>@<sha>` (the
+commit read), the qualified FR and SC ids, the tasks and dependencies, the
+`parity.md` row ids (`F<nnn>-FR-### × <platform>`) and the `plan.md` section
+(`§ Platform: <member>` — Hatsu's `plan.md` keys its `## Platform: <member>`
+sections by **member**, while the group is keyed by its **platform tag**, so the
+member is the one `nen/repos.json` → `families[].members[]` declares on that
+platform, and the line says it is unresolved when no single member is), **one unfenced `- AC-<n>: Given … When …
+Then … (F<nnn>-AC-<###>)` row per acceptance scenario**, numbered from 1, the
+`###` taken from the scenario's own `**AC-###**:` label (SP-10) or, unlabelled,
+from the folder-global count; and the scenarios and SC lines
+**verbatim inside a `source-data` fence** one character longer than the longest
+backtick run they hold (SP-4). Nothing in the body is reworded but the AC rows'
+markdown, stripped of bold, numbering, label and annotations. **A story group
+with no platform renders no title and no body**: the title's tail is the
+dedupe key, and `all` is not a platform; its `note` says so.
+
+**Usage**
+
+```text
+nen spec tasks groups --repo <spec> --folder <dir> [--layout <pattern>] [--group <id>] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--repo <path>` | yes | The spec repository's checkout. | Omitted exits 2. |
+| `--folder <dir>` | yes | The folder whose `tasks.md` is grouped. | Not a folder of the layout, or no `spec.md`/`tasks.md` at `HEAD`: `could-not-read`. |
+| `--layout <pattern>` | no | Where the folders live; the folder's `{nnn}` is the layout's. | Default `specs/{nnn}-{slug}`. |
+| `--group <id>` | no | Print one story group's body alone (`--json`: `{ contract, verdict, group }`). | An unknown id, a phase group or a story group with no platform exits 2. |
+
+`spec tasks` with any action but `groups` exits 2.
+
+**Output and exit codes** — prints `<verdict>: <folder> -- <n> group(s) in order
+…`, then one line per group in order (`<id> <state> · <tasks> · after <deps> ·
+<title>`). `--json` top-level keys: `contract` (`nen.spec.tasks/v0.1`),
+`verdict` (`grouped` \| `no-tasks` \| `refused` \| `could-not-read`), `repo`,
+`folder`, `spec` (`<folder>@<sha>` or null), `groups` (`{ id, phase, story,
+storyTitle, platform, state, tasks, requirements, dependsOn, title, body, note
+}` each, `title` and `body` null for a phase group and for a story group with
+no platform, `note` saying why), `order`, `reason`. Exit 0 when `grouped`; exit
+1 when `no-tasks` (a tasks.md with no task line — never a pass over nothing),
+`refused` (a dependency cycle, a `depends on` naming no task) or
+`could-not-read`; exit 2 on a usage error.
+
+**Example**
+
+```bash
+nen spec tasks groups --repo . --folder specs/002-list
+```
+```text
+grouped: specs/002-list -- 5 group(s) in order phase-1 -> phase-2 -> US1/web -> US2/android -> US1/android · pinned specs/002-list@<sha>
+  phase-1 captured · T001
+  phase-2 open · T002
+  US1/web clarifying · T003, T004 · after phase-1, phase-2 · spec: A user opens the list (F002/US1 · web)
+  US2/android clarifying · T006 · after phase-1, phase-2 · spec: A user sorts the list (F002/US2 · android)
+  US1/android open · T005 · after phase-1, phase-2, US2/android · spec: A user opens the list (F002/US1 · android)
+```
+(exit 0; from `src/spec/tasks.test.ts`)
+
+### `nen spec trace`
+
+`<root>/traceability.md` regenerated for **one product family**
+(zheref/nen#493 AC-10): one row per FR and SC of every folder, by its qualified
+id (`F<nnn>-FR-###`); one column per member of the family's
+`families[].members` — its `parity.md` state when the folder records one, else
+the count of that member's citations on the line, else `—` — then the tasks
+naming the requirement and the line's open markers. Every cell is a word or a
+count read from a file. As [`spec index`](#nen-spec-index)'s file does, its
+first line is a marker holding the sha256 of every byte below it, so the verb
+tells **stale** (nen wrote it, a folder changed since) from **hand-edited**
+(the body no longer hashes to the marker): `--write` regenerates an absent or
+stale file and **refuses a hand edit** as drift.
+
+**Usage**
+
+```text
+nen spec trace --repo <spec> --family <name> [--layout <pattern>] [--write [--dry-run]] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--repo <path>` | yes | The spec repository's checkout. | Omitted exits 2. |
+| `--family <name>` | yes | The family whose members are the columns. | Not a slug, or not in `nen/repos.json` → `families[]`: exit 2. |
+| `--layout <pattern>` | no | Where the folders live. | Default `specs/{nnn}-{slug}`. |
+| `--write` | no | Write the file when absent or stale. | Refused (exit 1) when hand-edited. |
+| `--dry-run` | no | With `--write`: say `would-write`, write nothing. | Without `--write` exits 2. |
+
+**Output and exit codes** — prints `<root>/traceability.md: <verdict> · action
+<action> · family <name> (<members>) · <n> requirement(s)`. `--json` top-level
+keys: `contract` (`nen.spec.trace/v0.1`), `verdict` (`current` \| `stale` \|
+`hand-edited` \| `absent` \| `could-not-read`), `repo`, `family`, `members`,
+`path`, `rows` (`{ folder, id, cells, tasks, markers }` each), `action`
+(`none` \| `written` \| `would-write` \| `refused`), `reason`. Without
+`--write`, exit 0 only when `current`; with it, exit 0 unless refused. Exit 1
+too, verdict `could-not-read` with its document, when the spec repository's
+`nen/repos.json` cannot be read, a folder has no readable `spec.md` or the file
+is a link or a directory; exit 2 on a usage error (an undeclared family
+included).
+
+**Example**
+
+```bash
+nen spec trace --repo . --family fixture-family --write
+```
+```text
+specs/traceability.md: absent · action written · family fixture-family (FA, FW) · 2 requirement(s)
+```
+(exit 0; from `src/spec/trace.test.ts`)
 
 <a id="family-decisions"></a>
 
