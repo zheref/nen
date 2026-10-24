@@ -39,15 +39,29 @@ const CONTROL = /[\u0000-\u001F\u007F-\u009F]/g;
 
 /**
  * Characters that print NOTHING and still change what a reader sees (Feitan,
- * zheref/nen#340): the Unicode bidi controls -- LRM/RLM (U+200E-200F), the
- * embeddings and overrides (U+202A-202E) and the isolates (U+2066-2069), which
- * reorder the text around them so a name can read as another -- and the
- * zero-width characters (U+200B-200D, U+FEFF), which make two different
- * strings look identical. A one-line rendering has no use for either, so
- * `plainLine` strips them with the control characters. `plainBlock` keeps its
- * narrower contract.
+ * zheref/nen#340; widened on zheref/nen#515): every Unicode Bidi_Control --
+ * ALM (U+061C), LRM/RLM (U+200E-200F), the embeddings and overrides
+ * (U+202A-202E) and the isolates (U+2066-2069), which reorder the text around
+ * them so a name can read as another; the zero-width and invisible characters
+ * (U+00AD, U+180E, U+200B-200D, U+2060-2064, U+206A-206F, U+FEFF), which make
+ * two different strings look identical; and the line and paragraph separators
+ * (U+2028-2029), which break a line in a line-oriented viewer. ONE CLASS for
+ * both renderings: `plainLine` strips them, and `escapeInvisibleJson` writes
+ * them as `\uXXXX` in a `--json` document. `plainBlock` keeps its narrower
+ * contract.
  */
-const INVISIBLE = /[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/g;
+export const INVISIBLE_CLASS = "\\u00AD\\u061C\\u180E\\u200B-\\u200F\\u2028-\\u202E\\u2060-\\u2064\\u2066-\\u206F\\uFEFF";
+const INVISIBLE = new RegExp(`[${INVISIBLE_CLASS}]`, "g");
+
+/**
+ * A JSON text with every {@link INVISIBLE_CLASS} character written as its
+ * `\uXXXX` escape. The parsed value is unchanged; only what a terminal or a
+ * log viewer can be made to show is. Idempotent, and safe on any JSON text:
+ * these characters can only occur inside JSON strings.
+ */
+export function escapeInvisibleJson(json: string): string {
+  return json.replace(INVISIBLE, (char): string => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
 
 /**
  * One line of text nen did not write, made safe to print.

@@ -2,7 +2,7 @@
 // string somebody else typed (Feitan F4).
 
 import { describe, expect, it } from "vitest";
-import { plainBlock, plainLine } from "./plain.js";
+import { escapeInvisibleJson, plainBlock, plainLine } from "./plain.js";
 
 const ESC = String.fromCharCode(0x1b);
 
@@ -54,7 +54,8 @@ describe("plainLine -- invisible characters (zheref/nen#340)", () => {
   });
 
   it("keeps the neighbours of those ranges, which are ordinary text", () => {
-    for (const code of [0x200a, 0x2010, 0x2029, 0x202f, 0x2065, 0x206a, 0xfefe]) {
+    // U+2028-2029 and U+206A-206F joined the class on zheref/nen#515 (Feitan 2).
+    for (const code of [0x200a, 0x2010, 0x2027, 0x202f, 0x2065, 0x2070, 0xfefe]) {
       const text = `a${String.fromCharCode(code)}b`;
       expect(plainLine(text), `U+${code.toString(16)} was stripped`).toBe(text);
     }
@@ -73,5 +74,24 @@ describe("plainBlock", () => {
 
   it("strips a carriage return: it rewrites a line in place, which is the complaint", () => {
     expect(plainBlock("first\r\nsecond")).toBe("first\nsecond");
+  });
+});
+
+describe("escapeInvisibleJson -- one class for both renderings (zheref/nen#515 Feitan 2)", () => {
+  const codes = [0x00ad, 0x061c, 0x180e, 0x200b, 0x200f, 0x2028, 0x2029, 0x202a, 0x202e, 0x2060, 0x2064, 0x2066, 0x206f, 0xfeff];
+
+  it("writes each as its \\uXXXX escape, parses back to the same value, and plainLine strips each", () => {
+    for (const code of codes) {
+      const value = { text: `a${String.fromCharCode(code)}b` };
+      const escaped = escapeInvisibleJson(JSON.stringify(value));
+      expect(escaped.includes(String.fromCharCode(code)), `U+${code.toString(16)}`).toBe(false);
+      expect(JSON.parse(escaped)).toEqual(value);
+      expect(plainLine(value.text)).toBe("ab");
+    }
+  });
+
+  it("is idempotent", () => {
+    const once = escapeInvisibleJson(JSON.stringify({ t: "\u202E" }));
+    expect(escapeInvisibleJson(once)).toBe(once);
   });
 });

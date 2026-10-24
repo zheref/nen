@@ -286,6 +286,11 @@ export interface ReviewScope {
 export interface ReviewPolicy {
   /** Scope name -> its row, in the file's own declaration order. */
   readonly scopes: Readonly<Record<string, ReviewScope>>;
+  /**
+   * Personas the repository declares never to be code reviewers (zheref/nen#472;
+   * Hatsu HR-23's intake examiners), as written. No scope may name one.
+   */
+  readonly excludedPersonas: readonly string[];
   readonly raw: Readonly<Record<string, unknown>>;
 }
 
@@ -601,6 +606,8 @@ export interface Workflow {
   readonly runners: RunnersPolicy | null;
   /** `idle` -- the typed idle profile (HR-5), or null when none is declared. No default. */
   readonly idle?: IdlePolicy | null;
+  /** `spec` -- a spec repository's capture and autonomy keys (zheref/nen#493), defaults filled; `declared` false when the block is absent. */
+  readonly spec?: SpecPolicy;
   /**
    * `alwaysOverlaps` -- paths every delivery touches sooner or later (a
    * manifest version, the CHANGELOG, generated mirrors), read by `nen wc
@@ -608,7 +615,26 @@ export interface Workflow {
    * is a directory prefix. Empty when undeclared.
    */
   readonly alwaysOverlaps?: readonly string[];
+  /**
+   * `canon` -- the canon prose verbs' declared inputs (zheref/nen#481):
+   * `canon.lint` names the rules contract and the baseline `nen canon lint`
+   * reads when no flag names them, and the paths its marker limit and reading
+   * rule apply to when the contract declares none. Null when undeclared.
+   */
+  readonly canon?: CanonPolicy | null;
   /** The document exactly as the file states it, every key preserved. */
+  readonly raw: Readonly<Record<string, unknown>>;
+}
+
+/** `canon.lint` -- repository-relative paths; `baseline` and `skillPaths` optional. */
+export interface CanonLintPolicy {
+  readonly rules: string;
+  readonly baseline: string | null;
+  readonly skillPaths: readonly string[] | null;
+}
+
+export interface CanonPolicy {
+  readonly lint: CanonLintPolicy | null;
   readonly raw: Readonly<Record<string, unknown>>;
 }
 
@@ -699,7 +725,7 @@ export function defaultWorkflow(): Workflow {
     commits: { allowedAttributionTrailers: [], forbiddenTrailers: [], runTrailer: null, subjectCase: null, bodyMaxLineLength: null, raw: empty },
     monitor: { maxCycles: DEFAULT_MAX_CYCLES, pollSeconds: DEFAULT_POLL_SECONDS, localSlotFrees: DEFAULT_LOCAL_SLOT_RULE, localSlotFreesDeclared: false, raw: empty },
     models: { rule: null, surfaces: emptyRecord(), roles: emptyRecord(), raw: empty },
-    review: { scopes: emptyRecord<ReviewScope>(), raw: empty },
+    review: { scopes: emptyRecord<ReviewScope>(), excludedPersonas: [], raw: empty },
     profile: { default: DEFAULT_PROFILE, allowed: PROFILE_NAMES, raw: empty },
     release: { unitPaths: null, raw: empty },
     futon: { advanceGo: emptyRecord<readonly AdvanceGoKind[]>(), raw: empty },
@@ -707,6 +733,7 @@ export function defaultWorkflow(): Workflow {
     runners: null,
     ci: null,
     idle: null,
+    spec: defaultSpecPolicy(),
     alwaysOverlaps: [],
     raw: empty,
   };
@@ -735,7 +762,9 @@ const ROOT_KEYS: readonly string[] = [
   "futon",
   "runners", "ci",
   "idle",
+  "spec",
   "alwaysOverlaps",
+  "canon",
 ];
 
 const BRANCH_KEYS: readonly string[] = ["template", "base"];
@@ -746,7 +775,7 @@ const LAUNCH_KEYS: readonly string[] = ["default", "fallback"];
 const DEPLOY_KEYS: readonly string[] = ["defaultTarget"];
 const PRIVATE_NAMES_KEYS: readonly string[] = ["namedFile"];
 const REPORTS_KEYS: readonly string[] = ["dir", "retain", "template", "captures", "sections"];
-const REVIEW_KEYS: readonly string[] = ["scopes"];
+const REVIEW_KEYS: readonly string[] = ["scopes", "excludedPersonas"];
 const RELEASE_KEYS: readonly string[] = ["unitPaths"];
 const FUTON_KEYS: readonly string[] = ["advanceGo"];
 const NOTIFICATIONS_KEYS: readonly string[] = ["rungs", "sound", "turn"];
@@ -763,6 +792,13 @@ const IDLE_BUDGET_KEYS: readonly string[] = ["minutes", "tokens"];
 /** A decisions.json row id, as ../schema/decisions.ts spells one. */
 const DECISION_ROW_ID = /^[a-z0-9][a-z0-9-]*$/;
 const PROFILE_KEYS: readonly string[] = ["default", "allowed"];
+const SPEC_KEYS: readonly string[] = ["clarify", "capture", "maxBytes", "autonomy"];
+const SPEC_CLARIFY_KEYS: readonly string[] = ["maxQuestions", "maxRounds"];
+const SPEC_CAPTURE_KEYS: readonly string[] = ["foldersPerPr"];
+const SPEC_AUTONOMY_KEYS: readonly string[] = ["platformOrder", "referencePlatform", "maxInFlight", "unmetSc", "convergeFiling", "waveEnds"];
+export const SPEC_UNMET_SC = ["refuse"] as const;
+export const SPEC_CONVERGE_FILING = ["propose", "file"] as const;
+export const SPEC_WAVE_ENDS = ["all-at-prompt"] as const;
 
 /**
  * A key one typo away from a key nen reads, refused by the name it meant.
@@ -1196,6 +1232,33 @@ function parseSections(path: string, value: unknown): Readonly<Record<string, Re
   return sections;
 }
 
+/** A persona name as the exclusion compares it: trimmed, case-folded. */
+const personaKey = (name: string): string => name.trim().toLowerCase();
+
+/**
+ * `review.excludedPersonas` (zheref/nen#472): the personas this repository
+ * declares never to be code reviewers -- Hatsu's intake examiners (HR-23),
+ * which challenge a brief at capture intake and nowhere else. THE HOME IS THIS
+ * BLOCK, not the consumer's `intake.challenger` options: that key is Hatsu's
+ * own vocabulary, which nen does not read (names are data), and a list here is
+ * one choke point every writer of `review.scopes` already passes through.
+ * Each entry is a non-empty name, unique after trimming and case-folding.
+ */
+function parseExcludedPersonas(path: string, value: unknown): readonly string[] {
+  if (value === undefined || value === null) return [];
+  const list = requireArray(path, "review.excludedPersonas", value);
+  const seen = new Map<string, number>();
+  return list.map((item, index): string => {
+    const pointer = `review.excludedPersonas[${index}]`;
+    const name = requireString(path, pointer, item);
+    if (name.trim() === "") throw new SchemaError(path, pointer, "is empty. An exclusion that names nobody excludes nobody");
+    const previous = seen.get(personaKey(name));
+    if (previous !== undefined) throw new SchemaError(path, pointer, `repeats review.excludedPersonas[${previous}] (compared trimmed and case-insensitively)`);
+    seen.set(personaKey(name), index);
+    return name;
+  });
+}
+
 /**
  * `review.scopes` -- who reads which paths, validated for SHAPE only.
  *
@@ -1213,9 +1276,11 @@ function parseSections(path: string, value: unknown): Readonly<Record<string, Re
  * module's near-miss rule exists to prevent one level up.
  */
 function parseReview(path: string, value: unknown): ReviewPolicy {
-  const raw = block(path, "review", value, REVIEW_KEYS, "A review policy's one key is");
+  const raw = block(path, "review", value, REVIEW_KEYS, "A review policy's keys are");
+  const excludedPersonas = parseExcludedPersonas(path, raw["excludedPersonas"]);
+  const excluded = new Set(excludedPersonas.map(personaKey));
   const scopesRaw = raw["scopes"];
-  if (scopesRaw === undefined || scopesRaw === null) return { scopes: emptyRecord<ReviewScope>(), raw };
+  if (scopesRaw === undefined || scopesRaw === null) return { scopes: emptyRecord<ReviewScope>(), excludedPersonas, raw };
   const record = requireRecord(path, "review.scopes", scopesRaw);
   const scopes = emptyRecord<ReviewScope>();
   for (const [name, entry] of Object.entries(record)) {
@@ -1226,6 +1291,13 @@ function parseReview(path: string, value: unknown): ReviewPolicy {
     const persona = requireString(path, `${pointer}.persona`, scope["persona"]);
     if (persona.trim() === "") {
       throw new SchemaError(path, `${pointer}.persona`, `is empty. A scope with no reviewer is a review nobody owes`);
+    }
+    if (excluded.has(personaKey(persona))) {
+      throw new SchemaError(
+        path,
+        `${pointer}.persona`,
+        `names '${persona.trim()}', which review.excludedPersonas declares is never a code reviewer (zheref/nen#472). Name a reviewer persona, or remove the scope`,
+      );
     }
     const tier = requireString(path, `${pointer}.tier`, scope["tier"]);
     if (tier.trim() === "") {
@@ -1259,7 +1331,7 @@ function parseReview(path: string, value: unknown): ReviewPolicy {
     }
     scopes[name] = { persona, tier, budget, paths };
   }
-  return { scopes, raw };
+  return { scopes, excludedPersonas, raw };
 }
 
 /**
@@ -2356,7 +2428,7 @@ function parseCi(path: string, value: unknown): CiPolicy | null {
 
 export function parseWorkflow(path: string, value: unknown): Workflow {
   const raw = requireRecord(path, "(root)", value);
-  refuseNearMissKey(path, "", raw, ROOT_KEYS, "A workflow's twenty-one blocks are");
+  refuseNearMissKey(path, "", raw, ROOT_KEYS, "A workflow's twenty-three blocks are");
   const monitor = parseMonitor(path, raw["monitor"]);
   const idle = parseIdle(path, raw["idle"]);
   // ONE RULE, ONE VALUE: a repository that states the slot rule under both
@@ -2389,9 +2461,152 @@ export function parseWorkflow(path: string, value: unknown): Workflow {
     runners: parseRunners(path, raw["runners"]),
     ci: parseCi(path, raw["ci"]),
     idle,
+    spec: parseSpecPolicy(path, raw["spec"]),
     alwaysOverlaps: parseAlwaysOverlaps(path, raw["alwaysOverlaps"]),
+    canon: parseCanonPolicy(path, raw["canon"]),
     raw,
   };
+}
+
+/**
+ * `spec` -- the keys a product family's spec repository states for its
+ * capture skill (Hatsu docs/config/spec-repo.md § The spec repository's keys;
+ * zheref/nen#493's catalogue domain). Every key is optional; a stated key is
+ * held to its type and range, a near-miss refused by the name it meant. Three
+ * carry the catalogue's defaults (clarify.maxQuestions 5, clarify.maxRounds 3,
+ * capture.foldersPerPr 4) and two their one safe value (autonomy.unmetSc
+ * refuse, autonomy.convergeFiling propose); the rest are TYPED by the
+ * maintainer and have none -- null here, and a reader that needs one says it
+ * is missing rather than inventing it.
+ */
+export interface SpecPolicy {
+  readonly declared: boolean;
+  /**
+   * Every key path the file STATES (`clarify.maxQuestions`, `autonomy.unmetSc`, …), so a reader can tell a
+   * stated value from a filled default: Hatsu reads an absent key at wave time as missing-configuration,
+   * never as the default (spec-repo.md § The spec repository's keys; Nobunaga F13).
+   */
+  readonly stated: readonly string[];
+  readonly clarify: { readonly maxQuestions: number; readonly maxRounds: number };
+  readonly capture: { readonly foldersPerPr: number };
+  readonly maxBytes: number | null;
+  readonly autonomy: {
+    readonly platformOrder: readonly string[] | null;
+    readonly referencePlatform: string | null;
+    readonly maxInFlight: Readonly<Record<string, number>> | null;
+    readonly unmetSc: (typeof SPEC_UNMET_SC)[number];
+    readonly convergeFiling: (typeof SPEC_CONVERGE_FILING)[number];
+    readonly waveEnds: (typeof SPEC_WAVE_ENDS)[number] | null;
+  };
+}
+
+export function defaultSpecPolicy(): SpecPolicy {
+  return {
+    declared: false,
+    stated: [],
+    clarify: { maxQuestions: 5, maxRounds: 3 },
+    capture: { foldersPerPr: 4 },
+    maxBytes: null,
+    autonomy: { platformOrder: null, referencePlatform: null, maxInFlight: null, unmetSc: "refuse", convergeFiling: "propose", waveEnds: null },
+  };
+}
+
+function parseSpecPolicy(path: string, value: unknown): SpecPolicy {
+  const defaults = defaultSpecPolicy();
+  if (value === undefined || value === null) return defaults;
+  const raw = block(path, "spec", value, SPEC_KEYS, "A spec block's four keys are");
+  const positive = (pointer: string, at: unknown, fallback: number): number => {
+    if (at === undefined) return fallback;
+    if (!Number.isSafeInteger(at) || (at as number) < 1) throw new SchemaError(path, pointer, `expected a positive whole number, got ${describeValue(at)}`);
+    return at as number;
+  };
+  const clarify = block(path, "spec.clarify", raw["clarify"], SPEC_CLARIFY_KEYS, "spec.clarify's two keys are");
+  const capture = block(path, "spec.capture", raw["capture"], SPEC_CAPTURE_KEYS, "spec.capture's one key is");
+  const autonomy = block(path, "spec.autonomy", raw["autonomy"], SPEC_AUTONOMY_KEYS, "spec.autonomy's six keys are");
+  const word = (pointer: string, at: unknown): string => {
+    const text = requireString(path, pointer, at);
+    if (text.trim() === "") throw new SchemaError(path, pointer, "is an empty string");
+    return text;
+  };
+  let platformOrder: string[] | null = null;
+  if (autonomy["platformOrder"] !== undefined) {
+    platformOrder = requireArray(path, "spec.autonomy.platformOrder", autonomy["platformOrder"]).map((item, index): string => word(`spec.autonomy.platformOrder[${index}]`, item));
+    if (platformOrder.length === 0 || new Set(platformOrder).size !== platformOrder.length) throw new SchemaError(path, "spec.autonomy.platformOrder", "expected a non-empty list of distinct platforms");
+  }
+  const referencePlatform = autonomy["referencePlatform"] === undefined ? null : word("spec.autonomy.referencePlatform", autonomy["referencePlatform"]);
+  if (referencePlatform !== null && platformOrder !== null && !platformOrder.includes(referencePlatform)) throw new SchemaError(path, "spec.autonomy.referencePlatform", `'${referencePlatform}' is not in spec.autonomy.platformOrder (${platformOrder.join(", ")})`);
+  // "an integer per platform" (Hatsu spec-repo.md): a map, each key a platform of platformOrder when it is stated (Nobunaga F19).
+  let maxInFlight: Record<string, number> | null = null;
+  const inFlight = autonomy["maxInFlight"];
+  if (inFlight !== undefined) {
+    const map = requireRecord(path, "spec.autonomy.maxInFlight", inFlight);
+    maxInFlight = Object.fromEntries(Object.entries(map).filter(([key]): boolean => !key.startsWith("$")).map(([key, at]): [string, number] => {
+      if (platformOrder !== null && !platformOrder.includes(key)) throw new SchemaError(path, `spec.autonomy.maxInFlight.${key}`, `'${key}' is not in spec.autonomy.platformOrder (${platformOrder.join(", ")})`);
+      return [key, positive(`spec.autonomy.maxInFlight.${key}`, at, 1)];
+    }));
+  }
+  const stated = [
+    ...SPEC_CLARIFY_KEYS.filter((key): boolean => clarify[key] !== undefined).map((key): string => `clarify.${key}`),
+    ...SPEC_CAPTURE_KEYS.filter((key): boolean => capture[key] !== undefined).map((key): string => `capture.${key}`),
+    ...(raw["maxBytes"] === undefined ? [] : ["maxBytes"]),
+    ...SPEC_AUTONOMY_KEYS.filter((key): boolean => autonomy[key] !== undefined).map((key): string => `autonomy.${key}`),
+  ];
+  return {
+    declared: true,
+    stated,
+    clarify: { maxQuestions: positive("spec.clarify.maxQuestions", clarify["maxQuestions"], defaults.clarify.maxQuestions), maxRounds: positive("spec.clarify.maxRounds", clarify["maxRounds"], defaults.clarify.maxRounds) },
+    capture: { foldersPerPr: positive("spec.capture.foldersPerPr", capture["foldersPerPr"], defaults.capture.foldersPerPr) },
+    maxBytes: raw["maxBytes"] === undefined ? null : positive("spec.maxBytes", raw["maxBytes"], 1),
+    autonomy: {
+      platformOrder,
+      referencePlatform,
+      maxInFlight,
+      unmetSc: autonomy["unmetSc"] === undefined ? "refuse" : requireEnum(path, "spec.autonomy.unmetSc", autonomy["unmetSc"], SPEC_UNMET_SC),
+      convergeFiling: autonomy["convergeFiling"] === undefined ? "propose" : requireEnum(path, "spec.autonomy.convergeFiling", autonomy["convergeFiling"], SPEC_CONVERGE_FILING),
+      waveEnds: autonomy["waveEnds"] === undefined ? null : requireEnum(path, "spec.autonomy.waveEnds", autonomy["waveEnds"], SPEC_WAVE_ENDS),
+    },
+  };
+}
+
+const CANON_KEYS: readonly string[] = ["lint"];
+const CANON_LINT_KEYS: readonly string[] = ["rules", "baseline", "skillPaths"];
+
+/** A repository-relative path: non-empty, never absolute, never climbing out with '..'. */
+function repoRelativePath(path: string, pointer: string, value: unknown): string {
+  const entry = requireString(path, pointer, value);
+  if (entry.trim() === "" || entry.startsWith("/") || /^[A-Za-z]:/.test(entry) || entry.split(/[\\/]/).includes("..")) {
+    throw new SchemaError(path, pointer, `is ${JSON.stringify(entry)}: a repository-relative path, never empty, absolute or climbing out with '..'`);
+  }
+  return entry;
+}
+
+/**
+ * `canon` (zheref/nen#481): `canon.lint` is the declared home of the canon
+ * prose lint's rules contract and baseline, so `nen canon lint --repo <path>`
+ * needs no flag and `nen schema check` has a file to validate them from.
+ * `rules` is required once `lint` is declared; `baseline` and `skillPaths`
+ * are optional. The CONTENTS of the two files are checked by the
+ * `nen/workflow.json#canon.lint` row, never here: this loader reads one file.
+ */
+function parseCanonPolicy(path: string, value: unknown): CanonPolicy | null {
+  if (value === undefined || value === null) return null;
+  const raw = block(path, "canon", value, CANON_KEYS, "A canon policy's keys are");
+  const lintRaw = raw["lint"];
+  if (lintRaw === undefined || lintRaw === null) return { lint: null, raw };
+  const lint = block(path, "canon.lint", lintRaw, CANON_LINT_KEYS, "A canon lint policy's keys are");
+  if (lint["rules"] === undefined) throw new SchemaError(path, "canon.lint.rules", "is required: the rules contract nen canon lint reads (nen.prose-lint/v0.1). A lint with no rules checks nothing");
+  const rules = repoRelativePath(path, "canon.lint.rules", lint["rules"]);
+  const baseline = lint["baseline"] === undefined || lint["baseline"] === null ? null : repoRelativePath(path, "canon.lint.baseline", lint["baseline"]);
+  let skillPaths: string[] | null = null;
+  if (lint["skillPaths"] !== undefined && lint["skillPaths"] !== null) {
+    skillPaths = requireArray(path, "canon.lint.skillPaths", lint["skillPaths"]).map((item, index): string => {
+      const glob = requireString(path, `canon.lint.skillPaths[${index}]`, item);
+      if (glob.trim() === "") throw new SchemaError(path, `canon.lint.skillPaths[${index}]`, "is empty. A glob that matches nothing applies the rule nowhere");
+      return glob;
+    });
+    if (skillPaths.length === 0) throw new SchemaError(path, "canon.lint.skillPaths", "is an empty array. Omit it to apply the per-skill rules to every linted path, or name the globs");
+  }
+  return { lint: { rules, baseline, skillPaths }, raw };
 }
 
 /** `alwaysOverlaps`: a list of non-empty repository-relative paths, each once; refused by pointer otherwise. */

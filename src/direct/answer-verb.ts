@@ -27,6 +27,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { requireRepoFlag, requireValue, VerbUsageError, type CommandContext } from "../cli/command.js";
 import { assertRepoRoot } from "../repo/root.js";
 import { withLedgerLock } from "../ledger/lock.js";
+import { assertEffortId } from "../ledger/effort.js";
+import { legacyLine, locateEffortLedger, resolveEffortHome } from "../ledger/home.js";
 import { assertRecordContained, recordPath, writeRecord } from "./record.js";
 import { RESOLVE_CONTRACT } from "./resolve-verb.js";
 
@@ -39,15 +41,20 @@ export function runAnswer(context: CommandContext): number {
   const args = context.args;
   const id = requireValue(args, "record", "It is the effort's id, as 'nen direct resolve --record' was given it.");
   const answer = requireValue(args, "answer", `It is the maintainer's picker answer: ${ANSWERS.join(" or ")}.`);
-  const repoFlag = requireRepoFlag(context, "It is the checkout whose .nen/direct/ holds the record.");
+  const repoFlag = requireRepoFlag(context, "It is the checkout whose repository (its git common dir's .nen/direct/) holds the record.");
   const root = assertRepoRoot({ repoFlag });
-  const path = recordPath(root, id);
+  assertEffortId(id);
   if (!ANSWERS.includes(answer)) {
     throw new VerbUsageError(`--answer '${answer}' is not one of: ${ANSWERS.join(", ")}.`);
   }
-
+  const home = resolveEffortHome(root, "direct", context.seams);
   // Before anything is read: a record the filesystem redirects is not this effort's.
-  assertRecordContained(root, path);
+  assertRecordContained(home.base, recordPath(home, id));
+  const located = locateEffortLedger(home, id, "write");
+  const path = located.path;
+  const moved = legacyLine(located);
+  if (moved !== null) context.io.err(`nen direct: ${moved}`);
+  assertRecordContained(home.base, path);
   if (!existsSync(path)) {
     context.io.err(`nen: no record at '${path}'. The answer belongs to a resolution that exists: run 'nen direct resolve --record ${id}' first.`);
     return 1;
@@ -68,7 +75,7 @@ export function runAnswer(context: CommandContext): number {
     if (record["effortId"] !== id) {
       return `records the effort ${JSON.stringify(record["effortId"] ?? null)}, not '${id}'`;
     }
-    writeRecord(root, path, { ...record, decision });
+    writeRecord(home.base, path, { ...record, decision });
     return null;
   }, { warn: context.io.err });
   if (refused !== null) {

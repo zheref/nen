@@ -760,6 +760,11 @@ export interface RepositoryContract {
    * repository's, the list is only its declaration.
    */
   readonly precedence: readonly PrecedenceSource[] | null;
+  /**
+   * The repository files that restate `precedence` in prose (zheref/nen#474),
+   * each held by `nen schema check` to the array: null when none is declared.
+   */
+  readonly precedenceRestatedIn: readonly string[] | null;
   /** The document exactly as the file states it, every key preserved. */
   readonly raw: Readonly<Record<string, unknown>>;
 }
@@ -2846,6 +2851,89 @@ export function parsePrecedence(path: string, value: unknown): readonly Preceden
   });
 }
 
+/**
+ * `precedenceRestatedIn` (zheref/nen#474): the repository-relative files that
+ * restate the order in prose. HOW A FILE RESTATES IT IS ONE FIXED SHAPE: a run
+ * of two or more code spans joined by `**>**`, wrapped across lines or not --
+ * Hatsu's form (`` `a` **>** `b` ``). The key names the files rather than nen
+ * guessing which prose is a restatement, so a file that restates nothing is
+ * never read, and a declared file that no longer carries one is a finding.
+ */
+export function parsePrecedenceRestatedIn(path: string, value: unknown, precedence: readonly PrecedenceSource[] | null): readonly string[] | null {
+  if (value === undefined || value === null) return null;
+  const list = requireArray(path, "precedenceRestatedIn", value);
+  if (precedence === null) {
+    throw new SchemaError(path, "precedenceRestatedIn", "names files that restate 'precedence', and this file declares no 'precedence' to hold them to. Declare the order, or delete the key");
+  }
+  if (list.length === 0) {
+    throw new SchemaError(path, "precedenceRestatedIn", "is an empty array. A restatement list that names no file checks nothing; name the files, or delete the key");
+  }
+  const seen = new Map<string, number>();
+  return list.map((item, index): string => {
+    const pointer = `precedenceRestatedIn[${index}]`;
+    const file = requireString(path, pointer, item);
+    if (!PATH_SOURCE.test(file)) {
+      throw new SchemaError(path, pointer, `${JSON.stringify(file)} is not a repository-relative file path (no leading '/', no '..', no empty segment)`);
+    }
+    const previous = seen.get(file);
+    if (previous !== undefined) throw new SchemaError(path, pointer, `repeats precedenceRestatedIn[${previous}] ('${file}')`);
+    seen.set(file, index);
+    return file;
+  });
+}
+
+/** One prose restatement of the order: the code spans in sequence, and the 1-based line it starts on. */
+export interface PrecedenceRestatement {
+  readonly line: number;
+  readonly sequence: readonly string[];
+}
+
+const RESTATEMENT_RUN = /`([^`\n]+)`(?:\s*\*\*>\*\*\s*`[^`\n]+`)+/g;
+
+/**
+ * Every run of two or more code spans joined by `**>**` in `text`, outside
+ * fenced code blocks. CRLF reads as LF; a run may wrap across lines.
+ */
+export function findPrecedenceRestatements(text: string): readonly PrecedenceRestatement[] {
+  const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  let fence: string | null = null;
+  const visible = lines.map((line): string => {
+    const opener = /^\s{0,3}(`{3,}|~{3,})/.exec(line);
+    if (fence === null && opener !== null) {
+      fence = (opener[1] as string)[0] as string;
+      return "";
+    }
+    if (fence !== null) {
+      if (new RegExp(`^\\s{0,3}${fence === "`" ? "`" : "~"}{3,}\\s*$`).test(line)) fence = null;
+      return "";
+    }
+    return line;
+  });
+  const joined = visible.join("\n");
+  const found: PrecedenceRestatement[] = [];
+  for (const match of joined.matchAll(RESTATEMENT_RUN)) {
+    const sequence = [...match[0].matchAll(/`([^`\n]+)`/g)].map((span): string => (span[1] as string).trim());
+    found.push({ line: joined.slice(0, match.index).split("\n").length, sequence });
+  }
+  return found;
+}
+
+/** The findings for one restating file: none when every run equals `precedence` and at least one run exists. */
+export function precedenceRestatementFindings(file: string, text: string, precedence: readonly PrecedenceSource[]): readonly string[] {
+  const runs = findPrecedenceRestatements(text);
+  if (runs.length === 0) {
+    return [`${file}: restates no order -- no run of code spans joined by '**>**' (declared in precedenceRestatedIn)`];
+  }
+  const findings: string[] = [];
+  for (const run of runs) {
+    if (run.sequence.length === precedence.length && run.sequence.every((entry, index): boolean => entry === precedence[index])) continue;
+    const at = run.sequence.findIndex((entry, index): boolean => entry !== precedence[index]);
+    const where = at === -1 ? `it stops after ${run.sequence.length} of ${precedence.length} sources` : `position ${at + 1} reads '${run.sequence[at] ?? ""}' where the array has '${precedence[at] ?? "(nothing)"}'`;
+    findings.push(`${file}:${run.line}: restates ${run.sequence.join(" > ")} -- drifted from precedence (${where})`);
+  }
+  return findings;
+}
+
 /** A root key one edit from `precedence`, refused by the name it meant. */
 function refuseNearMissPrecedence(path: string, raw: Readonly<Record<string, unknown>>): void {
   for (const key of Object.keys(raw)) {
@@ -2869,6 +2957,7 @@ export function parseContract(
   const hasMechanical = raw["mechanical"] !== undefined && raw["mechanical"] !== null;
   refuseNearMissPrecedence(path, raw);
   const precedence = parsePrecedence(path, raw["precedence"]);
+  const precedenceRestatedIn = parsePrecedenceRestatedIn(path, raw["precedenceRestatedIn"], precedence);
   if (!hasDependency && !hasProject && !hasMechanical && precedence === null) {
     const stray = Object.keys(raw).filter((key): boolean => !key.startsWith("$"));
     throw new SchemaError(
@@ -2896,6 +2985,7 @@ export function parseContract(
     project: hasProject ? parseProjectBlock(path, raw["project"]) : null,
     mechanical: hasMechanical ? parseMechanical(path, raw["mechanical"]) : null,
     precedence,
+    precedenceRestatedIn,
     raw,
   };
 }
@@ -2951,7 +3041,7 @@ export function describeContract(contract: RepositoryContract): string {
     );
   }
   if (contract.precedence !== null) {
-    blocks.push(`precedence (${contract.precedence.length} ${contract.precedence.length === 1 ? "source" : "sources"}: ${contract.precedence.join(" > ")})`);
+    blocks.push(`precedence (${contract.precedence.length} ${contract.precedence.length === 1 ? "source" : "sources"}: ${contract.precedence.join(" > ")}${contract.precedenceRestatedIn === null ? "" : `; restated in ${contract.precedenceRestatedIn.join(", ")}`})`);
   }
   return blocks.join(", ");
 }

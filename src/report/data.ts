@@ -45,9 +45,11 @@ import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { VerbUsageError } from "../cli/command.js";
 import { containedPath } from "../repo/contain.js";
 import { proofRelativePath } from "../shu/proof.js";
-import { PHASE_CONTRACT, PHASE_LEDGER_DIR } from "../phase/ledger.js";
-import { SESSION_CONTRACT, SESSION_LEDGER_DIR, isSessionEntry, readSessionLedgerText, type SessionEntry } from "../session/ledger.js";
-import { USAGE_CONTRACT, USAGE_LEDGER_DIR } from "../usage/ledger.js";
+import { PHASE_CONTRACT } from "../phase/ledger.js";
+import { commonDirOrNull, EFFORT_COMMON_SEGMENTS, type EffortFamily } from "../ledger/home.js";
+import { EFFORT_WORKTREE_LEGACY } from "../ledger/roots.js";
+import { SESSION_CONTRACT, isSessionEntry, readSessionLedgerText, type SessionEntry } from "../session/ledger.js";
+import { USAGE_CONTRACT } from "../usage/ledger.js";
 import { openDeclaration } from "../shu/declaration.js";
 import { formatNamedBy, readReport } from "../shu/coverage/parse.js";
 import type { CoverageMeasure, CoverageTarget } from "../shu/coverage/shape.js";
@@ -194,6 +196,8 @@ export interface DataOptions {
   readonly tiers: TierTable | null;
   /** `--lane`, or the declaration's `defaultLane`, or null. */
   readonly lane: string | null;
+  /** `--effort <id>`...: keep only these efforts' ledger rows; null (or absent) keeps every effort's. */
+  readonly efforts?: readonly string[] | null;
 }
 
 /** `{ "<tier>": ["<prefix or glob>", …] }`, in the file's own key order. */
@@ -571,6 +575,13 @@ export function assembleData(
   warn: (line: string) => void,
 ): ReportData {
   assertBase(seams, root, options.base);
+  // ONE question to git for all three families (zheref/nen#509), asked when the
+  // first ledger is read; null outside a repository.
+  let asked: { readonly common: string | null } | null = null;
+  const common = (): string | null => (asked ??= { common: commonDirOrNull(root, seams, "report's ledgers") }).common;
+  const wanted = options.efforts ?? null;
+  const keep = <T extends { readonly effort: string }>(rows: readonly T[]): readonly T[] =>
+    wanted === null ? rows : rows.filter((row): boolean => wanted.includes(row.effort));
   const lastStop = containedPath(root, ".nen/last-stop.json");
   const branch = readBranch(seams, root);
   return {
@@ -587,28 +598,78 @@ export function assembleData(
       options.lane === null
         ? null
         : readJsonArtifact(proofPath(root, options.lane), proofRelativePath(options.lane), warn),
-    phases: readPhaseLedgers(root, warn),
+    phases: keep(readPhaseLedgers(ledgerDirs(common(), root, "phases"), warn)),
     /* c8 ignore next -- containedPath cannot reject a literal relative path */
     lastStop: lastStop === null ? null : readJsonArtifact(lastStop, ".nen/last-stop.json", warn),
-    usage: readUsageLedgers(root, warn),
-    sessions: readSessionLedgers(root, warn),
+    usage: keep(readUsageLedgers(ledgerDirs(common(), root, "usage"), warn)),
+    sessions: keep(readSessionLedgers(ledgerDirs(common(), root, "sessions"), warn)),
   };
 }
 
-/** Every usage entry under `.nen/usage/`, flattened, filename then entry order. */
-export function readUsageLedgers(root: string, warn: (line: string) => void): readonly ReportUsage[] {
-  const dir = join(root, ...USAGE_LEDGER_DIR.split("/"));
-  let names: string[];
+/**
+ * Where a per-effort family's ledgers are read from (zheref/nen#509): the
+ * repository's `<git-common-dir>/.nen/<family>/`, then the worktree-local
+ * `<root>/.nen/<family>/` an older build wrote (read beside it through the 0.28
+ * line), or `<root>/.nen/<family>/` alone outside git. Display names say which.
+ */
+export function ledgerDirs(common: string | null, root: string, family: EffortFamily): readonly LedgerDir[] {
+  const local = join(root, ...EFFORT_WORKTREE_LEGACY[family]);
+  const prefix = EFFORT_WORKTREE_LEGACY[family].join("/");
+  if (common === null) return [{ dir: local, display: prefix }];
+  const segments = EFFORT_COMMON_SEGMENTS[family];
+  return [{ dir: join(common, ...segments), display: `<git-common-dir>/${segments.join("/")}` }, { dir: local, display: `${prefix} (older build, worktree-local)` }];
+}
+
+/** One directory a reader lists, and the name its rows' warnings use. */
+export interface LedgerDir {
+  readonly dir: string;
+  readonly display: string;
+}
+
+/** A row-shaped ledger reader's input: a repository root (worktree-local only, the pre-#509 form) or the directories. */
+type LedgerSource = string | readonly LedgerDir[];
+
+function sourceDirs(source: LedgerSource, family: EffortFamily): readonly LedgerDir[] {
+  if (typeof source !== "string") return source;
+  return [{ dir: join(source, ...EFFORT_WORKTREE_LEGACY[family]), display: EFFORT_WORKTREE_LEGACY[family].join("/") }];
+}
+
+/**
+ * Ledger names present in more than one of `dirs` (the common dir AND a
+ * checkout's older copy): warned once and read from NEITHER (Nobunaga on #516),
+ * the same refusal `phase`/`usage` make at exit 1 -- doubled rows would
+ * otherwise read as one effort that ran every phase twice.
+ */
+function duplicateNames(dirs: readonly LedgerDir[], warn: (line: string) => void): ReadonlySet<string> {
+  const seen = new Map<string, string[]>();
+  for (const { dir, display } of dirs) for (const name of ledgerNames(dir)) seen.set(name, [...(seen.get(name) ?? []), `${display}/${name}`]);
+  const dupes = new Set<string>();
+  for (const [name, where] of seen) {
+    if (where.length < 2) continue;
+    dupes.add(name);
+    warn(`${where.join(" and ")}: one effort's ledger in two homes -- skipped; keep one (the common-dir copy) and move the other aside`);
+  }
+  return dupes;
+}
+
+/** Every `.json` name in `dir`, sorted; an absent directory is none. */
+function ledgerNames(dir: string): string[] {
   try {
-    names = readdirSync(dir).filter((name): boolean => name.endsWith(".json")).sort();
+    return readdirSync(dir).filter((name): boolean => name.endsWith(".json")).sort();
   } catch {
     return [];
   }
+}
+
+/** Every usage entry under each `.nen/usage/` directory, flattened, directory then filename then entry order. */
+export function readUsageLedgers(source: LedgerSource, warn: (line: string) => void): readonly ReportUsage[] {
   const rows: ReportUsage[] = [];
   const string = (value: unknown): string | null => (typeof value === "string" ? value : null);
   const number = (value: unknown): number | null => (typeof value === "number" ? value : null);
-  for (const name of names) {
-    const display = `${USAGE_LEDGER_DIR}/${name}`;
+  const usageDirs = sourceDirs(source, "usage");
+  const usageDupes = duplicateNames(usageDirs, warn);
+  for (const { dir, display: where } of usageDirs) for (const name of ledgerNames(dir).filter((n): boolean => !usageDupes.has(n))) {
+    const display = `${where}/${name}`;
     const doc = readJsonArtifact(join(dir, name), display, warn) as { contract?: unknown; effort?: unknown; entries?: unknown } | null;
     if (doc === null) continue;
     if (doc.contract !== USAGE_CONTRACT || typeof doc.effort !== "string" || !Array.isArray(doc.entries)) {
@@ -636,18 +697,13 @@ export function readUsageLedgers(root: string, warn: (line: string) => void): re
   return rows;
 }
 
-/** Every phase entry under `.nen/phases/`, flattened, filename then entry order. */
-export function readPhaseLedgers(root: string, warn: (line: string) => void): readonly ReportPhase[] {
-  const dir = join(root, ...PHASE_LEDGER_DIR.split("/"));
-  let names: string[];
-  try {
-    names = readdirSync(dir).filter((name): boolean => name.endsWith(".json")).sort();
-  } catch {
-    return [];
-  }
+/** Every phase entry under each `.nen/phases/` directory, flattened, directory then filename then entry order. */
+export function readPhaseLedgers(source: LedgerSource, warn: (line: string) => void): readonly ReportPhase[] {
   const rows: ReportPhase[] = [];
-  for (const name of names) {
-    const display = `${PHASE_LEDGER_DIR}/${name}`;
+  const phaseDirs = sourceDirs(source, "phases");
+  const phaseDupes = duplicateNames(phaseDirs, warn);
+  for (const { dir, display: where } of phaseDirs) for (const name of ledgerNames(dir).filter((n): boolean => !phaseDupes.has(n))) {
+    const display = `${where}/${name}`;
     const doc = readJsonArtifact(join(dir, name), display, warn) as { contract?: unknown; effort?: unknown; phases?: unknown } | null;
     if (doc === null) continue;
     if (doc.contract !== PHASE_CONTRACT || typeof doc.effort !== "string" || !Array.isArray(doc.phases)) {
@@ -682,8 +738,15 @@ export function readPhaseLedgers(root: string, warn: (line: string) => void): re
 }
 
 /** Every session entry, flattened with its effort, in filename then entry order. */
-export function readSessionLedgers(root: string, warn: (line: string) => void): readonly ReportSession[] {
-  const dir = join(root, ...SESSION_LEDGER_DIR.split("/"));
+export function readSessionLedgers(source: LedgerSource, warn: (line: string) => void): readonly ReportSession[] {
+  const rows: ReportSession[] = [];
+  const sessionDirs = sourceDirs(source, "sessions");
+  const sessionDupes = duplicateNames(sessionDirs, warn);
+  for (const { dir, display: where } of sessionDirs) rows.push(...readSessionDir(dir, where, warn, sessionDupes));
+  return rows;
+}
+
+function readSessionDir(dir: string, where: string, warn: (line: string) => void, skip: ReadonlySet<string>): readonly ReportSession[] {
   let names: string[];
   try {
     names = readdirSync(dir).filter((name): boolean => name.endsWith(".json")).sort();
@@ -695,16 +758,16 @@ export function readSessionLedgers(root: string, warn: (line: string) => void): 
         lstatSync(dir);
       } catch (probeError) {
         if ((probeError as NodeJS.ErrnoException).code === "ENOENT") return [];
-        warn(`${SESSION_LEDGER_DIR}: could not inspect directory (${probeError instanceof Error ? probeError.message : String(probeError)}) -- sessions not read`);
+        warn(`${where}: could not inspect directory (${probeError instanceof Error ? probeError.message : String(probeError)}) -- sessions not read`);
         return [];
       }
     }
-    warn(`${SESSION_LEDGER_DIR}: could not read directory (${error instanceof Error ? error.message : String(error)}) -- sessions not read`);
+    warn(`${where}: could not read directory (${error instanceof Error ? error.message : String(error)}) -- sessions not read`);
     return [];
   }
   const rows: ReportSession[] = [];
-  for (const name of names) {
-    const display = `${SESSION_LEDGER_DIR}/${name}`;
+  for (const name of names.filter((n): boolean => !skip.has(n))) {
+    const display = `${where}/${name}`;
     const doc = readJsonArtifact(join(dir, name), display, warn, readSessionLedgerText) as { contract?: unknown; effort?: unknown; entries?: unknown } | null;
     if (doc === null) continue;
     if (doc.contract !== SESSION_CONTRACT || typeof doc.effort !== "string" || !Array.isArray(doc.entries)) {

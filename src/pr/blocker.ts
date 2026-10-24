@@ -36,6 +36,7 @@ import { describeQuorum } from "../gates/ready.js";
 import { rollupEntryLabel, rollupEntryStatus } from "../github/types.js";
 import type { DeclaredCheckExclusion, GateIdentities } from "../schema/gates.js";
 import type { PrSnapshot } from "./fetch.js";
+import { checkBody, type BodyRequirement } from "./bodycheck.js";
 
 export type BlockerKind =
   | "conflict"
@@ -56,6 +57,13 @@ export interface NextBlockerOptions {
   readonly reviewers?: readonly string[] | undefined;
   readonly policy?: RoundPolicy | undefined;
   readonly deliveryPr?: boolean | undefined;
+  /**
+   * The body requirements `pr body-check --requirements-from` reads
+   * (zheref/nen#479 AC-4). When given, the last step names the first one the
+   * body does not satisfy, so the two verbs agree on one body; when absent it
+   * is the historical `## How to verify` heading.
+   */
+  readonly bodyRequirements?: readonly BodyRequirement[] | undefined;
   /**
    * `checks.excluded` as the pull request's BASE declares it (zheref/nen#249),
    * applied exactly as `nen pr ready` applies it: resolved against the rollup
@@ -221,7 +229,12 @@ export function nextBlocker(
     };
   }
 
-  if (!HOW_TO_VERIFY.test(snapshot.body)) {
+  if (options.bodyRequirements !== undefined) {
+    const missing = checkBody(snapshot.body, options.bodyRequirements).results.find((result): boolean => !result.satisfied);
+    if (missing !== undefined) {
+      return { kind: "missing-body-requirement", detail: `body requirement '${missing.name}' not satisfied (CON-17; --requirements-from)` };
+    }
+  } else if (!HOW_TO_VERIFY.test(snapshot.body)) {
     return {
       kind: "missing-body-requirement",
       detail: "no '## How to verify' section in the body (CON-17)",

@@ -8,7 +8,7 @@
 // a fixed path with the core-to-worktree copy.
 
 import { runPrune } from "./prune.js";
-import { ancestryReader, computeOverlap, readEffortFiles, renderOverlap } from "./overlap.js";
+import { ancestryReader, computeOverlap, readEffortFiles, renderOverlap, withDeclared } from "./overlap.js";
 import { assertRepoRoot } from "../repo/root.js";
 import {
   emit,
@@ -46,19 +46,20 @@ import { copyPathRefusal, foldName, KEY_FILE, manageWorktree, MANIFEST_CONTRACT,
 
 const SQUASH_CONTRACT = "nen.wc.squash/v0.1";
 
-const USAGE = `nen wc overlap --efforts <a,b,...> --repo <path> [--base <ref>] [--always-overlaps <paths>] [--json]
+const USAGE = `nen wc overlap --efforts <a,b,...> --repo <path> [--base <ref>] [--always-overlaps <paths>] [--declared <file>] [--json]
   File disjointness of parallel efforts, computed: each effort's changed paths
   are 'git diff --name-only <base>...<effort>' (the merge-base diff), --base
   defaulting to origin/<nen/workflow.json branch.base>. nen/workflow.json's
   alwaysOverlaps list, plus --always-overlaps (comma-separated; an entry ending
   in '/' is a directory prefix), names paths every delivery touches sooner or
   later -- a manifest version, the CHANGELOG, generated mirrors -- each counted
-  as touched by EVERY effort. Verdict: disjoint | stack(<a> <- <b> ...) when
-  the overlapping efforts' branches already chain (each contains the one
-  before, by git merge-base --is-ancestor) | overlap(<paths>) when they do not
-  | unknown (an effort's diff could not be read -- never read as "touches
-  nothing"). Exit 0 disjoint, 1 stack, overlap or unknown. Where efforts
-  overlap and do not chain, which stacks on which is the caller's to decide.
+  as touched by EVERY effort. --declared names a JSON object of effort ->
+  paths it declares before authoring; they stand in for a diff that cannot be
+  read yet and are added to one that can. Verdict: disjoint | stack(<a> <- <b>
+  ...) when any path is shared, in the chain git holds when the branches
+  contain one another (order: chain), else in the --efforts order (order:
+  given) | unknown (an effort with neither a readable diff nor declared paths
+  -- never read as "touches nothing"). Exit 0 disjoint, 1 stack or unknown.
 
 nen wc prune --repo <path> --plan <file> [--dry-run | --run] [--json]
   An explicit JSON array, processed in order. Default: dry run, no fetch,
@@ -915,6 +916,35 @@ function doWorktree(context: CommandContext): number {
 
 const SWAP_ONLY_BOOLEANS: readonly string[] = ["take", "return", "status"];
 
+/**
+ * `--declared <file>` (zheref/nen#488 AC-1): a JSON object of effort -> the
+ * repository-relative paths it declares before authoring. Unreadable, not an
+ * object, a key no `--efforts` entry names, or an entry that is not a
+ * non-empty path list is a usage refusal (exit 2): a declaration nen cannot
+ * read is never "declares nothing".
+ */
+function readDeclaredPaths(root: string, flag: string | undefined, efforts: readonly string[]): Readonly<Record<string, readonly string[]>> | null {
+  if (flag === undefined) return null;
+  const text = readTextFile(flag, root, "--declared names each effort's declared paths; an unreadable declaration is never 'declares nothing'.");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text) as unknown;
+  } catch (error) {
+    throw new VerbUsageError(`--declared '${flag}' is not valid JSON (${error instanceof Error ? error.message : String(error)}).`);
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) throw new VerbUsageError(`--declared '${flag}' is not a JSON object of effort -> paths.`);
+  const out: Record<string, readonly string[]> = {};
+  for (const [effort, paths] of Object.entries(parsed as Record<string, unknown>)) {
+    if (effort.startsWith("$")) continue;
+    if (!efforts.includes(effort)) throw new VerbUsageError(`--declared names '${effort}', which --efforts does not list.`);
+    if (!Array.isArray(paths) || paths.length === 0 || paths.some((path): boolean => typeof path !== "string" || path.trim() === "" || path.startsWith("/") || path.split("/").includes(".."))) {
+      throw new VerbUsageError(`--declared '${effort}' is not a non-empty list of repository-relative paths; an empty list would read an unread diff as "touches nothing".`);
+    }
+    out[effort] = paths as string[];
+  }
+  return out;
+}
+
 /** `nen wc overlap` (./overlap.ts): the efforts' merge-base diffs, compared. */
 function doOverlap(context: CommandContext): number {
   for (const flag of ["onto", "message-file", "strategy", "remote", "name", "plan"]) {
@@ -944,7 +974,13 @@ function doOverlap(context: CommandContext): number {
     return 1;
   }
   const always = [...declared, ...flagged.filter((entry): boolean => !declared.includes(entry))];
-  const report = computeOverlap(base, efforts.map((effort) => readEffortFiles(context.seams, root, base as string, effort)), always, ancestryReader(context.seams, root));
+  const declaredPaths = readDeclaredPaths(root, context.args.values["declared"], efforts);
+  const report = computeOverlap(
+    base,
+    efforts.map((effort) => withDeclared(readEffortFiles(context.seams, root, base as string, effort), declaredPaths?.[effort])),
+    always,
+    ancestryReader(context.seams, root),
+  );
   emit(context.io, context.json, report, renderOverlap(report));
   return report.verdict === "disjoint" ? 0 : 1;
 }
@@ -960,7 +996,7 @@ export const wcCommand: Command = {
   summary: "Classify the working copy, squash it, catch it up, publish it, list the worktrees, swap one into core, keep one at a fixed path, or compute whether efforts overlap.",
   usage: USAGE,
   flags: {
-    values: ["base", "onto", "message-file", "strategy", "remote", "name", "plan", "efforts", "always-overlaps"],
+    values: ["base", "onto", "message-file", "strategy", "remote", "name", "plan", "efforts", "always-overlaps", "declared"],
     booleans: ["dry-run", "abort", "set-upstream", "take", "return", "status", "run"],
     lists: ["copy-from-core"],
   },
@@ -968,7 +1004,7 @@ export const wcCommand: Command = {
     const subcommand = requireSubcommand("wc", context.args, ["classify", "squash", "catch-up", "publish", "worktrees", "swap", "worktree", "prune", "overlap"]);
     // --efforts / --always-overlaps ARE OVERLAP'S ALONE.
     if (subcommand !== "overlap") {
-      for (const flag of ["efforts", "always-overlaps"]) {
+      for (const flag of ["efforts", "always-overlaps", "declared"]) {
         if (context.args.values[flag] !== undefined) {
           throw new VerbUsageError(`--${flag} is not read by 'wc ${subcommand}'; only 'wc overlap' takes it. A flag accepted and ignored is worse than one refused.`);
         }

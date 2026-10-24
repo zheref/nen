@@ -44,6 +44,8 @@ function script(options: { base?: string; branch?: string | null; log?: string; 
     { match: `git log ${base}..HEAD --format=${LOG_FORMAT}`, result: { code: 0, stdout: options.log ?? "" } },
     { match: `git diff --name-status ${base}...HEAD`, result: { code: 0, stdout: options.diff ?? "" } },
     { match: "git rev-parse --path-format=absolute --git-dir --git-common-dir --show-toplevel", result: { code: 0, stdout: "/w/nen/.git\n/w/nen/.git\n/w/nen\n" } },
+    // The ledgers' home (zheref/nen#509): these fixtures are no repository to it, so phases/usage/sessions are read under the root.
+    { match: "git rev-parse --path-format=absolute --git-common-dir", result: { code: 128, stderr: "fatal: not a git repository" } },
     { match: `git rev-parse --verify --quiet refs/remotes/origin/${branch ?? ""}`, result: { code: 1, stdout: "" } },
   ];
 }
@@ -188,6 +190,7 @@ describe("nen report data", () => {
       "remote get-url",
       "log main..HEAD",
       "diff --name-status",
+      "rev-parse --path-format=absolute",
       "rev-parse --path-format=absolute",
       "rev-parse --verify",
     ]);

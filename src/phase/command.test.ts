@@ -3,15 +3,19 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
-import type { Seams } from "../seam/exec.js";
+import { spawnRunner, type CommandResult, type Seams } from "../seam/exec.js";
 import { noPortProbe } from "../seam/scripted.js";
 import { PHASE_CONTRACT, PHASE_LEDGER_DIR, phaseCommand } from "./command.js";
 import { appendStepsToOpenPhase } from "./ledger.js";
+import { localEffortHome } from "../ledger/home.js";
 
 function seamsAt(iso: string): Seams {
   return {
-    run: (): never => {
-      throw new Error("must not be called");
+    // Only git, and only to find the ledger's home (zheref/nen#509): a temp
+    // dir is not a repository, so the ledger stays under --repo.
+    run: (command, args, options): CommandResult => {
+      if (command !== "git" || !args.includes("--git-common-dir")) throw new Error(`must not be called: ${command} ${args.join(" ")}`);
+      return spawnRunner(command, args, options);
     },
     now: (): Date => new Date(iso),
     env: {},
@@ -89,7 +93,7 @@ describe("nen phase begin|end -- the per-phase timing ledger", () => {
     const fresh = JSON.parse(readFileSync(path, "utf8")) as { phases: { steps: unknown[] }[] };
     expect(fresh.phases[0]?.steps).toEqual([]);
     expect(Object.keys(fresh.phases[0] ?? {})).toEqual(["phase", "startedAt", "endedAt", "durationMs", "exitCode", "surface", "model", "note", "steps", "dial"]);
-    expect(appendStepsToOpenPhase(root, "x", [
+    expect(appendStepsToOpenPhase(localEffortHome(root, "phases"), "x", [
       { verb: "build", argv: "placeholder-tool go", exitCode: 0, durationMs: 1200, stalled: false },
       { verb: "lint", argv: "placeholder-tool lint", exitCode: null, durationMs: null, stalled: true },
     ])).toBe(true);
@@ -104,7 +108,7 @@ describe("nen phase begin|end -- the per-phase timing ledger", () => {
     await capture(["phase", "end", "--effort", "x", "--exit", "0"], root, "2026-01-01T00:00:10Z");
     expect((JSON.parse(readFileSync(path, "utf8")) as { phases: { steps: unknown[] }[] }).phases[0]?.steps).toHaveLength(2);
     // Nothing open: nothing appended, nothing written.
-    expect(appendStepsToOpenPhase(root, "x", [{ verb: "build", argv: "x", exitCode: 0, durationMs: 1, stalled: false }])).toBe(false);
+    expect(appendStepsToOpenPhase(localEffortHome(root, "phases"), "x", [{ verb: "build", argv: "x", exitCode: 0, durationMs: 1, stalled: false }])).toBe(false);
     // An entry written before the key existed renders without it.
     writeFileSync(path, JSON.stringify({ contract: PHASE_CONTRACT, effort: "x", phases: [{ phase: "old", startedAt: "2026-01-01T00:00:00.000Z", endedAt: "2026-01-01T00:00:01.000Z", durationMs: 1000, exitCode: 0, surface: null, model: null, note: null }] }));
     expect((await capture(["phase", "show", "--effort", "x"], root, "2026-01-01T00:00:09Z")).out).toHaveLength(2);

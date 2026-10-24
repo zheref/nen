@@ -36,6 +36,7 @@ import { openDeclaration } from "../shu/declaration.js";
 import { assembleData, parseTiers, renderData, type TierTable } from "./data.js";
 import { assembleContext, deriveClock, type PrLookup, type ReportContext } from "./context.js";
 import { assembleObjects, filterEfforts, renderObjects, type ReportObject } from "./objects.js";
+import { assertEffortId } from "../ledger/effort.js";
 import { describeFilter, effortPasses, FILTER_LIST_FLAGS, FILTER_VALUE_FLAGS, readEffortFilter } from "../backlog/filter.js";
 import { assembleRegister, parseDesk, renderRegister, type Desk, type NotationSource } from "./register.js";
 import { openTaxonomy } from "../schema/taxonomy.js";
@@ -46,7 +47,7 @@ import { renderReport } from "./render.js";
 const USAGE = `nen report -- the facts an effort's report is made of, and the fill that turns them into one.
 
 usage:
-  nen report data --repo <path> --base <ref> [--lane <name>] [--tiers <file>] [--target <owner/name>] [--prs <n,...>] [--issues <n,...>] [--backlog] [--objects-from <file>] [--label <name>]... [--severity <name>[+] --severity-family <ns>:<family> --severity-order <a,b,..>] [--register <desk>] [--tz <zone>] [--open-stop] [--json]
+  nen report data --repo <path> --base <ref> [--lane <name>] [--tiers <file>] [--target <owner/name>] [--prs <n,...>] [--issues <n,...>] [--backlog] [--objects-from <file>] [--label <name>]... [--severity <name>[+] --severity-family <ns>:<family> --severity-order <a,b,..>] [--register <desk>] [--tz <zone>] [--open-stop] [--effort <id>]... [--json]
   nen report render --template <file> --data <file> --out <file> [--variant <name>] [--graph <file>] [--dry-run] [--repo <path>] [--json]
   nen report mermaid --graph <file>
 
@@ -56,8 +57,11 @@ data      One document describing this branch against --base: the commits, the
           coverage report if one is on disk, the build proof, and the last
           recorded stop. It also merges phases[], usage[] (each carrying the
           caller's dial, null on older entries), and sessions[] (caller-reported
-          title/id, surface, model, dial, source and recordedAt with effort).
-          --json carries these arrays; an absent directory yields []. READ-ONLY: it runs git and opens files, and writes
+          title/id, surface, model, dial, source and recordedAt with effort),
+          read from the repository's '<git-common-dir>/.nen/{phases,usage,
+          sessions}/' (every worktree's efforts, zheref/nen#509) and from an
+          older build's '<--repo>/.nen/<family>/' beside it (fallback removed
+          in 0.29.0). --json carries these arrays; an absent directory yields []. READ-ONLY: it runs git and opens files, and writes
           nothing, ever.
 
   --base <ref>     Required. What this branch is measured against -- the trunk,
@@ -68,6 +72,10 @@ data      One document describing this branch against --base: the commits, the
   --lane <name>    Which declared lane's coverage report and build proof to
                    read. Defaults to the declaration's own 'defaultLane'; with
                    neither, both fields are null.
+  --effort <id>    Repeatable. Keep only these efforts' phases[], usage[] and
+                   sessions[]: the ledgers are the repository's, shared by
+                   every worktree, so without it every effort's rows are read.
+                   Each id is held to the one effort-id grammar (exit 2).
   --tiers <file>   A JSON object mapping a tier name to its paths:
                    { "<tier>": ["<path prefix or glob>", ...] }. The file's key
                    order is the precedence -- the first tier whose patterns
@@ -231,7 +239,7 @@ const SUBCOMMAND_FLAGS: Readonly<Record<string, { values: readonly string[]; boo
   data: {
     values: ["base", "lane", "tiers", "target", "prs", "issues", "objects-from", "register", "tz", ...FILTER_VALUE_FLAGS],
     booleans: ["backlog", "open-stop"],
-    lists: FILTER_LIST_FLAGS,
+    lists: [...FILTER_LIST_FLAGS, "effort"],
   },
   render: { values: ["template", "data", "out", "variant", "graph"], booleans: ["dry-run"] },
   mermaid: { values: ["graph"], booleans: [] },
@@ -476,6 +484,13 @@ function readDesk(context: CommandContext, root: string): Desk | null {
   );
 }
 
+/** `--effort <id>`..., each held to the one grammar, or null when none was given. */
+function readEfforts(context: CommandContext): readonly string[] | null {
+  const efforts = context.args.lists["effort"] ?? [];
+  if (efforts.length === 0) return null;
+  return efforts.map((effort): string => assertEffortId(effort));
+}
+
 async function runData(context: CommandContext): Promise<number> {
   refuseExtraPositionals(context.args, 2);
   const root = assertRepoRoot({
@@ -494,6 +509,7 @@ async function runData(context: CommandContext): Promise<number> {
       ),
       tiers: readTiers(context, root),
       lane: resolveLane(context, root),
+      efforts: readEfforts(context),
     },
     warn,
   );

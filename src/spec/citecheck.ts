@@ -103,8 +103,11 @@ export function parseCheckouts(text: string, file: string): Map<string, string> 
 
 /** Lines l1..l2, each ending in "\n", or null when the range is past the end. */
 export function excerptOf(content: string, l1: number, l2: number): string | null {
-  const lines = content.split("\n");
-  if (content.endsWith("\n")) lines.pop();
+  // ONE NORMALISATION FOR EVERY VERB: a CRLF reads as LF, as `spec inventory`'s rows hash it, so a citation
+  // of a CRLF file verifies against its row (Bugbot on zheref/nen#514).
+  const text = content.replace(/\r\n/g, "\n");
+  const lines = text.split("\n");
+  if (text.endsWith("\n")) lines.pop();
   if (l1 < 1 || l2 < l1 || l2 > lines.length) return null;
   return `${lines.slice(l1 - 1, l2).join("\n")}\n`;
 }
@@ -162,7 +165,7 @@ export interface CiteCheckInput {
   readonly verifyExcerpt: boolean;
 }
 
-function resolveMember(seams: Seams, input: CiteCheckInput, registry: RepoRegistry | null, registryError: string | null, code: string): MemberCheckout {
+export function resolveMember(seams: Seams, input: CiteCheckInput, registry: RepoRegistry | null, registryError: string | null, code: string): MemberCheckout {
   const unresolved = (repo: string | null, path: string | null, reason: string): MemberCheckout => ({ code, repo, path, verdict: "unresolved", reason, at: null });
   if (registry === null) return unresolved(null, null, registryError ?? "no registry");
   let repo: string;

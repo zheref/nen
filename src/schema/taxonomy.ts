@@ -19,12 +19,12 @@
 // times a verb happened to ask, and a schema file does not become valid by being
 // re-read.
 
-import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { MARKER_FILE, parseMarker } from "../stop/marker.js";
 import { assertRepoRoot, type RepoRootOptions } from "../repo/root.js";
 import { loadColorVocabulary, type ColorVocabulary } from "./colors.js";
-import { describeContract, loadContract, withinOneEdit, type DeployTarget } from "./contract.js";
+import { describeContract, loadContract, precedenceRestatementFindings, withinOneEdit, type DeployTarget } from "./contract.js";
 import { GatesDuplicateKeyError, GatesUnknownKeyError, loadGateIdentities, pointerSegment, visibleKey, type GateIdentities } from "./gates.js";
 import { loadLabelTaxonomy, type LabelTaxonomy } from "./labels.js";
 import { loadRepoRegistry, type RepoRegistry } from "./repos.js";
@@ -45,6 +45,7 @@ import {
 } from "./workflow.js";
 import { describeDecisions, loadDecisions } from "./decisions.js";
 import { canonMirrorCheck } from "./canonmirror.js";
+import { insideRoot, LintWiringError, parseBaseline, parseLintContract, PROSE_LINT_SCHEMA } from "../canon/lint.js";
 import type { Runner } from "../seam/exec.js";
 import {
   COLORS_FILE,
@@ -458,6 +459,157 @@ function pointerCheck(root: string, pointer: string, describe: (workflow: Workfl
 // override is printed escaped, never raw.
 const DEFAULT_TARGET_POINTER = "deploy.defaultTarget";
 
+/** The largest file `precedenceRestatedIn` may name: a prose page, never a dump (4 MiB). */
+export const RESTATEMENT_MAX_BYTES = 4 * 1024 * 1024;
+
+/**
+ * The `precedence` restatement row (zheref/nen#474, Hatsu HR-1): every file
+ * `precedenceRestatedIn` names, read and held to the array. A FAIL-capable
+ * pointer row like `deploy.defaultTarget`'s, because it checks the contract
+ * against second files: drift, a file restating nothing, and a file that
+ * could not be read (absent, outside the root, not UTF-8) are each a required
+ * FAIL naming the file -- an unread file is never a parity pass. THE ROW
+ * APPEARS ONLY WHEN THE KEY IS DECLARED, so the report a repository without it
+ * reads is unchanged row for row.
+ */
+function precedenceRestatementCheck(root: string): SchemaCheck | null {
+  const resolved = resolveSchemaFile(root, CONTRACT_FILE);
+  const row = (ok: boolean, required: boolean, detail: string): SchemaCheck => ({
+    file: `${resolved.relative}#precedenceRestatedIn`,
+    path: resolved.path,
+    ok,
+    detail,
+    required,
+    legacy: false,
+    note: null,
+  });
+  let precedence: readonly string[] | null;
+  let files: readonly string[] | null;
+  try {
+    const contract = loadContract(root);
+    precedence = contract.precedence;
+    files = contract.precedenceRestatedIn;
+  } catch {
+    // Absent or malformed: the contract row already says so, and no
+    // restatement is declared that this row could hold to anything.
+    return null;
+  }
+  if (precedence === null || files === null) return null;
+  const findings: string[] = [];
+  let realRoot: string;
+  try {
+    realRoot = realpathSync(root);
+  } catch {
+    realRoot = root;
+  }
+  for (const file of files) {
+    let text: string;
+    try {
+      const real = realpathSync(join(root, file));
+      // `relative`, never a '/' prefix test: on Windows the separator is '\\'
+      // and a short (8.3) temp path only matches once both sides are real.
+      const inside = relative(realRoot, real);
+      if (inside === "" || inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside)) {
+        findings.push(`${file}: could not read -- it resolves outside the repository`);
+        continue;
+      }
+      // A REGULAR FILE, AND A BOUNDED ONE (zheref/nen#515, Feitan 3): the path
+      // is a pull request author's to choose, and this check may run in CI.
+      const stat = statSync(real);
+      if (!stat.isFile()) {
+        findings.push(`${file}: could not read -- it is not a regular file`);
+        continue;
+      }
+      if (stat.size > RESTATEMENT_MAX_BYTES) {
+        findings.push(`${file}: could not read -- ${stat.size} bytes is over the ${RESTATEMENT_MAX_BYTES}-byte cap for a restating file`);
+        continue;
+      }
+      text = new TextDecoder("utf-8", { fatal: true }).decode(readFileSync(real));
+    } catch (error) {
+      const code = error !== null && typeof error === "object" && "code" in error ? String((error as { code: unknown }).code) : "not UTF-8";
+      findings.push(`${file}: could not read (${code})`);
+      continue;
+    }
+    findings.push(...precedenceRestatementFindings(file, text, precedence));
+  }
+  if (findings.length === 0) return row(true, false, `${files.length} restatement file${files.length === 1 ? " agrees" : "s agree"} with precedence: ${files.join(", ")}`);
+  return row(false, true, new SchemaError(resolved.path, "precedenceRestatedIn", findings.join("; ")).message);
+}
+
+/**
+ * The `canon.lint` row (zheref/nen#481): the rules contract and the baseline
+ * the block names, validated with the very readers `nen canon lint` runs --
+ * the contract as `nen.prose-lint/v0.1` (every rule's class, severity, the
+ * keys its class needs, every pattern compiling) and the baseline's shape
+ * (rows of path, rule, text and count; no unknown key; one row per key; no
+ * row for a rule the contract never baselines). A FAIL-capable pointer row:
+ * a file absent, outside the root, not UTF-8 or invalid is a required FAIL
+ * naming it -- never a pass over a file it could not read. THE ROW APPEARS
+ * ONLY WHEN THE BLOCK IS DECLARED, so every other report is row for row the
+ * same.
+ */
+function canonLintCheck(root: string): SchemaCheck | null {
+  const resolved = resolveSchemaFile(root, WORKFLOW_FILE);
+  const row = (ok: boolean, required: boolean, detail: string): SchemaCheck => ({
+    file: `${resolved.relative}#canon.lint`,
+    path: resolved.path,
+    ok,
+    detail,
+    required,
+    legacy: false,
+    note: null,
+  });
+  let lint: { rules: string; baseline: string | null } | null;
+  try {
+    const loaded = loadWorkflow(root);
+    if (!loaded.present) return null;
+    lint = loaded.workflow.canon?.lint ?? null;
+  } catch {
+    return null; // the policy row says why it did not load
+  }
+  if (lint === null) return null;
+  let realRoot: string;
+  try {
+    realRoot = realpathSync(root);
+  } catch {
+    realRoot = root;
+  }
+  const read = (rel: string): string => {
+    const abs = insideRoot(root, realRoot, rel);
+    let bytes: Buffer;
+    try {
+      bytes = readFileSync(abs);
+    } catch (error) {
+      const code = error !== null && typeof error === "object" && "code" in error ? String((error as { code: unknown }).code) : "unreadable";
+      throw new LintWiringError(`${rel}: could not read (${code})`);
+    }
+    try {
+      return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+      throw new LintWiringError(`${rel} is not valid UTF-8`);
+    }
+  };
+  try {
+    let raw: unknown;
+    const text = read(lint.rules);
+    try {
+      raw = JSON.parse(text) as unknown;
+    } catch {
+      throw new LintWiringError(`${lint.rules} is not valid JSON`);
+    }
+    const contract = parseLintContract(raw, lint.rules);
+    let baselineDetail = "no baseline declared";
+    if (lint.baseline !== null) {
+      const rows = parseBaseline(read(lint.baseline), lint.baseline, contract.emptyBaseline);
+      baselineDetail = `baseline ${lint.baseline}: ${rows.length} row${rows.length === 1 ? "" : "s"}`;
+    }
+    return row(true, false, `rules ${lint.rules} (${PROSE_LINT_SCHEMA}): ${contract.rules.length} rule${contract.rules.length === 1 ? "" : "s"}; ${baselineDetail}`);
+  } catch (error) {
+    if (error instanceof LintWiringError) return row(false, true, new SchemaError(resolved.path, "canon.lint", error.message).message);
+    throw error;
+  }
+}
+
 function defaultTargetCheck(root: string): SchemaCheck {
   const resolved = resolveSchemaFile(root, WORKFLOW_FILE);
   const row = (ok: boolean, required: boolean, detail: string): SchemaCheck => ({
@@ -641,6 +793,8 @@ export function checkTaxonomy(options: CheckOptions = {}): CheckReport {
     // is NOT tolerated is a contract that is present and wrong, which fails
     // exactly like a present-and-wrong gates.json.
     contractCheck(root),
+    // ...and the prose restatements of its `precedence` (zheref/nen#474).
+    ...[precedenceRestatementCheck(root)].filter((check): check is SchemaCheck => check !== null),
     // `nen/workflow.json` LAST, and optional in the third of the three senses
     // this report distinguishes: gates.json's absence WARNS, contract.json's
     // absence is nothing to read, and this file's absence is a full policy made
@@ -666,6 +820,8 @@ export function checkTaxonomy(options: CheckOptions = {}): CheckReport {
     idleCheck(root),
     // The paths `nen wc overlap` counts as touched by every effort (NN#488 AC-2).
     pointerCheck(root, "alwaysOverlaps", describeAlwaysOverlaps),
+    // The canon prose lint's rules contract and baseline (zheref/nen#481), only when declared.
+    ...[canonLintCheck(root)].filter((check): check is SchemaCheck => check !== null),
     // `nen/decisions.json` LAST OF THE nen/ FILES: newest file, optional, and read by the
     // stop verb and by every skill that would otherwise ask.
     decisionsCheck(root),

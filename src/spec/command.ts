@@ -1,7 +1,9 @@
 // src/spec/command.ts -- the `nen spec` family: number, check, cite-check,
-// index. The first slice of the spec verbs Hatsu's capture skill
-// (`dowsing-chain`, ruling HR-12) owes to nen: text-only and read-only, but for
-// `index --write`, which writes one generated file and takes --dry-run.
+// index (the first slice), then inventory, diff, converge, coverage, parity,
+// tasks groups and trace (zheref/nen#493). The verbs Hatsu's capture skill
+// (`dowsing-chain`, ruling HR-12) owes to nen: read-only, but for `index
+// --write`, `converge --write`, `trace --write` (each behind --dry-run) and
+// `inventory --out`.
 //
 // EVERY VERB REPORTS AND NONE DECIDES. `number` computes the next free
 // `{nnn}` and names collisions without picking a winner; `check` lists
@@ -11,18 +13,30 @@
 // over a hand edit. "Could not read" is exit 1 on every one of them, never a
 // clean report.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { emit, parseCallerToken, refuseExtraPositionals, requireRepoFlag, requireSubcommand, requireValue, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import { parseTarget, targetFromRemote, TargetError, type Target } from "../github/target.js";
 import { resolveRepoRoot } from "../repo/root.js";
 import { loadWorkflow } from "../schema/workflow.js";
-import { checkRelativePath, parseLayout } from "./layout.js";
+import { checkRelativePath, matchFolder, parseLayout } from "./layout.js";
 import { checkSpec, CONSTITUTION_PATH, parseVocabulary, renderSpecCheck, SpecContainmentError, SpecReadError } from "./check.js";
 import { citeCheck, parseCheckouts, renderCiteCheck } from "./citecheck.js";
 import { computeNext, readBaseFolders, readPrFolders, renderSpecNumber, SPEC_NUMBER_CONTRACT, type SpecNumberReport } from "./number.js";
 import { renderSpecIndex, specIndex } from "./specindex.js";
+import { loadRepoRegistry, type RepoRegistry } from "../schema/repos.js";
+import { parseContract } from "../schema/contract.js";
+import { couldNotRead, GOVERNED_SCENARIOS, inventory, renderInventory, scenarioReader, type InventoryReport } from "./inventory.js";
+import { diffInventories, InventoryReadError, loadInventory, renderDiff, unreadableDiff, type SpecDiffReport } from "./diff.js";
+import { converge, renderConverge } from "./converge.js";
+import { captureCoverage, deliveryCoverage, readReport, renderCaptureCoverage, renderDeliveryCoverage, unreadableDelivery } from "./coverage.js";
+import { readTree, TreeReadError } from "./tree.js";
+import { parity, readParityFolders, renderParity, unreadableParity, type ParityReport } from "./parity.js";
+import { renderTasks, taskGroups, unreadableTasks, type TasksReport } from "./tasks.js";
+import { renderTrace, specTrace, unreadableTrace } from "./trace.js";
+import { GIT, outputLines } from "../seam/exec.js";
 
-const SUBCOMMANDS = ["number", "check", "cite-check", "index"] as const;
+const SUBCOMMANDS = ["number", "check", "cite-check", "index", "inventory", "diff", "converge", "coverage", "parity", "tasks", "trace"] as const;
 type Subcommand = (typeof SUBCOMMANDS)[number];
 
 export const DEFAULT_SPEC_LAYOUT = "specs/{nnn}-{slug}";
@@ -31,6 +45,14 @@ const USAGE = `nen spec number --repo <spec-checkout> --layout <pattern> [--base
 nen spec check --repo <path> (--folder <dir> | --constitution) [--vocabulary <file>] [--markers [--rank [--max <n>]]] [--json]
 nen spec cite-check --repo <spec> --folder <dir> --checkouts <file> [--at <sha>|HEAD] [--verify-excerpt] [--json]
 nen spec index --repo <spec> [--layout <pattern>] [--write [--dry-run]] [--json]
+nen spec inventory --repo <member> --scenario <id> [--lane <lane>] [--at <ref>] [--exclude <glob>[,<glob>...]] [--out <file>] [--json]
+nen spec diff --from <inventory> --to <inventory> [--json]
+nen spec converge --repo <spec> --folder <dir> --inventory <file> --code <CODE> --checkouts <file> [--date <YYYY-MM-DD>] [--write [--dry-run]] [--json]
+nen spec coverage --repo <spec> --inventory <file>[,<file>...] [--layout <pattern>] [--json]
+nen spec coverage --issue-body <file> --pr-body <file> [--test-report <file>] [--json]
+nen spec parity --repo <spec> (--folder <dir> | --family <name>) [--layout <pattern>] [--target <owner/name>[,<owner/name>...]] [--json]
+nen spec tasks groups --repo <spec> --folder <dir> [--layout <pattern>] [--group <id>] [--json]
+nen spec trace --repo <spec> --family <name> [--layout <pattern>] [--write [--dry-run]] [--json]
 
 Read-only verbs over a Spec Kit spec repository. Each
 reports and refuses; none decides. A layout is '<dir>/<final>' whose final
@@ -73,30 +95,115 @@ index       <root>/INDEX.md from each folder's spec.md header (title, Status,
             file is current. --write regenerates an absent or stale file and
             refuses (exit 1) a hand-edited one; --dry-run writes nothing.
 
+inventory   One row per owned file fact of a member checkout at --at (default
+            HEAD), read through git, never the work tree: the file set is the
+            build system's own (xcode: the project's target build phases and
+            synchronized groups; gradle: settings' include list and each
+            module's source sets; tsconfig: files/include/exclude, extends and
+            references), the suffix -> kind -> rule id table the scenario's
+            stack handbook appendix (${GOVERNED_SCENARIOS.join(", ")}).
+            Rows {id, kind, path, lines, sha, excerptSha256, tier, ruleId}; no
+            excerpts. --lane reads the lane's cwd from nen/contract.json at
+            that commit. --out writes the same JSON document to a file.
+            Exit 1 when partial (a declaration nen could not read) or nothing
+            could be read.
+diff        Added, removed and changed rows by stable id between two
+            inventories of one member; a different sha alone is no change.
+            Exit 0 identical or differing; 1 when an inventory could not be
+            read; 2 when the two name different members.
+converge    A folder's citations of one member (--code) re-read at the
+            inventory's sha in the checkout the checkouts file names: gaps
+            missing · partial · contradicts · unrequested (the last against
+            capture/<CODE>/inventory.json). A ticked task is a claim, never
+            evidence. --write APPENDS ONLY: [STALE @ <sha>] beside a moved,
+            changed or vanished citation, and one '## Phase N: Convergence
+            <date>' to tasks.md (first line 'Inventory: <CODE> @ <sha12>'),
+            each row tagged [US<k>] [platform:<p>] and ending '· supersedes
+            T<nnn>' when its class changed; a second run changes nothing.
+            Exit 1 on any gap or when the inputs could not be read.
+coverage    Capture form: per member and row kind, covered/total (a row is
+            covered when one of the member's citations overlaps it), plus
+            requirement<->task/test traceability both ways, each with its
+            denominator. Delivery form: every F<nnn>-SC-### of the issue body
+            has one '## Spec' row in the PR body -- '— satisfied — test <id>'
+            (in --test-report and passing, when given) or '— deferred —
+            <reason> · <follow-up>'. Exit 1 on an unaccounted criterion, a
+            missing or empty section, or an unreadable input; 2 when the PR
+            names an id the issue does not carry.
+parity      One row per FR and member from each folder's parity.md (a
+            table: FR column, one product-code column per member), each cell's
+            state held to what SP-6 says it carries -- present/mirror a
+            citation, map one and UX-13, drop-with-note a CL-nnn or PT ruling,
+            target-only a citation and a CL-nnn, differs both citations,
+            absent the files searched -- an FR or member with no cell open.
+            --family reads the members from nen/repos.json families[]; --target
+            reads each row's issues and PRs (bodies naming F<nnn>-FR-###) with
+            gh. Exit 1 unless every row is a handling.
+tasks groups
+            tasks.md's tasks grouped by story ([US<k>] or the phase heading)
+            and platform ([platform:<p>] or '### Platform: <p>'), each group's
+            state (open, clarifying, captured, delivered), its dependencies
+            (earlier phase groups; 'depends on T<nnn>') and topological order,
+            and for a story group the dispatch title and issue body: the
+            pinned 'Spec: <folder>@<sha>', one '- AC-<n>: …' row per scenario,
+            the scenarios and SCs in a source-data fence. Read at HEAD (SP-8).
+            Id-less lines ([ ], [x] captured — <cite>, [x] delivered —
+            <PR>) are read too. --group prints one body. Exit 1 on no task,
+            a cycle, an unknown dependency or an unread file or pin.
+trace       <root>/traceability.md for one family: one row per FR and SC, one
+            column per member (parity state, else citation count), the tasks
+            and open markers. Without --write: exit 0 only when current;
+            --write regenerates an absent or stale file and refuses a hand
+            edit; --dry-run writes nothing.
+
 --json shapes (key order as listed):
   number:     { contract: "nen.spec.number/v0.1", repo, target, layout, base, baseSource, baseSha, openPrs, taken, collisions, next, reason }
   check:      { contract: "nen.spec.check/v0.1", repo, mode, path, files, vocabulary, requirements, markers, open, ranked, tasks, findings, counts }
   cite-check: { contract: "nen.spec.cite-check/v0.1", repo, folder, checkouts, at, verifyExcerpt, members, citations, counts }
-  index:      { contract: "nen.spec.index/v0.1", repo, layout, path, rows, ignored, state, action, reason }`;
+  index:      { contract: "nen.spec.index/v0.1", repo, layout, path, rows, ignored, state, action, reason }
+  inventory:  { contract: "nen.spec.inventory/v0.1", verdict, repo, origin, lane, cwd, scenario, handbook, sha, membership, excluded, rows, totals, unread, reason }
+  diff:       { contract: "nen.spec.diff/v0.1", verdict, from, to, origin, added, removed, changed, counts, reason }
+  converge:   { contract: "nen.spec.converge/v0.1", verdict, repo, folder, inventory, member, citations, gaps, unrequested, unrequestedReason, claims, writes, action, counts, reason }
+  coverage:   { contract: "nen.spec.coverage/v0.1", form: "capture", verdict, repo, layout, folders, members, markers, reason }
+              { contract: "nen.spec.coverage/v0.1", form: "delivery", verdict, issueBody, prBody, testReport, section, criteria, outside, counts, reason }
+  parity:     { contract: "nen.spec.parity/v0.1", verdict, repo, scope, members, folders, rows, counts, live, reason }
+  tasks:      { contract: "nen.spec.tasks/v0.1", verdict, repo, folder, spec, groups, order, reason }
+  trace:      { contract: "nen.spec.trace/v0.1", verdict, repo, family, members, path, rows, action, reason }`;
 
 const OWNED: Readonly<Record<string, readonly Subcommand[]>> = {
-  layout: ["number", "index"],
+  layout: ["number", "index", "coverage", "parity", "trace", "tasks"],
   base: ["number"],
-  target: ["number"],
-  folder: ["check", "cite-check"],
+  target: ["number", "parity"],
+  folder: ["check", "cite-check", "converge", "parity", "tasks"],
+  family: ["parity", "trace"],
+  group: ["tasks"],
   vocabulary: ["check"],
   max: ["check"],
-  checkouts: ["cite-check"],
-  at: ["cite-check"],
+  checkouts: ["cite-check", "converge"],
+  at: ["cite-check", "inventory"],
+  scenario: ["inventory"],
+  lane: ["inventory"],
+  exclude: ["inventory"],
+  out: ["inventory"],
+  from: ["diff"],
+  to: ["diff"],
+  inventory: ["converge", "coverage"],
+  code: ["converge"],
+  date: ["converge"],
+  "issue-body": ["coverage"],
+  "pr-body": ["coverage"],
+  "test-report": ["coverage"],
 };
 const OWNED_BOOLEANS: Readonly<Record<string, readonly Subcommand[]>> = {
   constitution: ["check"],
   markers: ["check"],
   rank: ["check"],
   "verify-excerpt": ["cite-check"],
-  write: ["index"],
-  "dry-run": ["index"],
+  write: ["index", "converge", "trace"],
+  "dry-run": ["index", "converge", "trace"],
 };
+/** The verbs that read no spec or member checkout, and so take no --repo. */
+const REPOLESS: readonly Subcommand[] = ["diff"];
 
 function refuseForeignFlags(context: CommandContext, subcommand: Subcommand): void {
   const refuse = (flag: string, owners: readonly Subcommand[]): never => {
@@ -152,6 +259,11 @@ function runCheck(context: CommandContext, repo: string): number {
   if (rank && !markers) throw new VerbUsageError("--rank orders the open markers, so it needs --markers.");
   if (maxRaw !== undefined && !rank) throw new VerbUsageError("--max caps the ranked list, so it needs --rank.");
   if (maxRaw !== undefined && !/^[1-9][0-9]{0,5}$/.test(maxRaw)) throw new VerbUsageError(`--max '${maxRaw}' is not a positive whole number.`);
+  // The spec repository's own `spec` keys (zheref/nen#493's domain): a stated
+  // clarify.maxQuestions caps an uncapped --rank, a stated maxBytes is a ceiling.
+  const workflow = loadWorkflow(repo);
+  const specPolicy = workflow.present ? workflow.workflow.spec : undefined;
+  const rankCap = maxRaw !== undefined ? Number(maxRaw) : rank && specPolicy?.stated.includes("clarify.maxQuestions") === true ? specPolicy.clarify.maxQuestions : null;
   const vocabularyPath = context.args.values["vocabulary"];
   const vocabulary = vocabularyPath === undefined ? null : { path: vocabularyPath, terms: parseVocabulary(readCallerFile("vocabulary", vocabularyPath)) };
   try {
@@ -162,7 +274,8 @@ function runCheck(context: CommandContext, repo: string): number {
       vocabulary,
       markers,
       rank,
-      max: maxRaw === undefined ? null : Number(maxRaw),
+      max: rankCap,
+      maxBytes: specPolicy?.maxBytes ?? null,
     });
     emit(context.io, context.json, report, renderSpecCheck(report));
     return report.counts.CRITICAL > 0 ? 1 : 0;
@@ -203,20 +316,279 @@ function runIndex(context: CommandContext, repo: string): number {
   return report.state === "current" ? 0 : 1;
 }
 
+const LANE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+function runInventory(context: CommandContext, repo: string): number {
+  const scenario = requireValue(context.args, "scenario", `It names the member's governed scenario: ${GOVERNED_SCENARIOS.join(", ")}.`);
+  const reader = scenarioReader(scenario);
+  if (reader === null) throw new VerbUsageError(`--scenario '${scenario}' has no capture reader; the governed scenarios are ${GOVERNED_SCENARIOS.join(", ")} (each stack handbook's capture-reader appendix).`);
+  const lane = context.args.values["lane"] ?? null;
+  if (lane !== null && !LANE_NAME.test(lane)) throw new VerbUsageError(`--lane '${lane}' is not a lane name.`);
+  const at = context.args.values["at"] ?? "HEAD";
+  if (at !== "HEAD" && !/^[0-9a-f]{7,40}$/.test(at)) throw new VerbUsageError(`--at '${at}' is neither HEAD nor a 7-40 character hex sha.`);
+  const exclude = (context.args.values["exclude"] ?? "").split(",").map((entry): string => entry.trim()).filter((entry): boolean => entry !== "");
+  for (const pattern of exclude) checkRelativePath("exclude", pattern.replace(/\*/g, "x"));
+  const out = context.args.values["out"] ?? null;
+  let origin: string | null = null;
+  try {
+    origin = targetFromRemote(context.seams, repo).slug;
+  } catch {
+    origin = null;
+  }
+  const finish = (report: InventoryReport): number => {
+    if (out !== null && report.verdict !== "could-not-read") writeFileSync(resolve(out), `${JSON.stringify(report, null, 2)}\n`);
+    emit(context.io, context.json, report, [...renderInventory(report), ...(out !== null && report.verdict !== "could-not-read" ? [`  wrote ${out}`] : [])]);
+    return report.verdict === "read" ? 0 : 1;
+  };
+  const input = { repo, origin, lane, cwd: "", scenario, exclude };
+  let tree;
+  try {
+    tree = readTree(context.seams, repo, at);
+  } catch (error) {
+    if (error instanceof TreeReadError) return finish(couldNotRead(input, reader, error.message));
+    throw error;
+  }
+  let cwd = "";
+  if (lane !== null) {
+    const text = tree.read("nen/contract.json");
+    if (text === null) return finish(couldNotRead(input, reader, `--lane ${lane}: nen/contract.json is not in the tree at ${tree.sha.slice(0, 12)}`));
+    try {
+      const contract = parseContract("nen/contract.json", "nen", JSON.parse(text) as unknown);
+      const declared = contract.project?.lanes[lane];
+      if (declared === undefined) return finish(couldNotRead(input, reader, `--lane ${lane} is not a lane of nen/contract.json's project block at ${tree.sha.slice(0, 12)} (declared: ${Object.keys(contract.project?.lanes ?? {}).join(", ") || "none"})`));
+      cwd = declared.cwd === "." ? "" : declared.cwd.replace(/^\.\//, "").replace(/\/+$/, "");
+    } catch (error) {
+      return finish(couldNotRead(input, reader, `nen/contract.json at ${tree.sha.slice(0, 12)} could not be read: ${(error as Error).message}`));
+    }
+  }
+  return finish(inventory(tree, { ...input, cwd }, reader));
+}
+
+function runDiff(context: CommandContext): number {
+  const from = requireValue(context.args, "from", "It names the earlier inventory file.");
+  const to = requireValue(context.args, "to", "It names the later inventory file.");
+  let report: SpecDiffReport;
+  try {
+    const before = loadInventory(from);
+    const after = loadInventory(to);
+    if (before.origin !== null && after.origin !== null && before.origin !== after.origin) throw new VerbUsageError(`--from is an inventory of ${before.origin} and --to of ${after.origin}; a diff compares two inventories of one member.`);
+    report = diffInventories(before, after);
+  } catch (error) {
+    if (!(error instanceof InventoryReadError)) throw error;
+    report = unreadableDiff(from, to, error.message);
+  }
+  emit(context.io, context.json, report, renderDiff(report));
+  return report.verdict === "could-not-read" ? 1 : 0;
+}
+
+const DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+function runConverge(context: CommandContext, repo: string): number {
+  const folder = checkRelativePath("folder", requireValue(context.args, "folder", "It names the merged spec folder to converge."));
+  const inventoryFile = requireValue(context.args, "inventory", "It names the newer inventory of one member (nen spec inventory --out).");
+  const code = requireValue(context.args, "code", "It names the member's product code, as the folder's citations spell it.");
+  if (!/^[A-Z][A-Z0-9]{1,7}$/.test(code)) throw new VerbUsageError(`--code '${code}' is not a product code ([A-Z][A-Z0-9]{1,7}).`);
+  const checkoutsFile = requireValue(context.args, "checkouts", "It maps the member's owner/name to its checkout, one tab-separated line each.");
+  const write = context.args.booleans.has("write");
+  const dryRun = context.args.booleans.has("dry-run");
+  if (dryRun && !write) throw new VerbUsageError("--dry-run qualifies --write; without --write nothing is written anyway.");
+  const date = context.args.values["date"] ?? context.seams.now().toISOString().slice(0, 10);
+  if (!DATE.test(date)) throw new VerbUsageError(`--date '${date}' is not YYYY-MM-DD.`);
+  const checkouts = parseCheckouts(readCallerFile("checkouts", checkoutsFile), checkoutsFile);
+  let report;
+  try {
+    report = converge(context.seams, { repo, folder, inventoryFile, code, checkoutsFile, checkouts, date, write, dryRun });
+  } catch (error) {
+    if (error instanceof SpecContainmentError) throw new VerbUsageError(error.message);
+    throw error;
+  }
+  emit(context.io, context.json, report, renderConverge(report));
+  return report.verdict === "converged" ? 0 : 1;
+}
+
+function runCoverage(context: CommandContext): number {
+  const issueBody = context.args.values["issue-body"];
+  const prBody = context.args.values["pr-body"];
+  const testReport = context.args.values["test-report"] ?? null;
+  const inventories = context.args.values["inventory"];
+  const delivery = issueBody !== undefined || prBody !== undefined || testReport !== null;
+  if (delivery) {
+    if (inventories !== undefined || context.args.values["layout"] !== undefined || context.repoFlag !== null) throw new VerbUsageError("give the capture form (--repo, --inventory, --layout) or the delivery form (--issue-body, --pr-body, --test-report), never both.");
+    if (issueBody === undefined || prBody === undefined) throw new VerbUsageError("the delivery form needs both --issue-body <file> and --pr-body <file>.");
+    const names = { issueBodyFile: issueBody, prBodyFile: prBody, testReportFile: testReport };
+    const read = (path: string): string | null => {
+      try {
+        return readFileSync(path, "utf8");
+      } catch {
+        return null;
+      }
+    };
+    const issueText = read(issueBody);
+    const prText = read(prBody);
+    let report;
+    if (issueText === null || prText === null) report = unreadableDelivery(names, `${issueText === null ? issueBody : prBody} could not be read`);
+    else {
+      const parsed = testReport === null ? { report: null, reason: null } : readReport(resolve(testReport), testReport);
+      report = parsed.reason !== null ? unreadableDelivery(names, parsed.reason) : deliveryCoverage({ ...names, issueBody: issueText, prBody: prText, testReport: parsed.report });
+    }
+    emit(context.io, context.json, report, renderDeliveryCoverage(report));
+    if (report.outside.length > 0) return 2;
+    return report.verdict === "accounted" ? 0 : 1;
+  }
+  const repo = resolveRepoRoot({ repoFlag: requireRepoFlag(context, "It names the spec repository's checkout (or give the delivery form's --issue-body and --pr-body).") });
+  const list = requireValue(context.args, "inventory", "It names one inventory file per member, comma-separated.").split(",").map((entry): string => entry.trim()).filter((entry): boolean => entry !== "");
+  if (list.length === 0) throw new VerbUsageError("--inventory names no file.");
+  const layout = parseLayout(context.args.values["layout"] ?? DEFAULT_SPEC_LAYOUT);
+  let registry: RepoRegistry | null = null;
+  let registryError: string | null = null;
+  try {
+    registry = loadRepoRegistry(repo);
+  } catch (error) {
+    registryError = `the spec repository's nen/repos.json could not be read: ${(error as Error).message}`;
+  }
+  let report;
+  try {
+    report = captureCoverage(repo, layout, registry, registryError, list);
+  } catch (error) {
+    if (error instanceof SpecContainmentError) throw new VerbUsageError(error.message);
+    throw error;
+  }
+  emit(context.io, context.json, report, renderCaptureCoverage(report));
+  return report.verdict === "measured" ? 0 : 1;
+}
+
+const FAMILY_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/** The family's member codes from the spec repository's own registry; a usage refusal when it declares no such family. */
+function familyMembers(repo: string, family: string): string[] {
+  if (!FAMILY_NAME.test(family)) throw new VerbUsageError(`--family '${family}' is not a slug.`);
+  let registry: RepoRegistry;
+  try {
+    registry = loadRepoRegistry(repo);
+  } catch (error) {
+    throw new Error(`the spec repository's nen/repos.json could not be read: ${(error as Error).message}`);
+  }
+  const found = (registry.families ?? []).find((entry): boolean => entry.name === family);
+  if (found === undefined) throw new VerbUsageError(`--family '${family}' is not declared in nen/repos.json families[] (declared: ${(registry.families ?? []).map((entry): string => entry.name).join(", ") || "none"}).`);
+  return found.members.map((member): string => member.code);
+}
+
+function runParity(context: CommandContext, repo: string): number {
+  const folderRaw = context.args.values["folder"];
+  const family = context.args.values["family"] ?? null;
+  if ((folderRaw === undefined) === (family === null)) throw new VerbUsageError("give exactly one of --folder <dir> or --family <name>.");
+  const folder = folderRaw === undefined ? null : checkRelativePath("folder", folderRaw);
+  const targets = (context.args.values["target"] ?? "").split(",").map((entry): string => entry.trim()).filter((entry): boolean => entry !== "");
+  for (const target of targets) parseCallerToken((): Target => parseTarget(target), (error): boolean => error instanceof TargetError);
+  const layout = parseLayout(context.args.values["layout"] ?? DEFAULT_SPEC_LAYOUT);
+  const input = { repo, folder, family, familyMembers: null as readonly string[] | null, targets };
+  let report: ParityReport;
+  try {
+    const members = family === null ? null : familyMembers(repo, family);
+    const folders = readParityFolders(repo, layout, folder);
+    report = parity(context.seams, { ...input, familyMembers: members }, folders);
+  } catch (error) {
+    if (error instanceof VerbUsageError) throw error;
+    if (error instanceof SpecContainmentError) throw new VerbUsageError(error.message);
+    report = unreadableParity(input, (error as Error).message);
+  }
+  emit(context.io, context.json, report, renderParity(report));
+  return report.verdict === "handled" ? 0 : 1;
+}
+
+function runTasks(context: CommandContext, repo: string): number {
+  const action = context.args.positionals[2];
+  if (action !== "groups") throw new VerbUsageError(`'spec tasks' needs its action: 'spec tasks groups'${action === undefined ? "" : ` (got '${action}')`}.`);
+  refuseExtraPositionals(context.args, 3);
+  const folder = checkRelativePath("folder", requireValue(context.args, "folder", "It names the folder whose tasks.md is grouped."));
+  const only = context.args.values["group"] ?? null;
+  const layout = parseLayout(context.args.values["layout"] ?? DEFAULT_SPEC_LAYOUT);
+  // The folder number is the layout's, as parity and trace read it (Nobunaga F17).
+  const parent = folder.includes("/") ? folder.slice(0, folder.lastIndexOf("/")) : "";
+  const name = matchFolder(layout, folder.slice(folder.lastIndexOf("/") + 1));
+  const nnn = parent === layout.root ? (name?.nnn ?? null) : null;
+  // SP-8: the body pins a commit, so both files are read AT that commit, never from the work tree.
+  const rev = context.seams.run(GIT, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], { cwd: repo });
+  const sha = rev.code === 0 ? (outputLines(rev.stdout)[0] ?? null) : null;
+  // plan.md's sections are keyed by member; the family's registry turns the group's platform into one.
+  let members: readonly { code: string; platform: string | null }[] = [];
+  try {
+    members = (loadRepoRegistry(repo).families ?? []).flatMap((family) => family.members);
+  } catch {
+    members = [];
+  }
+  const memberFor = (platform: string): string | null => {
+    const codes = [...new Set(members.filter((member): boolean => member.platform === platform).map((member): string => member.code))];
+    return codes.length === 1 ? (codes[0] as string) : null;
+  };
+  const input = { repo, folder, nnn: nnn ?? "000", sha, memberFor };
+  const read = (file: string): string | null => {
+    if (sha === null) return null;
+    const blob = context.seams.run(GIT, ["cat-file", "blob", `${sha}:./${folder}/${file}`], { cwd: repo });
+    return blob.code === 0 ? blob.stdout : null;
+  };
+  let report: TasksReport;
+  const specText = read("spec.md");
+  const tasksText = read("tasks.md");
+  if (nnn === null) report = unreadableTasks(input, `${folder} is not a folder matching ${layout.pattern}, so it carries no {nnn} to qualify its ids with`);
+  else if (sha === null) report = unreadableTasks(input, `${repo} has no HEAD commit to pin the body to (SP-8); nen renders no body at an unread pin`);
+  else if (specText === null || tasksText === null) report = unreadableTasks(input, `${folder}/${specText === null ? "spec.md" : "tasks.md"} is not in the commit ${sha.slice(0, 12)} (uncommitted text is never rendered into a pinned body)`);
+  else report = taskGroups(input, specText, tasksText);
+  // An unread folder is reported as such even when --group filters: "no such group" would hide it (Bugbot on #517).
+  if (only !== null && report.verdict !== "could-not-read") {
+    const group = report.groups.find((entry): boolean => entry.id === only);
+    if (group === undefined) throw new VerbUsageError(`--group '${only}' is not a group of ${folder} (groups: ${report.groups.map((entry): string => entry.id).join(", ") || "none"}).`);
+    if (group.body === null) throw new VerbUsageError(`--group '${only}' renders no issue body: ${group.note ?? "it is a phase group; only a story group renders as an issue body"}.`);
+    if (context.json) emit(context.io, true, { contract: report.contract, verdict: report.verdict, group }, []);
+    else for (const line of group.body.replace(/\n$/, "").split("\n")) context.io.out(line);
+    return report.verdict === "grouped" ? 0 : 1;
+  }
+  emit(context.io, context.json, report, renderTasks(report));
+  return report.verdict === "grouped" ? 0 : 1;
+}
+
+function runTrace(context: CommandContext, repo: string): number {
+  const family = requireValue(context.args, "family", "It names the family whose traceability.md is regenerated.");
+  const write = context.args.booleans.has("write");
+  const dryRun = context.args.booleans.has("dry-run");
+  if (dryRun && !write) throw new VerbUsageError("--dry-run qualifies --write; without --write nothing is written anyway.");
+  const layout = parseLayout(context.args.values["layout"] ?? DEFAULT_SPEC_LAYOUT);
+  let report;
+  try {
+    // An unreadable registry is could-not-read with a report, as parity reads it (Nobunaga F2); an
+    // undeclared family stays a usage refusal.
+    const members = familyMembers(repo, family);
+    report = specTrace(repo, layout, family, members, { write, dryRun });
+  } catch (error) {
+    if (error instanceof VerbUsageError) throw error;
+    if (error instanceof SpecContainmentError) throw new VerbUsageError(error.message);
+    report = unreadableTrace(repo, layout, family, (error as Error).message, write);
+  }
+  emit(context.io, context.json, report, renderTrace(report));
+  if (report.verdict === "could-not-read") return 1;
+  if (write) return report.action === "refused" ? 1 : 0;
+  return report.verdict === "current" ? 0 : 1;
+}
+
 export const specCommand: Command = {
   name: "spec",
-  summary: "Number, check, cite-check and index a Spec Kit spec repository's folders (read-only).",
+  summary: "Inventory, number, check, cite-check, diff, converge, cover, hold to parity, group, trace and index a product family's Spec Kit spec repository.",
   usage: USAGE,
   subcommands: [...SUBCOMMANDS],
   flags: {
-    values: ["layout", "base", "target", "folder", "vocabulary", "max", "checkouts", "at"],
+    values: ["layout", "base", "target", "folder", "vocabulary", "max", "checkouts", "at", "scenario", "lane", "exclude", "out", "from", "to", "inventory", "code", "date", "issue-body", "pr-body", "test-report", "family", "group"],
     booleans: ["constitution", "markers", "rank", "verify-excerpt", "write", "dry-run"],
   },
   run(context): number {
     const subcommand = requireSubcommand("spec", context.args, SUBCOMMANDS) as Subcommand;
-    refuseExtraPositionals(context.args, 2);
+    if (subcommand !== "tasks") refuseExtraPositionals(context.args, 2);
     refuseForeignFlags(context, subcommand);
-    const repo = resolveRepoRoot({ repoFlag: requireRepoFlag(context, "It names the spec repository's checkout.") });
+    if (REPOLESS.includes(subcommand)) {
+      if (context.repoFlag !== null) throw new VerbUsageError(`'spec ${subcommand}' reads no checkout, so it takes no --repo.`);
+      return runDiff(context);
+    }
+    if (subcommand === "coverage") return runCoverage(context);
+    const repo = resolveRepoRoot({ repoFlag: requireRepoFlag(context, subcommand === "inventory" ? "It names the member's checkout." : "It names the spec repository's checkout.") });
     switch (subcommand) {
       case "number":
         return runNumber(context, repo);
@@ -226,6 +598,17 @@ export const specCommand: Command = {
         return runCiteCheck(context, repo);
       case "index":
         return runIndex(context, repo);
+      case "inventory":
+        return runInventory(context, repo);
+      case "converge":
+        return runConverge(context, repo);
+      case "parity":
+        return runParity(context, repo);
+      case "tasks":
+        return runTasks(context, repo);
+      case "trace":
+        return runTrace(context, repo);
     }
+    throw new VerbUsageError(`'spec ${subcommand}' is not dispatched here.`);
   },
 };

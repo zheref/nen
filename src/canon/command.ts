@@ -40,6 +40,7 @@ import { shellSingleQuote } from "../shu/render.js";
 import { parseTarget, TargetError, type Target } from "../github/target.js";
 import { resolveScenario } from "../repo/scenario.js";
 import { canonLint, LintWiringError, renderLint } from "./lint.js";
+import { loadWorkflow, type CanonLintPolicy } from "../schema/workflow.js";
 import { clauseCheck, ClauseWiringError, renderClauseCheck } from "./clause.js";
 import { canonSurfaceNames, canonSurfaces, type SurfaceRow } from "../surface/rules.js";
 import type { ToolCheckout } from "../schema/repos.js";
@@ -65,7 +66,7 @@ import {
 } from "./mirror.js";
 
 /** The flags only the prose verbs read; every other canon verb refuses them by name. */
-export const PROSE_FLAGS = ["root", "rules", "baseline", "base", "file", "prefix", "leaves", "body-from"] as const;
+export const PROSE_FLAGS = ["root", "rules", "baseline", "base", "base-baseline", "skill-paths", "file", "prefix", "leaves", "body-from"] as const;
 
 export const GENERATE_CONTRACT = "nen.canon.mirror.generate/v0.1";
 export const CHECK_CONTRACT = "nen.canon.mirror.check/v0.1";
@@ -92,7 +93,8 @@ const USAGE = `nen canon -- resolve a repo's handbook set, read its canon pin, r
             canon mirror on every surface it uses, or lint its canon prose and clause ids.
 
 usage:
-  nen canon lint --root <checkout> --rules <contract> [--baseline <file>] [--base <ref>] [--json]
+  nen canon lint --root <checkout> [--rules <contract>] [--baseline <file>]
+                 [--base <ref> | --base-baseline <file>] [--skill-paths <globs>] [--json]
       A canon repository's Markdown held to the caller's rules contract
       (nen.prose-lint/v0.1; nothing built in): each rule's class picks the
       check -- by-hand, stale-residue, stale-version, citation, bare-ref,
@@ -101,15 +103,31 @@ usage:
       and quoted words are exempt. 'fail' findings count against the
       shrink-only --baseline (keyed path + rule + normalised text); a row no
       finding uses is stale, and under --base a row the base lacked is grown;
-      'advisory' findings print and never count. --base <ref> lints only the
-      files changed since git merge-base <ref> HEAD. --repo names the same
-      directory as --root.
+      'advisory' findings never count, and print one line each under --base
+      only (the change's own files; a whole-tree run, --base-baseline's
+      included, carries them in --json advisory[]). --base <ref> lints only the
+      files changed since git merge-base <ref> HEAD, and says so when <ref>
+      carries no baseline (growth then unchecked); --base-baseline <file>
+      lints the whole tree and refuses growth over <file>, the trusted base
+      revision's copy, with no git read (the CI form). Without --rules, the
+      rules, baseline and skill paths come from nen/workflow.json canon.lint
+      (neither flag nor block: usage error). WITH --rules nothing is read from
+      nen/workflow.json -- in CI the tree is the head -- so --baseline and
+      --skill-paths <globs> (comma-separated; the paths the marker limit and
+      the reading rule apply to when the contract declares no skillPaths;
+      absent, every linted path) are flags. A relative --rules resolves
+      against --root; one whose real location is outside the root is the
+      caller's own file, read as named (the sibling-checkout CI form). One
+      that reaches into the root under any spelling, and canon.lint.rules
+      always, is held there: a symlink leaving the root is wiring. --repo
+      names the same directory as --root.
       Exit 0 nothing new, stale or grown; 1 at least one, each printed
       'path:line · <rule> · text'; 2 wiring (an unreadable or invalid
       contract, baseline or file, a symlink leaving the root, a failed git
       read) or a usage error -- never green over a file it could not read.
       --json: { contract: "nen.canon.lint/v0.1", root, rules, baseline, base,
-      files, exit, counts, findings, advisory, staleBaseline, grownBaseline }.
+      files, exit, counts, findings, advisory, staleBaseline, grownBaseline,
+      notice }.
 
   nen canon clause check --file <md> --prefix <P> [--base <md> | --base <ref>:<path>]
                          [--leaves <paths>] [--body-from <file>] [--repo <path>] [--json]
@@ -1389,18 +1407,47 @@ function lintRoot(context: CommandContext): string {
   return chosen;
 }
 
+/**
+ * The declared `canon.lint` block of the root's nen/workflow.json (zheref/nen#481),
+ * or null when the file or the block is absent. A policy file that is present and
+ * does not load is wiring: its skillPaths could move the verdict, so an unread
+ * policy is never read as "nothing declared".
+ */
+function declaredLint(root: string): CanonLintPolicy | null {
+  let loaded;
+  try {
+    loaded = loadWorkflow(resolve(root));
+  } catch (error) {
+    throw new LintWiringError(`nen/workflow.json did not load (${error instanceof Error ? error.message : String(error)}); its canon.lint block could not be read`);
+  }
+  return loaded.present ? (loaded.workflow.canon?.lint ?? null) : null;
+}
+
 function lintVerb(context: CommandContext): number {
   refuseExtraPositionals(context.args, 2);
   refuseForeignFlags(context, "lint", [...PIN_AND_MIRROR_FLAGS, "file", "prefix", "leaves", "body-from"]);
   const root = lintRoot(context);
-  const rules = nonEmpty(context, "rules");
-  if (rules === null) throw new VerbUsageError("--rules <contract> is required: the rules are the caller's data, never built in (e.g. contracts/prose.lint.json).");
-  const baseline = nonEmpty(context, "baseline");
+  const rulesFlag = nonEmpty(context, "rules");
+  const baselineFlag = nonEmpty(context, "baseline");
   const base = nonEmpty(context, "base");
   if (base !== null && base.startsWith("-")) throw new VerbUsageError(`--base '${base}' starts with '-'; nen will not put it on a git command line.`);
+  const baseBaseline = nonEmpty(context, "base-baseline");
+  if (base !== null && baseBaseline !== null) throw new VerbUsageError("--base and --base-baseline both name the base revision's baseline; give one (--base <ref> in a checkout, --base-baseline <file> in CI).");
+  const skillFlag = nonEmpty(context, "skill-paths");
+  const skillPaths = skillFlag === null ? null : commaList(skillFlag);
+  if (skillPaths !== null && skillPaths.length === 0) throw new VerbUsageError("--skill-paths names no glob; give a comma-separated list, or omit it.");
   try {
-    const { report, rules: ruleList } = canonLint({ root, rules, baseline, base }, context.seams);
-    emit(context.io, context.json, report, renderLint(report, ruleList));
+    // AN EXPLICIT --rules READS NO POLICY FROM THE TREE (Feitan F1 on
+    // zheref/nen#526, SEC-7): in CI the tree is the pull request's head, and
+    // its canon.lint.skillPaths could narrow a trusted contract. With --rules,
+    // --baseline and --skill-paths come from flags only; nen/workflow.json is
+    // read only when --rules is absent.
+    const declared = rulesFlag === null && existsSync(root) ? declaredLint(root) : null;
+    const rules = rulesFlag ?? declared?.rules ?? null;
+    if (rules === null) throw new VerbUsageError("--rules <contract> is required, or declare nen/workflow.json canon.lint.rules: the rules are the caller's data, never built in (e.g. contracts/prose.lint.json).");
+    const baseline = baselineFlag ?? declared?.baseline ?? null;
+    const { report, rules: ruleList } = canonLint({ root, rules, baseline, base, baseBaseline, skillPaths: skillPaths ?? declared?.skillPaths ?? null, rulesCallerNamed: rulesFlag !== null }, context.seams);
+    emit(context.io, context.json, report, renderLint(report, ruleList, baseBaseline ?? base));
     return report.exit;
   } catch (error) {
     if (error instanceof LintWiringError) {
@@ -1415,7 +1462,7 @@ function clauseVerb(context: CommandContext): number {
   const sub = context.args.positionals[2];
   if (sub !== "check") throw new VerbUsageError(`'canon clause' needs the subcommand 'check'${sub === undefined ? "" : `, got '${sub}'`}.`);
   refuseExtraPositionals(context.args, 3);
-  refuseForeignFlags(context, "clause check", [...PIN_AND_MIRROR_FLAGS, "root", "rules", "baseline"]);
+  refuseForeignFlags(context, "clause check", [...PIN_AND_MIRROR_FLAGS, "root", "rules", "baseline", "base-baseline", "skill-paths"]);
   const repo = assertRepoRoot({ repoFlag: context.repoFlag });
   const file = nonEmpty(context, "file");
   if (file === null) throw new VerbUsageError("--file <md> is required: the document that defines the clause ids (e.g. docs/ROSTER.md).");

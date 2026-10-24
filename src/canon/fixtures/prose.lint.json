@@ -1,7 +1,7 @@
 {
   "$schema": "nen.prose-lint/v0.1",
   "contract": "example.prose-lint/v1",
-  "$comment": "TEST FIXTURE for src/canon/lint.test.ts -- a copy of the rules a consumer's prose-lint contract carries, under a neutral contract id so it never claims to be any consumer's single home of its rules. The consumer's own contract is its data; `nen canon lint` presupposes the consumer has landed one (Hatsu's lands with its SDD piece P5). Not shipped.",
+  "$comment": "TEST FIXTURE for src/canon/lint.test.ts -- a copy of the rules a consumer's prose-lint contract carries, under a neutral contract id so it never claims to be any consumer's single home of its rules. The consumer's own contract is its data; `nen canon lint` presupposes the consumer has landed one (Hatsu's lands with its SDD piece P5). Synced with Hatsu's committed contract at its main 1243b272 (zheref/nen#481). Not shipped.",
   "authority": "HR-13 (ratchet, PL-03 and PL-04 empty from day one; code fences and quoted maintainer words exempt) and HR-4 (the one marker shape) in docs/ROSTER.md. Where this file and a page describing it disagree, this file is right.",
   "paths": {
     "include": [
@@ -26,8 +26,19 @@
       "docs/ROSTER.md",
       "CHANGELOG*"
     ],
-    "rules": ["PL-03"],
-    "$records": "Dated evidence and history records: a version literal there is what was true when it was written. docs/ROSTER.md is one because a ruling's words are never changed after it lands (HR-2). RETIRED blocks are exempt from the same rules wherever they sit."
+    "rules": [
+      "PL-03"
+    ],
+    "$records": "Dated evidence and history records: a version literal there is what was true when it was written. docs/ROSTER.md is one because a ruling's words are never changed after it lands (HR-2). RETIRED blocks are exempt from retired.rules wherever they sit."
+  },
+  "retired": {
+    "rules": [
+      "PL-02",
+      "PL-03",
+      "PL-05",
+      "PL-10"
+    ],
+    "$retired": "The rules a RETIRED block (a `> **RETIRED…` quote, a `**RETIRED` paragraph or list item) is exempt from, wherever it sits: what it retired was true when it was written. A `para` block ends at a blank line, a heading or a list item at the same or a shallower indent."
   },
   "versionSource": {
     "file": "nen/contract.json",
@@ -35,11 +46,22 @@
     "pinned": "/dependency/pinned_ref"
   },
   "decisionsFile": "nen/decisions.json",
-  "markerRows": ["missing-maintainer-choice", "missing-argument", "missing-configuration", "ambiguous-intent"],
+  "markerRows": [
+    "missing-maintainer-choice",
+    "missing-argument",
+    "missing-configuration"
+  ],
+  "$markerRows": "HR-4: a marker names an ask-once-per-run row of decisionsFile, and only these; the guard refuses a contract that lists a row of any other class at exit 2, and a marker naming a human-gate row is a finding (a gate is a stop, not a question).",
   "markerLimit": 3,
-  "emptyBaseline": ["PL-03", "PL-04"],
+  "emptyBaseline": [
+    "PL-03",
+    "PL-04"
+  ],
   "rulingsFile": "docs/ROSTER.md",
-  "declaredValues": ["contracts/config-catalogue.json", "nen/*.json"],
+  "declaredValues": [
+    "contracts/config-catalogue.json",
+    "nen/*.json"
+  ],
   "rules": [
     {
       "id": "PL-01",
@@ -68,7 +90,17 @@
         "\\b(?:needs?|requires?|minimum|floor)(?: of)?\\s+`?nen`?\\s+`?v?(\\d+)\\.(\\d+)(?:\\.(\\d+))?"
       ],
       "otherPins": "spec-?kit|specKit|handbooks|maintained_tools|canon-values|limbo",
-      "pastWords": ["through", "before", "until", "pre", "was", "were", "then", "older", "earlier"]
+      "pastWords": [
+        "through",
+        "before",
+        "until",
+        "pre",
+        "was",
+        "were",
+        "then",
+        "older",
+        "earlier"
+      ]
     },
     {
       "id": "PL-04",

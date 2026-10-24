@@ -120,6 +120,27 @@ describe("nextBlocker -- the FIRST condition, fixed order, and nothing past it",
     expect(result.kind).toBe("missing-body-requirement");
   });
 
+  it("reads the verify title from --requirements-from exactly as pr body-check does (zheref/nen#479 AC-4)", () => {
+    const checks = [
+      { kind: "check_run" as const, name: "ci", status: "COMPLETED" as const, conclusion: "SUCCESS" as const, startedAt: null, completedAt: null, detailsUrl: null },
+    ];
+    const reviews = [
+      { author: "sasuke", state: "APPROVED" as const, commitId: "head1", submittedAt: null },
+      { author: "tenma", state: "APPROVED" as const, commitId: "head1", submittedAt: null },
+    ];
+    const process = "## What the guards prove\n\nthe lane is green";
+    const verify = [{ name: "verify", pattern: "^## (How to verify|How a consumer verifies|What the guards prove)\\b" }];
+    // Without the file: the historical heading, so a process body blocks.
+    expect(nextBlocker(IDENTITIES, snapshot({ checks, reviews, body: process })).kind).toBe("missing-body-requirement");
+    // With it: the process title satisfies the same requirement body-check reads.
+    expect(nextBlocker(IDENTITIES, snapshot({ checks, reviews, body: process }), { bodyRequirements: verify }).kind).toBe("none");
+    for (const title of ["## How to verify", "## How a consumer verifies"]) {
+      expect(nextBlocker(IDENTITIES, snapshot({ checks, reviews, body: `${title}\n\nx` }), { bodyRequirements: verify }).kind, title).toBe("none");
+    }
+    const missing = nextBlocker(IDENTITIES, snapshot({ checks, reviews, body: "## Summary\n\nx" }), { bodyRequirements: [...verify, { name: "summary", pattern: "^## Summary" }] });
+    expect(missing).toEqual({ kind: "missing-body-requirement", detail: "body requirement 'verify' not satisfied (CON-17; --requirements-from)" });
+  });
+
   // Review finding #7: an explicitly-empty reviewers override must not be
   // treated as "no reviewers, nothing owed" -- it made this exact snapshot
   // read as kind:"none" instead of the correct owed-round.

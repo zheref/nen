@@ -459,7 +459,7 @@ describe("nen direct resolve --record", () => {
       const repo = consumerRepo();
       const result = await capture(resolveArgs(repo, ...CLASSIFIED, "--record", id));
       expect(result.code, `--record '${id}'`).toBe(2);
-      expect(result.err.join("\n")).toMatch(/--record .* is refused/);
+      expect(result.err.join("\n")).toMatch(/effort id .* is refused/);
       expect(existsSync(join(repo, ".nen")), `--record '${id}' wrote`).toBe(false);
     }
   });
@@ -600,7 +600,7 @@ describe("nen direct answer", () => {
       const result = await answer(repo, "--record", id, "--answer", "stop");
       expect(result.code, `--record '${id}'`).toBe(2);
       // an empty value is the flag missing; every other id is refused by name
-      expect(result.err.join("\n")).toMatch(id === "" ? /--record is required/ : /--record .* is refused/);
+      expect(result.err.join("\n")).toMatch(id === "" ? /--record is required/ : /effort id .* is refused/);
       expect(existsSync(join(repo, ".nen")), `--record '${id}' wrote`).toBe(false);
     }
   });

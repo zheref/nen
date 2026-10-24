@@ -1,15 +1,19 @@
 import { emit, refuseExtraPositionals, requireSubcommand, VerbUsageError, type Command } from "../cli/command.js";
 import { plainLine } from "../cli/plain.js";
 import { resolveRepoRoot } from "../repo/root.js";
-import { EFFORT_ID } from "../usage/ledger.js";
-import { appendSessionEntry, readSessionLedger, sessionLedgerPath, SESSION_CONTRACT, SESSION_LEDGER_DIR, type SessionEntry, type SessionLedger } from "./ledger.js";
+import { assertEffortId } from "../ledger/effort.js";
+import { legacyLine, locateEffortLedger, resolveEffortHome } from "../ledger/home.js";
+import { appendSessionEntry, readSessionLedger, SESSION_CONTRACT, SESSION_LEDGER_DIR, type SessionEntry, type SessionLedger } from "./ledger.js";
 
 const USAGE = `nen session record --effort <id> --surface <s> [--model <alias>] [--dial <level>] [--title <text>] [--id <text>] [--source <text>] [--repo <path>] [--json]
 nen session show --effort <id> [--repo <path>] [--json]
 
 Record one caller-reported session identity per invocation under
-'${SESSION_LEDGER_DIR}/<effort>.json', contract '${SESSION_CONTRACT}'.
-The effort uses phase/usage's id alphabet; '/' is percent-encoded as '%2F'.
+'<git-common-dir>/${SESSION_LEDGER_DIR}/<effort>.json' (under --repo outside
+git), contract '${SESSION_CONTRACT}' -- the common dir every worktree shares,
+so a cleanup never takes it. An older '<worktree>/${SESSION_LEDGER_DIR}/' copy is
+read in place by 'show' and moved once by 'record' (fallback removed in 0.29.0).
+The effort uses the one effort-id grammar; '/' is percent-encoded as '%2F'.
 The invocation's clock supplies recordedAt. All other values are verbatim;
 nen reads no title, id, model or dial from the environment or a harness.
 
@@ -47,11 +51,15 @@ export const sessionCommand: Command = {
     const sub = requireSubcommand("session", context.args, ["record", "show"]);
     refuseExtraPositionals(context.args, 2);
     const effort = context.args.values["effort"];
-    if (effort === undefined || !EFFORT_ID.test(effort)) throw new VerbUsageError("--effort <id> is required: letters, digits, '.', '_', '-' and '/' only, starting with a letter or digit.");
+    if (effort === undefined || effort.trim() === "") throw new VerbUsageError("--effort <id> is required.");
+    assertEffortId(effort);
     const root = resolveRepoRoot({ repoFlag: context.repoFlag });
-    const path = sessionLedgerPath(root, effort);
+    const home = resolveEffortHome(root, "sessions", context.seams);
     if (sub === "show") {
-      const ledger = readSessionLedger(path, effort);
+      const located = locateEffortLedger(home, effort, "read");
+      const note = legacyLine(located);
+      if (note !== null) context.io.err(`nen session: ${note}`);
+      const ledger = readSessionLedger(located.path, effort);
       emit(context.io, context.json, ledger, renderSessions(ledger));
       return 0;
     }
@@ -66,6 +74,10 @@ export const sessionCommand: Command = {
       dial: context.args.values["dial"] ?? null,
       title, id, source: context.args.values["source"] ?? null,
     };
+    const located = locateEffortLedger(home, effort, "write");
+    const moved = legacyLine(located);
+    if (moved !== null) context.io.err(`nen session: ${moved}`);
+    const path = located.path;
     appendSessionEntry(path, effort, entry, { warn: context.io.err });
     emit(context.io, context.json, { path, entry }, [`recorded session on '${effort}' -- ${path}`]);
     return 0;

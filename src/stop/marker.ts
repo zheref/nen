@@ -9,6 +9,7 @@
  * is generated output, so a `git add nen/` after a stop cannot stage this file.
  */
 import type { GateId } from "../schema/decisions.js";
+import { isEffortId } from "../ledger/effort.js";
 
 export const MARKER_FILE = ".nen/last-stop.json";
 
@@ -22,10 +23,20 @@ export const STOP_MARK_CONTRACT = "nen.stop.mark/v0.1";
  * caller starts saying more.
  */
 export const STOP_MARK_CONTRACT_V2 = "nen.stop.mark/v0.2";
+/**
+ * `nen.stop.mark/v0.3` -- the PER-GATE marker (zheref/nen#513): every v0.2 key,
+ * every one present, plus `effort` (the effort id the stop belongs to, or
+ * null). Written only at `<git-common-dir>/.nen/marks/<effort>/<gate>.json`
+ * (./marks.ts); `.nen/last-stop.json` keeps writing v0.1/v0.2 unchanged, so a
+ * hook reading the single file sees nothing change.
+ */
+export const STOP_MARK_CONTRACT_V3 = "nen.stop.mark/v0.3";
 /** The v0.1 marker's keys, in written order. */
 const MARKER_KEYS_V1: readonly string[] = ["contract", "who", "gate", "notified", "at"];
 /** What v0.2 adds, in written order; every one present, null when empty. */
 const MARKER_KEYS_V2_EXTRA: readonly string[] = ["title", "body", "reportUrl", "options", "proposedIssue"];
+/** What v0.3 adds to v0.2, in written order. */
+const MARKER_KEYS_V3_EXTRA: readonly string[] = ["effort"];
 
 /** Each gate of ../schema/decisions.ts's one GATES list, named; the type holds the two in step. */
 export const GATE_NAMES: Readonly<Record<GateId, string>> = {
@@ -112,15 +123,21 @@ export function parseMarker(document: unknown): { ok: true; marker: Record<strin
   if (typeof document !== "object" || document === null || Array.isArray(document)) return { ok: false, reason: "not a JSON object" };
   const m = document as Record<string, unknown>;
   const contract = m["contract"];
-  if (contract !== STOP_MARK_CONTRACT && contract !== STOP_MARK_CONTRACT_V2) {
-    return { ok: false, reason: `contract is ${JSON.stringify(contract)}; expected '${STOP_MARK_CONTRACT}' or '${STOP_MARK_CONTRACT_V2}'` };
+  if (contract !== STOP_MARK_CONTRACT && contract !== STOP_MARK_CONTRACT_V2 && contract !== STOP_MARK_CONTRACT_V3) {
+    return { ok: false, reason: `contract is ${JSON.stringify(contract)}; expected '${STOP_MARK_CONTRACT}', '${STOP_MARK_CONTRACT_V2}' or '${STOP_MARK_CONTRACT_V3}'` };
   }
+  const rich = contract === STOP_MARK_CONTRACT_V2 || contract === STOP_MARK_CONTRACT_V3;
   // THE KEY SET IS THE CONTRACT. v0.1 is exactly its five keys and v0.2 is
   // exactly those plus its five, every one PRESENT (null where the stop
   // carried nothing) -- an absent key is a defect, not a null, and a key
   // neither contract names is a marker written by something else (Copilot
   // review on zheref/nen#217).
-  const expected = contract === STOP_MARK_CONTRACT_V2 ? [...MARKER_KEYS_V1, ...MARKER_KEYS_V2_EXTRA] : MARKER_KEYS_V1;
+  const expected =
+    contract === STOP_MARK_CONTRACT_V3
+      ? [...MARKER_KEYS_V1, ...MARKER_KEYS_V2_EXTRA, ...MARKER_KEYS_V3_EXTRA]
+      : contract === STOP_MARK_CONTRACT_V2
+        ? [...MARKER_KEYS_V1, ...MARKER_KEYS_V2_EXTRA]
+        : MARKER_KEYS_V1;
   const str = (key: string): string | null => {
     if (!Object.hasOwn(m, key)) throw new Error(`${key} is missing`);
     const v = m[key];
@@ -137,7 +154,11 @@ export function parseMarker(document: unknown): { ok: true; marker: Record<strin
     if (typeof m["notified"] !== "boolean") throw new Error("notified must be a boolean");
     const at = str("at");
     if (at === null || Number.isNaN(Date.parse(at))) throw new Error("at must be an ISO-8601 instant");
-    if (contract === STOP_MARK_CONTRACT_V2) {
+    if (contract === STOP_MARK_CONTRACT_V3) {
+      const effort = str("effort");
+      if (effort !== null && !isEffortId(effort)) throw new Error(`effort '${effort}' is not an effort id`);
+    }
+    if (rich) {
       str("title");
       str("body");
       str("reportUrl");
