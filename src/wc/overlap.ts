@@ -60,10 +60,41 @@ export interface OverlapReport {
   readonly overlaps: readonly { readonly path: string; readonly efforts: readonly string[]; readonly always: boolean }[];
   readonly efforts: readonly EffortFiles[];
   readonly unread: readonly string[];
-  /** The efforts in stack order when the verdict is `stack`; null otherwise. */
-  readonly stack: readonly string[] | null;
-  /** `chain` when git holds the order, `given` when it is the `--efforts` order; null unless `stack`. */
-  readonly stackSource: StackSource | null;
+  /**
+   * One stack per CONNECTED GROUP of efforts linked by shared paths (zheref/nen#515
+   * delta 10): A and B sharing p and C and D sharing q are two stacks, never one.
+   * Groups in the order their first effort appears in `--efforts`; empty unless
+   * the verdict is `stack`.
+   */
+  readonly stacks: readonly StackGroup[];
+}
+
+/** One stack: its efforts in order, and where the order came from. */
+export interface StackGroup {
+  readonly efforts: readonly string[];
+  readonly source: StackSource;
+}
+
+/** The efforts linked by shared paths, as connected groups in `all`'s order. */
+export function sharingGroups(all: readonly string[], overlaps: readonly { readonly efforts: readonly string[] }[]): readonly (readonly string[])[] {
+  const parent = new Map<string, string>(all.map((name): [string, string] => [name, name]));
+  const find = (name: string): string => {
+    let root = name;
+    while (parent.get(root) !== root) root = parent.get(root) as string;
+    return root;
+  };
+  for (const row of overlaps) {
+    const [first, ...rest] = row.efforts;
+    if (first === undefined) continue;
+    for (const other of rest) parent.set(find(other), find(first));
+  }
+  const groups = new Map<string, string[]>();
+  for (const name of all) {
+    if (!overlaps.some((row): boolean => row.efforts.includes(name))) continue;
+    const root = find(name);
+    groups.set(root, [...(groups.get(root) ?? []), name]);
+  }
+  return [...groups.values()];
 }
 
 /** Fold an effort's declared paths into its diff read (AC-1); the declared paths alone stand in for an unread diff. */
@@ -162,28 +193,35 @@ export function computeOverlap(base: string, efforts: readonly EffortFiles[], al
     .filter(([, owner]): boolean => owner.efforts.length > 1)
     .map(([path, owner]) => ({ path, efforts: all.filter((name): boolean => owner.efforts.includes(name)), always: owner.always }))
     .sort((a, b): number => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-  // ONLY THE EFFORTS THAT SHARE A PATH STACK (zheref/nen#515 F7): an effort
-  // that shares nothing with any other may still run beside them.
-  const sharing = all.filter((name): boolean => overlaps.some((row): boolean => row.efforts.includes(name)));
+  // ONLY THE EFFORTS THAT SHARE A PATH STACK (zheref/nen#515 F7), and one stack
+  // per connected group of them (delta 10): an effort that shares nothing may
+  // still run beside them, and two unlinked groups may run beside each other.
   const verdict: OverlapVerdict = unread.length > 0 ? "unknown" : overlaps.length === 0 ? "disjoint" : "stack";
-  const chain = verdict === "stack" ? (isAncestor === null ? "unread" : readChain(sharing, isAncestor)) : null;
-  const stack = verdict === "stack" ? (Array.isArray(chain) ? chain : sharing) : null;
-  const stackSource: StackSource | null = verdict !== "stack" ? null : Array.isArray(chain) ? "chain" : chain === "unread" ? "ancestry-unread" : "given";
-  return { verdict, base, alwaysOverlaps: [...alwaysOverlaps], overlaps, efforts, unread, stack, stackSource };
+  const stacks: StackGroup[] =
+    verdict !== "stack"
+      ? []
+      : sharingGroups(all, overlaps).map((group): StackGroup => {
+          const chain = isAncestor === null ? "unread" : readChain(group, isAncestor);
+          if (Array.isArray(chain)) return { efforts: chain, source: "chain" };
+          return { efforts: group, source: chain === "unread" ? "ancestry-unread" : "given" };
+        });
+  return { verdict, base, alwaysOverlaps: [...alwaysOverlaps], overlaps, efforts, unread, stacks };
 }
 
 export function renderOverlap(report: OverlapReport): string[] {
   const lines: string[] = [];
   if (report.verdict === "unknown") lines.push(`verdict: unknown (could not read ${report.unread.join(", ")})`);
   else if (report.verdict === "stack") {
-    lines.push(`verdict: stack(${(report.stack ?? []).join(" <- ")})`);
-    lines.push(
-      report.stackSource === "chain"
-        ? "order: chain (each branch contains the one before)"
-        : report.stackSource === "ancestry-unread"
-          ? "order: given (the --efforts order; ancestry unread -- git could not say whether the branches chain)"
-          : "order: given (the --efforts order; the branches do not chain)",
-    );
+    lines.push(`verdict: stack(${report.stacks.map((group): string => group.efforts.join(" <- ")).join("; ")})`);
+    for (const group of report.stacks) {
+      const why =
+        group.source === "chain"
+          ? "chain (each branch contains the one before)"
+          : group.source === "ancestry-unread"
+            ? "given (the --efforts order; ancestry unread -- git could not say whether the branches chain)"
+            : "given (the --efforts order; the branches do not chain)";
+      lines.push(report.stacks.length === 1 ? `order: ${why}` : `order ${group.efforts.join(" <- ")}: ${why}`);
+    }
   } else lines.push("verdict: disjoint");
   lines.push(`base: ${report.base}`);
   for (const row of report.efforts) {
