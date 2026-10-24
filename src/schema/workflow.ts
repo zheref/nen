@@ -615,7 +615,26 @@ export interface Workflow {
    * is a directory prefix. Empty when undeclared.
    */
   readonly alwaysOverlaps?: readonly string[];
+  /**
+   * `canon` -- the canon prose verbs' declared inputs (zheref/nen#481):
+   * `canon.lint` names the rules contract and the baseline `nen canon lint`
+   * reads when no flag names them, and the paths its marker limit and reading
+   * rule apply to when the contract declares none. Null when undeclared.
+   */
+  readonly canon?: CanonPolicy | null;
   /** The document exactly as the file states it, every key preserved. */
+  readonly raw: Readonly<Record<string, unknown>>;
+}
+
+/** `canon.lint` -- repository-relative paths; `baseline` and `skillPaths` optional. */
+export interface CanonLintPolicy {
+  readonly rules: string;
+  readonly baseline: string | null;
+  readonly skillPaths: readonly string[] | null;
+}
+
+export interface CanonPolicy {
+  readonly lint: CanonLintPolicy | null;
   readonly raw: Readonly<Record<string, unknown>>;
 }
 
@@ -745,6 +764,7 @@ const ROOT_KEYS: readonly string[] = [
   "idle",
   "spec",
   "alwaysOverlaps",
+  "canon",
 ];
 
 const BRANCH_KEYS: readonly string[] = ["template", "base"];
@@ -2408,7 +2428,7 @@ function parseCi(path: string, value: unknown): CiPolicy | null {
 
 export function parseWorkflow(path: string, value: unknown): Workflow {
   const raw = requireRecord(path, "(root)", value);
-  refuseNearMissKey(path, "", raw, ROOT_KEYS, "A workflow's twenty-one blocks are");
+  refuseNearMissKey(path, "", raw, ROOT_KEYS, "A workflow's twenty-three blocks are");
   const monitor = parseMonitor(path, raw["monitor"]);
   const idle = parseIdle(path, raw["idle"]);
   // ONE RULE, ONE VALUE: a repository that states the slot rule under both
@@ -2443,6 +2463,7 @@ export function parseWorkflow(path: string, value: unknown): Workflow {
     idle,
     spec: parseSpecPolicy(path, raw["spec"]),
     alwaysOverlaps: parseAlwaysOverlaps(path, raw["alwaysOverlaps"]),
+    canon: parseCanonPolicy(path, raw["canon"]),
     raw,
   };
 }
@@ -2545,6 +2566,47 @@ function parseSpecPolicy(path: string, value: unknown): SpecPolicy {
       waveEnds: autonomy["waveEnds"] === undefined ? null : requireEnum(path, "spec.autonomy.waveEnds", autonomy["waveEnds"], SPEC_WAVE_ENDS),
     },
   };
+}
+
+const CANON_KEYS: readonly string[] = ["lint"];
+const CANON_LINT_KEYS: readonly string[] = ["rules", "baseline", "skillPaths"];
+
+/** A repository-relative path: non-empty, never absolute, never climbing out with '..'. */
+function repoRelativePath(path: string, pointer: string, value: unknown): string {
+  const entry = requireString(path, pointer, value);
+  if (entry.trim() === "" || entry.startsWith("/") || /^[A-Za-z]:/.test(entry) || entry.split(/[\\/]/).includes("..")) {
+    throw new SchemaError(path, pointer, `is ${JSON.stringify(entry)}: a repository-relative path, never empty, absolute or climbing out with '..'`);
+  }
+  return entry;
+}
+
+/**
+ * `canon` (zheref/nen#481): `canon.lint` is the declared home of the canon
+ * prose lint's rules contract and baseline, so `nen canon lint --repo <path>`
+ * needs no flag and `nen schema check` has a file to validate them from.
+ * `rules` is required once `lint` is declared; `baseline` and `skillPaths`
+ * are optional. The CONTENTS of the two files are checked by the
+ * `nen/workflow.json#canon.lint` row, never here: this loader reads one file.
+ */
+function parseCanonPolicy(path: string, value: unknown): CanonPolicy | null {
+  if (value === undefined || value === null) return null;
+  const raw = block(path, "canon", value, CANON_KEYS, "A canon policy's keys are");
+  const lintRaw = raw["lint"];
+  if (lintRaw === undefined || lintRaw === null) return { lint: null, raw };
+  const lint = block(path, "canon.lint", lintRaw, CANON_LINT_KEYS, "A canon lint policy's keys are");
+  if (lint["rules"] === undefined) throw new SchemaError(path, "canon.lint.rules", "is required: the rules contract nen canon lint reads (nen.prose-lint/v0.1). A lint with no rules checks nothing");
+  const rules = repoRelativePath(path, "canon.lint.rules", lint["rules"]);
+  const baseline = lint["baseline"] === undefined || lint["baseline"] === null ? null : repoRelativePath(path, "canon.lint.baseline", lint["baseline"]);
+  let skillPaths: string[] | null = null;
+  if (lint["skillPaths"] !== undefined && lint["skillPaths"] !== null) {
+    skillPaths = requireArray(path, "canon.lint.skillPaths", lint["skillPaths"]).map((item, index): string => {
+      const glob = requireString(path, `canon.lint.skillPaths[${index}]`, item);
+      if (glob.trim() === "") throw new SchemaError(path, `canon.lint.skillPaths[${index}]`, "is empty. A glob that matches nothing applies the rule nowhere");
+      return glob;
+    });
+    if (skillPaths.length === 0) throw new SchemaError(path, "canon.lint.skillPaths", "is an empty array. Omit it to apply the per-skill rules to every linted path, or name the globs");
+  }
+  return { lint: { rules, baseline, skillPaths }, raw };
 }
 
 /** `alwaysOverlaps`: a list of non-empty repository-relative paths, each once; refused by pointer otherwise. */

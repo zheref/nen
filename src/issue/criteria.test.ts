@@ -95,18 +95,18 @@ describe("converge", () => {
       "| AC-2 | done | x |\n| AC-3 | satisfied | x |\n| AC-3 | partial | y |\n| AC-4 | missing | x |\n| AC-5 | contradicts | x |\n",
     );
     expect(report.blocking).toEqual([
-      "o/n#12/AC-1: missing-row",
-      "o/n#12/AC-2: malformed-row",
+      "o/n#12/AC-1: missing-row (no verify row names AC-1)",
+      "o/n#12/AC-2: malformed-row -- row line 1: | AC-2 | done | x |",
       "o/n#12/AC-3: duplicate-rows",
-      "o/n#12/AC-4: missing",
-      "o/n#12/AC-5: contradicts",
+      "o/n#12/AC-4: missing -- row line 4: | AC-4 | missing | x |",
+      "o/n#12/AC-5: contradicts -- row line 5: | AC-5 | contradicts | x |",
     ]);
     expect(report.criteria.find((entry) => entry.id === "AC-3")?.rows).toEqual([2, 3]);
   });
 
   it("yields a not-verifiable row for an issue with no criterion, never a pass, and is not verifiable with no closing issue", () => {
     const report = converge([issue("No criteria.", 13)], "");
-    expect(report.criteria).toEqual([{ issue: "o/n#13", id: null, text: null, coverage: "not-verifiable", word: null, evidence: null, rows: [] }]);
+    expect(report.criteria).toEqual([{ issue: "o/n#13", id: null, text: null, coverage: "not-verifiable", word: null, evidence: null, rows: [], raw: null }]);
     expect(report.verifiable).toBe(false);
     expect(report.blocking).toEqual(["o/n#13/-: not-verifiable (the issue states no criterion)"]);
     expect(converge([], "| AC-1 | satisfied | x |").verifiable).toBe(false);
@@ -117,8 +117,8 @@ describe("converge", () => {
     const bare = converge(issues, "| AC-1 | satisfied | x |\n");
     expect(bare.unmatched).toEqual([{ line: 1, cell: "AC-1", reason: "ambiguous: o/n#12 and o/other#14 each state AC-1; write <CODE>#<N>/AC-<n>" }]);
     expect(bare.blocking).toEqual([
-      "o/n#12/AC-1: missing-row",
-      "o/other#14/AC-1: missing-row",
+      "o/n#12/AC-1: missing-row (no verify row names AC-1)",
+      "o/other#14/AC-1: missing-row (no verify row names AC-1)",
       "row line 1 'AC-1': unmatched -- ambiguous: o/n#12 and o/other#14 each state AC-1; write <CODE>#<N>/AC-<n>",
     ]);
     const qualified = converge(issues, "| NN#12/AC-1 | satisfied | x |\n| o/other#14/AC-1 | satisfied | y |\n| o/n#14/AC-1 | satisfied | z |\n");

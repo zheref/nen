@@ -445,9 +445,10 @@ The complete list:
 | [`pr mark-ready`](#nen-pr-mark-ready) | `8` | `--require-head` did not match GitHub's head — deliberately `pr ready`'s code for the same fact, so a caller pinning a head across both verbs branches on one number |
 | [`pr request-reviews`](#nen-pr-request-reviews) | `9` | a bot request GitHub accepted but did not list in the response's pending-review page; this does not prove recording failure or allowance exhaustion. Its `2` is also **refused by the round ceiling** (`round_policy.maxRounds`, [#240](https://github.com/zheref/nen/issues/240)), told apart from usage by its `refused:` line |
 | [`pr mark-ready`](#nen-pr-mark-ready) | `3` | the pull request is CLOSED or MERGED; nothing sent |
+| [`pr converge`](#nen-pr-converge) | `3` | `--composite` only: a read did not finish, or was at another head than `--require-head`; no verdict, stdout empty — could not look, told apart from not ready (`1`) ([#483](https://github.com/zheref/nen/issues/483) AS-3) |
 | `review ledger` | `3` / `4` | refused: the branch is the trunk or not a branch, no ledger opened / lost: no ledger here, but one was opened under this key before -- recover it, never a fresh init |
 | [`loop iterate`](#nen-loop-iterate) | `2` | its own meaning of 2, beside usage: the loop's count cannot be established -- a lost ledger, a ledger in two homes, an unreadable ledger, or a git that cannot name the common dir; never retried as a typo |
-| [`canon lint`](#nen-canon-lint) | `2` | its own meaning of 2, beside usage: wiring -- an unreadable or invalid contract, baseline or file, a symlink leaving the root, a failed git read |
+| [`canon lint`](#nen-canon-lint) | `2` | its own meaning of 2, beside usage: wiring -- an unreadable or invalid contract, baseline or file, a symlink leaving the root, a failed git read, a `nen/workflow.json` that does not load |
 | [`canon clause check`](#nen-canon-clause-check) | `2` | its own meaning of 2, beside usage: a tooling failure -- an unreadable file or base, no definitions at all, a leaf pattern matching nothing, a failed git read |
 | [`bootstrap`](#nen-bootstrap) | `3`–`7` | not on the three-code scheme at all: it relays the bootstrap script's own published codes unchanged ([Getting the binary](#getting-the-binary)), and those numbers mean the script's things |
 <!-- exits:end -->
@@ -789,6 +790,7 @@ they assumed instead); they come back empty or `null`.
 | `spec` | a **spec repository's** capture and autonomy keys (zheref/nen#493; Hatsu's `docs/config/spec-repo.md` § *The spec repository's keys*): `clarify.maxQuestions` (default `5`) and `clarify.maxRounds` (default `3`), `capture.foldersPerPr` (default `4`), `maxBytes`, each a positive whole number; `autonomy.platformOrder` (a non-empty list of distinct platforms), `autonomy.referencePlatform` (one of them), `autonomy.maxInFlight` (a positive whole number per platform, each key in `platformOrder` when that is stated), `autonomy.unmetSc` (`refuse`, its only value and default), `autonomy.convergeFiling` (`propose`, the default, \| `file`) and `autonomy.waveEnds` (`all-at-prompt`). `maxBytes` and the `autonomy` keys but the two named have **no default**: they are the maintainer's to type, and a reader that needs one says it is missing. **The parsed policy's `stated` lists every key path the file states**, so a reader can tell a stated value from a filled default — Hatsu reads an absent key at wave time as `missing-configuration`, never as the default (its `spec-repo.md` § *The spec repository's keys*), and nen's defaults are the catalogue's proposals, used by nen only where this row says. Every key is optional; a stated one is validated by pointer and a near-miss key is refused. Read by [`spec check`](#nen-spec-check): a stated `clarify.maxQuestions` caps an uncapped `--rank`, and a stated `maxBytes` makes a folder file over it a HIGH `over-max-bytes` finding | [`spec check`](#nen-spec-check); callers (Hatsu's `dowsing-chain`) |
 | `alwaysOverlaps` | paths every delivery touches sooner or later -- a manifest version, the `CHANGELOG`, generated mirrors -- each a repository-relative path (a trailing `/` for a directory prefix), never empty, absolute, climbing with `..` or repeated; refused by pointer otherwise. **Default empty.** [`schema check`](#nen-schema-check) reports it on the `nen/workflow.json#alwaysOverlaps` row | [`wc overlap`](#nen-wc-overlap) |
 | `models.<surface>.<tier>` / `models.roles` / `models.rule` | which model alias a role gets on a surface. An **open** map at both levels — nen checks that every leaf is a string and reads nothing else | callers |
+| `canon.lint` | the canon prose lint's declared inputs (zheref/nen#481): `rules` (required once `lint` is declared) and `baseline` (optional) are repository-relative paths -- never empty, absolute or climbing with `..` -- and `skillPaths` (optional, non-empty globs) names the files the marker limit and the reading rule apply to when the rules contract declares none. A near-miss key is refused by pointer. **No default.** [`schema check`](#nen-schema-check) validates both files on the `nen/workflow.json#canon.lint` row, which appears only when the block is declared | [`canon lint`](#nen-canon-lint) |
 | `profile.default` / `profile.allowed` | which RUN PROFILE a bare turn runs under, and which a caller may ask for (v0.13.0, [#227](https://github.com/zheref/nen/issues/227)). The names are **closed** — `fast`, `standard`, `thorough` — and their meaning is the turn loop's, not nen's: nen refuses a fourth name by pointer, an empty or repeating `allowed`, and a `default` outside `allowed`. Default `{ "default": "standard", "allowed": ["fast", "standard", "thorough"] }`; an `allowed` with no `default` falls back to `standard` when listed, else its first entry | callers ([`schema check`](#nen-schema-check) prints it as the `nen/workflow.json#profile` row) |
 | `release.unitPaths` | the release-unit bounds: a string `"=README.md"` for one exact path, an existing segment prefix or narrow glob, an object `{"path":"package.json","keys":["version"]}` for JSON leaves, or `{"path":"src/version.ts","lines":["<whole-line regex>"]}` for text; `{"path":"changelog.d/","deleteOnly":true}` permits only removals under that literal path prefix. Both removed and added lines must match. Content-bound object paths are exact; `keys`, `lines` and `deleteOnly` are mutually exclusive, and the first two are non-empty lists. See [release unit-check](#nen-release-unit-check) for validation, full-content reads and fail-closed limits. `null` or absent means undeclared and both unit gates refuse; empty lists and universal string globs (`**`, `**/*`) are refused by pointer. No default | [`release unit-check`](#nen-release-unit-check), [`nen pr merge`](#nen-pr-merge) (policy read from the PR's BASE commit); [`schema check`](#nen-schema-check) reports `nen/workflow.json#release` |
 | `futon.advanceGo` | which repo KINDS (`product` \| `process` \| `library`, `../repo/classify.ts`'s own closed three) a named skill's advance-go step is gated to, keyed by skill name with any `plugin:` prefix stripped and lower-cased. A skill this DECLARED map does not name is UNGATED. When the map itself is EMPTY -- the key absent, the whole file absent, an explicit `{}`, or a body carrying only `$`-prefixed metadata keys (none of which count as a declared skill) -- the gate does not read as "no gate" at all: the built-in `DEFAULT_ADVANCE_GO` policy applies instead, and every step it annotates carries `source: "default"`. A map naming even ONE skill is a genuine declaration and replaces the default wholesale (`source: "declared"`) -- see [`parse futon`](#nen-parse-futon)'s "declared vs. default" section | [`parse futon`](#nen-parse-futon) |
@@ -1123,7 +1125,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`canon`](#family-canon) | [`nen canon checkout`](#nen-canon-checkout) | resolve WHERE the canon checkout is on this machine -- `--canon-checkout`, then the variable the pinned entry's `checkout_env` names, then its `checkout` path template -- and verify it is a clean checkout of the pinned source at the pinned tag, reporting every step | nen/repos.json + the environment; read-only, isolated git (rev-parse, remote get-url on the checkout and the consumer, status, ls-files); fetches nothing | yes |
 | [`canon`](#family-canon) | [`nen canon mirror generate`](#nen-canon-mirror-generate) | render every canonical rule file, {{TOKEN}}s bound, into the rules location of EACH agent surface the consumer declares (a directory of marked files, or one marked block inside AGENTS.md), writing only changed files, deleting marked orphans, refusing to touch a hand-written file | --rules-dir, or --stack-dir/--leaf inside the canon checkout `canon checkout` resolves (read-only git) + --canon-values; the surface table (src/surface/rules.ts); writes under --repo; no gh | yes |
 | [`canon`](#family-canon) | [`nen canon mirror check`](#nen-canon-mirror-check) | render the mirror in memory and diff every declared surface's committed copy against it: ok / missing / extra / stale / hand-edited per file, foreign for the consumer's own | --rules-dir, or --stack-dir/--leaf inside the resolved canon checkout (read-only git) + --canon-values; the surface table; reads under --repo; --markdown-out writes its table (and its parent directory) there; no gh | yes |
-| [`canon`](#family-canon) | [`nen canon lint`](#nen-canon-lint) | a canon repository's prose held to a caller-owned rules contract (each rule's class picks the check) behind a shrink-only baseline; fenced code and quoted words exempt; never green over a file it could not read | the --rules contract and the files it names (version source, decisions, rulings, declared values), the --baseline, the Markdown its include globs match under --root; with --base, git (merge-base, diff, show) | yes |
+| [`canon`](#family-canon) | [`nen canon lint`](#nen-canon-lint) | a canon repository's prose held to a caller-owned rules contract (each rule's class picks the check) behind a shrink-only baseline; fenced code and quoted words exempt; never green over a file it could not read | nen/workflow.json `canon.lint`, the --rules contract and the files it names (version source, decisions, rulings, declared values), the --baseline and --base-baseline, the Markdown its include globs match under --root; with --base, git (merge-base, diff, show) | yes |
 | [`canon`](#family-canon) | [`nen canon clause check`](#nen-canon-clause-check) | a clause id space (HR-{n}, CON-{n}) held unique -- definitions counted, citations never, gaps a notice -- and, with --leaves, every changed clause matched by a change in each file citing it or a `no-leaf-change:` line | --file under --repo; --base as a file or `git show <ref>:<path>`; with --leaves, git (ls-files, diff) and the --body-from file | yes |
 | [`quality`](#family-quality) | [`nen quality tooling`](#nen-quality-tooling) | look up the e2e/adversarial/perf tooling recorded for a scenario in a caller-supplied table | caller's own --table JSON (never a table shipped in nen) | yes |
 | [`quality`](#family-quality) | [`nen quality perf-compare`](#nen-quality-perf-compare) | classify a measured-vs-baseline regression at QA-13's fixed 10%/25% thresholds | none (pure arithmetic over the two numbers given) | yes |
@@ -2510,6 +2512,8 @@ absent, are **derived** from the repository's own pull-request template.
 ```text
 nen pr body-check --body-from <path> [--requirements-from <path> | --base <ref>]
                   [--exact [--max <n>]] [--prose-budget <words>]
+                  [--criteria <AC-1,AC-2> | --criteria-from <issue-body.md>]
+                  [--criteria-issue <[owner/name]#N>] [--catalogue <path>]
 ```
 
 **Arguments**
@@ -2519,8 +2523,16 @@ nen pr body-check --body-from <path> [--requirements-from <path> | --base <ref>]
 | `--body-from <path>` | yes | the pull-request body to check | plain text |
 | `--requirements-from <path>` | no | a JSON array of `{ name, pattern }` | an empty array is refused, exit 1 — a vacuous pass having checked nothing is never reported as success. Omitted: the set is derived from the PR template (below). Given but empty (`--requirements-from ""`): exit 2, never a fall-through to derivation |
 | `--base <ref>` | no | read the PR template from git at `<ref>`, never from the working tree | only with a derived set; with `--requirements-from` it is refused, exit 2. A ref that does not resolve to a single commit (a range such as `main..feat` included), or that begins with `-`, exits 2 |
+| `--criteria <ids>` | no | the closing issue's acceptance-criterion ids, comma-separated (`AC-1,AC-2`), held to the body's verify rows — one row per id | each id `<PREFIX>-<n>` (`AC`, or the catalogue's prefix), else exit 2. With `--criteria-from`: exit 2 |
+| `--criteria-from <path>` | no | a local copy of the closing issue's body; its `- AC-{n}:` rows are the criteria, read as [`issue criteria`](#nen-issue-criteria) reads them | unreadable exits 2; a body with no criterion is `not-verifiable` and exits 1 |
+| `--criteria-issue <[owner/name]#N>` | no | names the issue the criteria belong to, so a qualified row (`<CODE>#<N>/AC-{n}`, `<owner/name>#<N>/AC-{n}`) matches it and the report names it | only with `--criteria`/`--criteria-from`; another shape exits 2 |
+| `--catalogue <path>` | no | the [issue-sections catalogue](#the-issue-sections-catalogue): the acceptance prefix and sections, and its `coverage` block | only with `--criteria`/`--criteria-from`; absent: `AC` rows anywhere, `missing` and `contradicts` block, evidence required |
 | `--repo <path>` | no | resolves `--body-from`/`--requirements-from` against this root, and is where the PR template is looked for (the working tree, or the git checkout `--base` is read in) | default cwd |
 | `--json` | no | machine-readable report | — |
+
+<a id="one-verify-row-per-acceptance-criterion"></a>
+
+**One verify row per acceptance criterion** ([#479](https://github.com/zheref/nen/issues/479) AC-1–AC-3; Akatsuki CON-17(c), ruled aligned with Hatsu HR-11 on 2026-10-23 — one rule, one verb). With `--criteria` or `--criteria-from`, the body's verify rows ([the grammar `pr converge` reads](#the-verify-row-grammar)) are compared with the criteria by the comparison [`pr converge`](#nen-pr-converge) and [`pr merge --delivery`](#nen-pr-merge) run, so the three verbs give one verdict for one body. Each criterion needs exactly one row carrying exactly one status from `satisfied` · `partial` · `missing` · `contradicts` · `unrequested`. Exit **1**, each named on a `BLOCKING` line: an id with no row (`missing-row (no verify row names AC-2)`); a status outside the five, or a row carrying two (`'satisfied, partial' carries more than one status`), as `malformed-row` with the row quoted; a row reading `missing` or `contradicts`, **quoted** (`AC-2: contradicts -- row line 8: | AC-2 | contradicts | … |`); two rows for one id; an issue body stating no criterion (`not-verifiable`). The lines follow the requirement lines; `--json` adds `criteria`, the converge report (`criteria`, `unrequested`, `unmatched`, `malformed`, `counts`, `blocking`), and `ok` is false when anything blocks. The verb stays local — it reads files and git, never GitHub; the live read of a pull request's closing issues is [`pr converge`](#nen-pr-converge). **One issue per run**: a body that closes several issues carries qualified rows for the others, which read `unmatched` and block here — several closing issues are [`pr converge`](#nen-pr-converge)'s job. Without the flags the verdict is unchanged.
 
 **Exact shape and prose measurement** (zheref/nen#448). `--exact` checks
 visible headings outside fenced code and HTML comments. Every level-2 heading
@@ -2737,7 +2749,9 @@ Acceptance-criterion coverage as data (Hatsu's ruling HR-11): compares the crite
 **Usage**
 
 ```text
-nen pr converge --target <owner/name> --pr <n> [--requirements-from <catalogue.json>] [--require-head <sha>] [--json]
+nen pr converge --target <owner/name> --pr <n> [--catalogue <catalogue.json>] [--require-head <sha>] [--json]
+nen pr converge --target <owner/name> --pr <n> --composite --require-head <sha> --body-requirements <path>
+                [--catalogue <catalogue.json>] [--repo <path>] [--json]
 ```
 
 **Arguments**
@@ -2746,11 +2760,26 @@ nen pr converge --target <owner/name> --pr <n> [--requirements-from <catalogue.j
 |---|---|---|---|
 | `--target <owner/name>` | yes | The repository the pull request lives in. | Missing or malformed exits 2. |
 | `--pr <n>` | yes | The pull-request number. | Missing or not a positive whole number exits 2. |
-| `--requirements-from <path>` | no | The [issue-sections catalogue](#the-issue-sections-catalogue): its acceptance-row prefix and section scope the criteria, and an optional `coverage` block `{ "blocking": [<words>], "none": "<word>", "evidence": "required" \| "optional" }` sets the rules. | Resolves against `--repo`'s root. Absent: `AC` rows anywhere in the issue body, `missing` and `contradicts` block, `unrequested` on `none` rows, evidence required. Unreadable or malformed exits 2. |
-| `--require-head <sha>` | no | Pin the verdict to one head ([#483](https://github.com/zheref/nen/issues/483) AC-6). The first read's `headRefOid` must equal it, and a head-only re-read (`gh pr view <n> --repo <target> --json headRefOid`) **after** every closing issue was read must still equal it. | A full 40- or 64-hex SHA, compared case-insensitively; anything else exits 2 before any read. A first read at another head, a head that moved between the reads, or a re-read that failed exits **1** with stdout empty and stderr naming both heads: a verdict assembled across two heads is refused, never reported. |
+| `--catalogue <path>` (deprecated alias `--requirements-from`) | no | The [issue-sections catalogue](#the-issue-sections-catalogue): its acceptance-row prefix and section scope the criteria, and an optional `coverage` block `{ "blocking": [<words>], "none": "<word>", "evidence": "required" \| "optional" }` sets the rules. | Resolves against `--repo`'s root. Absent: `AC` rows anywhere in the issue body, `missing` and `contradicts` block, `unrequested` on `none` rows, evidence required. Unreadable or malformed exits 2. |
+| `--require-head <sha>` | no | Pin the verdict to one head ([#483](https://github.com/zheref/nen/issues/483) AC-6). The first read's `headRefOid` must equal it, and a head-only re-read (`gh pr view <n> --repo <target> --json headRefOid`) **after** every closing issue was read must still equal it. | A full 40- or 64-hex SHA, compared case-insensitively; anything else exits 2 before any read. A first read at another head, a head that moved between the reads, or a re-read that failed exits **1** (**3** under `--composite`) with stdout empty and stderr naming both heads: a verdict assembled across two heads is refused, never reported. |
+| `--composite` | no | One readiness verdict at the pinned head (below). | Needs `--require-head` and `--body-requirements`, else exit 2. |
+| `--body-requirements <path>` | with `--composite` | The `{ name, pattern }` JSON array [`pr body-check`](#nen-pr-body-check) reads: the body conjunct. | Unreadable, empty or malformed exits 2 before any read. Without `--composite`: exit 2. |
 | `--json` | no | The report as one JSON document. | |
 
-Every other flag is refused at exit 2 before any `gh` call. `--repo` is read only to resolve `--requirements-from`.
+Every other flag is refused at exit 2 before any `gh` call. `--repo` resolves `--catalogue` and `--body-requirements`, and under `--composite` is `pr ready`'s checkout. **`--catalogue` is the flag name on every sibling verb** (`body-check`, `merge --delivery`, here): on `body-check`, `next-blocker` and `merge`, `--requirements-from` names the `{ name, pattern }` body requirements, so on this verb it is kept only as a deprecated alias of `--catalogue` (a stderr line says so; both given exits 2).
+
+<a id="the-composite-verdict"></a>
+
+**The composite verdict** ([#483](https://github.com/zheref/nen/issues/483) AC-1; Hatsu HR-11, Akatsuki CON-17(c) and CON-32). `--composite` reports **four conjuncts at one head**, and `ready` only when all four hold:
+
+| Conjunct | Holds when | Read |
+|---|---|---|
+| `pr ready` | [`pr ready`](#nen-pr-ready)'s verdict is `ready` at the pin (in-process, `--require-head` passed through — the gate [`pr merge`](#nen-pr-merge) runs) | its own state reads |
+| `pr body-check` | every `--body-requirements` entry matches the live body | the converge read's body |
+| `closing links` | into the default branch: every issue a body closing keyword names is one GitHub links as closing (a Development link), and every issue GitHub links is named in a body closing keyword — the link both ways; on another base GitHub links nothing, so it holds and says the body's keywords were read | the converge read's `closingIssuesReferences` and body |
+| `criteria` | the coverage above blocks nothing | every closing issue |
+
+The pull request is read first and must be at the pin; `pr ready` must judge the pin; and after every other read the head is read once more. A first read at another head, a judged head that differs, a head that moved, or any read that did not finish is exit **3** with stdout empty — no verdict mixes two heads, and "could not read" is never "ready" nor "not ready" (#483 AS-3's split: 3 could not look; Nobunaga 4 on #526). Exit **0** when all four hold, **1** when any does not; each failing conjunct names why on its own lines, and `blocking` lists them. `--json`: `{ contract: "nen.pr.converge/v0.1", composite: true, target, pr, url, headSha, requiredHead, base, closingSource, ready, conjuncts: [{ name, ok, lines }], blocking }`. [`pr merge --delivery`](#nen-pr-merge) gates on the same `criteria` and `closing links` conjuncts, computed from its own one fetch, so the report a caller quotes and the merge's refusal rest on the same facts.
 
 **What it reads.** The pull request through `gh pr view <n> --repo <target> --json number,url,headRefOid,baseRefName,body,closingIssuesReferences` -- the `gh pr view` read [`pr fetch`](#nen-pr-fetch) and [`issue open-pr-check`](#nen-issue-open-pr-check) make; `closingIssuesReferences` is GitHub's own list of the issues the PR closes, a body keyword and a sidebar link alike -- **but only for a PR into the default branch**. When the list is empty, the default branch is read (`gh repo view <target> --json defaultBranchRef`); on any other base GitHub computes no closing references, so the body's own closing keywords (`Closes`/`Fixes`/`Resolves` and their tenses, with `#N`, `owner/name#N` or an issue URL, outside code and comments) name the closing issues instead (`closingSource: "body-keywords"`), and a body naming none there is reported as `closingSource: "none-on-non-default-base"` with zero criteria -- never "closes no issue" -- and, from 2026-10-23, no longer blocks: the other conjuncts decide. Each closing issue is read over REST (`gh api repos/<owner/name>/issues/<N>`) in **its own repository**, and its criteria extracted as [`issue criteria`](#nen-issue-criteria) extracts them -- the one row grammar, so a list row naming `AC-{n}` in no admitted shape is `unrecognised`.
 
@@ -2775,13 +2804,13 @@ A table line whose first cell mentions `AC-` and is none of those spellings (`AC
 | `covered-with-evidence` | exactly one readable row names it, and its evidence cell says something |
 | `covered-without-evidence` | exactly one readable row names it, with no evidence |
 | `missing-row` | no row names it |
-| `malformed-row` | one row names it and could not be read: an unknown word, or not three cells |
+| `malformed-row` | one row names it and could not be read: an unknown word, two or more words in one cell (`satisfied, partial` — refused by name, never read as either), or not three cells |
 | `duplicate-rows` | two or more rows name it; nen will not pick one |
 | `not-verifiable` | the closing issue states no AC row: one row for the issue, with a null `id` -- **never a pass** |
 
 Beside the coverage, the row's `word` when exactly one readable row names the criterion. Rows that name a criterion no closing issue states, or name one ambiguously, are **unmatched**; `none` rows are listed as **unrequested** with their word and evidence, and a `problem` when the word is not the none word or, with evidence required, the evidence says nothing. A pull request that closes no issue reports `verifiable: false` and no criterion.
 
-**Output and exit codes** -- the line `<n> criterion row(s) across <n> closing issue(s), <n> blocking -- <n> covered with evidence, <n> without, <n> missing-row, <n> malformed-row, <n> duplicate-rows, <n> not-verifiable` (or `<owner/name>#<n> closes no issue: no criterion to compare (not verifiable)`, or, into a base that is not the default branch with no closing keyword in the body, `<owner/name>#<n> into '<base>' (not the default branch): GitHub lists no closing issue and the body names none -- cannot tell what it closes`), then one `<COVERAGE>  <owner/name>#<N>/<AC-n> <word> (line <n>)` line per criterion and `UNRECOGNISED`, `UNREQUESTED`, `UNMATCHED` and `MALFORMED` lines. `--json`: `{ contract, target, pr, url, headSha, base, closingSource, closingIssues, verifiable, criteria, unrequested, unmatched, malformed, counts, blocking }` -- `contract` is `nen.pr.converge/v0.1`; `closingSource` `github`, `body-keywords`, `none-on-non-default-base` or `none`; `closingIssues` each `{ issue, criteria, verifiable, unrecognised }` (`issue` is `owner/name#N`, `criteria` the number of AC rows); `verifiable` false when the PR closes no issue or any closing issue states no criterion; `criteria` each `{ issue, id, text, coverage, word, evidence, rows }` (`id` `AC-{n}` or null on `not-verifiable`, `rows` the verify-row line numbers naming it); `unrequested` each `{ line, word, evidence, problem }`; `unmatched` and `malformed` each `{ line, cell, reason }`; `counts` one count per coverage plus `words: { satisfied, partial, missing, contradicts, unrequested }`; `blocking` one string per row that sets exit 1.
+**Output and exit codes** -- the line `<n> criterion row(s) across <n> closing issue(s), <n> blocking -- <n> covered with evidence, <n> without, <n> missing-row, <n> malformed-row, <n> duplicate-rows, <n> not-verifiable` (or `<owner/name>#<n> closes no issue: no criterion to compare (not verifiable)`, or, into a base that is not the default branch with no closing keyword in the body, `<owner/name>#<n> into '<base>' (not the default branch): GitHub lists no closing issue and the body names none -- cannot tell what it closes`), then one `<COVERAGE>  <owner/name>#<N>/<AC-n> <word> (line <n>)` line per criterion and `UNRECOGNISED`, `UNREQUESTED`, `UNMATCHED` and `MALFORMED` lines. `--json`: `{ contract, target, pr, url, headSha, base, closingSource, closingIssues, verifiable, criteria, unrequested, unmatched, malformed, counts, blocking }` -- `contract` is `nen.pr.converge/v0.1`; `closingSource` `github`, `body-keywords`, `none-on-non-default-base` or `none`; `closingIssues` each `{ issue, criteria, verifiable, unrecognised }` (`issue` is `owner/name#N`, `criteria` the number of AC rows); `verifiable` false when the PR closes no issue or any closing issue states no criterion; `criteria` each `{ issue, id, text, coverage, word, evidence, rows, raw }` (`id` `AC-{n}` or null on `not-verifiable`, `rows` the verify-row line numbers naming it, `raw` the one row as written, else null); `unrequested` each `{ line, word, evidence, problem }`; `unmatched` and `malformed` each `{ line, cell, reason }`; `counts` one count per coverage plus `words: { satisfied, partial, missing, contradicts, unrequested }`; `blocking` one string per row that sets exit 1 — a blocking word or a malformed row quotes the row (`o/n#12/AC-2: contradicts -- row line 8: | AC-2 | contradicts | x |`), a criterion with no row names its id (`o/n#12/AC-2: missing-row (no verify row names AC-2)`).
 
 **Which rows block.** Exit **1** on any of: a criterion that is `missing-row`, `malformed-row` or `duplicate-rows`; a criterion whose word is a blocking word (default `missing`, `contradicts`); a criterion row saying the none word (`unrequested`); a criterion `covered-without-evidence` while evidence is required (the default); a closing issue that states no criterion (`not-verifiable` -- never the pass code); a closing issue carrying an `unrecognised` AC row; a `none` row with a problem; an `unmatched` or `malformed` verify row. `partial` with evidence passes. A non-default base whose body names no closing issue is reported, not blocked (changed 2026-10-23; it exited 1 in v0.26.0). Exit **0** when nothing blocks, a PR into the default branch closing no issue included (`verifiable: false` says so). Exit **1** too when it **could not read**: the pull request, its `body`, `baseRefName` or `closingIssuesReferences`, the default branch, a closing reference naming no number and repository (or a repository that is no `owner/name` GitHub could issue -- a `..`, an extra slash -- refused before any read of it), a closing issue or its body, a closing number that names a pull request, or a full page of 100 closing references (the rest unread); stdout stays empty and stderr names what failed. "Could not read" is never "nothing to cover". Exit **2** on usage and a malformed catalogue.
 
@@ -4014,6 +4043,7 @@ nen pr merge <n|owner/name#n|CODE#n> --delivery --requirements-from <path> --rep
 | `--requirements-from <path>` | **yes** | the `pr body-check` requirements | validated before any `gh` call, exactly as `--release-unit` |
 | `--repo <path>` | **yes** | the checkout whose `origin` names the repository and whose `nen/workflow.json` `branch.base` is one protected name | — |
 | `--require-head <sha>` | no | pin the commit (7–40 hex digits) | passed to `pr ready`, which gives no verdict on any other head; restated on the head-pin gate |
+| `--catalogue <path>` | no | the [issue-sections catalogue](#the-issue-sections-catalogue) the `criteria` gate reads the closing issues with (prefix, sections, `coverage` block) | absent: `AC` rows anywhere in the issue body and the default coverage rules; unreadable or malformed exits 2 before any `gh` call; with `--release-unit`: exit 2 |
 | `--run` | no | execute the merge once every gate passes | omit to see the plan only |
 | `--json` | no | machine-readable result | emitted on a refusal by ruling too |
 
@@ -4060,7 +4090,20 @@ integration branches.
 2. **`pr ready`** — in-process, `--require-head` passed through.
 3. **head pin** — as `--release-unit`'s.
 4. **`pr body-check`** — as `--release-unit`'s.
-5. **whose pr** — author is the viewer, never cross-repository, **and** the
+5. **criteria** ([#479](https://github.com/zheref/nen/issues/479) AC-3; Akatsuki CON-17(c), Hatsu HR-11) — the
+   [`pr converge`](#nen-pr-converge) coverage of every closing issue, from
+   the SAME one fetch (its `closingIssuesReferences` and body; on this
+   non-main base, the body's closing keywords), so at the pinned head. A
+   criterion with no verify row, a row outside the five words or with two, a
+   row reading `missing` or `contradicts` — **quoted**, `BLOCKING
+   o/n#12/AC-2: contradicts -- row line 8: | AC-2 | contradicts | … |` — or a
+   closing issue stating none refuses, whatever `pr ready` said. A body
+   naming no closing issue has no criterion to miss and passes. A closing
+   issue that could not be read fails this gate and the next.
+6. **closing links** — [`pr converge --composite`](#the-composite-verdict)'s
+   links conjunct, over the same fetch (on a non-main base it holds, naming
+   the body's keywords as the source).
+7. **whose pr** — author is the viewer, never cross-repository, **and** the
    head ref is in the run form of `branch.template` read at the base commit:
    every `{token}` is one non-empty segment, so `{model}/{persona}/{descriptor}`
    is three.
@@ -4086,7 +4129,7 @@ unconfirmed.
 
 **`--json`** — `nen.pr.merge-delivery/v0.1`: `{ contract, target, pr, base,
 baseOk, refused, defaultBranch, configuredBase, baseCommitBase,
-defaultBranchBase, baseProtected, baseRulesets, ready, pinOk, bodyOk, wholeOk,
+defaultBranchBase, baseProtected, baseRulesets, ready, pinOk, bodyOk, criteriaOk, linksOk, wholeOk,
 ok, ran, spawnFailed, judgedHead, requiredHead, state, rereadBase, mergedBase,
 outsideAuthority, mergeArgv, gates: [{ name, ok, lines }] }` — `baseRulesets`
 counts DISTINCT `ruleset_id`s (the transcript prints `N rule(s) from M
@@ -11205,34 +11248,73 @@ picks the check; nothing dispatches on an id, so a contract may renumber:
 | `reading-cited-as-ruled` | a clause id (`pattern`, capture 1) whose status in `rulingsFile` is `reading`, in a `skillPaths` file, in a paragraph without the word *reading* | `pattern` (`prefix` optional, default `HR`) |
 
 **Exemptions.** Fenced code is never read; quoted words (`"…"`, `“…”`, so also
-`*"…"*`) are blanked unless `exemptions.quotedWords` is `false`; a RETIRED block
-exempts the `stale-residue`, `stale-version`, `bare-ref` and `residue-unfiled`
-classes; a `records.paths` file exempts the `records.rules` ids. `.git`,
+`*"…"*`) are blanked unless `exemptions.quotedWords` is `false` — a quotation
+pairs within one line and never across an inline code span; a RETIRED block (a
+`> **RETIRED…` quote, or a `**RETIRED` paragraph or list item up to a blank line,
+a heading or a list item at the same or a shallower indent) exempts the rule ids
+in `retired.rules` (absent: the rules of the `stale-residue`, `stale-version`,
+`bare-ref` and `residue-unfiled` classes; an id naming no rule exits 2); a
+`records.paths` file exempts the `records.rules` ids. Every `markerRows` entry
+must be an `ask-once-per-run` row of `decisionsFile` (HR-4): absent or of any
+other class exits 2. `.git`,
 `node_modules`, `.nen` and `.claude` at the root are never walked; `paths.exclude`
 adds globs; a symlink is followed only inside the root.
 
-**The baseline** (`--baseline`) is `{ "findings": [{ path, rule, text, count }] }`,
-keyed by path, rule id and the finding's normalised text — never a line number.
-A `fail` finding the baseline holds reads clean; a row no finding uses any more
-is **stale** (red: remove it); with `--base`, a row the base's copy did not carry
-is **grown** (red: the baseline only shrinks). A rule id in `emptyBaseline` is
+**The baseline** (`--baseline`) is `{ "findings": [{ path, rule, text, count }] }`
+(plus `frozenAt` and `$`-keys; any other key, top-level or in a row, exits 2, and
+so does a repeated row key — one row per key, its count the total), keyed by
+path, rule id and the finding's normalised text — never a line number. A `fail`
+finding the baseline holds reads clean; a row no finding uses any more, or whose
+path the walk does not read (deleted, renamed, out of scope), is **stale** (red:
+remove it); with `--base` or `--base-baseline`, a row whose count exceeds the
+base copy's, summed per key, is **grown** (red: the baseline only shrinks). A rule id in `emptyBaseline` is
 refused in any baseline. `advisory` findings print and are never counted or
 baselined.
 
 **Usage**
 
 ```text
-nen canon lint --root <checkout> --rules <contract> [--baseline <file>] [--base <ref>] [--json]
+nen canon lint --root <checkout> [--rules <contract>] [--baseline <file>]
+               [--base <ref> | --base-baseline <file>] [--skill-paths <globs>] [--json]
 ```
+
+**The declared home: `canon.lint` in `nen/workflow.json`.** A repository that
+lints its canon declares the two paths once, so every caller — a CI step, a
+skill, `nen schema check` — reads the same files:
+
+```json
+{ "canon": { "lint": {
+  "rules": "contracts/prose.lint.json",
+  "baseline": "contracts/prose.lint.baseline.json",
+  "skillPaths": ["claude/skills/*/SKILL.md", "claude/agents/*.md", "claude/rules/*.md"]
+} } }
+```
+
+`rules` is required once `lint` is declared; `baseline` and `skillPaths` are
+optional; each path is repository-relative (absolute, empty or climbing `..`
+is refused by pointer). `skillPaths` applies only when the contract declares
+none. **The block is read only when `--rules` is absent** (Feitan F1 on
+[#526](https://github.com/zheref/nen/pull/526), SEC-7): in CI the tree is the
+pull request's head, and a head `canon.lint.skillPaths` must not narrow a
+trusted contract, so with `--rules` nothing is read from `nen/workflow.json` as
+policy and `--baseline` and `--skill-paths` are flags. Read, a
+`nen/workflow.json` that does not load exits 2: its `skillPaths` could move the
+verdict, so an unread policy is never "nothing declared". [`schema check`](#nen-schema-check) adds the
+row `nen/workflow.json#canon.lint` when the block is declared — the rules
+contract validated as `nen.prose-lint/v0.1` and the baseline's shape, with the
+readers this verb runs; a file absent, outside the root, not UTF-8 or invalid is
+a required FAIL naming it.
 
 **Arguments**
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `--root <checkout>` | yes | The canon checkout to lint. | `--repo <path>` is the same directory; both naming different ones exits 2. |
-| `--rules <contract>` | yes | The rules contract, relative to the root. | Never built in. Missing, unreadable, not JSON or of the wrong shape (a rule without a field its class needs included) exits 2. |
-| `--baseline <file>` | no | The shrink-only baseline, relative to the root. | Absent: every `fail` finding is new. Named and missing, or malformed, exits 2. |
-| `--base <ref>` | no | Lint only the files changed since `git merge-base <ref> HEAD` (working tree included), and refuse a baseline row the base's copy lacks. | The hanten form. A ref starting `-` exits 2; a git read that fails exits 2. |
+| `--rules <contract>` | unless `canon.lint.rules` is declared | The rules contract, relative to the root (an absolute path inside the root is read too). | Never built in. Neither flag nor block: usage, exit 2. Missing, unreadable, not JSON, a symlink leaving the root, or of the wrong shape (a rule without a field its class needs included) exits 2. |
+| `--baseline <file>` | no | The shrink-only baseline, relative to the root. | Default `canon.lint.baseline`. Neither: every `fail` finding is new. Named and missing, or malformed, exits 2. |
+| `--base <ref>` | no | Lint only the files changed since `git merge-base <ref> HEAD` (working tree included), and refuse a baseline row grown over the base's copy. | The hanten form. A base carrying no baseline prints `notice: <ref> carries no <baseline>; baseline growth is not checked` (and `notice` in `--json`), never a silent skip. A ref starting `-` exits 2; a git read that fails exits 2. |
+| `--base-baseline <file>` | no | The whole tree, with growth refused over `<file>`, the trusted base revision's baseline. No git read. | The CI form (Hatsu's `prose-ambiguity-check.yml` passes the trusted revision's copy). Missing or malformed exits 2. Given with `--base`: usage, exit 2. |
+| `--skill-paths <globs>` | no | Comma-separated globs the marker limit and the reading rule apply to when the contract declares no `skillPaths`. | Default `canon.lint.skillPaths` without `--rules`; with `--rules`, only this flag (absent: every linted path). An empty list exits 2. The CI form passes the trusted value: `--rules <trusted> --baseline <file> --base-baseline <trusted> --skill-paths 'claude/skills/*/SKILL.md,claude/agents/*.md,claude/rules/*.md'`. |
 
 **Output and exit codes** — one line per new finding, `path:line · <rule> · text`,
 then `baseline · <rule> · path · text — no longer found; remove the row` per stale
@@ -11243,34 +11325,48 @@ advisory rule). `--json` top-level keys: `contract` (`nen.canon.lint/v0.1`),
 `root`, `rules`, `baseline`, `base`, `files`, `exit`, `counts` (per rule id
 `{ total, baselined, new }`), `findings` (every `fail` finding,
 `{ path, line, rule, severity, text, inBaseline }`), `advisory` (the same without
-`inBaseline`), `staleBaseline`, `grownBaseline` (baseline rows). Exit **0** no
+`inBaseline`), `staleBaseline`, `grownBaseline` (baseline rows), `notice` (the
+`--base` notice, else `null`) — the guard's shape, with `rules` and `baseline`
+added and nen's own `contract` id. Exit **0** no
 `fail` finding outside the baseline and no stale or grown row; **1** at least one;
 **2** wiring — an unreadable or invalid contract, baseline, decisions, rulings or
-version file, an unlistable directory, an unreadable or non-UTF-8 file, a symlink
-leaving the root or dangling, a failed git read — and every usage error. **A file
+version file, an unlistable directory, an unreadable or non-UTF-8 file, a file
+over 4 MiB (`MAX_LINT_FILE_BYTES`, never read slowly), a symlink leaving the root
+or dangling (only a real symlink is called dangling; any other path that cannot
+be resolved is `cannot read <path>: <code>`), a failed git read — and every usage error. **A file
 the lint could not read is never a file it found clean**: nothing is printed on
 stdout under exit 2.
 
-Three deliberate differences from the guard: nen does not probe for a Hatsu
-checkout (the contract's own files are the root's credentials); a finding inside
-YAML frontmatter names the file's own line (the guard reports it one line
-early); and a cited file reached through a symlink that resolves outside the root
-is a `citation` finding (`leaves the root`), never read. Where the guard used built-in `claude/…` and `surfaces/` paths, the
-contract now says so: `skillPaths` (the files the marker limit and the reading
-rule apply to; absent, every linted file) and `paths.exclude`.
+Deliberate differences from the guard, none of which moves a verdict on Hatsu's
+committed contract and baseline: nen does not probe for a Hatsu checkout (the
+contract's own files are the root's credentials); rules dispatch on `class`, so
+a contract may renumber, and a class the contract does not use need not appear;
+`retired` is optional (default above); and the guard's built-in `claude/…` and
+`surfaces/` paths are data — `skillPaths` (the contract's, else `canon.lint`'s;
+neither, every linted file) and `paths.exclude`. A cited file reached through a
+symlink that resolves outside the root exits 2, as in the guard (SEC-7), and a
+JSON file that does not parse is named, never quoted.
+
+**Parity, checked 2026-10-23.** Over an export of Hatsu `main` at `1243b272`
+with `canon.lint` declared as above, `nen canon lint --repo <export> --json` and
+`node scripts/prose_ambiguity_check.mts --root <export> --json` agree on every
+fail and advisory finding, every count and the exit (0); so do the CI forms
+(`--rules <abs> --base-baseline <abs>`). Without `skillPaths` the verb applies
+`PL-12` to `docs/ROSTER.md` too (48 findings), which is why the block (or
+`--skill-paths`) names them. Re-checked after the settle pass of #526: the CI
+form with `--skill-paths` agrees too.
 
 **Example**
 
 ```bash
-nen canon lint --root ../hatsu --rules contracts/prose.lint.json --baseline contracts/prose.lint.baseline.json
+nen canon lint --repo ../hatsu
 ```
 ```text
-claude/skills/ten/SKILL.md:205 · PL-05 · Fixed in #154 last week.
-canon lint: 180 files · 1 new · 0 stale · 0 grown · PL-01 185/185b · PL-02 8/8b · PL-03 0/0b · PL-04 0/0b · PL-05 604/603b · PL-06 387/387b · PL-07 357a · PL-08 441a · PL-09 10a · PL-10 50a · PL-11 1/1b · PL-12 0/0b
+canon lint: 187 files · 0 new · 0 stale · 0 grown · PL-01 189/189b · PL-02 7/7b · PL-03 0/0b · PL-04 0/0b · PL-05 653/653b · PL-06 381/381b · PL-07 387a · PL-08 450a · PL-09 12a · PL-10 57a · PL-11 7/7b · PL-12 0/0b
 ```
-(exit 1; a real run over an export of Hatsu's `opus/kurapika/sdd-p5-prose-lint`
-tree with one bare reference planted — the unplanted tree reads `0 new` at exit 0,
-the guard's verdict and counts exactly)
+(exit 0; a real run over an export of Hatsu `main` at `1243b272` with the
+`canon.lint` block above added to its `nen/workflow.json` — the guard's counts
+exactly)
 
 ### `nen canon clause check`
 
