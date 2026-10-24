@@ -103,7 +103,9 @@ usage:
       and quoted words are exempt. 'fail' findings count against the
       shrink-only --baseline (keyed path + rule + normalised text); a row no
       finding uses is stale, and under --base a row the base lacked is grown;
-      'advisory' findings print and never count. --base <ref> lints only the
+      'advisory' findings never count, and print one line each under --base
+      only (the change's own files; a whole-tree run, --base-baseline's
+      included, carries them in --json advisory[]). --base <ref> lints only the
       files changed since git merge-base <ref> HEAD, and says so when <ref>
       carries no baseline (growth then unchecked); --base-baseline <file>
       lints the whole tree and refuses growth over <file>, the trusted base
@@ -113,8 +115,10 @@ usage:
       nen/workflow.json -- in CI the tree is the head -- so --baseline and
       --skill-paths <globs> (comma-separated; the paths the marker limit and
       the reading rule apply to when the contract declares no skillPaths;
-      absent, every linted path) are flags. --repo names the same directory
-      as --root.
+      absent, every linted path) are flags. A --rules path outside the root
+      is the caller's own file, read as named like --base-baseline; inside
+      the root (and always for canon.lint.rules) a symlink leaving the root
+      is wiring. --repo names the same directory as --root.
       Exit 0 nothing new, stale or grown; 1 at least one, each printed
       'path:line · <rule> · text'; 2 wiring (an unreadable or invalid
       contract, baseline or file, a symlink leaving the root, a failed git
@@ -1440,7 +1444,7 @@ function lintVerb(context: CommandContext): number {
     const rules = rulesFlag ?? declared?.rules ?? null;
     if (rules === null) throw new VerbUsageError("--rules <contract> is required, or declare nen/workflow.json canon.lint.rules: the rules are the caller's data, never built in (e.g. contracts/prose.lint.json).");
     const baseline = baselineFlag ?? declared?.baseline ?? null;
-    const { report, rules: ruleList } = canonLint({ root, rules, baseline, base, baseBaseline, skillPaths: skillPaths ?? declared?.skillPaths ?? null }, context.seams);
+    const { report, rules: ruleList } = canonLint({ root, rules, baseline, base, baseBaseline, skillPaths: skillPaths ?? declared?.skillPaths ?? null, rulesCallerNamed: rulesFlag !== null }, context.seams);
     emit(context.io, context.json, report, renderLint(report, ruleList, baseBaseline ?? base));
     return report.exit;
   } catch (error) {

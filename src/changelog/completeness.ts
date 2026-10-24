@@ -173,10 +173,10 @@ export function describeReleasePrAllowance(allowance: ReleasePrAllowance | null)
 // A VERSIONED SECTION HEADING, AT EITHER LEVEL THIS FAMILY WRITES. `nen
 // changelog collate` renders `### vX.Y.Z — <theme>` (./collate.ts) while this
 // repository's own CHANGELOG.md opens each release with `## vX.Y.Z — <date>`.
-// ./fragment.ts's `firstDatedVersion` reads `###` only and is left alone --
-// CON-33(a) is outside this change's scope -- so the allowance reads both
-// levels here rather than declining every release of a `##` repository as
-// "no dated section". Anything else (a `## [1.2.3]` Keep-a-Changelog heading,
+// ./fragment.ts's `firstDatedVersion` reads both levels too (Bugbot on
+// zheref/nen#527), so the allowance and CON-33(a)'s release move agree on
+// which heading opens a release rather than declining every release of a `##`
+// repository as "no dated section". Anything else (a `## [1.2.3]` Keep-a-Changelog heading,
 // `### Unreleased`) is not a versioned section to this check, and the
 // allowance then declines rather than guessing. The second group is whatever
 // trails the version: the date, the theme, or `— unreleased`.

@@ -732,6 +732,26 @@ export interface LintOptions {
   readonly baseBaseline?: string | null;
   /** The marker-limit and reading-rule paths when the contract declares no `skillPaths` (from `canon.lint`). */
   readonly skillPaths?: readonly string[] | null;
+  /**
+   * Whether `rules` is caller-named (the `--rules` flag) rather than read from
+   * the tree's `canon.lint.rules`. A caller-named path outside the root is read
+   * as named, as `baseBaseline` is; absent or false, it is held inside the root.
+   */
+  readonly rulesCallerNamed?: boolean;
+}
+
+/**
+ * The rules contract's absolute path. A path the TREE names, or any path that
+ * lies inside the root, is held to SEC-7 by {@link insideRoot}: the pull
+ * request's head controls those bytes, a symlink among them included. A
+ * caller-named `--rules` that lies outside the root (Bugbot on zheref/nen#527:
+ * the CI form checks the trusted revision out beside the head, as it does for
+ * `--base-baseline`) is the caller's own file and is read as named.
+ */
+function rulesPath(root: string, realRoot: string, rel: string, callerNamed: boolean): string {
+  const abs = resolve(root, rel);
+  const lexicallyInside = abs === root || abs.startsWith(root + sep);
+  return callerNamed && !lexicallyInside ? abs : insideRoot(root, realRoot, rel);
 }
 
 /** The path as git names it from the root: a root-relative, `/`-separated path. */
@@ -744,8 +764,8 @@ export function canonLint(options: LintOptions, seams: Seams): { readonly report
   const root = resolve(options.root);
   if (!existsSync(root) || !statSync(root).isDirectory()) wiring(`root ${options.root} is not a directory`);
   const realRoot = realpathSync(root);
-  const rulesAbs = insideRoot(root, realRoot, options.rules);
-  if (!existsSync(rulesAbs)) wiring(`rules contract ${options.rules} does not exist under ${root}`);
+  const rulesAbs = rulesPath(root, realRoot, options.rules, options.rulesCallerNamed === true);
+  if (!existsSync(rulesAbs)) wiring(`rules contract ${options.rules} does not exist${rulesAbs.startsWith(root + sep) ? ` under ${root}` : ""}`);
   const contract = parseLintContract(readJson(rulesAbs, options.rules), options.rules);
   let min = "";
   let pin = "";

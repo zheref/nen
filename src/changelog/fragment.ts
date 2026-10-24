@@ -116,39 +116,51 @@ export function bodyHasOptOut(body: string | null): boolean {
 
 /** `### Unreleased` entries: top-level `- **...` before the next heading at level 3 or higher. */
 export function unreleasedEntryCount(changelog: string): number {
-  return countEntries(changelog, /^### Unreleased/);
+  return countEntries(changelog, /^(###) Unreleased/);
 }
 
-/** The first dated `### vX.Y.Z` section's version, or null. */
+// A VERSIONED RELEASE HEADING AT EITHER LEVEL THIS FAMILY WRITES (Bugbot on
+// zheref/nen#527): `### vX.Y.Z — <theme>`, the fragment-era form, and
+// `## vX.Y.Z — <date>`, which `collate` writes where the changelog's releases
+// already take that form (./collate.ts, zheref/nen#515 F1) -- nen's own. Read
+// at `###` only, a release PR that collated into the `##` form had no head
+// version, so `isReleaseMove` declined it and `fragment-required` exited 1.
+// Capture 1 is the heading's level, capture 2 the version.
+const DATED_SECTION = /^(#{2,3}) (v\d+\.\d+\.\d+)/;
+
+/** The first dated `## vX.Y.Z` / `### vX.Y.Z` section's version, or null. */
 export function firstDatedVersion(changelog: string): string | null {
   for (const line of changelog.split("\n")) {
-    const match = /^### (v\d+\.\d+\.\d+)/.exec(line);
-    if (match !== null) return match[1] ?? null;
+    const match = DATED_SECTION.exec(line);
+    if (match !== null) return match[2] ?? null;
   }
   return null;
 }
 
-/** Entries under the FIRST dated section. */
+/** Entries under the FIRST dated section, its subsections included. */
 export function firstDatedEntryCount(changelog: string): number {
-  return countEntries(changelog, /^### v\d+\.\d+\.\d+/);
+  return countEntries(changelog, DATED_SECTION);
 }
 
+// `header`'s capture 1 is the opening heading's `#`s: the section runs to the
+// next heading at THAT level or higher, so a `## vX.Y.Z` section keeps its
+// `### Added` / `### Fixed` subsections and their bullets, and a `###` section
+// still ends at the next `###`.
 function countEntries(changelog: string, header: RegExp): number {
-  let inside = false;
+  let level = 0;
   let count = 0;
   for (const line of changelog.split("\n")) {
-    if (!inside && header.test(line)) {
-      inside = true;
+    if (level === 0) {
+      const opened = header.exec(line);
+      if (opened !== null) level = (opened[1] as string).length;
       continue;
     }
-    // A heading at level 3 OR HIGHER ends the section (zheref/nen#515 F2), as
-    // collate's `endsSection(…, 3)` does: a `## v<prev>` heading below an
-    // empty Unreleased block is not part of it, and neither are its bullets.
-    if (/^#{1,3} /.test(line)) {
-      if (inside) break;
-      continue;
-    }
-    if (inside && line.startsWith("- **")) count += 1;
+    // A heading at the section's level OR HIGHER ends it (zheref/nen#515 F2),
+    // as collate's `endsSection(…, level)` does: a `## v<prev>` heading below
+    // an empty Unreleased block is not part of it, and neither are its bullets.
+    const heading = /^(#{1,6}) /.exec(line);
+    if (heading !== null && (heading[1] as string).length <= level) break;
+    if (line.startsWith("- **")) count += 1;
   }
   return count;
 }

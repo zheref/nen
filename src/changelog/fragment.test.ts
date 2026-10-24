@@ -10,6 +10,7 @@ import {
   unreleasedEntryCount,
   type FragmentInputs,
 } from "./fragment.js";
+import { collateChangelog } from "./collate.js";
 
 function inputs(overrides: Partial<FragmentInputs> = {}): FragmentInputs {
   return {
@@ -56,6 +57,47 @@ describe("unreleasedEntryCount / firstDatedVersion / firstDatedEntryCount", () =
   it("finds the first dated section's version and entry count", () => {
     expect(firstDatedVersion(changelog)).toBe("v1.0.0");
     expect(firstDatedEntryCount(changelog)).toBe(1);
+  });
+});
+
+// THE DATED FORM `collate` WRITES (Bugbot on zheref/nen#527, PRRT_kwDOUKPjns6v1Osm):
+// a changelog whose releases are `## vX.Y.Z — <date>` -- nen's own -- gets its
+// new section in that form, and the release-move readers must see it, or a
+// release PR that collated its fragments is "fragment required" at exit 1.
+describe("firstDatedVersion / firstDatedEntryCount -- the `## vX.Y.Z — <date>` form", () => {
+  const nenForm = "# Changelog\n\nIntro.\n\n## v0.27.0 — 2026-10-22\n\nTheme.\n\n### Added\n\n- **A** one\n- **B** two\n\n### Fixed\n\n- **C** three\n\n## v0.26.0 — 2026-10-20\n\n- **D** older\n";
+  it("reads the version of a level-2 dated heading", () => {
+    expect(firstDatedVersion(nenForm)).toBe("v0.27.0");
+  });
+  it("counts every entry of the section, its `###` subsections included, and stops at the next `##`", () => {
+    expect(firstDatedEntryCount(nenForm)).toBe(3);
+  });
+  it("still stops a `###` section at the next `###` heading", () => {
+    expect(firstDatedEntryCount("### v1.0.0\n- **A** a\n### v0.9.0\n- **B** b\n")).toBe(1);
+  });
+  it("is not fooled by `### Unreleased` or a non-version heading", () => {
+    expect(firstDatedVersion("## Notes\n\n### Unreleased\n\n- **A** a\n")).toBeNull();
+    expect(firstDatedEntryCount("## Notes\n\n### Unreleased\n\n- **A** a\n")).toBe(0);
+  });
+  it("a release that collate wrote into the dated form is a release move", () => {
+    const base = "# Changelog\n\n### Unreleased\n\n## v1.0.0 — 2026-10-01\n\n- **old** thing\n";
+    const head = collateChangelog(base, "v1.1.0", "Theme.", [{ name: "1-a.md", content: "- **new** thing\n" }], { date: "2026-10-24" }).text;
+    expect(head).toContain("## v1.1.0 — 2026-10-24");
+    expect(firstDatedVersion(head)).toBe("v1.1.0");
+    expect(firstDatedEntryCount(head)).toBe(1);
+    const report = fragmentRequired(
+      inputs({
+        changed: ["CONSTITUTION.md", "changelog.d/1-a.md"],
+        present: new Set(),
+        baseUnreleased: unreleasedEntryCount(base),
+        headUnreleased: unreleasedEntryCount(head),
+        baseVersion: firstDatedVersion(base),
+        headVersion: firstDatedVersion(head),
+        headSectionEntries: firstDatedEntryCount(head),
+      }),
+    );
+    expect(report.verdict).toBe("release-move");
+    expect(report.required).toBe(false);
   });
 });
 

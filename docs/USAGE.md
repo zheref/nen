@@ -8865,6 +8865,14 @@ no spec/canon path changed; satisfied by an opt-out stated in the body, a
 fragment added at head, or a recognized "release move" (Unreleased emptied
 via collation); otherwise required.
 
+**The release move reads the first dated section at either level `collate`
+writes** — `### vX.Y.Z — <theme>` or `## vX.Y.Z — <date>` (Bugbot on
+[#527](https://github.com/zheref/nen/pull/527)). Its version must differ from
+the base changelog's first dated section, and its entries are every top-level
+`- **…` bullet up to the next heading at its own level or higher, so a `##`
+section's `### Added` / `### Fixed` subsections count. Read at `###` only, a
+release PR that collated into nen's own `##` form was `required` at exit 1.
+
 **Usage**
 
 ```text
@@ -11310,7 +11318,7 @@ a required FAIL naming it.
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `--root <checkout>` | yes | The canon checkout to lint. | `--repo <path>` is the same directory; both naming different ones exits 2. |
-| `--rules <contract>` | unless `canon.lint.rules` is declared | The rules contract, relative to the root (an absolute path inside the root is read too). | Never built in. Neither flag nor block: usage, exit 2. Missing, unreadable, not JSON, a symlink leaving the root, or of the wrong shape (a rule without a field its class needs included) exits 2. |
+| `--rules <contract>` | unless `canon.lint.rules` is declared | The rules contract, relative to the root (an absolute path is read too). | Never built in. Neither flag nor block: usage, exit 2. A path inside the root is held to SEC-7 — a symlink there leaving the root exits 2 — while a path outside it is the caller's own file, read as named like `--base-baseline` (the CI form checks the trusted revision out beside the head; Bugbot on [#527](https://github.com/zheref/nen/pull/527)). `canon.lint.rules`, which the tree names, is always held inside the root. Missing, unreadable, not JSON, or of the wrong shape (a rule without a field its class needs included) exits 2. |
 | `--baseline <file>` | no | The shrink-only baseline, relative to the root. | Default `canon.lint.baseline`. Neither: every `fail` finding is new. Named and missing, or malformed, exits 2. |
 | `--base <ref>` | no | Lint only the files changed since `git merge-base <ref> HEAD` (working tree included), and refuse a baseline row grown over the base's copy. | The hanten form. A base carrying no baseline prints `notice: <ref> carries no <baseline>; baseline growth is not checked` (and `notice` in `--json`), never a silent skip. A ref starting `-` exits 2; a git read that fails exits 2. |
 | `--base-baseline <file>` | no | The whole tree, with growth refused over `<file>`, the trusted base revision's baseline. No git read. | The CI form (Hatsu's `prose-ambiguity-check.yml` passes the trusted revision's copy). Missing or malformed exits 2. Given with `--base`: usage, exit 2. |
@@ -11319,7 +11327,11 @@ a required FAIL naming it.
 **Output and exit codes** — one line per new finding, `path:line · <rule> · text`,
 then `baseline · <rule> · path · text — no longer found; remove the row` per stale
 row and `… — added over <ref>; the baseline only shrinks` per grown row; under
-`--base` every advisory finding as `advisory path:line · <rule> · text`; last, one
+`--base` every advisory finding as `advisory path:line · <rule> · text` — under
+`--base` only: a whole-tree run, `--base-baseline`'s CI form included, prints
+none, since the tree's every advisory would bury the fail lines, and carries
+them in `--json`'s `advisory[]` (as the guard does; Bugbot on
+[#527](https://github.com/zheref/nen/pull/527)); last, one
 summary line per rule (`<id> <total>/<baselined>b`, or `<id> <total>a` for an
 advisory rule). `--json` top-level keys: `contract` (`nen.canon.lint/v0.1`),
 `root`, `rules`, `baseline`, `base`, `files`, `exit`, `counts` (per rule id
