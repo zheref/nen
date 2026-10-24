@@ -20,6 +20,7 @@
 
 import readersData from "./readers.json";
 import { sha256 } from "./check.js";
+import { excerptOf } from "./citecheck.js";
 import { readMembership, type Membership, type MembershipSource, type Unread } from "./membership.js";
 import { globMatcher, lineCount, type GlobMatcher, type MemberTree } from "./tree.js";
 
@@ -87,9 +88,7 @@ export interface InventoryReport {
 
 /** Lines l1..l2 of a text, each ending in "\n" (CRLF read as LF): the bytes every spec verb hashes. */
 export function excerptLines(text: string, l1: number, l2: number): string {
-  const lines = text.replace(/\r\n/g, "\n").split("\n");
-  if (text.endsWith("\n")) lines.pop();
-  return lines.slice(l1 - 1, l2).map((line): string => `${line}\n`).join("");
+  return excerptOf(text, l1, l2) ?? "";
 }
 
 /** Each test case a file declares: its name and 1-based line. */

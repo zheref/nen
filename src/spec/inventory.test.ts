@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { defaultSeams } from "../seam/exec.js";
 import { sha256 } from "./check.js";
 import { excerptLines, testCases } from "./inventory.js";
+import { excerptOf } from "./citecheck.js";
 import { parsePlist } from "./membership.js";
 import { globMatcher } from "./tree.js";
 import { commit, MEMBER_SLUG, memberRepo } from "./member.testkit.js";
@@ -78,6 +79,37 @@ describe("nen spec inventory", () => {
     const report = (await spec(["inventory", "--scenario", "react-uzf-v1"], member.root, defaultSeams(), true)).json();
     expect((report["membership"] as { read: string[] }).read).toEqual(["tsconfig.json", "tsconfig.base.json", "apps/web/tsconfig.json"]);
     expect((report["rows"] as { id: string }[]).map((row) => row.id)).toEqual(["screen:apps/web/app/RootPage.tsx", "screen:src/HomePage.tsx"]);
+  });
+
+  it("reads a multi-line include in both Gradle shapes, and an array extends merged key by key (Bugbot on #514)", async () => {
+    const kts = memberRepo({
+      "settings.gradle.kts": `include(\n  ":app",\n  ":feature",\n)\n`,
+      "app/build.gradle.kts": "\n",
+      "app/src/main/kotlin/AScreen.kt": "x\n",
+      "feature/build.gradle.kts": "\n",
+      "feature/src/main/kotlin/BScreen.kt": "y\n",
+    });
+    const groovy = memberRepo({
+      "settings.gradle": `include ':app',\n        ':feature'\n`,
+      "app/build.gradle": "\n",
+      "app/src/main/kotlin/AScreen.kt": "x\n",
+      "feature/build.gradle": "\n",
+      "feature/src/main/kotlin/BScreen.kt": "y\n",
+    });
+    for (const member of [kts, groovy]) {
+      const run = await spec(["inventory", "--scenario", "compose-uzf-v2"], member.root, defaultSeams(), true);
+      expect(run.code).toBe(0);
+      expect((run.json()["rows"] as { id: string }[]).map((row) => row.id)).toEqual(["screen:app/src/main/kotlin/AScreen.kt", "screen:feature/src/main/kotlin/BScreen.kt"]);
+    }
+    const ts = memberRepo({
+      "a.json": `{ "include": ["src"], "exclude": ["src/old"] }`,
+      "b.json": `{ "compilerOptions": { "allowJs": true } }`,
+      "tsconfig.json": `{ "extends": ["./a.json", "./b.json"] }`,
+      "src/HomePage.tsx": "x\n",
+      "src/old/OldPage.tsx": "y\n",
+    });
+    const run = await spec(["inventory", "--scenario", "react-uzf-v1"], ts.root, defaultSeams(), true);
+    expect((run.json()["rows"] as { id: string }[]).map((row) => row.id)).toEqual(["screen:src/HomePage.tsx"]);
   });
 
   it("reads a gradle member's include list and source sets, with JUnit cases", async () => {
@@ -200,6 +232,8 @@ describe("nen spec inventory", () => {
 describe("the inventory's readers", () => {
   it("hashes lines l1..l2 each ending in a newline", () => {
     expect(excerptLines("a\r\nb\nc", 2, 3)).toBe("b\nc\n");
+    // One normalisation for every verb: cite-check's excerpt of a CRLF file equals the inventory's.
+    expect(excerptOf("a\r\nb\r\nc\r\n", 1, 2)).toBe(excerptLines("a\r\nb\r\nc\r\n", 1, 2));
   });
 
   it("finds test cases by each detector", () => {
