@@ -20,6 +20,8 @@ function script(): ScriptedCall[] {
     { match: "git diff --name-status main...HEAD", result: { code: 0, stdout: "" } },
     { match: "git remote get-url origin", result: { code: 0, stdout: "https://github.com/zheref/nen.git\n" } },
     { match: "git rev-parse --path-format=absolute --git-dir --git-common-dir --show-toplevel", result: { code: 0, stdout: "/w/.git\n/w/.git\n/w\n" } },
+    // The ledgers' home (zheref/nen#509): these fixtures are no repository to it, so phases/usage/sessions are read under the root.
+    { match: "git rev-parse --path-format=absolute --git-common-dir", result: { code: 128, stderr: "fatal: not a git repository" } },
     { match: "git rev-parse --verify --quiet refs/remotes/origin/feat/register", result: { code: 1, stdout: "" } },
     { match: "git rev-parse --verify --quiet HEAD", result: { code: 0, stdout: "0000000000000000000000000000000000000000\n" } },
   ];

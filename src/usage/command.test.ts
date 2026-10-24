@@ -3,14 +3,17 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
-import type { Seams } from "../seam/exec.js";
+import { spawnRunner, type CommandResult, type Seams } from "../seam/exec.js";
 import { noPortProbe } from "../seam/scripted.js";
 import { USAGE_CONTRACT, USAGE_LEDGER_DIR, usageCommand } from "./command.js";
 
 function seamsAt(iso: string): Seams {
   return {
-    run: (): never => {
-      throw new Error("must not be called");
+    // Only git, and only to find the ledger's home (zheref/nen#509): a temp
+    // dir is not a repository, so the ledger stays under --repo.
+    run: (command, args, options): CommandResult => {
+      if (command !== "git" || !args.includes("--git-common-dir")) throw new Error(`must not be called: ${command} ${args.join(" ")}`);
+      return spawnRunner(command, args, options);
     },
     now: (): Date => new Date(iso),
     env: {},

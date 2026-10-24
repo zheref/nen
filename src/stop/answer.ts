@@ -41,7 +41,7 @@ import { emit, VerbUsageError, type CommandContext } from "../cli/command.js";
 import { readVerbatimTextFile } from "../cli/inputs.js";
 import { realContainment } from "../repo/contain.js";
 import { assertRepoRoot } from "../repo/root.js";
-import { encodeEffortId } from "../usage/ledger.js";
+import { assertEffortId, encodeEffortId } from "../ledger/effort.js";
 import { GATES, loadDecisions } from "../schema/decisions.js";
 import { STOP_IDS_COMMON_SEGMENTS, STOPS_COMMON_SEGMENTS } from "../ledger/roots.js";
 
@@ -121,11 +121,10 @@ export function effortDirectory(common: string, id: string): string {
   const refuse = (why: string): never => {
     throw new VerbUsageError(`the effort id '${id}' is refused: ${why}. Records are written under ${STOPS_DIR.join("/")}/<percent-encoded id>/ in the git common directory.`);
   };
-  if (id.trim() === "") return refuse("it is empty");
-  if (id.includes("\\")) return refuse("it contains a backslash");
-  if (id.includes("\0")) return refuse("it contains a NUL");
-  if (id.startsWith("/") || /^[A-Za-z]:/.test(id)) return refuse("it is an absolute path");
-  if (id.split("/").some((segment): boolean => segment === ".." || segment === ".")) return refuse("a segment is '.' or '..'");
+  // THE ONE EFFORT-ID GRAMMAR (../ledger/effort.ts, zheref/nen#509 with #511
+  // folded in): an id `nen phase` and `nen usage` refuse is refused here too,
+  // in the same words, so one effort keys every ledger the same way.
+  assertEffortId(id);
   const base = resolve(common, ...STOPS_DIR);
   const full = resolve(base, encodeEffortId(id));
   if (!full.startsWith(base + sep)) return refuse("it resolves outside the stops directory");

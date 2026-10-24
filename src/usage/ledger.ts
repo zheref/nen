@@ -19,8 +19,10 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { encodeEffortId } from "../ledger/effort.js";
 import { withLedgerLock, writeLedgerAtomically, type LedgerLockOptions } from "../ledger/lock.js";
 
+/** The directory's last two segments: under the git common dir since #509, under --repo outside git. */
 export const USAGE_LEDGER_DIR = ".nen/usage";
 export const USAGE_CONTRACT = "nen.usage.ledger/v0.1";
 
@@ -47,29 +49,18 @@ export interface UsageLedger {
   readonly entries: readonly UsageEntry[];
 }
 
-/** The same id alphabet ../phase/command.ts admits, so one effort names both ledgers. */
-export const EFFORT_ID = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+/** The ONE effort-id grammar (../ledger/effort.ts, zheref/nen#509), re-exported for this ledger's callers. */
+export { EFFORT_ID, encodeEffortId } from "../ledger/effort.js";
 
 /**
- * `.nen/usage/<effort>.json`. `encodeURIComponent` is INJECTIVE on the id
- * alphabet ('/' -> '%2F', every other admitted character kept), so no two
- * efforts share a file -- ../phase/command.ts's `ledgerPath` states the
- * incident that rule comes from.
+ * `<root>/.nen/usage/<effort>.json` -- the WORKTREE-LOCAL path, the only one
+ * before zheref/nen#509 and the home outside git; a verb resolves the durable
+ * `<git-common-dir>/.nen/usage/` one through ../ledger/home.ts.
  */
 export function usageLedgerPath(root: string, effort: string): string {
   return join(root, ...USAGE_LEDGER_DIR.split("/"), `${encodeEffortId(effort)}.json`);
 }
 
-/**
- * The ONE encoder of an effort's id into a ledger file name, exported so every
- * per-effort ledger (this one, and `.nen/direct/<id>.json`, ../direct/record.ts) names
- * its file the same way. It is the encoder only: the id VOCABULARY is each verb's own
- * (this ledger's EFFORT_ID alphabet refuses `#` and `:`, which an id such as
- * `<CODE>-IS-#<N>` or `inline-<ISO>` carries; the direct ledger accepts them).
- */
-export function encodeEffortId(effort: string): string {
-  return encodeURIComponent(effort);
-}
 
 /** The ledger on disk, or an empty one; a file that is not this contract's is refused, never rewritten. */
 export function readUsageLedger(path: string, effort: string): UsageLedger {

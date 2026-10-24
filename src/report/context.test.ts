@@ -90,6 +90,8 @@ function script(shape: Shape = {}): ScriptedCall[] {
             : { code: 1, stdout: "" },
     },
     { match: "git rev-parse --verify --quiet HEAD", result: { code: 0, stdout: `${HEAD}\n` } },
+    // The ledgers' home (zheref/nen#509): these fixtures are no repository to it, so phases/usage/sessions are read under the root.
+    { match: "git rev-parse --path-format=absolute --git-common-dir", result: { code: 128, stderr: "fatal: not a git repository" } },
   ];
 }
 

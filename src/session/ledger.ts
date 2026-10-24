@@ -2,7 +2,7 @@
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { withLedgerLock, writeLedgerAtomically, type LedgerLockOptions } from "../ledger/lock.js";
-import { encodeEffortId } from "../usage/ledger.js";
+import { encodeEffortId } from "../ledger/effort.js";
 
 export const SESSION_LEDGER_DIR = ".nen/sessions";
 export const SESSION_CONTRACT = "nen.session.ledger/v0.1";

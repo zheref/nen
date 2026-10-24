@@ -7,6 +7,7 @@
 // Hatsu batch run (the manifest verbs, which take --id). Every flag below is
 // refused on the subcommands that do not read it, so the two never blur.
 
+import { resolve } from "node:path";
 import { parseTarget, type Target } from "../github/target.js";
 import {
   emit,
@@ -21,7 +22,8 @@ import {
 import { splitList } from "../cli/inputs.js";
 import { resolveRepoRoot } from "../repo/root.js";
 import { loadWorkflow } from "../schema/workflow.js";
-import { EFFORT_ID } from "../usage/ledger.js";
+import { effortIdProblem, effortIdRefusal } from "../ledger/effort.js";
+import { resolveEffortHome } from "../ledger/home.js";
 import { rerunFailed } from "./rerun.js";
 import {
   BRANCH_NAME,
@@ -45,15 +47,17 @@ import {
   type RunManifest,
 } from "./manifest.js";
 import { readLivePr, renderVerify, verifyRun } from "./verify.js";
+import { normaliseIssue } from "./issue.js";
+import { CONSUMER_RUN_CONTRACTS, CONSUMER_RUN_DISPLAY, consumerRunPath, planImport, readConsumerRun } from "./import.js";
 import { computeBudget, renderBudget, runEfforts, type BudgetCeiling } from "./budget.js";
 import { readFileSync } from "node:fs";
 import { readRecord, RECORD_SCHEMAS, recordSchema, renderRecord, runIdMatches, unreadableRecord, writeRecord } from "./record.js";
 
-const SUBCOMMANDS = ["rerun-failed", "start", "append", "verify", "budget", "park", "record"] as const;
+const SUBCOMMANDS = ["rerun-failed", "start", "append", "verify", "budget", "park", "record", "import"] as const;
 type Subcommand = (typeof SUBCOMMANDS)[number];
 
 const USAGE = `nen run rerun-failed -- re-run a workflow run's failed jobs, senkei's dead-reviewer recovery.
-nen run start|append|park|verify|budget -- a batch run's manifest (${RUN_CONTRACT}, HR-5).
+nen run start|append|park|verify|budget|import -- a batch run's manifest (${RUN_CONTRACT}, HR-5).
 
 usage:
   nen run rerun-failed --target <owner/name> --run-id <n> [--dry-run] [--json]
@@ -69,6 +73,7 @@ usage:
                  [--effort <id,...>] [--repo <path>] [--json]
   nen run record read  --schema <id> --id <run-id> [--json]
   nen run record write --schema <id> --id <run-id> --from <file> [--dry-run] [--json]
+  nen run import --id <run-id> [--from <file>] [--repo <path>] [--dry-run] [--json]
 
 rerun-failed: 'gh run rerun <n> --failed', exactly. senkei's own instruction:
 re-run the failed job when a reviewer job dies mid-run, NEVER re-label to force
@@ -93,7 +98,10 @@ GIT_WORK_TREE dropped. nen records and reads; it decides nothing.
           --base and --head, when given, must match what is read. A PR
           created before the run's startedAt is refused, exit 1: the run did
           not open it. --issue is required for a delivery PR and optional
-          (null) for an integration or release PR. The same facts again:
+          (null) for an integration or release PR; it is recorded as
+          '<owner/name>#<N>' (a code is resolved through --repo's
+          nen/repos.json, exit 2 when it does not resolve), as park and
+          import record it. The same facts again:
           'unchanged'; a moved head or a retargeted base: 'updated'; another
           issue, kind or effort for a recorded PR: refused, exit 1. No
           manifest, or a PR that could not be read: exit 1.
@@ -108,8 +116,8 @@ GIT_WORK_TREE dropped. nen records and reads; it decides nothing.
   budget  Minutes are WALL-CLOCK since the manifest's startedAt
           (idle.budget.minutes as its catalogue row defines it); the
           efforts' own minutes are printed as effortMinutes, never compared.
-          Tokens are the usage ledgers' (.nen/usage/<effort>.json under
-          --repo) input + output + cache read + cache write, for the efforts
+          Tokens are the usage ledgers' (<git-common-dir>/.nen/usage/
+          <effort>.json, as 'nen usage show' reads them) input + output + cache read + cache write, for the efforts
           the PRs name plus --effort. Ceilings: --max-minutes and
           --max-tokens, default --repo's nen/workflow.json idle.budget. The
           token sum is UNREAD -- 'unevaluated', a claim refused, exit 1 --
@@ -117,6 +125,18 @@ GIT_WORK_TREE dropped. nen records and reads; it decides nothing.
           effort, a delivery PR's or an --effort's effort has no ledger, or a
           ledger will not read. With --claim: exit 1 once either ceiling is reached -- an
           answer, not a failure, the loop cap's shape. Nothing is written.
+  import  Read the consumer plane's futon run manifest
+          (${CONSUMER_RUN_CONTRACTS.join(" or ")}, at
+          '${CONSUMER_RUN_DISPLAY}', or --from <file>)
+          into this manifest, so one manifest owns the run (NN#486 AC-5): the
+          start, every PR (READ LIVE, as append reads it: the consumer keeps
+          the head branch and no commit; its issue number becomes
+          '<owner/name>#<N>') and every parked row, through the same plans
+          start, append and park use. The source file is READ ONLY -- never
+          written, moved or deleted. 'imported', or 'unchanged' on a
+          re-import; a PR gh cannot read, one created before the run started,
+          or a fact that contradicts what nen holds refuses the WHOLE import
+          at exit 1 and writes nothing. A missing or malformed source is exit 1.
 
   record  A caller's resumable run record (zheref/nen#493), validated against
           a schema nen ships as data (${RECORD_SCHEMAS.join(", ")}) and kept at
@@ -134,9 +154,9 @@ Exit 2 for a malformed flag or a flag another subcommand owns.`;
 const OWNED: Readonly<Record<string, readonly Subcommand[]>> = {
   "run-id": ["rerun-failed"],
   target: ["rerun-failed", "start", "verify"],
-  id: ["start", "append", "verify", "budget", "park", "record"],
+  id: ["start", "append", "verify", "budget", "park", "record", "import"],
   schema: ["record"],
-  from: ["record"],
+  from: ["record", "import"],
   "idle-answers": ["start"],
   issue: ["append", "park"],
   pr: ["append"],
@@ -149,7 +169,7 @@ const OWNED: Readonly<Record<string, readonly Subcommand[]>> = {
   "max-tokens": ["budget"],
 };
 const OWNED_BOOLEANS: Readonly<Record<string, readonly Subcommand[]>> = {
-  "dry-run": ["rerun-failed", "start", "append", "park", "record"],
+  "dry-run": ["rerun-failed", "start", "append", "park", "record", "import"],
   claim: ["budget"],
 };
 
@@ -185,6 +205,7 @@ export const runCommand: Command = {
     if (subcommand === "verify") return doVerify(context);
     if (subcommand === "park") return doPark(context);
     if (subcommand === "record") return doRecord(context);
+    if (subcommand === "import") return doImport(context);
     return doBudget(context);
   },
 };
@@ -314,8 +335,7 @@ function doAppend(context: CommandContext): number {
   if (!(RUN_KINDS as readonly string[]).includes(kind)) throw new VerbUsageError(`--kind '${kind}' must be one of ${RUN_KINDS.join(", ")}.`);
   const issueRaw = context.args.values["issue"];
   if (issueRaw === undefined && kind === "delivery") throw new VerbUsageError("--issue <CODE>#<N> is required for a delivery PR: it is the issue the PR delivers. An integration or release PR may omit it (recorded null).");
-  const issue = issueRaw ?? null;
-  if (issue !== null && !ISSUE_REF.test(issue)) throw new VerbUsageError(`--issue '${issue}' is not <CODE>#<N> or <owner/name>#<N>.`);
+  if (issueRaw !== undefined && !ISSUE_REF.test(issueRaw)) throw new VerbUsageError(`--issue '${issueRaw}' is not <CODE>#<N> or <owner/name>#<N>.`);
   const prRaw = requireValue(context.args, "pr", "It is the pull request number the run opened.");
   const pr = Number(prRaw);
   if (!/^[1-9][0-9]*$/.test(prRaw) || !Number.isSafeInteger(pr)) throw new VerbUsageError(`--pr '${prRaw}' is not a pull request number.`);
@@ -324,11 +344,11 @@ function doAppend(context: CommandContext): number {
   const headFlag = context.args.values["head"];
   if (headFlag !== undefined && !HEAD_SHA.test(headFlag)) throw new VerbUsageError(`--head '${headFlag}' is not a commit id of 7 to 40 hex digits.`);
   const effort = context.args.values["effort"] ?? null;
-  if (effort !== null && !EFFORT_ID.test(effort)) {
-    throw new VerbUsageError(`--effort '${effort}' is not an effort id ([A-Za-z0-9][A-Za-z0-9._/-]*), the alphabet nen usage record admits.`);
-  }
+  const effortProblem = effort === null ? null : effortIdProblem(effort);
+  if (effort !== null && effortProblem !== null) throw new VerbUsageError(`--effort: ${effortIdRefusal(effort, effortProblem)}`);
 
   const root = resolveRepoRoot({ repoFlag: context.repoFlag });
+  const issue = issueRaw === undefined ? null : normaliseIssue(root, issueRaw);
   const path = manifestPath(context, root, id);
   if (path === null) return 1;
   const dryRun = context.args.booleans.has("dry-run");
@@ -381,11 +401,12 @@ function doAppend(context: CommandContext): number {
 
 function doPark(context: CommandContext): number {
   const id = runId(context);
-  const issue = requireValue(context.args, "issue", "It is the issue whose effort is parked, as <CODE>#<N> or <owner/name>#<N>.");
-  if (!ISSUE_REF.test(issue)) throw new VerbUsageError(`--issue '${issue}' is not <CODE>#<N> or <owner/name>#<N>.`);
+  const issueRaw = requireValue(context.args, "issue", "It is the issue whose effort is parked, as <CODE>#<N> or <owner/name>#<N>.");
+  if (!ISSUE_REF.test(issueRaw)) throw new VerbUsageError(`--issue '${issueRaw}' is not <CODE>#<N> or <owner/name>#<N>.`);
   const row = requireValue(context.args, "row", "It is the ask-once decisions row the effort is parked on (HR-5).");
   if (!ROW_ID.test(row)) throw new VerbUsageError(`--row '${row}' is not [a-z0-9-]+, the spelling nen/decisions.json uses.`);
   const root = resolveRepoRoot({ repoFlag: context.repoFlag });
+  const issue = normaliseIssue(root, issueRaw);
   const path = manifestPath(context, root, id);
   if (path === null) return 1;
   const dryRun = context.args.booleans.has("dry-run");
@@ -448,7 +469,8 @@ function doBudget(context: CommandContext): number {
   const id = runId(context);
   const extra = splitList(context.args.values["effort"]);
   for (const effort of extra) {
-    if (!EFFORT_ID.test(effort)) throw new VerbUsageError(`--effort '${effort}' is not an effort id ([A-Za-z0-9][A-Za-z0-9._/-]*).`);
+    const problem = effortIdProblem(effort);
+    if (problem !== null) throw new VerbUsageError(`--effort: ${effortIdRefusal(effort, problem)}`);
   }
   const root = resolveRepoRoot({ repoFlag: context.repoFlag });
   const minutesFlag = context.args.values["max-minutes"];
@@ -478,8 +500,48 @@ function doBudget(context: CommandContext): number {
   const manifest = loadManifest(context, id);
   if (manifest === null) return 1;
   const claim = context.args.booleans.has("claim");
-  const report = computeBudget(manifest, root, runEfforts(manifest, extra), ceiling, claim, context.seams.now());
+  const report = computeBudget(manifest, resolveEffortHome(root, "usage", context.seams), runEfforts(manifest, extra), ceiling, claim, context.seams.now());
   emit(context.io, context.json, report, renderBudget(report));
   if (report.verdict === "unevaluated") return 1;
   return claim && report.verdict === "reached" ? 1 : 0;
+}
+
+/**
+ * `nen run import` -- the consumer's futon run manifest read into nen's (NN#486
+ * AC-5; ./import.ts). The source file is read, never written; nen's is written under
+ * the ledger lock only when every PR read live and nothing conflicted.
+ */
+function doImport(context: CommandContext): number {
+  const id = runId(context);
+  const root = resolveRepoRoot({ repoFlag: context.repoFlag });
+  const dryRun = context.args.booleans.has("dry-run");
+  const fromFlag = context.args.values["from"];
+  let common: string;
+  try {
+    common = gitCommonDir(context.seams, root);
+  } catch (error) {
+    context.io.err(`nen: ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
+  }
+  const from = fromFlag === undefined ? consumerRunPath(common, id) : resolve(root, fromFlag);
+  const path = manifestPath(context, root, id);
+  if (path === null) return 1;
+  const now = context.seams.now().toISOString();
+  let result;
+  try {
+    const run = readConsumerRun(from);
+    if (run.id !== id) throw new RunManifestError(`'${from}' records run '${run.id}', not '${id}'. Nothing was written.`);
+    result = withManifest(path, (existing) => planImport(context.seams, existing, run, id, now, root), !dryRun);
+  } catch (error) {
+    context.io.err(`nen: ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
+  }
+  const outcome = dryRun && result.outcome === "imported" ? "dry-run" : result.outcome;
+  emit(context.io, context.json, { outcome, from, path, reason: result.reason, prs: result.prs, parked: result.parked, manifest: result.manifest }, [
+    result.reason === null
+      ? `${outcome}: run ${id} from ${from} -- ${result.prs.length} PR(s), ${result.parked.length} parked -- ${path}`
+      : `refused: ${result.reason}`,
+    ...result.prs.map((row): string => `  #${row.pr}: ${row.outcome}`),
+  ]);
+  return result.outcome === "conflict" ? 1 : 0;
 }

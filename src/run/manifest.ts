@@ -24,8 +24,9 @@
 // `<CODE>#<N>` string (the number is what follows `#`) and null for an
 // integration or release PR, `repo` is the `owner/name` every PR lives in, and
 // `parked[]` `{ issue, row, at }` is HR-5's park state. Which file Hatsu's
-// `then` gate reads is Hatsu's to say; until its effort recorder moves onto
-// these verbs, the two manifests are separate records.
+// `then` gate reads is Hatsu's to say. `nen run import` (./import.ts, NN#486
+// AC-5) reads Hatsu's v0.2 manifest into this one, so one manifest owns the
+// run and Hatsu's recorder can retire.
 //
 // NEN RECORDS AND READS; IT NEVER DECIDES. Nothing here chooses which PR a run
 // may open, whether a gate passes, or what an idle answer means: start writes
