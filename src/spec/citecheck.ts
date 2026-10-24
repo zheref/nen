@@ -162,7 +162,7 @@ export interface CiteCheckInput {
   readonly verifyExcerpt: boolean;
 }
 
-function resolveMember(seams: Seams, input: CiteCheckInput, registry: RepoRegistry | null, registryError: string | null, code: string): MemberCheckout {
+export function resolveMember(seams: Seams, input: CiteCheckInput, registry: RepoRegistry | null, registryError: string | null, code: string): MemberCheckout {
   const unresolved = (repo: string | null, path: string | null, reason: string): MemberCheckout => ({ code, repo, path, verdict: "unresolved", reason, at: null });
   if (registry === null) return unresolved(null, null, registryError ?? "no registry");
   let repo: string;

@@ -1471,14 +1471,20 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       warmup: MUT("brings a working copy to a known state: it discards, fetches, force-moves a trunk ref and checks out a branch. No form of it is a pure read -- the dry run spawns nothing, but a warm-up is not a thing anyone WATCHES, so certifying one form read-only buys a caller nothing and costs the fail-closed answer"),
     },
   },
-  // The spec family's first slice (SDD piece N10, HR-12): three pure reads
-  // and one generator whose write is behind --write, itself dry-run-gated.
+  // The spec family (SDD piece N10, HR-12; zheref/nen#493): pure reads,
+  // generators whose write is behind --write (itself dry-run-gated), and
+  // inventory's --out.
   spec: {
     subcommands: {
       number: RO("reads origin/<base> with git rev-parse/ls-tree and the open PRs' files over gh pr list; writes nothing"),
       check: RO("reads a spec folder's or constitution's Markdown and a caller's vocabulary file; writes nothing"),
       "cite-check": RO("reads member checkouts with git remote get-url, rev-parse and cat-file; writes nothing"),
       index: GATED_DRY(["--write"], "reads each folder's spec.md header; --write writes <root>/INDEX.md unless --dry-run is given"),
+      // zheref/nen#493 waves A and C.
+      inventory: GATED(["--out"], "reads a member checkout through git rev-parse, ls-tree and cat-file; --out writes the inventory document to the caller's file"),
+      diff: RO("reads two inventory files; writes nothing"),
+      converge: GATED_DRY(["--write"], "reads the folder, the inventories and the member checkout through git; --write appends [STALE] companions to spec.md and a convergence phase to tasks.md unless --dry-run is given"),
+      coverage: RO("reads the spec folders and inventory files, or an issue body, a PR body and a test report; writes nothing"),
     },
   },
   split: { subcommands: { verify: RO("proves diff equality over git reads") } },

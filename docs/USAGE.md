@@ -12,7 +12,7 @@ repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
 what each version changed: 47 command
-families, 161 verbs, every flag checked against that binary.
+families, 165 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -206,7 +206,7 @@ change from a compatible one.
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **91 shapes** and **94 ids** (`nen.runner.plan`,
+binary carries**, writing or reading — **95 shapes** and **98 ids** (`nen.runner.plan`,
 `nen.stop.mark` and `nen.wc.worktree.copies` each have two versions, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -266,7 +266,7 @@ file formats).
 - **`schema`** — `nen.schema.set/v0.1`
 - **`session`** — `nen.session.ledger/v0.1`
 - **`shu`** — `nen.shu.<verb>/v0.1` · `nen.shu.coverage-capture/v0.1` · `nen.shu.coverage/v0.1` · `nen.shu.detect/v0.1` · `nen.shu.evidence/v0.1` · `nen.shu.proof/v0.1` · `nen.shu.test-report/v0.1` · `nen.shu.tools/v0.1` · `nen.shu.warmup/v0.1`
-- **`spec`** — `nen.spec.check/v0.1` · `nen.spec.cite-check/v0.1` · `nen.spec.index/v0.1` · `nen.spec.number/v0.1`
+- **`spec`** — `nen.spec.check/v0.1` · `nen.spec.cite-check/v0.1` · `nen.spec.converge/v0.1` · `nen.spec.coverage/v0.1` · `nen.spec.diff/v0.1` · `nen.spec.index/v0.1` · `nen.spec.inventory/v0.1` · `nen.spec.number/v0.1`
 - **`stop`** — `nen.stop.answer/v0.1` · `nen.stop.mark/v0.1` · `nen.stop.mark/v0.2` · `nen.stop.proposed-issue/v0.1`
 - **`surface`** — `nen.surface.capabilities/v0.1` · `nen.surface.install/v0.1` · `nen.surface.mirror.check-installed/v0.1` · `nen.surface.mirror.check-plugin/v0.1` · `nen.surface.mirror.check/v0.1` · `nen.surface.mirror.generate/v0.1` · `nen.surface.status/v0.1`
 - **`usage`** — `nen.usage.ledger/v0.1`
@@ -920,7 +920,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 161 verbs, grouped as the README groups them. **Reads** is what a
+All 165 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -1060,6 +1060,10 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`spec`](#family-spec) | [`nen spec check`](#nen-spec-check) | a spec folder or the constitution held to citation-or-marker, plus Spec Kit analyze's computable passes (duplicate ids, placeholders, inferred tier in a MUST/SC, FR↔task both ways, the caller's vague terms) and the open markers ranked by clarify's taxonomy; CRITICAL exits 1 | spec.md/tasks.md or .specify/memory/constitution.md under --repo; the --vocabulary file; no git/gh | yes |
 | [`spec`](#family-spec) | [`nen spec cite-check`](#nen-spec-cite-check) | every `[src:]` range in a folder resolves at its own sha in the member checkout the checkouts file names; excerpt hashes against `capture/<CODE>/inventory.json`; `--at` reports [STALE] candidates | the folder's .md files and nen/repos.json under --repo; the --checkouts file; git (remote get-url, rev-parse, cat-file) in each member checkout | yes |
 | [`spec`](#family-spec) | [`nen spec index`](#nen-spec-index) | `<root>/INDEX.md` regenerated from each folder's spec.md header; reports current / stale / hand-edited / absent; `--write` refuses over a hand edit | spec.md headers and INDEX.md under --repo; WRITES `<root>/INDEX.md` under --write unless --dry-run | yes |
+| [`spec`](#family-spec) | [`nen spec inventory`](#nen-spec-inventory) | one row per owned file fact of a member at a commit — {id, kind, path, lines, sha, excerptSha256, tier, ruleId}, no excerpts — from the build system's own membership (Xcode build phases and synchronized groups, Gradle include list and source sets, tsconfig files/include/extends/references) classified by the scenario handbook's capture-reader appendix; totals per kind, unknown never omitted | git (rev-parse, ls-tree, cat-file, remote get-url) in the member checkout; WRITES --out when given | yes |
+| [`spec`](#family-spec) | [`nen spec diff`](#nen-spec-diff) | added, removed and changed rows by stable id between two inventories of one member, each changed field named; a different sha alone is no change, so identical inputs give an empty diff | the two inventory files; no git/gh | yes |
+| [`spec`](#family-spec) | [`nen spec converge`](#nen-spec-converge) | a folder's citations of one member re-read at a newer inventory's sha: gaps missing · partial · contradicts · unrequested (against capture/<CODE>/inventory.json), ticked tasks listed as claims, never evidence; `--write` only appends `[STALE @ <sha>]` companions and one dated convergence phase, and a second run changes nothing | spec.md/tasks.md, nen/repos.json and capture/<CODE>/inventory.json under --repo; the inventory and --checkouts files; git (remote get-url, rev-parse, ls-tree, cat-file) in the member checkout; WRITES spec.md and tasks.md under --write unless --dry-run | yes |
+| [`spec`](#family-spec) | [`nen spec coverage`](#nen-spec-coverage) | capture form: covered/total per row kind per member and requirement↔task/test traceability both ways, each with its denominator; delivery form: every F<nnn>-SC-### of an issue has one `## Spec` row in the PR body, satisfied with a passing test or deferred with a reason and a follow-up — an outside id exits 2 | capture: folders and nen/repos.json under --repo, the inventory files; delivery: the two body files and --test-report; no git/gh | yes |
 | [`decisions`](#family-decisions) | [`nen decisions summary`](#nen-decisions-summary) | rows per class and per gate and the G5 ids of nen/decisions.json, so prose never carries those numbers | nen/decisions.json under --repo | yes |
 | [`shu`](#family-shu) | [`nen shu detect`](#nen-shu-detect) | read the markers on disk and PROPOSE a nen/contract.json project block; never writes without --write and never overwrites one | the target repo's own files (framework configs, package.json, project files); writes nen/contract.json only with --write | yes |
 | [`shu`](#family-shu) | [`nen shu build`](#nen-shu-build) | compile or assemble a lane, from the invocation its declaration states | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
@@ -11404,13 +11408,18 @@ message:
 
 **`nen spec`**
 
-The first slice of the verbs Hatsu's capture skill (`dowsing-chain`, Hatsu
-ruling HR-12) reads a Spec Kit spec repository through: number a new folder,
-hold a folder or the constitution to citation-or-marker, resolve every
-citation against the member checkouts, and keep `INDEX.md` generated. They
-**report and refuse; none decides** — no slug is picked, no question is chosen,
-no citation is rewritten, no hand edit is overwritten — and "could not read"
-is exit 1 on every one of them, never a clean report.
+The verbs Hatsu's capture skill (`dowsing-chain`, Hatsu ruling HR-12) reads a
+product family's Spec Kit spec repository and its members through
+(zheref/nen#493): inventory a member's owned files, number a new folder, hold
+a folder or the constitution to citation-or-marker, resolve every citation
+against the member checkouts, diff two inventories, converge a folder against
+a newer one, measure coverage, and keep `INDEX.md` generated. They **report
+and refuse; none decides** — no slug is picked, no question is chosen, no
+citation is rewritten, no hand edit is overwritten — and "could not read" is
+exit 1 on every one of them, never a clean report. The verbs added by #493's
+later waves also carry it as a **`verdict`**, drawn from each verb's closed
+set and always including `could-not-read`, so a `--json` reader can tell an
+unread input from an empty or passing one without parsing prose.
 
 One grammar serves all four (`src/spec/lines.ts`). A requirement line ends in
 
@@ -11694,6 +11703,329 @@ specs/INDEX.md: absent · action none
   002 other-feature Specified · 0 open marker(s) · Other | feature
 ```
 (exit 1; run live against this repository's fixture)
+
+### `nen spec inventory`
+
+One row per **owned file fact** of a member checkout, read at one commit
+(zheref/nen#493 AC-1). Everything is read **through git at `--at`** (default
+`HEAD`) — `git ls-tree` for the file list, `git cat-file` for each file — never
+the work tree, so a row's sha is the sha its bytes belong to. The file set is
+the **build system's own** (SP-14: never a filename glob), one reader per
+governed scenario:
+
+| `--scenario` | Membership | What is read |
+|---|---|---|
+| `swiftui-tca-uzf-v2` | `xcode` | every `*.xcodeproj/project.pbxproj` (not under `Pods/`): each native target's Sources and Resources build-phase files, resolved through the group tree (`<group>` and `SOURCE_ROOT` paths; an SDK or product reference is not product code and is skipped), plus every file under a target's file-system-synchronized root group minus that target's `membershipExceptions` |
+| `compose-uzf-v2` | `gradle` | `settings.gradle(.kts)`'s `include(...)` modules; each module's `src/<set>/{kotlin,java}` source sets, any `srcDir(...)`/`srcDirs(...)` string in its build file, and `src/<set>/res/values*/strings.xml`. A `projectDir` override is not followed and is reported `unread` |
+| `react-uzf-v1` | `tsconfig` | `tsconfig.json`'s `files`/`include`/`exclude` (TypeScript's defaults when absent: `**/*`; `node_modules`, `bower_components`, `jspm_packages` and `outDir` excluded), a relative `extends` for the keys a file does not state, every `references[].path` project; `.ts`/`.tsx` (`.js`/`.jsx` with `allowJs`), `.d.ts` skipped. A package `extends` is reported `unread` |
+
+Each owned file is classified by the scenario stack handbook's **capture-reader
+appendix** (`src/spec/readers.json`, data, at bankai-handbooks v0.12.0): file
+suffix → row kind (the fourteen of `handbooks/spec/authoring.md` § *Capture row
+kinds*) → the rule id the appendix cites. A suffix the appendix says **joins**
+another row (a pure renderer, an adapter) emits none and is counted `joined`; a
+file no suffix matches is counted `unclassified`. A `test` file emits **one row
+per test case** (`it(`/`test(` titles; JUnit `@Test fun`; XCTest `func test…`
+and Swift Testing `@Test func`), its range the declaration line; every other
+kind is **one row per file**, its range the whole file. `--exclude` drops the
+caller's own globs (comma-separated, matched against repository paths) and lists
+what it dropped.
+
+A row is `{ id, kind, path, lines: [l1, l2], sha, excerptSha256, tier, ruleId }`:
+`id` is stable across commits (`<kind>:<path>`, or `<kind>:<path>#<test name>`,
+a repeated name suffixed `~2`); `excerptSha256` is the sha256 of lines `l1..l2`,
+each ending in a newline, a CRLF read as LF — the bytes
+[`spec cite-check --verify-excerpt`](#nen-spec-cite-check) hashes; `tier` is
+`declared` for a test case (a test assertion, SP-2) and `observed` otherwise.
+**No excerpt is ever printed or written.** `totals` lists all fourteen kinds:
+`total` with `unit` `file` or `case`, or `total: null` with `unit: unknown` for a
+kind the appendix derives from no suffix (a flag registry, analytics call
+sites) — reported, never omitted (SP-14).
+
+**Usage**
+
+```text
+nen spec inventory --repo <member> --scenario <id> [--lane <lane>] [--at <ref>] [--exclude <glob>[,<glob>...]] [--out <file>] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--repo <path>` | yes | The member's checkout. | Omitted exits 2. |
+| `--scenario <id>` | yes | The member's governed scenario (as [`repo scenario`](#nen-repo-scenario) reads it). | Not one of the three exits 2, naming them. |
+| `--lane <lane>` | no | Read under the lane's `cwd` from `nen/contract.json` **at the same commit**. | A malformed name exits 2; a contract absent, unparseable or without the lane at that commit is `could-not-read`. |
+| `--at <ref>` | no | The commit to read. | `HEAD` or 7–40 hex; anything else exits 2. |
+| `--exclude <globs>` | no | The caller's exclusions. | `*`, `**`, `?`; `..` or an absolute path exits 2. |
+| `--out <file>` | no | Write the same JSON document to a file. | Written whenever the verdict is not `could-not-read`. |
+
+**Output and exit codes** — prints `<verdict>: <scenario> <origin> @ <sha> --
+<n> row(s) from <m> owned file(s)`, the totals per kind, the classified /
+joined / unclassified / excluded counts and one `unread` line per declaration
+nen could not read. `--json` top-level keys: `contract`
+(`nen.spec.inventory/v0.1`), `verdict` (`read` \| `partial` \|
+`could-not-read`), `repo`, `origin` (the checkout's `origin` slug, or null),
+`lane`, `cwd`, `scenario`, `handbook`, `sha`, `membership` (`{ source, read,
+files, classified, joined, unclassified }`), `excluded`, `rows`, `totals`
+(`{ kind, total, unit }` each), `unread` (`{ path, reason }` each), `reason`.
+Exit 0 when `read`; exit 1 when `partial` (a declaration nen could not read, a
+listed file missing at the sha) or `could-not-read` (no commit, no build
+declaration, no owned file — never an empty inventory); exit 2 on a usage
+error.
+
+**Example**
+
+```bash
+nen spec inventory --repo ../fixture-app --scenario react-uzf-v1 --out capture/FX/inventory.json
+```
+```text
+read: react-uzf-v1 fixture-owner/fixture-app @ 0123456789ab -- 4 row(s) from 5 owned file(s) (tsconfig: tsconfig.json)
+  totals: screen 1 · state 1 · event unknown · shifter 0 · selector 0 · producer 0 · service 0 · model 0 · flag unknown · strings unknown · analytics unknown · navigation unknown · test 2 (per case) · snapshot 0
+  3 classified · 1 joined to another row · 1 unclassified · 0 excluded by --exclude
+  wrote capture/FX/inventory.json
+```
+(exit 0; the shape of `src/spec/inventory.test.ts`'s tsconfig member, which
+builds a real repository per test)
+
+### `nen spec diff`
+
+Two inventories of **one member**, compared by stable row id (zheref/nen#493
+AC-5): every row of `--to` that `--from` lacks is `added`, every row the other
+way `removed`, and a row in both whose `kind`, `path`, `lines`, `excerptSha256`,
+`tier` or `ruleId` differs is `changed`, each changed field with its `from` and
+`to`. **A different `sha` alone is not a change** — every row of a later
+inventory carries a later commit, so comparing it would mark every row changed
+on every recapture and hide the rows that did; the two commits are reported
+once, at the top. Identical inputs, or inputs differing only in their commit,
+produce an empty diff. Each input is held to
+[`spec inventory`](#nen-spec-inventory)'s row shape; one whose `verdict` was
+`could-not-read` holds no rows and is refused as unreadable, never diffed as
+empty.
+
+**Usage**
+
+```text
+nen spec diff --from <inventory> --to <inventory> [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--from <file>` | yes | The earlier inventory (`spec inventory --out`). | Missing exits 2. |
+| `--to <file>` | yes | The later inventory. | Two different `origin`s exit 2: a diff compares one member. |
+
+This verb reads no checkout and refuses `--repo` (exit 2).
+
+**Output and exit codes** — prints `<verdict>: <origin> <from sha> -> <to sha>
+-- <a> added, <r> removed, <c> changed, <u> unchanged`, then one `+`, `-` or
+`~` line per row. `--json` top-level keys: `contract` (`nen.spec.diff/v0.1`),
+`verdict` (`identical` \| `differs` \| `could-not-read`), `from` and `to`
+(`{ file, sha }`), `origin`, `added` and `removed` (rows), `changed` (`{ id,
+fields }` each), `counts` (`{ added, removed, changed, unchanged }`), `reason`.
+Exit 0 when `identical` or `differs` — the diff is the answer, not a finding;
+exit 1 when an input could not be read (not JSON, not
+`nen.spec.inventory/v0.1`, a row off the shape, a row id twice, a recorded
+`could-not-read`); exit 2 on a usage error.
+
+**Example**
+
+```bash
+nen spec diff --from capture/FX/inventory.json --to /tmp/FX-now.json
+```
+```text
+differs: fixture-owner/fixture-app aaaaaaaaaaaa -> aaaaaaaaaaaa -- 1 added, 1 removed, 1 changed, 1 unchanged
+  + screen:src/NewPage.tsx
+  - screen:src/OldPage.tsx
+  ~ state:src/AFeature.ts (lines, excerptSha256)
+```
+(exit 0; from `src/spec/diff.test.ts`)
+
+### `nen spec converge`
+
+A merged folder held against a **newer inventory of one member**, its gaps
+classified, and — under `--write` — **only ever appended to** (zheref/nen#493
+AC-6; SP-9, SP-10). Every citation of `--code` on a requirement line (FR, SC,
+story) is re-read: its cited bytes at its own sha, and the same range at the
+inventory's sha, both through git in the checkout the checkouts file names
+(the member chain of [`spec cite-check`](#nen-spec-cite-check), its `origin`
+read back as the inventory's). Each range is `current`, `moved` (the bytes
+are elsewhere in the file now), `changed` (they are nowhere in it),
+`vanished` (the file is gone) or `unreadable` (its own sha does not read).
+Per requirement, the **gap class** is a fact about those bytes:
+
+| Class | When |
+|---|---|
+| `missing` | every cited range of this member vanished |
+| `partial` | some ranges moved or vanished, none changed (or one could not be read at its own sha) |
+| `contradicts` | a cited range changed — a **candidate** for Hatsu's `spec-conflict` gate; whether the code contradicts the sentence is the maintainer's to rule, never nen's |
+| `unrequested` | a row the inventory has and `capture/<CODE>/inventory.json` (the folder's last capture) lacks, in a directory the folder cites: behaviour no line requests yet. With no capture inventory it is not computed, and `unrequestedReason` says why |
+
+**Completion claims are not evidence**: a ticked task (`- [x]`) naming a
+requirement with a gap is listed under `claims` and closes nothing.
+
+`--write` appends **two things and nothing else**: a `[STALE @ <cited sha>]`
+companion right after each moved, changed or vanished citation — the sentence
+and its citation stay byte for byte, and [`spec check`](#nen-spec-check) reads
+the companion as stale — and one `## Phase <N>: Convergence <date>` section
+(SP-9's heading) at the end of `tasks.md` (created when absent). Its first
+body line, `Inventory: <CODE> @ <sha12>`, records the commit read and is the
+key a rerun finds. Then one open task per gap, numbered after the highest
+`T<nnn>` already there, tagged with the requirement's story (`[US<k>]`, from a
+task already naming it) and the member's platform (`[platform:<p>]`, from
+`families[].members[].platform`, else the code), so
+[`spec tasks groups`](#nen-spec-tasks-groups) files it in a story group. When a
+requirement's gap class differs from the last finding recorded for it in an
+earlier convergence row, the new row ends `· supersedes T<nnn>` (SP-10's
+reversal line, computed from the two rows). It never renumbers and never
+deletes. A **second run on the same inputs finds its companions and its phase
+and changes zero bytes**; a folder with no gap is left byte-identical.
+
+**Usage**
+
+```text
+nen spec converge --repo <spec> --folder <dir> --inventory <file> --code <CODE> --checkouts <file> [--date <YYYY-MM-DD>] [--write [--dry-run]] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--repo <path>` | yes | The spec repository's checkout. | Omitted exits 2. |
+| `--folder <dir>` | yes | The merged folder, relative to `--repo`. | As `spec check`; one with no `spec.md` is `could-not-read`. |
+| `--inventory <file>` | yes | The newer inventory of one member. | Unreadable, or naming no sha or origin: `could-not-read`. |
+| `--code <CODE>` | yes | The member's product code, as the citations spell it. | `[A-Z][A-Z0-9]{1,7}`, else exit 2; one resolving to another member than the inventory's is `could-not-read`. |
+| `--checkouts <file>` | yes | As `spec cite-check`. | Malformed exits 2. |
+| `--date <YYYY-MM-DD>` | no | The convergence phase's date. | Default today (UTC); malformed exits 2. |
+| `--write` | no | Append the companions and the phase. | |
+| `--dry-run` | no | With `--write`: say `would-write`, write nothing. | Without `--write` exits 2. |
+
+**Output and exit codes** — prints `<verdict>: <folder> against <code>
+<member> @ <sha> -- <n> missing · <n> partial · <n> contradicts · <n>
+unrequested · action <action>`, one line per gap, per claim and per write.
+`--json` top-level keys: `contract` (`nen.spec.converge/v0.1`), `verdict`
+(`converged` \| `gaps` \| `could-not-read`), `repo`, `folder`, `inventory`
+(`{ file, sha, origin }`), `member` (`{ code, repo, path }`), `citations`
+(`{ line, id, text, path, lines, sha, state, now, marked, reason }` each),
+`gaps` (`{ class, id, line, detail }` each), `unrequested` (rows, or null),
+`unrequestedReason`, `claims` (`{ line, text, ids }` each), `writes` (`{ file,
+kind: "stale"|"phase", line, text }` each), `action` (`none` \| `written` \|
+`would-write` \| `refused`), `counts` (per class), `reason`. Exit 0 when
+`converged`; exit 1 on any gap — written or not, it stands until the author
+acts — and when the inputs could not be read; exit 2 on a usage error or a
+spec file resolving outside `--repo`.
+
+**Example**
+
+```bash
+nen spec converge --repo . --folder specs/007-converge --inventory /tmp/FX-now.json --code FX --checkouts ~/.config/hatsu/checkouts --write
+```
+```text
+gaps: specs/007-converge against FX fixture-owner/fixture-app @ 0123456789ab -- 0 missing · 1 partial · 0 contradicts · 0 unrequested · action written
+  partial FR-001 (spec.md:3) -- 1 moved at 0123456789ab
+  unrequested: not computed -- capture/FX/inventory.json does not exist, so there is no earlier capture to tell new rows from old ones
+  claim tasks.md:5 ticks FR-001 -- a tick is not evidence; the gap stands
+  wrote specs/007-converge/spec.md:3 [STALE @ aaaaaaaaaa]
+  wrote specs/007-converge/tasks.md ## Phase 2: Convergence 2026-10-23
+```
+(exit 1; the shape of `src/spec/converge.test.ts`, which builds a member
+repository with two commits)
+
+### `nen spec coverage`
+
+Coverage as **a number with its denominator** (SP-14), in two forms
+(zheref/nen#493 AC-7, AC-12).
+
+**The capture form** reads every folder under the layout and one inventory per
+member. A member's code is the one product code the spec repository's
+`nen/repos.json` resolves to the inventory's `origin` (none, or several, is
+said, and that member is measured against nothing). Per member and per row
+kind of the inventory's `totals`: `covered/total`, a row covered when one of
+the member's citations names its path with an overlapping line range, the
+total `null` where the inventory could not count the kind. Per member, the
+traceability **both ways**: `requirementsCited`, `requirementsTested` (a
+citation overlapping a `test` row), `requirementsTasked` (a `tasks.md` task
+naming the requirement) over every FR and SC; `testsCited` over the member's
+test rows; `tasksTraced` (a task naming only requirements its folder defines)
+over every task. Open markers are counted per folder and kind. Ticks in
+`tasks.md` count nothing.
+
+**The delivery form** reads a spec-derived issue body and a pull request body
+(Hatsu's `docs/config/spec-repo.md` § *The PR Spec section*). Every
+`F<nnn>-SC-###` the issue carries (anywhere in it) needs **exactly one** row in
+the PR's `## Spec` section (a glyph before `Spec` is allowed; the section runs
+to the next heading of its level; fenced blocks are source data):
+
+```text
+- F<nnn>-SC-### — satisfied — test <test id>
+- F<nnn>-SC-### — deferred — <reason> · <follow-up object>
+```
+
+A follow-up is object notation (`<CODE>-IS-#<n>`, `<CODE>#<n>`,
+`<owner>/<name>#<n>`) or a markdown link. With `--test-report` (any format
+[`shu test-report`](#nen-shu-test-report) reads), a satisfied row's test must be
+a case named `<test id>`, `<suite>.<name>`, `<suite>/<name>` or `<suite>::<name>`
+and must have passed. **`satisfied` is never read as validated**: the report
+says a test ran, never that it exercises the criterion.
+
+| Criterion verdict | Accounted | Meaning |
+|---|---|---|
+| `satisfied` | yes | the named test passed in the report |
+| `satisfied-unverified` | yes | a satisfied row, no report given |
+| `deferred` | yes | a reason and a follow-up object |
+| `test-not-found` · `test-failing` | no | the report lacks the test, or it did not pass |
+| `deferred-incomplete` · `malformed` | no | a row off the grammar |
+| `duplicate` · `unaccounted` | no | two rows, or none |
+
+**Usage**
+
+```text
+nen spec coverage --repo <spec> --inventory <file>[,<file>...] [--layout <pattern>] [--json]
+nen spec coverage --issue-body <file> --pr-body <file> [--test-report <file>] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--repo <path>` | capture | The spec repository's checkout. | Refused (exit 2) in the delivery form. |
+| `--inventory <files>` | capture | One inventory per member, comma-separated. | An unreadable one is a member row with its reason (`partial`). |
+| `--layout <pattern>` | no | Where the folders live. | Default `specs/{nnn}-{slug}`. |
+| `--issue-body <file>` | delivery | The issue body. | Needs `--pr-body` (exit 2). |
+| `--pr-body <file>` | delivery | The pull request body. | |
+| `--test-report <file>` | no | The test run's report. | Unreadable or an unknown format: `could-not-read`. |
+
+**Output and exit codes** — capture: `<verdict>: <n> folder(s) …`, then per
+member its kinds, its traceability and per folder its open markers. Delivery:
+`<verdict>: <a>/<t> success criteria accounted for · Spec section <state>`, one
+line per criterion and per outside id. `--json` top-level keys: `contract`
+(`nen.spec.coverage/v0.1`) and `form`, then for `capture`: `verdict`
+(`measured` \| `partial` \| `could-not-read`), `repo`, `layout`, `folders`,
+`members` (`{ file, origin, code, sha, reason, kinds: [{ kind, covered, total,
+percent }], traceability }` each; every ratio `{ covered, total, percent }`,
+`percent` null when the total is unknown or zero), `markers` (`{ folder,
+clarification, ruling, unverified }` each), `reason`; for `delivery`:
+`verdict` (`accounted` \| `unaccounted` \| `could-not-read`), `issueBody`,
+`prBody`, `testReport`, `section` (`present` \| `missing` \| `empty`),
+`criteria` (`{ id, verdict, test, reason, followUp, line }` each), `outside`,
+`counts` (`{ total, accounted, unaccounted }`), `reason`. Exit 0 when
+`measured` or `accounted`; exit 1 when `partial`, `unaccounted` (including a
+missing or empty Spec section and an issue carrying no `F<nnn>-SC-###` — a
+check with nothing to account for is never success) or `could-not-read`;
+**exit 2 when the PR names an id the issue does not carry**, or on a usage
+error.
+
+**Example**
+
+```bash
+nen spec coverage --issue-body issue.md --pr-body pr.md
+```
+```text
+accounted: 2/2 success criteria accounted for · Spec section present · no test report (satisfied rows unverified)
+  F002-SC-001 satisfied-unverified -- test ListFeatureTest.empty_F002_SC_001
+  F002-SC-002 deferred -- needs a ruling on the threshold · HA#405
+```
+(exit 0; from `src/spec/coverage.test.ts`)
 
 <a id="family-decisions"></a>
 

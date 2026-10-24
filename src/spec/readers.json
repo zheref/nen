@@ -1,0 +1,399 @@
+{
+  "$comment": "The three governed scenarios' capture readers, as DATA (taxonomy-purity: names live in shipped data, never in code). Each table is the stack handbook's 'Appendix — capture reader' at bankai-handbooks v0.12.0 (5f0b2f4): file suffix -> row kind -> the rule id the appendix cites first. 'kind: null' is a suffix the appendix says joins another row or emits none; it is matched so it is never counted as unclassified. 'cases' names the test-case detector (src/spec/inventory.ts: swift-test, junit, js-test) a case-unit kind counts one row per; every other kind is one row per file, and the inventory says so per kind. Kinds the appendix derives from no suffix (flag, analytics, navigation; strings where no resource path names it) are reported with an unknown total, never omitted (SP-14).",
+  "kinds": [
+    "screen",
+    "state",
+    "event",
+    "shifter",
+    "selector",
+    "producer",
+    "service",
+    "model",
+    "flag",
+    "strings",
+    "analytics",
+    "navigation",
+    "test",
+    "snapshot"
+  ],
+  "scenarios": {
+    "swiftui-tca-uzf-v2": {
+      "membership": "xcode",
+      "handbook": "handbooks/stacks/swiftui-tca-uzf-v2/architecture.md#appendix--capture-reader",
+      "suffixes": [
+        {
+          "suffix": "SnapshotTests.swift",
+          "kind": "snapshot",
+          "ruleId": "SW-18"
+        },
+        {
+          "suffix": "FeatureTests.swift",
+          "kind": "test",
+          "ruleId": "SW-17",
+          "cases": "swift-test"
+        },
+        {
+          "suffix": "SelectorsTests.swift",
+          "kind": "test",
+          "ruleId": "SW-17",
+          "cases": "swift-test"
+        },
+        {
+          "suffix": "ShiftersTests.swift",
+          "kind": "test",
+          "ruleId": "SW-17",
+          "cases": "swift-test"
+        },
+        {
+          "suffix": "Screen.swift",
+          "kind": "screen",
+          "ruleId": "SW-1"
+        },
+        {
+          "suffix": "View.swift",
+          "kind": null,
+          "ruleId": "SW-2"
+        },
+        {
+          "suffix": "Fragment.swift",
+          "kind": null,
+          "ruleId": "UZF-4"
+        },
+        {
+          "suffix": "Feature.swift",
+          "kind": "state",
+          "ruleId": "UZF-1"
+        },
+        {
+          "suffix": "Shifters.swift",
+          "kind": "shifter",
+          "ruleId": "SW-8"
+        },
+        {
+          "suffix": "Selectors.swift",
+          "kind": "selector",
+          "ruleId": "SW-9"
+        },
+        {
+          "suffix": "Producer.swift",
+          "kind": "producer",
+          "ruleId": "SW-10"
+        },
+        {
+          "suffix": "Client.swift",
+          "kind": "service",
+          "ruleId": "SW-15"
+        },
+        {
+          "suffix": "Service.swift",
+          "kind": "service",
+          "ruleId": "SW-15"
+        },
+        {
+          "suffix": "Repository.swift",
+          "kind": "service",
+          "ruleId": "SW-15"
+        },
+        {
+          "suffix": "Provider.swift",
+          "kind": "service",
+          "ruleId": "SW-15"
+        },
+        {
+          "suffix": "Response.swift",
+          "kind": "model",
+          "ruleId": "SW-16"
+        },
+        {
+          "suffix": "Mapper.swift",
+          "kind": "model",
+          "ruleId": "SW-16"
+        },
+        {
+          "suffix": "Exception.swift",
+          "kind": "model",
+          "ruleId": "SW-16"
+        },
+        {
+          "suffix": "Endpoint.swift",
+          "kind": "model",
+          "ruleId": "SW-16"
+        },
+        {
+          "suffix": "Adapters.swift",
+          "kind": null,
+          "ruleId": null
+        }
+      ]
+    },
+    "compose-uzf-v2": {
+      "membership": "gradle",
+      "handbook": "handbooks/stacks/compose-uzf-v2/architecture.md#appendix--capture-reader",
+      "suffixes": [
+        {
+          "suffix": "PageSnapshotTest.kt",
+          "kind": "snapshot",
+          "ruleId": "KT-22"
+        },
+        {
+          "suffix": "FeatureTest.kt",
+          "kind": "test",
+          "ruleId": "UZF-18",
+          "cases": "junit"
+        },
+        {
+          "suffix": "ShiftersTest.kt",
+          "kind": "test",
+          "ruleId": "UZF-18",
+          "cases": "junit"
+        },
+        {
+          "suffix": "SelectorsTest.kt",
+          "kind": "test",
+          "ruleId": "UZF-18",
+          "cases": "junit"
+        },
+        {
+          "suffix": "ProducerTest.kt",
+          "kind": "test",
+          "ruleId": "UZF-18",
+          "cases": "junit"
+        },
+        {
+          "suffix": "MapperTest.kt",
+          "kind": "test",
+          "ruleId": "UZF-18",
+          "cases": "junit"
+        },
+        {
+          "suffix": "Screen.kt",
+          "kind": "screen",
+          "ruleId": "KT-1"
+        },
+        {
+          "suffix": "Page.kt",
+          "kind": null,
+          "ruleId": "KT-1"
+        },
+        {
+          "suffix": "Fragment.kt",
+          "kind": null,
+          "ruleId": "KT-1"
+        },
+        {
+          "suffix": "Feature.kt",
+          "kind": null,
+          "ruleId": "KT-3"
+        },
+        {
+          "suffix": "State.kt",
+          "kind": "state",
+          "ruleId": "KT-4"
+        },
+        {
+          "suffix": "Event.kt",
+          "kind": "event",
+          "ruleId": "UZF-2"
+        },
+        {
+          "suffix": "UiEffect.kt",
+          "kind": "navigation",
+          "ruleId": "KT-9"
+        },
+        {
+          "suffix": "Shifters.kt",
+          "kind": "shifter",
+          "ruleId": "KT-6"
+        },
+        {
+          "suffix": "Selectors.kt",
+          "kind": "selector",
+          "ruleId": "KT-7"
+        },
+        {
+          "suffix": "Producer.kt",
+          "kind": "producer",
+          "ruleId": "KT-8"
+        },
+        {
+          "suffix": "Service.kt",
+          "kind": "service",
+          "ruleId": "KT-10"
+        },
+        {
+          "suffix": "Repository.kt",
+          "kind": "service",
+          "ruleId": "KT-10"
+        },
+        {
+          "suffix": "Provider.kt",
+          "kind": "service",
+          "ruleId": "KT-10"
+        },
+        {
+          "suffix": "Api.kt",
+          "kind": "service",
+          "ruleId": "KT-19"
+        },
+        {
+          "suffix": "Database.kt",
+          "kind": "service",
+          "ruleId": "KT-19"
+        },
+        {
+          "suffix": "Mapper.kt",
+          "kind": "model",
+          "ruleId": "KT-19"
+        },
+        {
+          "suffix": "Response.kt",
+          "kind": "model",
+          "ruleId": "KT-19"
+        },
+        {
+          "suffix": "Entity.kt",
+          "kind": "model",
+          "ruleId": "KT-20"
+        },
+        {
+          "suffix": "Endpoint.kt",
+          "kind": "model",
+          "ruleId": "KT-19"
+        },
+        {
+          "suffix": "Exception.kt",
+          "kind": "model",
+          "ruleId": "UZF-17"
+        },
+        {
+          "suffix": "Adapter.kt",
+          "kind": null,
+          "ruleId": null
+        },
+        {
+          "suffix": "Mocks.kt",
+          "kind": null,
+          "ruleId": "KT-17"
+        },
+        {
+          "suffix": "Module.kt",
+          "kind": null,
+          "ruleId": "KT-18"
+        },
+        {
+          "suffix": "strings.xml",
+          "kind": "strings",
+          "ruleId": null
+        }
+      ]
+    },
+    "react-uzf-v1": {
+      "membership": "tsconfig",
+      "handbook": "handbooks/stacks/react-uzf-v1/architecture.md#appendix--capture-reader",
+      "suffixes": [
+        {
+          "suffix": ".test.tsx",
+          "kind": "test",
+          "ruleId": "UZF-18",
+          "cases": "js-test"
+        },
+        {
+          "suffix": ".test.ts",
+          "kind": "test",
+          "ruleId": "UZF-18",
+          "cases": "js-test"
+        },
+        {
+          "suffix": ".stories.tsx",
+          "kind": "snapshot",
+          "ruleId": "RC-11"
+        },
+        {
+          "suffix": "Page.tsx",
+          "kind": "screen",
+          "ruleId": "RC-37"
+        },
+        {
+          "suffix": "Fragment.tsx",
+          "kind": null,
+          "ruleId": "RC-15"
+        },
+        {
+          "suffix": "Feature.ts",
+          "kind": "state",
+          "ruleId": "RC-1"
+        },
+        {
+          "suffix": "Shifters.ts",
+          "kind": "shifter",
+          "ruleId": "RC-4"
+        },
+        {
+          "suffix": "Selectors.ts",
+          "kind": "selector",
+          "ruleId": "RC-5"
+        },
+        {
+          "suffix": "Producer.ts",
+          "kind": "producer",
+          "ruleId": "RC-58"
+        },
+        {
+          "suffix": "Service.ts",
+          "kind": "service",
+          "ruleId": "RC-59"
+        },
+        {
+          "suffix": "Repository.ts",
+          "kind": "service",
+          "ruleId": "RC-59"
+        },
+        {
+          "suffix": "Provider.ts",
+          "kind": "service",
+          "ruleId": "RC-59"
+        },
+        {
+          "suffix": "Mapper.ts",
+          "kind": "model",
+          "ruleId": "RC-30"
+        },
+        {
+          "suffix": "Response.ts",
+          "kind": "model",
+          "ruleId": "RC-30"
+        },
+        {
+          "suffix": "Exception.ts",
+          "kind": "model",
+          "ruleId": "RC-30"
+        },
+        {
+          "suffix": "Adapter.tsx",
+          "kind": null,
+          "ruleId": "RC-18"
+        },
+        {
+          "suffix": "Adapters.tsx",
+          "kind": null,
+          "ruleId": "RC-18"
+        },
+        {
+          "suffix": ".fixtures.json",
+          "kind": null,
+          "ruleId": null
+        },
+        {
+          "suffix": "store.ts",
+          "kind": null,
+          "ruleId": null
+        },
+        {
+          "suffix": "hooks.ts",
+          "kind": null,
+          "ruleId": null
+        }
+      ]
+    }
+  }
+}

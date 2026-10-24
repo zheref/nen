@@ -914,6 +914,8 @@ describe("write-flag-gated rows -- coupled to what ../cli/args.ts accepts (#31 r
     "runner relabel": "nen runner relabel --target o/r --pool p",
     "shu detect": "nen shu detect",
     "spec index": "nen spec index --repo .",
+    "spec inventory": "nen spec inventory --repo . --scenario react-uzf-v1",
+    "spec converge": "nen spec converge --repo . --folder specs/001-a --inventory i.json --code FX --checkouts c",
     // `--target` is mandatory on this verb, so the base line carries it: a
     // base that could never run would prove the coupling against a command
     // nobody types.
