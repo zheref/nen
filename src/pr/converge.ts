@@ -42,6 +42,38 @@ export function convergeViewArgv(target: Target, prNumber: number): readonly str
   return ["pr", "view", String(prNumber), "--repo", target.slug, "--json", "number,url,headRefOid,baseRefName,body,closingIssuesReferences"];
 }
 
+/** The head-only re-read `--require-head` closes with (zheref/nen#483 AC-6). */
+export function headViewArgv(target: Target, prNumber: number): readonly string[] {
+  return ["pr", "view", String(prNumber), "--repo", target.slug, "--json", "headRefOid"];
+}
+
+/**
+ * Hold a converge read to one pinned head (zheref/nen#483 AC-6): the first
+ * read's `headRefOid` must equal `requireHead`, and a head-only re-read AFTER
+ * every closing issue was read must still equal it. Either differing -- or the
+ * re-read failing -- throws: a verdict assembled across two heads is refused,
+ * never reported.
+ */
+export function assertPinnedHead(seams: Seams, target: Target, prNumber: number, input: ConvergeInput, requireHead: string): void {
+  const pin = requireHead.toLowerCase();
+  if (input.headSha.toLowerCase() !== pin) {
+    throw new ConvergeReadError(`${target.slug}#${prNumber}'s head is ${input.headSha === "" ? "(unread)" : input.headSha}, not the pinned ${requireHead}; no verdict is reported for a head other than the one pinned.`);
+  }
+  const again = seams.run(GH, headViewArgv(target, prNumber));
+  let head: unknown = null;
+  try {
+    head = again.code === 0 ? record(JSON.parse(again.stdout))?.["headRefOid"] : null;
+  } catch {
+    head = null;
+  }
+  if (typeof head !== "string" || head === "") {
+    throw new ConvergeReadError(`could not re-read ${target.slug}#${prNumber}'s head after the closing issues, so the reads cannot be shown to share one head: ${outputLines(again.stderr).join(" ") || `exit ${again.code}`}`);
+  }
+  if (head.toLowerCase() !== pin) {
+    throw new ConvergeReadError(`${target.slug}#${prNumber}'s head moved from ${requireHead} to ${head} between the reads; refusing to mix two heads in one verdict.`);
+  }
+}
+
 export function defaultBranchViewArgv(target: Target): readonly string[] {
   return ["repo", "view", target.slug, "--json", "defaultBranchRef"];
 }

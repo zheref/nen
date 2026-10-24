@@ -20,6 +20,7 @@ import { createArgv, stdinLine, validateFiling, type FileRequest } from "../issu
 import { readTitleFile } from "../issue/title.js";
 import { blockingExit, blocksWrite } from "../issue/privacy.js";
 import { guardPrivateNames, PRIVATE_NAME_FLAGS, readIgnoreFlag } from "../issue/privacyguard.js";
+import { shapePreflight } from "../issue/preflight.js";
 import { fileIdea } from "./file.js";
 
 const USAGE = `nen idea file -- file an idea issue, then READ IT BACK to verify GitHub stored it as sent.
@@ -29,6 +30,7 @@ usage:
                (--title <t> | --title-file <path>)
                --body-file <path> --label a,b --assignee <user>
                [--forbid-family ns:family] [--dry-run]
+               [--requirements-from <catalogue.json> [--kind <kind>]]
                [--skip-private-name-check]
                [--private-names-ignore-file <path> [--allow-all-ignored]]
 
@@ -91,7 +93,7 @@ export const ideaCommand: Command = {
   summary: "File an idea issue and verify it read back exactly as submitted.",
   usage: USAGE,
   flags: {
-    values: ["target", "title", "title-file", "body-file", "label", "assignee", "forbid-family", ...PRIVATE_NAME_FLAGS.values],
+    values: ["target", "title", "title-file", "body-file", "label", "assignee", "forbid-family", "requirements-from", "kind", ...PRIVATE_NAME_FLAGS.values],
     booleans: ["dry-run", ...PRIVATE_NAME_FLAGS.booleans],
   },
   run(context: CommandContext): number {
@@ -163,6 +165,10 @@ export const ideaCommand: Command = {
     if (refusals.length > 0) {
       return refuse(context.io, context.json, "idea file", 1, refusals.map((refusal): string => refusal.reason));
     }
+    // THE BODY SHAPE (zheref/nen#476), before anything reaches GitHub: the
+    // check 'issue body-check' runs, on the bytes the create will send.
+    const shape = shapePreflight(root, { requirementsFrom: context.args.values["requirements-from"], kind: context.args.values["kind"] }, submittedBody, "idea file");
+    if (shape !== null && shape.length > 0) return refuse(context.io, context.json, "idea file", 1, shape);
     // THE PRIVATE-NAME GUARD (zheref/nen#363), before the create: the title and
     // the very bytes that travel to gh on stdin.
     const privateNameCheck = guardPrivateNames(

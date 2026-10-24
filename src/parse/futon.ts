@@ -202,6 +202,14 @@ export function parseFutonInvocation(raw: string): FutonParseResult {
     idle = true;
     scopeHead = scopeHead.replace(pattern, "").trim();
   }
+  // Twice at the SAME end (`nen@bug --idle --idle`, `--idle --idle nen@bug`):
+  // the loop above strips one per end, so a second copy at either end is
+  // still standing here. Read as part of the label it would silently turn
+  // `bug --idle` into the selector (zheref/nen#491 AC-2).
+  if (idle && (leading.test(scopeHead) || trailing.test(scopeHead))) {
+    const kept = scopeHead.replace(/^(?:--idle\s+)+/, "").replace(/(?:\s+--idle)+$/, "").trim();
+    return { ok: false, error: { message: "'--idle' is given twice. It is one flag of the scope.", correctedLine: `${kept} --idle${tail === null ? "" : ` then ${tail}`}` } };
+  }
   if (tail !== null && /(?:^|\s)--idle(?:\s|$)/.test(tail)) {
     const moved = tail.replace(/(?:^|\s+)--idle(?=\s|$)/g, "").trim();
     return {

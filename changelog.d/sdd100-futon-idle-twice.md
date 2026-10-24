@@ -1,0 +1,2 @@
+- `nen parse futon` refuses `--idle` typed twice at the same end of the scope (`nen@bug --idle --idle`, `--idle --idle nen@bug`) at exit 2 with one kept, where the second copy used to be read silently into the label (`bug --idle`, `idle: true`) (zheref/nen#491 AC-2). Both-ends (`--idle nen@bug --idle`) was already refused.
+- `docs/USAGE.md` § `nen parse futon` documents that kazaana carries the same flag through the generic grammar as a literal-only optional clause (`[--idle]`), read off `clauses[]` (zheref/nen#491 AC-3); `src/grammar/engine.test.ts` holds it.

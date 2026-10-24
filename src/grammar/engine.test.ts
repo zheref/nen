@@ -160,6 +160,25 @@ describe("parseInvocation -- single-slot templates with a bracketed clause (zher
     });
   });
 
+  describe("kazaana's typed --idle -- the same flag, carried as a literal clause (zheref/nen#491 AC-3)", () => {
+    const grammar = parseTemplate("<repo> [on <line:claude|gpt|gemini|grok|composer>] [--idle]");
+
+    it("reads --idle after the optional line clause and with it absent", () => {
+      for (const [line, repo] of [["hatsu on claude --idle", "hatsu"], ["hatsu --idle", "hatsu"]] as const) {
+        const result = parseInvocation("kazaana", grammar, line);
+        expect(result.ok, line).toBe(true);
+        expect(slot(result, "repo"), line).toBe(repo);
+        expect(result.clauses, line).toEqual([{ literal: "--idle", present: true }]);
+      }
+    });
+
+    it("reports the flag absent on a line without it", () => {
+      const result = parseInvocation("kazaana", grammar, "hatsu on gpt");
+      expect(result.ok).toBe(true);
+      expect(result.clauses).toEqual([{ literal: "--idle", present: false }]);
+    });
+  });
+
   describe("<repo> [then sweep] -- a literal-only optional clause", () => {
     const grammar = parseTemplate("<repo> [then sweep]");
 

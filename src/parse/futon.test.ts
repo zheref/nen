@@ -496,4 +496,16 @@ describe("parseFutonInvocation -- the optional --idle flag (HR-5)", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.correctedLine).toBe("nen@bug --idle");
   });
+
+  it("refuses --idle given twice at the same end, never reading one as the label (#491 AC-2)", () => {
+    for (const [line, corrected] of [
+      ["nen@bug --idle --idle", "nen@bug --idle"],
+      ["--idle --idle nen@bug", "nen@bug --idle"],
+      ["nen@bug --idle --idle then getsuga", "nen@bug --idle then getsuga"],
+    ] as const) {
+      const result = parseFutonInvocation(line);
+      expect(result.ok, line).toBe(false);
+      if (!result.ok) expect(result.error.correctedLine, line).toBe(corrected);
+    }
+  });
 });

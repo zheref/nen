@@ -12,7 +12,7 @@ import {
   type CommandContext,
 } from "../cli/command.js";
 import { changedFiles, changedFilesUsage, CHANGED_FILE_FLAGS, optionalDirectoryFlag, readTextFile, splitList } from "../cli/inputs.js";
-import { collateIntoChangelog, sortFragments, type Fragment } from "./collate.js";
+import { collateChangelog, sortFragments, validIsoDate, type Fragment } from "./collate.js";
 import { DEFAULT_FRAGMENT_DIR, describeReleasePrAllowance } from "./completeness.js";
 import {
   fragmentRequired,
@@ -25,7 +25,7 @@ import { reconcileChangelog } from "./reconcile.js";
 import { resolveRepoRoot } from "../repo/root.js";
 
 const USAGE = `nen changelog fragment-required --spec-paths <a,b> --fragment-dir <dir> (--files ... | --files-from ... | --range ...) [--body-from <path>] [--base-changelog <path>] --head-changelog <path> [--base-repos <path>] [--head-repos <path>]
-nen changelog collate --version <vX.Y.Z> --theme <text> --changelog <path> --fragment-dir <dir> [--write]
+nen changelog collate --version <vX.Y.Z> --theme <text> --changelog <path> --fragment-dir <dir> [--date <YYYY-MM-DD>] [--write]
 nen changelog completeness --range <vPrev>..<vNew> --changelog <path> --owner-repo <owner/name> [--fragment-dir <dir>]
 
 fragment-required:
@@ -35,7 +35,10 @@ fragment-required:
 collate:
   CON-33(b): collate every fragment in --fragment-dir into a new dated section
   of --changelog. Without --write, reports the rendered result without
-  touching disk or deleting fragments.
+  touching disk or deleting fragments. Anchor: an empty '### Unreleased'
+  (the section goes below it), else the top dated release heading (the
+  section goes above it, at its level and in its form; a date suffix there
+  is written from --date, default today's UTC date) (zheref/nen#504).
 
 completeness:
   CON-33(c): every PR merged in --range has a CHANGELOG entry or an
@@ -143,6 +146,11 @@ function collateCmd(context: CommandContext): number {
   const changelogPath = requireValue(context.args, "changelog", "The CHANGELOG.md to rewrite.");
   const fragmentDir = requireValue(context.args, "fragment-dir", "The fragment directory.");
   const write = context.args.booleans.has("write");
+  const dateFlag = context.args.values["date"];
+  if (dateFlag !== undefined && !validIsoDate(dateFlag)) {
+    throw new VerbUsageError(`--date '${dateFlag}' is not a calendar date in YYYY-MM-DD form.`);
+  }
+  const date = dateFlag ?? context.seams.now().toISOString().slice(0, 10);
 
   const root = resolveRepoRoot({ repoFlag: context.repoFlag });
   const changelogFull = isAbsolute(changelogPath) ? changelogPath : resolvePath(root, changelogPath);
@@ -195,7 +203,8 @@ function collateCmd(context: CommandContext): number {
   // the ORDER is decided in one place and everything this verb reports is read
   // off that one decision.
   const ordered = sortFragments(fragments);
-  const rewritten = collateIntoChangelog(changelogText, version, theme, ordered);
+  const result = collateChangelog(changelogText, version, theme, ordered, { date });
+  const rewritten = result.text;
 
   if (write) {
     writeFileSync(changelogFull, rewritten, "utf8");
@@ -204,14 +213,14 @@ function collateCmd(context: CommandContext): number {
 
   const collated = ordered.map((fragment): string => fragment.name);
   const lines = [
-    `${write ? "collated" : "(no --write) would collate"} ${fragments.length} fragment(s) into ${changelogPath} ### v${version.replace(/^v/, "")} — ${theme}`,
+    `${write ? "collated" : "(no --write) would collate"} ${fragments.length} fragment(s) into ${changelogPath} ${result.heading} (anchored ${result.anchor === "unreleased" ? "below '### Unreleased'" : "above the top dated section"})`,
     ...collated.map((name): string => `  ${name}`),
   ];
   // `--json`'s `fragments[]` moves with it. It is the same claim in machine
   // form -- "these, in this order, are what was written" -- so leaving it in
   // readdir order while the text was corrected would be keeping the defect for
   // the consumer least able to notice it.
-  emit(context.io, context.json, { version, theme, fragments: collated, written: write }, lines);
+  emit(context.io, context.json, { version, theme, fragments: collated, written: write, heading: result.heading, anchor: result.anchor }, lines);
   return 0;
 }
 
@@ -286,6 +295,7 @@ export const changelogCommand: Command = {
       "theme",
       "changelog",
       "owner-repo",
+      "date",
     ],
     booleans: ["write"],
   },

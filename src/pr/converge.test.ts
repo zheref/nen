@@ -102,7 +102,7 @@ describe("nen pr converge", () => {
     expect(report.base).toBe("integration/x");
     expect(report.closingIssues.map((issue) => issue.issue)).toEqual(["o/n#12"]);
     const none = await run(prCommand, ["pr", "converge", "--target", "o/n", "--pr", "5"], [view("no keyword", [], "integration/x"), DEFAULT_MAIN]);
-    expect(none.code).toBe(1);
+    expect(none.code).toBe(0); // reported as none-on-non-default-base, never a blocking row (2026-10-23)
     expect(none.out).toMatch(/not the default branch/);
   });
 
@@ -167,6 +167,44 @@ describe("nen pr converge", () => {
       expect(result.code).toBe(2);
       expect(result.calls).toEqual([]);
     }
+  });
+});
+
+describe("nen pr converge --require-head (zheref/nen#483 AC-6)", () => {
+  const HEAD = "a".repeat(40);
+  const MOVED = "b".repeat(40);
+  const HEAD_VIEW = "gh pr view 5 --repo o/n --json headRefOid";
+  const pinnedView = (head: string): ScriptedCall => ({
+    match: VIEW,
+    result: { stdout: JSON.stringify({ number: 5, url: "https://github.com/o/n/pull/5", headRefOid: head, baseRefName: "main", body: PR_BODY, closingIssuesReferences: [ref(12)] }) },
+  });
+  const reRead = (head: string): ScriptedCall => ({ match: HEAD_VIEW, result: { stdout: JSON.stringify({ headRefOid: head }) } });
+  const argv = (pin: string): string[] => ["pr", "converge", "--target", "o/n", "--pr", "5", "--require-head", pin];
+
+  it("reports the verdict when both reads see the pinned head, re-reading it after the closing issues", async () => {
+    const result = await run(prCommand, argv(HEAD), [pinnedView(HEAD), issueRead(12, ISSUE_BODY), reRead(HEAD)]);
+    expect(result.code).toBe(0);
+    expect(result.calls).toEqual([VIEW, "gh api repos/o/n/issues/12", HEAD_VIEW]);
+  });
+
+  it("refuses a first read at another head, a head that moved between reads, and an unreadable re-read -- stdout empty", async () => {
+    const other = await run(prCommand, argv(HEAD), [pinnedView(MOVED), issueRead(12, ISSUE_BODY)]);
+    expect(other.code).toBe(1);
+    expect(other.out).toBe("");
+    expect(other.err).toMatch(/head is b{40}, not the pinned a{40}/);
+    const moved = await run(prCommand, argv(HEAD), [pinnedView(HEAD), issueRead(12, ISSUE_BODY), reRead(MOVED)]);
+    expect(moved.code).toBe(1);
+    expect(moved.out).toBe("");
+    expect(moved.err).toMatch(/head moved from a{40} to b{40} between the reads/);
+    const failed = await run(prCommand, argv(HEAD), [pinnedView(HEAD), issueRead(12, ISSUE_BODY), { match: HEAD_VIEW, result: { code: 1, stderr: "HTTP 502" } }]);
+    expect(failed.code).toBe(1);
+    expect(failed.err).toMatch(/could not re-read .* HTTP 502/);
+  });
+
+  it("refuses a pin that is not a full SHA at exit 2 before any read", async () => {
+    const result = await run(prCommand, argv("abc1234"), []);
+    expect(result.code).toBe(2);
+    expect(result.calls).toEqual([]);
   });
 });
 

@@ -224,6 +224,17 @@ verdict. [`pr ready`](#nen-pr-ready)'s JSON carries a `contract` field,
 `"nen.pr.ready/v0.1"`, precisely so a consumer can tell a future breaking
 change from a compatible one.
 
+**Invisible characters are escaped in `--json` ([#515](https://github.com/zheref/nen/pull/515)).**
+Under `--json`, every line a verb writes to stdout passes through one writer
+that spells the bidirectional, zero-width and line-separator characters --
+U+00AD, U+061C, U+180E, U+200B–200F, U+2028–202E, U+2060–2064, U+2066–206F and
+U+FEFF -- as `\uXXXX` escapes. The parsed value is unchanged; only what a
+terminal or a log can be made to show differs, so a `U+202E` in an issue body
+cannot reorder a document someone reads. The human rendering strips the same
+class through `plainLine` wherever a verb prints text it did not write,
+including every refusal reason. The raw NUL-delimited stream
+(`stage list --nul`) is not JSON and is not touched.
+
 **Which shapes carry a `contract`, and why not all of them.**
 
 > [#79](https://github.com/zheref/nen/issues/79) asked the question directly, so
@@ -246,7 +257,7 @@ change from a compatible one.
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **101 shapes** and **105 ids** (`nen.runner.plan`
+binary carries**, writing or reading — **102 shapes** and **106 ids** (`nen.runner.plan`
 and `nen.wc.worktree.copies` each have two versions, `nen.stop.mark` three, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -289,7 +300,7 @@ file formats).
 - **`dev`** — `nen.dev.release-publish/v0.1`
 - **`exits`** — `nen.exits/v0.1`
 - **`direct`** — `nen.direct.answer/v0.1` · `nen.direct.matrix/v0.1` · `nen.direct.registry/v0.1` · `nen.direct.resolve/v0.1`
-- **`issue`** — `nen.issue.body-check/v0.1` · `nen.issue.criteria/v0.1` · `nen.issue.edit-body/v0.3` · `nen.issue.questions/v0.1` · `nen.issue.reconcile/v0.1`
+- **`issue`** — `nen.issue.body-check/v0.1` · `nen.issue.criteria/v0.1` · `nen.issue.edit-body/v0.3` · `nen.issue.questions/v0.1` · `nen.issue.questions.batch/v0.1` · `nen.issue.reconcile/v0.1`
 - **`loop`** — `nen.loop.iterate/v0.1`
 - **`phase`** — `nen.phase.ledger/v0.1`
 - **`pr`** — `nen.pr.converge/v0.1` · `nen.pr.edit-body/v0.1` · `nen.pr.ledger/v0.1` · `nen.pr.mark-ready/v0.1` · `nen.pr.merge-delivery/v0.1` · `nen.pr.merge-unit/v0.1` · `nen.pr.open/v0.1` · `nen.pr.sections/v0.1` · `nen.pr.ready.head-mismatch/v0.1` · `nen.pr.ready/v0.1` · `nen.pr.threads-settle/v0.1` · `nen.pr.threads/v0.1`
@@ -615,6 +626,24 @@ the list and never applies it. The contract row of `schema check` prints it as
 `precedence (<n> sources: a > b > …)`. A file declaring only `precedence` is a
 readable contract.
 
+**Prose restatements (`precedenceRestatedIn`, [#474](https://github.com/zheref/nen/issues/474)).**
+Optional, beside `precedence`: the repository-relative files that restate the
+order in prose, for example `"precedenceRestatedIn": ["docs/WORKFLOW.md"]`. A
+restatement has one fixed shape: a run of two or more code spans joined by
+`**>**`, on one line or wrapped across several (Hatsu's
+`` `skill.hardLimit` **>** `roster.ruling` **>** … ``), read outside fenced
+code with CRLF read as LF. The key names the files, so nen never guesses which
+prose is a restatement. `schema check` refuses by pointer a list with no
+`precedence` beside it, an empty list, a repeated file, and a path that is
+absolute or climbs with `..`. It then adds the row
+`nen/contract.json#precedenceRestatedIn` under the contract row, **only when
+the key is declared**. The row reads each file and FAILS, required, naming the
+file and line, when a run's sequence differs from the array
+(`docs/WORKFLOW.md:13: restates a > c > … -- drifted from precedence (position 2 reads 'c' where the array has 'b')`),
+when a file carries no run, and when a file could not be read (absent, not
+UTF-8, or resolving outside the repository). An unread file is never a pass.
+The contract row adds `; restated in <files>` to its precedence summary.
+
 #### Product families (`families[]`)
 
 **Optional, in `nen/repos.json` ([#453](https://github.com/zheref/nen/issues/453); Hatsu's
@@ -746,6 +775,7 @@ they assumed instead); they come back empty or `null`.
 | `privateNames.namedFile` | the [private-name guard](#the-private-name-guard)'s committed NAMED LIST ([#441](https://github.com/zheref/nen/issues/441)): a repo-relative path (no leading `/`, no `..`, no trailing `/`; a directory or symlink at it names nothing, said) to a file of exact `owner/name` slugs a recorded ruling made public. **The checkout's copy is only the switch**: declared here, every guarded verb reads this policy, the path and the list **at the remote's default branch** (`refs/remotes/origin/HEAD`), never from the checkout, and exempts those slugs beside the caller's ignore file. A non-string or a path outside the allowlist is refused **by pointer** at load; a [gate change](#gate-changes) under `schema set`. `null` or absent means no named list. **No default ever**: the file publishes what it names, and only a ruling may | every guarded verb ([`issue file`](#nen-issue-file) and the rest of the guard's table), `release-publish` |
 | `reports.sections` | which blocks each report VARIANT renders, and with which template. No default ever | [`report render --variant`](#nen-report-render) |
 | `review.scopes` | which reviewer, at which tier, within which budget, over which paths. No default ever | [`review scopes`](#nen-review-scopes) |
+| `review.excludedPersonas` | personas never to be a code reviewer (an intake-only persona); a scope naming one is refused by pointer ([#472](https://github.com/zheref/nen/issues/472)). Default none | [`review scopes`](#nen-review-scopes), [`schema check`](#nen-schema-check) |
 | `reports.dir` / `retain` / `template` / `captures` | where reports go. `dir` is what [`scaffold init`](#nen-scaffold-init) appends to `.gitignore`, beside `.nen/` | callers |
 | `notifications.rungs` / `sound` | which escalation rungs a host hook fires | host hooks |
 | `notifications.turn` | how loud an ORDINARY (no-gate) turn is: `"rung1"` (default) rings only the first rung `rungs` lists, `"all"` rings every rung `rungs` lists on every turn. Never widens what `rungs` grants | host hooks |
@@ -997,7 +1027,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`wc`](#family-wc) | [`nen wc worktrees`](#nen-wc-worktrees) | list every checkout of the project, core first: core/in mark, branch or detached, uncommitted count, +ahead/-behind against `origin/<base>`, HEAD, last commit and age, path | git (rev-parse --git-common-dir, worktree list, status, rev-list, log) | yes |
 | [`wc`](#family-wc) | [`nen wc swap`](#nen-wc-swap) | bring a worktree's committed tree into the core checkout (view: HEAD detached; `--take`: the branch), `--return` it with core's parked work restored, `--status`; core's work parked in a pinned commit, never stashed; exit 3 on a dirty tree | git (worktree list, status, read-tree/add/write-tree/commit-tree through a temporary index, update-ref, reset --hard, clean -fd, checkout, diff) | yes |
 | [`wc`](#family-wc) | [`nen wc worktree`](#nen-wc-worktree) | keep ONE detached worktree at `<core>/.nen/worktrees/<name>` at `origin/<base>`'s fetched tip -- created, reused, moved, or (its registration outliving its directory) that one registration dropped and recreated; refused, never discarded, when dirty, and refused for a stray directory, a symlink or a sibling registration; `--copy-from-core` copies gitignored, untracked regular files from core after proving the source in core and the destination at the tip and in the worktree, through a temp file and a rename | git (rev-parse --git-common-dir/--git-dir, check-ref-format, fetch, ls-remote, rev-parse, ls-files, check-ignore, ls-tree, worktree list/add/remove, status -z, diff --name-only, checkout --detach), the files named by --copy-from-core in core, the copy record in the worktree's git dir | yes |
-| [`wc`](#family-wc) | [`nen wc overlap`](#nen-wc-overlap) | file disjointness of parallel efforts, computed: each effort's merge-base diff against `--base` (default `origin/<branch.base>`), plus an always-overlapping list counted as every effort's; verdict `disjoint` / `stack(<order>)` (the branches already chain) / `overlap(<paths>)` / `unknown` | git (diff --name-only -z `<base>...<effort>`, merge-base --is-ancestor), nen/workflow.json under --repo (alwaysOverlaps; branch.base without --base) | yes |
+| [`wc`](#family-wc) | [`nen wc overlap`](#nen-wc-overlap) | file disjointness of parallel efforts, computed: each effort's merge-base diff against `--base` (default `origin/<branch.base>`), plus an always-overlapping list counted as every effort's; verdict `disjoint` / `stack(<order>)` (git's chain when the branches chain, else the `--efforts` order) / `unknown`; `--declared` paths stand in before authoring | git (diff --name-only -z `<base>...<effort>`, merge-base --is-ancestor), nen/workflow.json under --repo (alwaysOverlaps; branch.base without --base), the `--declared` file | yes |
 | [`stage`](#family-stage) | [`nen stage triage`](#nen-stage-triage) | flag secret-shaped, binary, out-of-scope and unmentioned-deletion files before staging; report git-ignored paths separately, never counted toward the exit code; `--range <base>..<head>` triages a committed range instead of the working copy — names and blob sizes over every change any commit made (`in-history` for a finding not in the net change), deletions and mentions over the net diff from the merge base — an unresolved, malformed or unrelated range exit 2 and never a fall back | git status --porcelain; with --range: git rev-parse, merge-base, rev-list --count, log --raw, diff --raw, cat-file --batch-check | yes |
 | [`stage`](#family-stage) | [`nen stage list`](#nen-stage-list) | the exact add list — every modified, added, renamed, deleted and untracked path triage called clean, minus flagged and git-ignored ones, each exclusion named with its reasons, unmerged paths, embedded repositories and undecodable names held off with the list withheld, a worktree rename's original included; `--repo` must be the top; newline (C-quoted where needed) or `--nul` form to feed `git add --pathspec-from-file=-` verbatim, withheld on a flag (exit 1), exit 3 when empty | git status --porcelain | yes |
 | [`stage`](#family-stage) | [`nen stage check`](#nen-stage-check) | `--exclusive`: exit 1 when an issue (or any of `--issues`) carries two stage-family labels at once, the family read from `nen/labels.json` (`<namespace>:stage/<leaf>`), exit 2 when it declares none; names both, picks neither | nen/labels.json under --repo, github (gh issue view --json labels) | yes |
@@ -1083,7 +1113,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`issue`](#family-issue) | [`nen issue reconcile`](#nen-issue-reconcile) | read-only, proposes only: which OPEN issues a MERGED pull request already closes, each proposal citing the PR, its merge commit and the closing reference | gh (repo view, issue list, api graphql search and per-PR commit queries, api compare, api labels when --hold-labels is given, pr list for delivery PRs and the open-PR guard) | yes |
 | [`issue`](#family-issue) | [`nen issue edit-body`](#nen-issue-edit-body) | replaces an issue's body outright with a file's bytes, certifying the number is an ISSUE (never a PR) before any write | gh (api read to certify, issue edit unless --dry-run) | yes |
 | [`issue`](#family-issue) | [`nen issue body-check`](#nen-issue-body-check) | read-only: does an issue body carry every section its kind requires in the caller's catalogue, with content patterns, contiguous and measurable numbered rows, and vague-word advisories | --body-file or gh (api read), the --requirements-from catalogue | yes |
-| [`issue`](#family-issue) | [`nen issue questions`](#nen-issue-questions) | read-only: counts an issue body's open OQ-{n} rows, resolved ones and [NEEDS ...] markers; counts, never decides | --body-file or gh (api read) | yes |
+| [`issue`](#family-issue) | [`nen issue questions`](#nen-issue-questions) | read-only: counts an issue body's open OQ-{n} rows, resolved ones and [NEEDS ...] markers, one issue or a comma-separated batch; exits 1 while any question is open, NEEDS-marked or malformed | --body-file or gh (api read) | yes |
 | [`issue`](#family-issue) | [`nen issue criteria`](#nen-issue-criteria) | read-only: lists an issue body's AC-{n} acceptance-criterion rows with their text; a body with none is not verifiable | --body-file or gh (api read) | yes |
 | [`idea`](#family-idea) | [`nen idea file`](#nen-idea-file) | file an idea issue (reusing issue file's own choreography), then read it back over the API and diff title/body/labels against what was submitted | nen/labels.json; gh (issue create + api read) | yes |
 | [`scaffold`](#family-scaffold) | [`nen scaffold init`](#nen-scaffold-init) | stand an EXISTING repository up: the directory skeleton, the trailer-enforcing commit-msg hook, the trunk-guarding pre-commit hook, a canon-values.yml template, nen/contract.json's project block, nen/workflow.json's policy, the schemas/-&gt;nen/ copy migration, the stack's CI workflow, .gitignore upkeep, and a closing `shu tools` CHECK that installs nothing | nen/contract.json + nen/workflow.json (both hooks are generated FROM the policy) + the legacy schemas/ copies; the bundled profiles pack and templates/; writes to disk under --repo; spawns the version probes the target declares (never on --dry-run) | yes |
@@ -2707,7 +2737,7 @@ Acceptance-criterion coverage as data (Hatsu's ruling HR-11): compares the crite
 **Usage**
 
 ```text
-nen pr converge --target <owner/name> --pr <n> [--requirements-from <catalogue.json>] [--json]
+nen pr converge --target <owner/name> --pr <n> [--requirements-from <catalogue.json>] [--require-head <sha>] [--json]
 ```
 
 **Arguments**
@@ -2717,11 +2747,12 @@ nen pr converge --target <owner/name> --pr <n> [--requirements-from <catalogue.j
 | `--target <owner/name>` | yes | The repository the pull request lives in. | Missing or malformed exits 2. |
 | `--pr <n>` | yes | The pull-request number. | Missing or not a positive whole number exits 2. |
 | `--requirements-from <path>` | no | The [issue-sections catalogue](#the-issue-sections-catalogue): its acceptance-row prefix and section scope the criteria, and an optional `coverage` block `{ "blocking": [<words>], "none": "<word>", "evidence": "required" \| "optional" }` sets the rules. | Resolves against `--repo`'s root. Absent: `AC` rows anywhere in the issue body, `missing` and `contradicts` block, `unrequested` on `none` rows, evidence required. Unreadable or malformed exits 2. |
+| `--require-head <sha>` | no | Pin the verdict to one head ([#483](https://github.com/zheref/nen/issues/483) AC-6). The first read's `headRefOid` must equal it, and a head-only re-read (`gh pr view <n> --repo <target> --json headRefOid`) **after** every closing issue was read must still equal it. | A full 40- or 64-hex SHA, compared case-insensitively; anything else exits 2 before any read. A first read at another head, a head that moved between the reads, or a re-read that failed exits **1** with stdout empty and stderr naming both heads: a verdict assembled across two heads is refused, never reported. |
 | `--json` | no | The report as one JSON document. | |
 
 Every other flag is refused at exit 2 before any `gh` call. `--repo` is read only to resolve `--requirements-from`.
 
-**What it reads.** The pull request through `gh pr view <n> --repo <target> --json number,url,headRefOid,baseRefName,body,closingIssuesReferences` -- the `gh pr view` read [`pr fetch`](#nen-pr-fetch) and [`issue open-pr-check`](#nen-issue-open-pr-check) make; `closingIssuesReferences` is GitHub's own list of the issues the PR closes, a body keyword and a sidebar link alike -- **but only for a PR into the default branch**. When the list is empty, the default branch is read (`gh repo view <target> --json defaultBranchRef`); on any other base GitHub computes no closing references, so the body's own closing keywords (`Closes`/`Fixes`/`Resolves` and their tenses, with `#N`, `owner/name#N` or an issue URL, outside code and comments) name the closing issues instead (`closingSource: "body-keywords"`), and a body naming none there is a blocking row, never "closes no issue". Each closing issue is read over REST (`gh api repos/<owner/name>/issues/<N>`) in **its own repository**, and its criteria extracted as [`issue criteria`](#nen-issue-criteria) extracts them -- the one row grammar, so a list row naming `AC-{n}` in no admitted shape is `unrecognised`.
+**What it reads.** The pull request through `gh pr view <n> --repo <target> --json number,url,headRefOid,baseRefName,body,closingIssuesReferences` -- the `gh pr view` read [`pr fetch`](#nen-pr-fetch) and [`issue open-pr-check`](#nen-issue-open-pr-check) make; `closingIssuesReferences` is GitHub's own list of the issues the PR closes, a body keyword and a sidebar link alike -- **but only for a PR into the default branch**. When the list is empty, the default branch is read (`gh repo view <target> --json defaultBranchRef`); on any other base GitHub computes no closing references, so the body's own closing keywords (`Closes`/`Fixes`/`Resolves` and their tenses, with `#N`, `owner/name#N` or an issue URL, outside code and comments) name the closing issues instead (`closingSource: "body-keywords"`), and a body naming none there is reported as `closingSource: "none-on-non-default-base"` with zero criteria -- never "closes no issue" -- and, from 2026-10-23, no longer blocks: the other conjuncts decide. Each closing issue is read over REST (`gh api repos/<owner/name>/issues/<N>`) in **its own repository**, and its criteria extracted as [`issue criteria`](#nen-issue-criteria) extracts them -- the one row grammar, so a list row naming `AC-{n}` in no admitted shape is `unrecognised`.
 
 <a id="the-verify-row-grammar"></a>
 
@@ -2752,7 +2783,7 @@ Beside the coverage, the row's `word` when exactly one readable row names the cr
 
 **Output and exit codes** -- the line `<n> criterion row(s) across <n> closing issue(s), <n> blocking -- <n> covered with evidence, <n> without, <n> missing-row, <n> malformed-row, <n> duplicate-rows, <n> not-verifiable` (or `<owner/name>#<n> closes no issue: no criterion to compare (not verifiable)`, or, into a base that is not the default branch with no closing keyword in the body, `<owner/name>#<n> into '<base>' (not the default branch): GitHub lists no closing issue and the body names none -- cannot tell what it closes`), then one `<COVERAGE>  <owner/name>#<N>/<AC-n> <word> (line <n>)` line per criterion and `UNRECOGNISED`, `UNREQUESTED`, `UNMATCHED` and `MALFORMED` lines. `--json`: `{ contract, target, pr, url, headSha, base, closingSource, closingIssues, verifiable, criteria, unrequested, unmatched, malformed, counts, blocking }` -- `contract` is `nen.pr.converge/v0.1`; `closingSource` `github`, `body-keywords`, `none-on-non-default-base` or `none`; `closingIssues` each `{ issue, criteria, verifiable, unrecognised }` (`issue` is `owner/name#N`, `criteria` the number of AC rows); `verifiable` false when the PR closes no issue or any closing issue states no criterion; `criteria` each `{ issue, id, text, coverage, word, evidence, rows }` (`id` `AC-{n}` or null on `not-verifiable`, `rows` the verify-row line numbers naming it); `unrequested` each `{ line, word, evidence, problem }`; `unmatched` and `malformed` each `{ line, cell, reason }`; `counts` one count per coverage plus `words: { satisfied, partial, missing, contradicts, unrequested }`; `blocking` one string per row that sets exit 1.
 
-**Which rows block.** Exit **1** on any of: a criterion that is `missing-row`, `malformed-row` or `duplicate-rows`; a criterion whose word is a blocking word (default `missing`, `contradicts`); a criterion row saying the none word (`unrequested`); a criterion `covered-without-evidence` while evidence is required (the default); a closing issue that states no criterion (`not-verifiable` -- never the pass code); a closing issue carrying an `unrecognised` AC row; a `none` row with a problem; an `unmatched` or `malformed` verify row; a non-default base whose body names no closing issue. `partial` with evidence passes. Exit **0** when nothing blocks, a PR into the default branch closing no issue included (`verifiable: false` says so). Exit **1** too when it **could not read**: the pull request, its `body`, `baseRefName` or `closingIssuesReferences`, the default branch, a closing reference naming no number and repository (or a repository that is no `owner/name` GitHub could issue -- a `..`, an extra slash -- refused before any read of it), a closing issue or its body, a closing number that names a pull request, or a full page of 100 closing references (the rest unread); stdout stays empty and stderr names what failed. "Could not read" is never "nothing to cover". Exit **2** on usage and a malformed catalogue.
+**Which rows block.** Exit **1** on any of: a criterion that is `missing-row`, `malformed-row` or `duplicate-rows`; a criterion whose word is a blocking word (default `missing`, `contradicts`); a criterion row saying the none word (`unrequested`); a criterion `covered-without-evidence` while evidence is required (the default); a closing issue that states no criterion (`not-verifiable` -- never the pass code); a closing issue carrying an `unrecognised` AC row; a `none` row with a problem; an `unmatched` or `malformed` verify row. `partial` with evidence passes. A non-default base whose body names no closing issue is reported, not blocked (changed 2026-10-23; it exited 1 in v0.26.0). Exit **0** when nothing blocks, a PR into the default branch closing no issue included (`verifiable: false` says so). Exit **1** too when it **could not read**: the pull request, its `body`, `baseRefName` or `closingIssuesReferences`, the default branch, a closing reference naming no number and repository (or a repository that is no `owner/name` GitHub could issue -- a `..`, an extra slash -- refused before any read of it), a closing issue or its body, a closing number that names a pull request, or a full page of 100 closing references (the rest unread); stdout stays empty and stderr names what failed. "Could not read" is never "nothing to cover". Exit **2** on usage and a malformed catalogue.
 
 **Example**
 
@@ -2770,10 +2801,25 @@ COVERED-WITH-EVIDENCE  o/n#12/AC-2 partial (line 6)
 
 Reports the FIRST blocking condition, in a fixed order: conflict -> red
 required check -> owed reviewer round -> unresolved thread -> missing body
-requirement (`## How to verify`, CON-17). It does not re-derive the CON-32
+requirement (CON-17). It does not re-derive the CON-32
 predicates; it composes the ported, tested gate engine over one fetched
 snapshot. The changelog.d/ fragment half of CON-33(a) is diff-shaped and not
 checked here.
+
+**The body step reads the caller's requirements ([#479](https://github.com/zheref/nen/issues/479) AC-4).**
+`--requirements-from <path>` takes the same `{ name, pattern }` JSON array
+[`pr body-check`](#nen-pr-body-check) reads (a relative path resolves against
+`--repo`), and the last step then names the first requirement the body does not
+satisfy: `body requirement '<name>' not satisfied (CON-17; --requirements-from)`.
+So the two verbs give one verdict for one body, including a process body headed
+`## What the guards prove` or a library body headed `## How a consumer verifies`
+(Akatsuki CON-17(b)'s three titles). Without the flag the step is the historical
+`## How to verify` heading. An unreadable or malformed file exits 2 before any
+GitHub read.
+
+```text
+nen pr next-blocker --target <owner/name> --pr <n> --repo <path> [--reviewers a,b] [--policy bounded|strict] [--delivery-pr] [--gates <path>] [--requirements-from <path>]
+```
 
 | Exit | Meaning |
 |---|---|
@@ -5197,15 +5243,26 @@ the effort. `--repo`'s `nen/workflow.json` → `alwaysOverlaps` (validated by [`
 delivery touches sooner or later -- a plugin manifest's version, the `CHANGELOG`, generated mirrors --
 whether the branch has touched them yet or not: the bump happens at catch-up or release time. Each is
 counted as touched by **every** effort (an entry ending in `/` is a directory prefix, counted through the
-paths under it some effort changed). The verdict is a fact, never a plan: when the overlapping efforts'
-branches **already chain** -- each contains the one before (`git merge-base --is-ancestor`) -- the
-verdict is `stack(<order>)`, an order git holds rather than one nen chooses (NN#488 AC-1); when they
-overlap and do not chain, which stacks on which is the caller's to decide.
+paths under it some effort changed). **Efforts that share any path stack** -- they never run side by
+side -- so the verdict is `stack(<order>)` (NN#488 AC-2: two efforts that both touch `plugin.json`
+stack). **The order is never nen's choice**: when the branches **already chain** -- each contains the one
+before (`git merge-base --is-ancestor`) -- it is the order git holds (`order: chain`); otherwise it is the
+order the caller listed `--efforts` in, which is the order its epic names (`order: given`), and when git
+could not answer the ancestry question that order is used and said so (`source: "ancestry-unread"`).
+**Only the efforts that share a path are stacked, one stack per connected group**: an effort sharing nothing is left out, and A and B sharing `p` beside C and D sharing `q` read two stacks, `stack(A <- B; C <- D)`, each with its own order line.
+
+**Declared paths, before authoring (NN#488 AC-1).** Before an effort is authored there is no branch tip
+to diff, so `--declared <file>` names a JSON object of effort → the repository-relative paths it declares
+(`{ "opus/kurapika/x": ["docs/USAGE.md", "src/a.ts"] }`). An effort whose diff cannot be read yet is
+compared on its declared paths alone, and keeps the reason its diff was not read; after publish the diff
+is read and the declared paths are added to it. Each effort's `sources` says which inputs its files came
+from (AC-3: the verb states what it could not read). Only an effort with **neither** a readable diff nor
+declared paths is unread, and the verdict is then `unknown`.
 
 **Usage**
 
 ```text
-nen wc overlap --efforts <a,b,...> --repo <path> [--base <ref>] [--always-overlaps <paths>] [--json]
+nen wc overlap --efforts <a,b,...> --repo <path> [--base <ref>] [--always-overlaps <paths>] [--declared <file>] [--json]
 ```
 
 **Arguments**
@@ -5216,17 +5273,21 @@ nen wc overlap --efforts <a,b,...> --repo <path> [--base <ref>] [--always-overla
 | `--repo <path>` | yes | The checkout whose refs are read. | Listed unbracketed: omitted, exits 2 by name. |
 | `--base <ref>` | no | What each effort is diffed against. | Default `origin/<branch.base>` from `--repo`'s `nen/workflow.json` (`origin/main` when undeclared); a policy that will not load exits 1, with or without `--base` (its `alwaysOverlaps` would go uncounted). |
 | `--always-overlaps <paths>` | no | Comma-separated paths every effort is counted as touching, added to the workflow's `alwaysOverlaps`. | An entry ending in `/` is a directory prefix. |
+| `--declared <file>` | no | A JSON object of effort → the paths it declares before authoring. | Resolves against `--repo`. Unreadable, not JSON, not an object, a key `--efforts` does not list, or an entry that is not a **non-empty** list of repository-relative paths (no leading `/`, no `..`) exits 2: an empty list would read an unread diff as "touches nothing". `$`-keys are skipped. |
 
-**Output and exit codes** -- prints `verdict: disjoint`, `verdict: stack(<a> <- <b> ...)`, `verdict:
-overlap(<path>, ...)` or `verdict: unknown (could not read <effort>, ...)`, then `base: <ref>`, each
-effort's file count, and one `shared <path>: <efforts>[ (always overlaps)]` line per shared path.
-`--json` top-level keys: `verdict` (`disjoint` \| `stack` \| `overlap` \| `unknown`), `base`,
-`alwaysOverlaps` (the workflow's list, then the flag's), `overlaps` (`[{path, efforts, always}]`,
-path-sorted), `efforts` (`[{effort, files, unreadReason}]`, `files: null` when unread), `unread`, `stack`
-(the efforts in chain order on `stack`, else null; a chain git could not confirm reads `overlap`). Exit 0
-on `disjoint`; exit 1 on `stack`, `overlap` and `unknown` -- an effort whose diff could not be read is
-never read as "touches nothing"; exit 2 on a malformed flag or a flag another `wc` verb owns. Writes
-nothing.
+**Output and exit codes** -- prints `verdict: disjoint`, `verdict: stack(<a> <- <b> ...)` followed by
+`order: chain (…)` or `order: given (…)`, or `verdict: unknown (could not read <effort>, ...)`, then
+`base: <ref>`, each effort's file count with its sources (`(diff)`, `(declared)`, `(diff + declared)`)
+and `; diff not read -- <reason>` where declared paths stood in, and one
+`shared <path>: <efforts>[ (always overlaps)]` line per shared path. `--json` top-level keys: `verdict`
+(`disjoint` \| `stack` \| `unknown`), `base`, `alwaysOverlaps` (the workflow's list, then the flag's),
+`overlaps` (`[{path, efforts, always}]`, path-sorted), `efforts` (`[{effort, files, unreadReason,
+sources}]`, `files: null` when unread), `unread`,
+`stacks` (`[{efforts, source}]`, one per connected group of sharing efforts, `source` `chain` \| `given` \| `ancestry-unread`; empty unless `stack`). Exit 0 on `disjoint`; exit 1 on `stack`
+and `unknown` -- an effort with nothing read is never read as "touches nothing"; exit 2 on a malformed
+flag, an unreadable or malformed `--declared`, or a flag another `wc` verb owns. Writes nothing.
+**Changed from v0.26.0**: the `overlap(<paths>)` verdict is gone; efforts that overlap and do not chain
+now read `stack(<the --efforts order>)` with `stacks[].source: "given"`, at the same exit 1.
 
 **Example**
 
@@ -5235,14 +5296,15 @@ nen wc overlap --repo . --base origin/integration/sdd-plan-2026-10-22 \
   --efforts origin/opus/kurapika/sdd-n8-schema-keys,origin/opus/kurapika/sdd-n1-loop-ledger
 ```
 ```text
-verdict: overlap(docs/USAGE.md, src/loop/command.ts)
+verdict: stack(origin/opus/kurapika/sdd-n8-schema-keys <- origin/opus/kurapika/sdd-n1-loop-ledger)
+order: given (the --efforts order; the branches do not chain)
 base: origin/integration/sdd-plan-2026-10-22
-  origin/opus/kurapika/sdd-n8-schema-keys: 27 file(s)
-  origin/opus/kurapika/sdd-n1-loop-ledger: 6 file(s)
+  origin/opus/kurapika/sdd-n8-schema-keys: 27 file(s) (diff)
+  origin/opus/kurapika/sdd-n1-loop-ledger: 6 file(s) (diff)
   shared docs/USAGE.md: origin/opus/kurapika/sdd-n8-schema-keys, origin/opus/kurapika/sdd-n1-loop-ledger
   shared src/loop/command.ts: origin/opus/kurapika/sdd-n8-schema-keys, origin/opus/kurapika/sdd-n1-loop-ledger
 ```
-(exit 1; a real run against this repository's own two open SDD sub-PR branches)
+(exit 1; a real run against this repository's own two open SDD sub-PR branches, re-rendered in this build's shape)
 
 <a id="family-stage"></a>
 
@@ -8578,6 +8640,22 @@ exceeding 100,000 lines per file, 2,048 edits or 1,000,000 comparison steps
 fails closed. File additions, deletions and renames without readable content
 at the same exact path at both commits therefore fail this bound.
 
+**Files over 1 MB ([#424](https://github.com/zheref/nen/issues/424)).** For a
+file between 1 MB and 100 MB the contents API answers `"encoding": "none"` with
+an empty `content` and the blob's `sha`. The read follows that `sha` to
+`gh api repos/<slug>/git/blobs/<sha>` (base64, up to 100 MB) and decodes it
+under the same strict rules, so this repository's own `docs/USAGE.md` (about
+1.2 MB) is read in full. The decoded byte count must equal the stated `size`.
+A refusal names **which** condition failed, at which side:
+`whole file -- <reason> at its base|head commit`, where `<reason>` is one of
+`unreadable: …` (the read failed, answered no JSON or no base64),
+`too large for the API: …` (no content and no blob, or the blob read failed
+too), `truncated: …` (fewer bytes than `size`), `not UTF-8 text`, or
+`binary: the file contains a NUL byte`. Checked live on 2026-10-23: at v0.26.0,
+`release unit-check --pr 503` refused `docs/USAGE.md` as "unreadable or not
+UTF-8"; this build reads it and reports `every changed path is inside the
+release unit`.
+
 Nen's own unit bounds the changed lines in `src/version.ts` to version/floor
 literal forms, and those in `README.md` / `docs/USAGE.md` to declared
 install/example forms with numeric pins. Each removed and added line is
@@ -8787,12 +8865,38 @@ exit 1
 
 CON-33(b): collates every fragment in `--fragment-dir` into a new dated
 section of `--changelog`. Without `--write`, reports the rendered result
-without touching disk or deleting fragments.
+without touching disk or deleting fragments. The preview and the write render
+the section through one pure function, so they never disagree.
+
+**The anchor rule ([#504](https://github.com/zheref/nen/issues/504)).** Two
+anchors, tried in order:
+
+1. **An `### Unreleased` header.** It must be empty (otherwise exit 1, as
+   before). It is kept with the `_(nothing awaiting release.)_` placeholder and
+   the new section goes directly below it. The Unreleased block runs to the
+   next heading at level 3 **or higher**, so a `## v<prev>` heading under it is
+   never swallowed, and neither its bullets nor its paragraph count as
+   Unreleased entries. When that next heading is a dated release heading at a
+   **higher** level (`## v0.26.0 — 2026-10-22` under `### Unreleased`), the new
+   section takes **its** form, exactly as anchor 2 below does -- its level, its
+   `v`, its separator, and `--date` when its suffix is a date, with a blank line
+   before the old heading. Otherwise it is `### v<version> — <theme>`.
+2. **Otherwise, the top dated release heading** -- the first line shaped
+   `#… v<X.Y.Z> — <suffix>` at any level (this repository's own
+   `## v0.27.0 — 2026-10-22`). The new section goes directly above it, at its
+   level, with its `v` and separator. When that suffix is a `YYYY-MM-DD` date,
+   the new heading carries the release date and `--theme` becomes the
+   section's first paragraph; any other suffix means `--theme` is the suffix.
+   **The date source** is `--date`, else today's date in UTC. Every existing
+   line stays byte-identical: only the new section and its trailing blank line
+   are inserted, each with the file's own line ending (a CRLF file stays CRLF).
+
+With neither anchor the verb refuses at exit 1 naming both.
 
 **Usage**
 
 ```text
-nen changelog collate --version <vX.Y.Z> --theme <text> --changelog <path> --fragment-dir <dir> [--write]
+nen changelog collate --version <vX.Y.Z> --theme <text> --changelog <path> --fragment-dir <dir> [--date <YYYY-MM-DD>] [--write]
 ```
 
 **Arguments**
@@ -8803,16 +8907,18 @@ nen changelog collate --version <vX.Y.Z> --theme <text> --changelog <path> --fra
 | `--theme <text>` | yes | the release's one-line theme | — |
 | `--changelog <path>` | yes | the `CHANGELOG.md` to rewrite | — |
 | `--fragment-dir <dir>` | yes | the fragment directory | a missing directory contributes zero fragments rather than refusing |
+| `--date <YYYY-MM-DD>` | no | the release date written on a dated heading: anchor 2, and anchor 1 when the Unreleased block ends at a higher-level dated heading | default today's UTC date; not a calendar day exits 2; unused when the new heading carries the theme |
 | `--write` | no | actually rewrite the changelog and delete the collated fragments | default off (dry-run) |
 | `--repo <path>` | no | resolves relative `--changelog`/`--fragment-dir` | default cwd |
 | `--json` | no | machine-readable collation result | — |
 
 **Output and exit codes** — human lines: `(no --write) would collate` or
-`collated <n> fragment(s) into <path> ### v<version> — <theme>`, then each
+`collated <n> fragment(s) into <path> <heading> (anchored below '### Unreleased' | above the top dated section)`, then each
 fragment name **in the order it was written into the section** — newest-first
 by the leading `<n>-` prefix, the same order the section itself reads, so the
 manifest can be cross-checked against it line for line. `--json` top-level
-keys: `version`, `theme`, `fragments[]` (that same order), `written`. Exit 0 on any completed run — there is no "drift" verdict here,
+keys: `version`, `theme`, `fragments[]` (that same order), `written`, `heading` (the
+heading written), `anchor` (`unreleased` \| `dated-section`). Exit 0 on any completed run — there is no "drift" verdict here,
 only "wrote/didn't write". Exit **2** on a missing required flag, and on an
 unreadable `--changelog` or fragment: the read goes through the shared reader,
 so a mistyped path is the named refusal every other path flag gives —
@@ -8827,10 +8933,21 @@ nothing.` It used to escape as a raw errno at exit 1
 nen changelog collate --repo . --version v0.3.0 --theme "readiness and release docs" --changelog CHANGELOG.md --fragment-dir changelog.d
 ```
 ```text
-(no --write) would collate 1 fragment(s) into CHANGELOG.md ### v0.3.0 — readiness and release docs
+(no --write) would collate 1 fragment(s) into CHANGELOG.md ### v0.3.0 — readiness and release docs (anchored below '### Unreleased')
   90-usage-docs.md
 ```
 (from a real run against a scratch `CHANGELOG.md` and a `changelog.d/90-usage-docs.md` fragment; `CHANGELOG.md` was confirmed unchanged on disk afterward since `--write` was not given)
+
+Against this repository's own `CHANGELOG.md`, which has no Unreleased header (2026-10-23):
+
+```bash
+nen changelog collate --repo . --version v0.28.0 --theme "probe" --changelog CHANGELOG.md --fragment-dir changelog.d --date 2026-10-23
+```
+```text
+(no --write) would collate 2 fragment(s) into CHANGELOG.md ## v0.28.0 — 2026-10-23 (anchored above the top dated section)
+  nn-505-antigravity-tool-names.md
+  sdd100-futon-idle-twice.md
+```
 
 ### `nen changelog completeness`
 
@@ -9655,6 +9772,7 @@ nen issue file --target <owner/name> --repo <path>
                (--title <t> | --title-file <path>)
                --body-file <path> --label a,b --assignee <user>
                [--forbid-family ns:family] [--dry-run]
+               [--requirements-from <catalogue.json> [--kind <kind>]]
                [--skip-private-name-check]
                [--private-names-ignore-file <path> [--allow-all-ignored]]
 ```
@@ -9671,6 +9789,7 @@ nen issue file --target <owner/name> --repo <path>
 | `--label a,b` | yes | Comma-separated labels, applied in the create call. | Every label must exist in `--repo`'s taxonomy; an empty list is refused. |
 | `--assignee <user>` | yes | A single GitHub login. | Empty is refused: an unassigned issue reaches nobody by notification. |
 | `--forbid-family ns:family` | no | Label families this invocation declares off-limits. | Caller data -- nen carries no repository's own "which family means released" convention. |
+| `--requirements-from <catalogue.json>` | no | The [issue-sections catalogue](#the-issue-sections-catalogue): the body is held to it **before the create**, by the same check [`issue body-check`](#nen-issue-body-check) runs, on the bytes about to be sent ([#476](https://github.com/zheref/nen/issues/476)). `--kind <kind>` selects the kind, as `body-check`'s does. | Resolves against `--repo`'s root. Any miss refuses the filing at exit **1** before any GitHub read, each named as `body-check (kind '<kind>'): <miss> line <n>: <detail>; nothing was filed` (under `--json`, the [refusal envelope](#the-refusal-envelope)); advisories never block. `--kind` without it, an unreadable or malformed catalogue, and an undeclared kind exit **2**. |
 | `--dry-run` | no | Print the exact `gh issue create` argv and write nothing. | Writes nothing. Since [#329](https://github.com/zheref/nen/issues/329) it READS: the [private-name guard](#the-private-name-guard) runs here too, so a dry run's verdict is the real run's. |
 | `--skip-private-name-check` | no | Skip the [private-name guard](#the-private-name-guard): the caller attests it ran its own check. | Nothing is read; every run that uses it says so on stderr, and `--json` carries `privateNameCheck.result: "skipped-by-flag"`. |
 | `--private-names-ignore-file <path>` | no | Private repositories the caller ruled too generic to police ([private-name guard](#the-private-name-guard)). | No default path is read; a missing file exits **2** before any `gh` call. Resolves against `--repo`'s root. Ignored hits are reported, never silent. |
@@ -10341,7 +10460,7 @@ nen issue body-check (--body-file <path> | --ref <CODE>#<N> --target <owner/name
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
-| `--body-file <path>` | one of the two | The issue body to check, read from disk. | Resolves against `--repo`'s root (default the current directory). An unreadable file exits **2**, never reads as empty. Refused with `--ref`, and with `--target` (a file addresses no repository). |
+| `--body-file <path>` | one of the two | The issue body to check, read from disk. | Resolves against `--repo`'s root (default the current directory). An unreadable file exits **2**, never reads as empty. So does a file that is not valid UTF-8, on `body-check`, `questions` and `criteria` alike, rather than reading replacement characters as a body with no rows. Refused with `--ref`, and with `--target` (a file addresses no repository). |
 | `--ref <CODE>#<N>` | one of the two | The issue to read the body of. Also `<owner/name>#<N>`, `#<N>` or `<N>`. | Needs `--target`, which is what addresses the API; the `CODE` is echoed in the report and never resolved, and an `owner/name` prefix must name `--target` itself (exit 2 otherwise). A number that names a pull request is refused at exit **2** -- [`pr body-check`](#nen-pr-body-check) reads those. |
 | `--target <owner/name>` | with `--ref` | The repository `--ref` is read from. | Missing or malformed exits 2. |
 | `--requirements-from <path>` | yes | The [issue-sections catalogue](#the-issue-sections-catalogue). | Resolves against `--repo`'s root. Unreadable, not JSON, or malformed exits **2**, naming the file and the field. |
@@ -10403,12 +10522,12 @@ ADVISORY line 3: vague 'fast'
 
 ### `nen issue questions`
 
-Counts an issue body's unresolved questions -- the one admitted shape for an open question in an issue (Hatsu's ruling HR-4) -- so a caller can refuse to build on an issue that still holds one. It **counts and never decides**: whether an open question blocks anything is the caller's rule.
+Counts an issue body's unresolved questions -- the one admitted shape for an open question in an issue (Hatsu's ruling HR-4) -- so a caller can refuse to build on an issue that still holds one. **Its exit says whether a question is still open** ([#477](https://github.com/zheref/nen/issues/477)), so a build or a batch selector can skip an issue on the exit alone; what an open question then stops is the caller's rule.
 
 **Usage**
 
 ```text
-nen issue questions (--body-file <path> | --ref <CODE>#<N> --target <owner/name>)
+nen issue questions (--body-file <path> | --ref <CODE>#<N>[,<CODE>#<N>...] --target <owner/name>)
                     [--requirements-from <catalogue.json>] [--json]
 ```
 
@@ -10417,7 +10536,7 @@ nen issue questions (--body-file <path> | --ref <CODE>#<N> --target <owner/name>
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `--body-file <path>` | one of the two | The issue body, read from disk. | As [`issue body-check`](#nen-issue-body-check)'s. |
-| `--ref <CODE>#<N>` | one of the two | The issue to read. | As [`issue body-check`](#nen-issue-body-check)'s: needs `--target`; a pull request is refused at exit 2. |
+| `--ref <CODE>#<N>[,…]` | one of the two | The issue to read, or a comma-separated **batch** of up to 100. | As [`issue body-check`](#nen-issue-body-check)'s: needs `--target`; a pull request anywhere in the list refuses the run at exit 2, and so does a repeated entry. |
 | `--target <owner/name>` | with `--ref` | The repository `--ref` is read from. | |
 | `--requirements-from <path>` | no | The [issue-sections catalogue](#the-issue-sections-catalogue) whose `rows.question` `pattern` and `resolvedPattern` replace the two shapes below. | Resolves against `--repo`'s root. Unreadable or malformed exits 2. |
 
@@ -10428,7 +10547,11 @@ nen issue questions (--body-file <path> | --ref <CODE>#<N> --target <owner/name>
 - **NEEDS markers** -- `[NEEDS CLARIFICATION: …]` and `[NEEDS <row-id>: …]`, each with its label;
 - **unrecognised** -- any list row naming `OQ-{n}` (a blockquoted one included) in neither shape above, listed with its text and counted as neither, so a malformed row is visible rather than lost.
 
-**Output and exit codes** -- the line `<open> open, <resolved> resolved, <n> [NEEDS] marker(s), <n> unrecognised -- <source>`, then `OPEN`, `RESOLVED`, `NEEDS` and `UNRECOGNISED` rows with their lines. `--json`: `{ contract, source, counts: { open, resolved, needsMarkers, unrecognised }, open, resolved, needsMarkers, unrecognised }` -- `contract` is `nen.issue.questions/v0.1`, `source` as `body-check`'s, `open` each `{ id, number, gate, line }`, `resolved` each `{ id, number, line }`, `needsMarkers` each `{ label, line }`, `unrecognised` each `{ line, text }`. Exit 0 whenever the body was read, whatever the counts; exit 1 when `--ref`'s issue could not be read or carried no body (never zero counts); exit 2 on usage or a malformed catalogue.
+**Output and exit codes** -- the line `<open> open, <resolved> resolved, <n> [NEEDS] marker(s), <n> unrecognised -- <source>`, then `OPEN`, `RESOLVED`, `NEEDS` and `UNRECOGNISED` rows with their lines. `--json`: `{ contract, source, counts: { open, resolved, needsMarkers, unrecognised }, open, resolved, needsMarkers, unrecognised }` -- `contract` is `nen.issue.questions/v0.1`, `source` as `body-check`'s, `open` each `{ id, number, gate, line }`, `resolved` each `{ id, number, line }`, `needsMarkers` each `{ label, line }`, `unrecognised` each `{ line, text }`.
+
+**A batch** (`--ref` with a comma) reads and counts each issue on its own and prints `<n> issue(s): <n> with an open question, <n> clear, <n> unread -- <owner/name>`, then each issue's block, and `UNREAD    <ref>: <reason>` for one that could not be read -- listed, never zero counts, and the others still reported. `--json`, under its own contract `nen.issue.questions.batch/v0.1` (one shape per contract id; a single `--ref` keeps `nen.issue.questions/v0.1`): `{ contract, target, counts: { issues, blocking, clear, unread }, issues }`, each entry the single-issue shape (with its `source`) or `{ ref, unread }`.
+
+**Exit codes** -- **1** when any open row, any `[NEEDS …]` marker or any unrecognised `OQ-{n}` row is found (a malformed row is a question nobody can tell is answered), and when an issue could not be read or carried no body; **0** only when every question read is resolved, or there is none; **2** on usage or a malformed catalogue. **Changed from v0.26.0**, which exited 0 whatever the counts. A `[NEEDS …]` marker blocks because it is an unanswered question in a shape HR-4 does not admit (this delivery's reading; #477 named open and malformed rows).
 
 **Example**
 
@@ -10441,7 +10564,7 @@ OPEN      OQ-1 (G4) line 1
 RESOLVED  OQ-2 line 2
 NEEDS     CLARIFICATION line 3
 ```
-(shape from `src/issue/shape-command.test.ts`)
+(shape from `src/issue/shape-command.test.ts`; exit 1)
 
 ### `nen issue criteria`
 
@@ -10496,6 +10619,7 @@ nen idea file --target <owner/name> --repo <path>
              (--title <t> | --title-file <path>)
              --body-file <path> --label a,b --assignee <user>
              [--forbid-family ns:family] [--dry-run]
+             [--requirements-from <catalogue.json> [--kind <kind>]]
              [--skip-private-name-check]
              [--private-names-ignore-file <path> [--allow-all-ignored]]
 ```
@@ -10513,6 +10637,7 @@ nen idea file --target <owner/name> --repo <path>
 | `--label a,b` | yes | Comma-separated labels. | Same taxonomy validation as `issue file`. |
 | `--assignee <user>` | yes | A single GitHub login. | |
 | `--forbid-family ns:family` | no | Label families this invocation declares off-limits. | Works exactly as [`issue file`](#nen-issue-file)'s does — forwarded into the same `FileRequest` — and is documented in `nen idea --help` since [#94](https://github.com/zheref/nen/issues/94). Caller data: nen carries no repository's own convention about which family means what. |
+| `--requirements-from <catalogue.json>` | no | The [issue-sections catalogue](#the-issue-sections-catalogue): the body is held to it **before the create**, by the same check [`issue body-check`](#nen-issue-body-check) runs, on the bytes about to be sent ([#476](https://github.com/zheref/nen/issues/476)). `--kind <kind>` selects the kind, as `body-check`'s does. | Resolves against `--repo`'s root. Any miss refuses the filing at exit **1** before any GitHub read, each named as `body-check (kind '<kind>'): <miss> line <n>: <detail>; nothing was filed` (under `--json`, the [refusal envelope](#the-refusal-envelope)); advisories never block. `--kind` without it, an unreadable or malformed catalogue, and an undeclared kind exit **2**. |
 | `--skip-private-name-check` | no | Skip the [private-name guard](#the-private-name-guard): the caller attests it ran its own check. | Nothing is read for it; named on stderr in every run that uses it, and `--json` carries `privateNameCheck.result: "skipped-by-flag"`. |
 | `--private-names-ignore-file <path>` | no | Private repositories the caller ruled too generic to police ([private-name guard](#the-private-name-guard)). | No default path is read; a missing file exits **2** before any `gh` call. Resolves against `--repo`'s root. Ignored hits are reported, never silent. |
 | `--allow-all-ignored` | no | Permit an ignore file that exempts **every** private name (otherwise exit 1). | Only with `--private-names-ignore-file` or a named list declared by `--repo`'s `privateNames.namedFile`; with neither it exits **2**. |
@@ -15863,7 +15988,12 @@ batch under the repository's typed idle profile; nen reports it (`idle: yes`, `-
 otherwise `false`) and never acts on it. A quoted label that merely contains the text is never read as
 the flag (an UNQUOTED label whose last word is `--idle` now reads as the flag: quote it to keep it);
 `--idle` after `then` would be indistinguishable from prose and is refused at exit 2 with the line moved
-before `then`; given twice it is refused with one kept. On any other skill it is exit 2.
+before `then`; given twice -- at both ends or twice at the same end (`nen@bug --idle --idle`) -- it is
+refused with one kept, never read as part of the label (zheref/nen#491). On any other skill it is exit 2.
+**Kazaana carries the same flag through the generic grammar**, as a literal-only optional clause:
+`nen parse kazaana --grammar "<repo> [on <line:…>] [--idle]" --line "hatsu on claude --idle"` reports
+`clauses: [{ literal: "--idle", present: true }]` (and `present: false` without it), so a caller reads
+the flag off the parse and strips nothing by hand.
 
 **Arguments**
 
@@ -16788,6 +16918,23 @@ exactly like a repository whose diff raised no scope there, and the two are
 opposite findings: one is "nothing to review here", the other is "nobody is
 looking at this".
 
+**A persona the repository declares is never a code reviewer is never raised
+([#472](https://github.com/zheref/nen/issues/472)).** `review.excludedPersonas`
+is an optional list of persona names beside `scopes` -- Hatsu's intake
+examiners (HR-23: `satotz`, `lippo`, `buhara`, `bisky`), which challenge a
+brief at capture intake and nowhere else. A `review.scopes.<scope>.persona`
+naming one, compared after trimming whitespace and case-insensitively, is
+refused by pointer by the policy loader: [`schema check`](#nen-schema-check)
+FAILs the `nen/workflow.json` row naming `review.scopes.<scope>.persona`, and
+this verb exits **2** and raises nothing. The list lives here rather than in
+the consumer's own intake keys (`intake.challenger`), because nen reads no
+consumer vocabulary and every writer of `review.scopes` already passes this
+one loader. An empty or repeated entry is refused by pointer too.
+
+```json
+{ "review": { "excludedPersonas": ["satotz", "lippo", "buhara", "bisky"], "scopes": { "…": "…" } } }
+```
+
 **Usage**
 
 ```text
@@ -16813,7 +16960,7 @@ only, in the declaration's order**, never the diff's) and `unclaimed[]`.
 |---|---|
 | `0` | the classification, whether or not it raised a scope |
 | `1` | the repository declares **no `review` block**, named, with the pointer to write. Not a usage error: the invocation was right and there is nothing here to classify by |
-| `2` | a missing or unresolvable `--base`, or a malformed `review` block — refused by pointer by the policy loader |
+| `2` | a missing or unresolvable `--base`, or a malformed `review` block — refused by pointer by the policy loader, a scope naming a `review.excludedPersonas` persona included |
 
 **Example**
 

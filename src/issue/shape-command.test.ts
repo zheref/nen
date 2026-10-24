@@ -123,11 +123,44 @@ describe("nen issue body-check", () => {
   });
 });
 
+describe("issue-shape reads: a non-UTF-8 body and bidi controls in --json", () => {
+  it("refuses a --body-file that is not UTF-8 at exit 2 on all three verbs, never zero rows", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-issue-shape-"));
+    writeFileSync(join(dir, "bad.md"), Buffer.from([0xff, 0xfe, 0x2d, 0x20, 0x41]));
+    writeFileSync(join(dir, "cat.json"), CATALOGUE);
+    for (const argv of [["issue", "criteria", "--body-file", "bad.md"], ["issue", "questions", "--body-file", "bad.md"], ["issue", "body-check", "--body-file", "bad.md", "--requirements-from", "cat.json", "--kind", "feature"]]) {
+      const result = await run(issueCommand, argv, [], { repoFlag: dir });
+      expect(result.code, argv[1]).toBe(2);
+      expect(result.err, argv[1]).toMatch(/not valid UTF-8/);
+    }
+  });
+
+  it("escapes U+202E in --json while the parsed text is unchanged", async () => {
+    const dir = scratch({ "b.md": "- AC-1: a \u202E evil\n" });
+    const result = await run(issueCommand, ["issue", "criteria", "--body-file", "b.md"], [], { repoFlag: dir, json: true });
+    expect(result.code).toBe(0);
+    expect(result.out).not.toContain("\u202E");
+    expect(result.out).toContain("\\u202e");
+    expect((JSON.parse(result.out) as { criteria: { text: string }[] }).criteria[0]?.text).toBe("a \u202E evil");
+  });
+
+  it("escapes every invisible class in --json and strips it in the plain rendering (#515 Feitan 2)", async () => {
+    // U+2028-2029 end a row's line, so they are held by src/cli/plain.test.ts instead.
+    const chars = ["\u061C", "\u200B", "\u2060", "\u2064", "\u2066", "\u00AD", "\uFEFF"];
+    const dir = scratch({ "b.md": `- AC-1: x${chars.join("")}y\n` });
+    const json = await run(issueCommand, ["issue", "criteria", "--body-file", "b.md"], [], { repoFlag: dir, json: true });
+    for (const char of chars) expect(json.out.includes(char), `U+${char.charCodeAt(0).toString(16)}`).toBe(false);
+    expect((JSON.parse(json.out) as { criteria: { text: string }[] }).criteria[0]?.text).toBe(`x${chars.join("")}y`);
+    const plain = await run(issueCommand, ["issue", "criteria", "--body-file", "b.md"], [], { repoFlag: dir });
+    expect(plain.out).toContain("AC-1 line 1: xy");
+  });
+});
+
 describe("nen issue questions", () => {
-  it("counts and exits 0, with the counts in --json", async () => {
+  it("counts and exits 1 on an open row, with the counts in --json (zheref/nen#477 AC-1)", async () => {
     const dir = scratch({ "q.md": QUESTIONS });
     const result = await run(issueCommand, ["issue", "questions", "--body-file", "q.md"], [], { repoFlag: dir, json: true });
-    expect(result.code).toBe(0);
+    expect(result.code).toBe(1);
     const report = JSON.parse(result.out) as { contract: string; counts: unknown };
     expect(report.contract).toBe("nen.issue.questions/v0.1");
     expect(report.counts).toEqual({ open: 1, resolved: 1, needsMarkers: 1, unrecognised: 0 });
@@ -154,6 +187,51 @@ describe("nen issue questions", () => {
     expect(result.out).toBe("");
   });
 
+  it("exits 0 when every question is resolved, and 1 on a malformed OQ row or a [NEEDS] marker (AC-2, AC-3)", async () => {
+    const dir = scratch({
+      "clear.md": "- ~~OQ-1~~ → A: yes (2026-10-21, HR-4)\n- ~~OQ-2~~ → A: no (2026-10-22, HR-5)\n",
+      "none.md": "## Open questions\n\nNone.\n",
+      "bad.md": "- OQ-1 which?\n",
+      "needs.md": "[NEEDS CLARIFICATION: scope]\n",
+    });
+    const clear = await run(issueCommand, ["issue", "questions", "--body-file", "clear.md"], [], { repoFlag: dir, json: true });
+    expect(clear.code).toBe(0);
+    expect((JSON.parse(clear.out) as { counts: unknown }).counts).toEqual({ open: 0, resolved: 2, needsMarkers: 0, unrecognised: 0 });
+    expect((await run(issueCommand, ["issue", "questions", "--body-file", "none.md"], [], { repoFlag: dir })).code).toBe(0);
+    const bad = await run(issueCommand, ["issue", "questions", "--body-file", "bad.md"], [], { repoFlag: dir });
+    expect(bad.code).toBe(1);
+    expect(bad.out).toMatch(/UNRECOGNISED line 1: - OQ-1 which\?/);
+    expect((await run(issueCommand, ["issue", "questions", "--body-file", "needs.md"], [], { repoFlag: dir })).code).toBe(1);
+  });
+
+  it("counts a batch of refs in one report, each on its own, an unread one listed (AC-4, SC-2)", async () => {
+    const issue = (n: number, body: string): ScriptedCall => ({ match: `gh api repos/o/n/issues/${n}`, result: { stdout: JSON.stringify({ number: n, body }) } });
+    const script: ScriptedCall[] = [issue(1, QUESTIONS), issue(2, "- ~~OQ-1~~ → A: yes (2026-10-21, HR-4)\n"), { match: "gh api repos/o/n/issues/3", result: { code: 1, stderr: "HTTP 502" } }];
+    const result = await run(issueCommand, ["issue", "questions", "--ref", "NN#1,NN#2,NN#3", "--target", "o/n"], script, { json: true });
+    expect(result.code).toBe(1);
+    const report = JSON.parse(result.out) as { contract: string; counts: unknown; issues: { source?: { number: number }; counts?: { open: number }; ref?: string; unread?: string }[] };
+    expect(report.contract).toBe("nen.issue.questions.batch/v0.1");
+    expect(report.counts).toEqual({ issues: 3, blocking: 1, clear: 1, unread: 1 });
+    expect(report.issues.map((entry) => entry.source?.number ?? entry.ref)).toEqual([1, 2, "NN#3"]);
+    expect(report.issues[0]?.counts?.open).toBe(1);
+    expect(report.issues[2]?.unread).toMatch(/502|could not read/i);
+
+    const fifty = Array.from({ length: 50 }, (_, index): number => index + 1);
+    const clearScript = fifty.map((n): ScriptedCall => issue(n, "None.\n"));
+    const batch = await run(issueCommand, ["issue", "questions", "--ref", fifty.map((n): string => `NN#${n}`).join(","), "--target", "o/n"], clearScript);
+    expect(batch.code).toBe(0);
+    expect(batch.out.split("\n")[0]).toBe("50 issue(s): 0 with an open question, 50 clear, 0 unread -- o/n");
+  });
+
+  it("refuses a batch naming a pull request, a repeat, or --body-file beside it (exit 2)", async () => {
+    const pr: ScriptedCall = { match: "gh api repos/o/n/issues/4", result: { stdout: JSON.stringify({ number: 4, pull_request: {}, body: "" }) } };
+    const ok: ScriptedCall = { match: "gh api repos/o/n/issues/5", result: { stdout: JSON.stringify({ number: 5, body: "" }) } };
+    expect((await run(issueCommand, ["issue", "questions", "--ref", "5,4", "--target", "o/n"], [ok, pr])).code).toBe(2);
+    expect((await run(issueCommand, ["issue", "questions", "--ref", "5,5", "--target", "o/n"], [ok])).code).toBe(2);
+    const dir = scratch({ "q.md": QUESTIONS });
+    expect((await run(issueCommand, ["issue", "questions", "--ref", "5,6", "--body-file", "q.md", "--target", "o/n"], [], { repoFlag: dir })).code).toBe(2);
+  });
+
   it("refuses --target with --body-file (exit 2)", async () => {
     const dir = scratch({ "q.md": QUESTIONS });
     expect((await run(issueCommand, ["issue", "questions", "--body-file", "q.md", "--target", "o/n"], [], { repoFlag: dir })).code).toBe(2);
@@ -168,6 +246,48 @@ function filing(family: "issue" | "idea", titleFlags: readonly string[], extra: 
   return [family, "file", "--target", "zheref/nen", ...titleFlags, "--body-file", "body.md", "--label", "bankai:severity/high", "--assignee", "me", ...extra];
 }
 
+
+describe("--requirements-from on nen issue file and nen idea file: the body shape before the create (zheref/nen#476)", () => {
+  for (const family of ["issue", "idea"] as const) {
+    const command = family === "issue" ? issueCommand : ideaCommand;
+    const withBody = (dir: string, extra: readonly string[]): string[] =>
+      filing(family, ["--title", "t"], extra).map((arg) => (arg === "body.md" ? join(dir, "body.md") : arg));
+
+    it(`${family} file: a body missing a required section is refused at exit 1 before any gh call, every miss named`, async () => {
+      const dir = scratch({ "cat.json": CATALOGUE, "body.md": "## Problem\n\nIt breaks.\n" });
+      const result = await run(command, withBody(dir, ["--requirements-from", join(dir, "cat.json"), "--kind", "feature", "--dry-run"]), [], { repoFlag: BANKAI_REPO });
+      expect(result.code).toBe(1);
+      expect(result.err).toMatch(/body-check \(kind 'feature'\): missing.*nothing was filed/);
+      expect(result.calls).toEqual([]);
+    });
+
+    it(`${family} file: a body in shape passes into the ordinary filing (here its dry run)`, async () => {
+      const dir = scratch({ "cat.json": CATALOGUE, "body.md": BODY });
+      const result = await run(command, withBody(dir, ["--requirements-from", join(dir, "cat.json"), "--kind", "feature", "--dry-run"]), [PRIVATE_TARGET], { repoFlag: BANKAI_REPO, json: true });
+      expect(result.code, result.err).toBe(0);
+      expect((JSON.parse(result.out) as { dryRun: boolean }).dryRun).toBe(true);
+    });
+
+    it(`${family} file: a shape refusal quoting the body is plain on stderr and escaped in --json (#515 Feitan 1)`, async () => {
+      const hostile = `## Problem\n\nx\n\n## Acceptance criteria\n\n- AC-1: \u001b[2K\u001b[1A erase \u202E evil\n- AC-3: gap\n`;
+      const dir = scratch({ "cat.json": CATALOGUE, "body.md": hostile });
+      const plain = await run(command, withBody(dir, ["--requirements-from", join(dir, "cat.json"), "--kind", "feature", "--dry-run"]), [], { repoFlag: BANKAI_REPO });
+      expect(plain.code).toBe(1);
+      expect(plain.err).not.toMatch(/[\u001b\u202E]/);
+      const json = await run(command, withBody(dir, ["--requirements-from", join(dir, "cat.json"), "--kind", "feature", "--dry-run"]), [], { repoFlag: BANKAI_REPO, json: true });
+      expect(json.code).toBe(1);
+      expect(json.out).not.toMatch(/[\u001b\u202E]/);
+      expect((JSON.parse(json.out) as { contract: string }).contract).toBe("nen.refusal/v0.1");
+    });
+
+    it(`${family} file: refuses --kind without --requirements-from, an unreadable catalogue and an undeclared kind at exit 2`, async () => {
+      const dir = scratch({ "cat.json": CATALOGUE, "body.md": BODY });
+      expect((await run(command, withBody(dir, ["--kind", "feature", "--dry-run"]), [], { repoFlag: BANKAI_REPO })).code).toBe(2);
+      expect((await run(command, withBody(dir, ["--requirements-from", join(dir, "nope.json"), "--dry-run"]), [], { repoFlag: BANKAI_REPO })).code).toBe(2);
+      expect((await run(command, withBody(dir, ["--requirements-from", join(dir, "cat.json"), "--kind", "epic", "--dry-run"]), [], { repoFlag: BANKAI_REPO })).code).toBe(2);
+    });
+  }
+});
 
 describe("--title-file on nen issue file and nen idea file (zheref/nen#444)", () => {
   for (const family of ["issue", "idea"] as const) {

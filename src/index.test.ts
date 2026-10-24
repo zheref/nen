@@ -1094,3 +1094,28 @@ describe("delivery ledger contract help (#437)", () => {
     for (const key of ["phases[]", "usage[]", "sessions[]", "--json", "dial"]) expect(report.out.join("\n")).toContain(key);
   });
 });
+
+describe("runFamily -- one JSON writer under --json (zheref/nen#515)", () => {
+  const raw: Command = {
+    name: "probe",
+    summary: "probe",
+    usage: "probe",
+    flags: { values: [], booleans: [] },
+    run(context): number {
+      // A verb's own JSON.stringify, bypassing emit.
+      context.io.out(JSON.stringify({ text: "a‮b؜c" }));
+      return 0;
+    },
+  };
+
+  it("escapes invisible characters a verb's own JSON writer leaves raw, and leaves the plain path alone", async () => {
+    const out: string[] = [];
+    const io: Io = { out: (line): void => void out.push(line), err: (): void => {} };
+    expect(await runFamily(raw, ["probe"], null, true, io, defaultSeams())).toBe(0);
+    expect(out[0]).toBe('{"text":"a\\u202eb\\u061cc"}');
+    expect(JSON.parse(out[0] as string)).toEqual({ text: "a‮b؜c" });
+    const plain: string[] = [];
+    await runFamily(raw, ["probe"], null, false, { out: (line): void => void plain.push(line), err: (): void => {} }, defaultSeams());
+    expect(plain[0]).toContain("‮");
+  });
+});
