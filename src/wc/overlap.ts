@@ -34,8 +34,12 @@ import { GIT, outputLines, type Seams } from "../seam/exec.js";
 
 export type OverlapVerdict = "disjoint" | "stack" | "unknown";
 
-/** Where a `stack` verdict's order came from: git's chain, or the caller's `--efforts` order. */
-export type StackSource = "chain" | "given";
+/**
+ * Where a `stack` verdict's order came from: git's chain; the caller's
+ * `--efforts` order because the branches do not chain; or that order because
+ * git could not say whether they chain (`ancestry-unread`).
+ */
+export type StackSource = "chain" | "given" | "ancestry-unread";
 
 export interface EffortFiles {
   readonly effort: string;
@@ -88,6 +92,12 @@ export function ancestryReader(seams: Seams, root: string): AncestryRead {
  * efforts at the same commit chain either way; the order given is kept.
  */
 export function stackOrder(efforts: readonly string[], isAncestor: AncestryRead): readonly string[] | null {
+  const read = readChain(efforts, isAncestor);
+  return read === "unread" ? null : read;
+}
+
+/** {@link stackOrder}, telling "no chain" (null) from "git could not say" (`unread`). */
+export function readChain(efforts: readonly string[], isAncestor: AncestryRead): readonly string[] | null | "unread" {
   const order = [...efforts];
   // Insertion by ancestry: a chain is a total order, so a sort by "how many of
   // the others contain it" recovers it, and the check after confirms each link.
@@ -97,14 +107,16 @@ export function stackOrder(efforts: readonly string[], isAncestor: AncestryRead)
     for (const other of order) {
       if (other === effort) continue;
       const answer = isAncestor(other, effort);
-      if (answer === null) return null;
+      if (answer === null) return "unread";
       if (answer) count += 1;
     }
     below.set(effort, count);
   }
   order.sort((a, b): number => (below.get(a) ?? 0) - (below.get(b) ?? 0));
   for (let at = 1; at < order.length; at += 1) {
-    if (isAncestor(order[at - 1] as string, order[at] as string) !== true) return null;
+    const link = isAncestor(order[at - 1] as string, order[at] as string);
+    if (link === null) return "unread";
+    if (!link) return null;
   }
   return order;
 }
@@ -150,10 +162,13 @@ export function computeOverlap(base: string, efforts: readonly EffortFiles[], al
     .filter(([, owner]): boolean => owner.efforts.length > 1)
     .map(([path, owner]) => ({ path, efforts: all.filter((name): boolean => owner.efforts.includes(name)), always: owner.always }))
     .sort((a, b): number => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-  const chain = unread.length === 0 && overlaps.length > 0 && isAncestor !== null ? stackOrder(all, isAncestor) : null;
+  // ONLY THE EFFORTS THAT SHARE A PATH STACK (zheref/nen#515 F7): an effort
+  // that shares nothing with any other may still run beside them.
+  const sharing = all.filter((name): boolean => overlaps.some((row): boolean => row.efforts.includes(name)));
   const verdict: OverlapVerdict = unread.length > 0 ? "unknown" : overlaps.length === 0 ? "disjoint" : "stack";
-  const stack = verdict === "stack" ? (chain ?? all) : null;
-  const stackSource: StackSource | null = verdict === "stack" ? (chain !== null ? "chain" : "given") : null;
+  const chain = verdict === "stack" ? (isAncestor === null ? "unread" : readChain(sharing, isAncestor)) : null;
+  const stack = verdict === "stack" ? (Array.isArray(chain) ? chain : sharing) : null;
+  const stackSource: StackSource | null = verdict !== "stack" ? null : Array.isArray(chain) ? "chain" : chain === "unread" ? "ancestry-unread" : "given";
   return { verdict, base, alwaysOverlaps: [...alwaysOverlaps], overlaps, efforts, unread, stack, stackSource };
 }
 
@@ -162,7 +177,13 @@ export function renderOverlap(report: OverlapReport): string[] {
   if (report.verdict === "unknown") lines.push(`verdict: unknown (could not read ${report.unread.join(", ")})`);
   else if (report.verdict === "stack") {
     lines.push(`verdict: stack(${(report.stack ?? []).join(" <- ")})`);
-    lines.push(report.stackSource === "chain" ? "order: chain (each branch contains the one before)" : "order: given (the --efforts order; the branches do not chain)");
+    lines.push(
+      report.stackSource === "chain"
+        ? "order: chain (each branch contains the one before)"
+        : report.stackSource === "ancestry-unread"
+          ? "order: given (the --efforts order; ancestry unread -- git could not say whether the branches chain)"
+          : "order: given (the --efforts order; the branches do not chain)",
+    );
   } else lines.push("verdict: disjoint");
   lines.push(`base: ${report.base}`);
   for (const row of report.efforts) {
