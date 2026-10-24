@@ -105,13 +105,14 @@ function segmentMatches(pattern: string, text: string): boolean {
   let star = -1;
   let mark = 0;
   while (t < text.length) {
-    if (p < pattern.length && (pattern[p] === "?" || pattern[p] === text[t])) {
-      p += 1;
-      t += 1;
-    } else if (p < pattern.length && pattern[p] === "*") {
+    // The pattern's `*` is a wildcard before it is a character: a literal `*` in the path must not consume it.
+    if (p < pattern.length && pattern[p] === "*") {
       while (pattern[p] === "*") p += 1;
       star = p;
       mark = t;
+    } else if (p < pattern.length && (pattern[p] === "?" || pattern[p] === text[t])) {
+      p += 1;
+      t += 1;
     } else if (star !== -1) {
       p = star;
       mark += 1;

@@ -222,6 +222,10 @@ describe("the build system's glob, matched without backtracking", () => {
     expect(globMatcher("src/?.ts").test("src/a.ts")).toBe(true);
     expect(globMatcher("**/*").test("a")).toBe(true);
     expect(globMatcher("node_modules/**/*").test("node_modules/x/y.ts")).toBe(true);
+    // A literal `*` in a path never consumes the pattern's wildcard.
+    expect(globMatcher("*b").test("*ab")).toBe(true);
+    expect(globMatcher("a*").test("a*")).toBe(true);
+    expect(globMatcher("*").test("")).toBe(true);
   });
 
   it("answers a six-star pattern against a long segment, and a many-** pattern, within a bound (Feitan F1)", () => {
