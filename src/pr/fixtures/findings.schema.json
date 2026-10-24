@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hatsu.hanten.findings/v0.1",
+  "$comment": "The hanten findings record (claude/skills/hanten/SKILL.md §§ 5-6), one ignored document per effort at <reports.dir>/hanten/<branch-slug>.json. HR-10: a finding whose rule is a CON or HR id is critical by shape and settles only fixed or deferred to a named amendment PR, never pushed-back. Every pushed-back and deferred disposition carries a non-empty detail; every deferred one a tracked ref. Its structural invariants are held by the criteria lane's fixture (scripts/pr_criteria_check_fixture.mts); registration with nen schema check is owed to nen, which validates only nen/ declarations at the 0.24 pin.",
+  "type": "object",
+  "required": ["scopes", "findings"],
+  "properties": {
+    "scopes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["persona", "tier", "used", "max", "invocation"],
+        "properties": {
+          "persona": { "type": "string", "minLength": 1 },
+          "tier": { "type": "string", "minLength": 1 },
+          "model": { "type": "string" },
+          "used": { "type": "integer", "minimum": 0 },
+          "max": { "type": "integer", "minimum": 0 },
+          "invocation": { "enum": ["ran", "delta", "skipped-exhausted"] },
+          "adapted": { "type": "string", "minLength": 1 },
+          "gap": { "type": "string", "minLength": 1 },
+          "scans": { "type": "array" }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/finding" }
+    },
+    "reports": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["scope", "persona", "invocation", "head", "path"],
+        "properties": {
+          "scope": { "type": "string", "minLength": 1 },
+          "persona": { "type": "string", "minLength": 1 },
+          "invocation": { "enum": ["ran", "delta", "skipped-exhausted"] },
+          "head": { "type": "string", "pattern": "^[0-9a-f]{7,40}$" },
+          "path": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "trackedRef": {
+      "$comment": "A tracked item: <CODE>#<N> or <owner>/<name>#<N>.",
+      "type": "string",
+      "pattern": "^(?:[A-Za-z][A-Za-z0-9]*|[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9_.-]*)#[1-9][0-9]*$"
+    },
+    "disposition": {
+      "type": "object",
+      "required": ["state"],
+      "properties": {
+        "state": { "enum": ["fixed", "pushed-back", "deferred"] },
+        "detail": { "type": "string" },
+        "tracked": { "$ref": "#/$defs/trackedRef" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "state": { "enum": ["pushed-back", "deferred"] } } },
+          "then": { "required": ["detail"], "properties": { "detail": { "type": "string", "minLength": 1, "pattern": "\\S" } } }
+        },
+        {
+          "if": { "properties": { "state": { "const": "deferred" } } },
+          "then": { "required": ["tracked"] }
+        }
+      ]
+    },
+    "finding": {
+      "type": "object",
+      "required": ["id", "scope", "persona", "rule", "severity", "path", "line", "evidence", "proposedFix", "disposition"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "scope": { "type": "string", "minLength": 1 },
+        "persona": { "type": "string", "minLength": 1 },
+        "rule": { "type": "string", "minLength": 1 },
+        "severity": { "enum": ["critical", "high", "medium", "low", "nit"] },
+        "path": { "type": "string", "minLength": 1 },
+        "line": { "type": "integer", "minimum": 0 },
+        "evidence": { "type": "string", "minLength": 1 },
+        "proposedFix": { "type": "string", "minLength": 1 },
+        "disposition": { "$ref": "#/$defs/disposition" }
+      },
+      "if": { "properties": { "rule": { "pattern": "^(?:CON|HR)-[1-9][0-9]*$" } } },
+      "then": {
+        "$comment": "HR-10: critical by shape; only fixed or deferred to a named amendment PR.",
+        "properties": {
+          "severity": { "const": "critical" },
+          "disposition": { "properties": { "state": { "enum": ["fixed", "deferred"] } } }
+        }
+      }
+    }
+  }
+}
