@@ -144,3 +144,35 @@ it("clear --all removes an unreadable marker too, naming it (Bugbot on #516)", a
   expect(existsSync(join(marks, "x", "G5.json"))).toBe(false);
   expect((await nen(["stop", "list", "--repo", tree])).code).toBe(0);
 });
+
+describe("delta round on #516 (Nobunaga 6, 7)", () => {
+  it("keeps one pointer per checkout: a second worktree's mark does not hide the first's rung twin", async () => {
+    const { core, tree } = repoWithWorktree();
+    const second = join(core, "wt2");
+    git(core, "worktree", "add", "-q", "-b", "effort2", second);
+    await nen(["stop", "--gate", "G2", "--mark", "--effort", "a", "--repo", tree]);
+    await nen(["stop", "--gate", "G5", "--mark", "--effort", "b", "--repo", second]);
+    execFileSync("rm", ["-f", join(tree, ".nen", "last-stop.json")]);
+    expect((await list(core)).marks.map((mark): string => `${mark.effort}:${mark.gate}`)).toEqual(["b:G5"]);
+  });
+
+  it("a .nen removed by git clean is not read as rung", async () => {
+    const { tree } = repoWithWorktree();
+    await nen(["stop", "--gate", "G2", "--mark", "--effort", "a", "--repo", tree]);
+    execFileSync("rm", ["-rf", join(tree, ".nen")]);
+    expect((await list(tree)).marks.map((mark): string | null => mark.gate)).toEqual(["G2"]);
+  });
+
+  it("a pointer whose path leaves the marks directory is ignored and never deleted", async () => {
+    const { tree, marks } = repoWithWorktree();
+    await nen(["stop", "--gate", "G2", "--mark", "--effort", "a", "--repo", tree]);
+    const outside = join(marks, "..", "outside-G2.json");
+    writeFileSync(outside, readFileSync(join(marks, "a", "G2.json"), "utf8"));
+    const at = (JSON.parse(readFileSync(outside, "utf8")) as { at: string }).at;
+    mkdirSync(join(marks, ".latest"), { recursive: true });
+    writeFileSync(join(marks, ".latest", "forged.json"), JSON.stringify({ path: join(marks, "..", "outside-G2.json"), at, single: join(tree, ".nen", "gone.json") }));
+    await nen(["stop", "--gate", "G4", "--mark", "--effort", "a", "--repo", tree]);
+    await nen(["stop", "clear", "--all", "--repo", tree]);
+    expect(existsSync(outside)).toBe(true);
+  });
+});
