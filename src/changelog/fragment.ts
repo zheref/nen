@@ -41,6 +41,8 @@
 // registry's version field arrive from the caller; the shell had them as
 // constants because it served one repository.
 
+import { versionHeading } from "./completeness.js";
+
 export interface FragmentPaths {
   /** Spec/canon path patterns. A hit means the rule applies. */
   readonly specPaths: readonly string[];
@@ -116,50 +118,61 @@ export function bodyHasOptOut(body: string | null): boolean {
 
 /** `### Unreleased` entries: top-level `- **...` before the next heading at level 3 or higher. */
 export function unreleasedEntryCount(changelog: string): number {
-  return countEntries(changelog, /^(###) Unreleased/);
+  return countEntries(changelog, /^### Unreleased/, 3);
 }
 
-// A VERSIONED RELEASE HEADING AT EITHER LEVEL THIS FAMILY WRITES (Bugbot on
-// zheref/nen#527): `### vX.Y.Z — <theme>`, the fragment-era form, and
-// `## vX.Y.Z — <date>`, which `collate` writes where the changelog's releases
-// already take that form (./collate.ts, zheref/nen#515 F1) -- nen's own. Read
-// at `###` only, a release PR that collated into the `##` form had no head
-// version, so `isReleaseMove` declined it and `fragment-required` exited 1.
-// Capture 1 is the heading's level, capture 2 the version.
-const DATED_SECTION = /^(#{2,3}) (v\d+\.\d+\.\d+)/;
+// THE FIRST DATED RELEASE, READ THROUGH COMPLETENESS'S OWN PREDICATE (Bugbot
+// on zheref/nen#527 and #528). A versioned heading at level 2 or 3 -- `###
+// vX.Y.Z — <theme>`, `## vX.Y.Z — <date>`, `## vX.Y.Z — <theme>`, the forms
+// `collate` writes -- with its pre-release suffix kept, and a `— unreleased`
+// trailer NOT dated: the PR that dates such a heading is the release move, and
+// v1.2.0-rc.1 and v1.2.0-rc.2 are different versions. One helper,
+// ./completeness.ts's `versionHeading`, so the release-PR allowance and
+// CON-33(a) never disagree on which heading opens a release.
 
-/** The first dated `## vX.Y.Z` / `### vX.Y.Z` section's version, or null. */
+/** The first dated `## vX.Y.Z` / `### vX.Y.Z` section's version (an `— unreleased` one skipped), or null. */
 export function firstDatedVersion(changelog: string): string | null {
   for (const line of changelog.split("\n")) {
-    const match = DATED_SECTION.exec(line);
-    if (match !== null) return match[2] ?? null;
+    const heading = versionHeading(line);
+    if (heading?.dated === true) return heading.version;
   }
   return null;
 }
 
-/** Entries under the FIRST dated section, its subsections included. */
+/** Entries under the FIRST dated section, its subsections included, up to the next version heading at any level. */
 export function firstDatedEntryCount(changelog: string): number {
-  return countEntries(changelog, DATED_SECTION);
-}
-
-// `header`'s capture 1 is the opening heading's `#`s: the section runs to the
-// next heading at THAT level or higher, so a `## vX.Y.Z` section keeps its
-// `### Added` / `### Fixed` subsections and their bullets, and a `###` section
-// still ends at the next `###`.
-function countEntries(changelog: string, header: RegExp): number {
   let level = 0;
   let count = 0;
   for (const line of changelog.split("\n")) {
     if (level === 0) {
-      const opened = header.exec(line);
-      if (opened !== null) level = (opened[1] as string).length;
+      const heading = versionHeading(line);
+      if (heading?.dated === true) level = heading.level;
       continue;
     }
-    // A heading at the section's level OR HIGHER ends it (zheref/nen#515 F2),
-    // as collate's `endsSection(…, level)` does: a `## v<prev>` heading below
-    // an empty Unreleased block is not part of it, and neither are its bullets.
-    const heading = /^(#{1,6}) /.exec(line);
-    if (heading !== null && (heading[1] as string).length <= level) break;
+    if (endsSection(line, level) || versionHeading(line) !== null) break;
+    if (line.startsWith("- **")) count += 1;
+  }
+  return count;
+}
+
+// A heading at the section's level OR HIGHER ends it (zheref/nen#515 F2), as
+// collate's `endsSection(…, level)` does: a `## v<prev>` heading below an
+// empty Unreleased block is not part of it, and neither are its bullets. A
+// lower `### Added` / `### Fixed` subsection does not.
+function endsSection(line: string, level: number): boolean {
+  const heading = /^(#{1,6}) /.exec(line);
+  return heading !== null && (heading[1] as string).length <= level;
+}
+
+function countEntries(changelog: string, header: RegExp, level: number): number {
+  let inside = false;
+  let count = 0;
+  for (const line of changelog.split("\n")) {
+    if (!inside) {
+      inside = header.test(line);
+      continue;
+    }
+    if (endsSection(line, level)) break;
     if (line.startsWith("- **")) count += 1;
   }
   return count;

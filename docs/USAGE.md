@@ -8865,17 +8865,24 @@ no spec/canon path changed; satisfied by an opt-out stated in the body, a
 fragment added at head, or a recognized "release move" (Unreleased emptied
 via collation); otherwise required.
 
-**The release move reads the first versioned section at level 2 or 3** — the
-heading's level and its `vX.Y.Z` decide, whatever its suffix: `collate` writes
-`### vX.Y.Z — <theme>`, `## vX.Y.Z — <date>` (nen's own form) and
+**The release move reads the first DATED versioned section at level 2 or 3**
+— the heading's level and its version decide, whatever its suffix: `collate`
+writes `### vX.Y.Z — <theme>`, `## vX.Y.Z — <date>` (nen's own form) and
 `## vX.Y.Z — <theme>` (Hatsu's), following the changelog's own (Bugbot on
-[#527](https://github.com/zheref/nen/pull/527)). Its version must differ from
-the base changelog's first versioned section. Its entries are every top-level
-`- **…` bullet up to the next heading at its own level or higher; `collate`
-copies fragment lines verbatim and writes no subsections, but a hand-written
-`##` section's `### Added` / `### Fixed` subsections count too. Read at `###`
-only, a release PR that collated into a `##` form was `required` at exit 1, and
-a `##` changelog had no version at all; it reads one now.
+[#527](https://github.com/zheref/nen/pull/527)). It reads through the same
+predicate as [`completeness`](#nen-changelog-completeness)'s release-PR
+allowance ([#528](https://github.com/zheref/nen/pull/528)): a pre-release
+suffix is part of the version (`v1.2.0-rc.1` and `v1.2.0-rc.2` differ), and a
+heading whose trailer is `unreleased` is not dated and is skipped, so the PR
+that dates it is the release move. Its version must differ from the base
+changelog's first dated section. Its entries are every top-level `- **…`
+bullet up to the next heading at its own level or higher, or the next version
+heading at any level (a `### vX.Y.Z` below a `## vX.Y.Z` is the previous
+release); `collate` copies fragment lines verbatim and writes no subsections,
+but a hand-written `##` section's `### Added` / `### Fixed` subsections count
+too. Read at `###` only, a release PR that collated into a `##` form was
+`required` at exit 1, and a `##` changelog had no version at all; it reads one
+now.
 
 **Usage**
 

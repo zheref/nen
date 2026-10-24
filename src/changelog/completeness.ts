@@ -173,10 +173,11 @@ export function describeReleasePrAllowance(allowance: ReleasePrAllowance | null)
 // A VERSIONED SECTION HEADING, AT EITHER LEVEL THIS FAMILY WRITES. `nen
 // changelog collate` renders `### vX.Y.Z — <theme>` (./collate.ts) while this
 // repository's own CHANGELOG.md opens each release with `## vX.Y.Z — <date>`.
-// ./fragment.ts's `firstDatedVersion` reads both levels too (Bugbot on
-// zheref/nen#527), so the allowance and CON-33(a)'s release move agree on
-// which heading opens a release rather than declining every release of a `##`
-// repository as "no dated section". Anything else (a `## [1.2.3]` Keep-a-Changelog heading,
+// ./fragment.ts's `firstDatedVersion` reads through {@link versionHeading}
+// (Bugbot on zheref/nen#527 and #528), so the allowance and CON-33(a)'s
+// release move share ONE predicate for which heading opens a release -- the
+// level, the pre-release suffix, the undated trailer -- rather than declining
+// every release of a `##` repository as "no dated section". Anything else (a `## [1.2.3]` Keep-a-Changelog heading,
 // `### Unreleased`) is not a versioned section to this check, and the
 // allowance then declines rather than guessing. The second group is whatever
 // trails the version: the date, the theme, or `— unreleased`.
@@ -208,12 +209,20 @@ export interface SectionHeading {
   readonly dated: boolean;
 }
 
+/** A versioned section heading on one line -- its version, whether it is dated, its `#` level -- or null. */
+export function versionHeading(line: string): (SectionHeading & { readonly level: number }) | null {
+  const text = line.replace(/\r$/, "");
+  const match = VERSION_HEADING.exec(text);
+  if (match?.[1] === undefined) return null;
+  return { version: match[1], dated: !isUndatedTrailer(match[2] ?? ""), level: (/^#+/.exec(text) as RegExpExecArray)[0].length };
+}
+
 /** Every versioned section heading, top to bottom, dated or not. */
 export function sectionHeadings(changelog: string): SectionHeading[] {
   const headings: SectionHeading[] = [];
   for (const line of changelog.split("\n")) {
-    const match = VERSION_HEADING.exec(line.replace(/\r$/, ""));
-    if (match?.[1] !== undefined) headings.push({ version: match[1], dated: !isUndatedTrailer(match[2] ?? "") });
+    const heading = versionHeading(line);
+    if (heading !== null) headings.push({ version: heading.version, dated: heading.dated });
   }
   return headings;
 }

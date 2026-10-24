@@ -11,6 +11,7 @@ import {
   type FragmentInputs,
 } from "./fragment.js";
 import { collateChangelog } from "./collate.js";
+import { sectionHeadings } from "./completeness.js";
 
 function inputs(overrides: Partial<FragmentInputs> = {}): FragmentInputs {
   return {
@@ -98,6 +99,58 @@ describe("firstDatedVersion / firstDatedEntryCount -- the `## vX.Y.Z — <date>`
     );
     expect(report.verdict).toBe("release-move");
     expect(report.required).toBe(false);
+  });
+});
+
+// ONE PREDICATE FOR "DATED" (Bugbot on zheref/nen#528, PRRT_kwDOUKPjns6v4kDn):
+// the release-move reader and completeness's allowance read the same heading
+// as the release -- a `— unreleased` trailer is not dated, and a pre-release
+// suffix is part of the version.
+describe("firstDatedVersion agrees with completeness's sectionHeadings", () => {
+  const cases = [
+    "## v1.2.0 — unreleased\n\n- **A** a\n\n## v1.1.0 — 2026-10-01\n\n- **B** b\n- **C** c\n",
+    "## v1.2.0-rc.2 — 2026-10-24\n\n- **A** a\n\n## v1.2.0-rc.1 — 2026-10-20\n",
+    "### v0.3.0 — _(unreleased)_\n- **A** a\n### v0.2.0 — theme\n- **B** b\n",
+    "## Notes\n\n### Unreleased\n\n- **A** a\n",
+  ];
+  it("names the same first dated version, the pre-release suffix kept and `— unreleased` skipped", () => {
+    for (const text of cases) {
+      expect(firstDatedVersion(text), text).toBe(sectionHeadings(text).find((h): boolean => h.dated)?.version ?? null);
+    }
+    expect(firstDatedVersion(cases[0] as string)).toBe("v1.1.0");
+    expect(firstDatedEntryCount(cases[0] as string)).toBe(2);
+    expect(firstDatedVersion(cases[1] as string)).toBe("v1.2.0-rc.2");
+    expect(firstDatedVersion(cases[2] as string)).toBe("v0.2.0");
+  });
+  it("the PR that only dates an `— unreleased` heading is a release move", () => {
+    const base = "## v1.2.0 — unreleased\n\n- **A** a\n\n## v1.1.0 — 2026-10-01\n";
+    const head = "## v1.2.0 — 2026-10-24\n\n- **A** a\n\n## v1.1.0 — 2026-10-01\n";
+    expect(
+      isReleaseMove(
+        inputs({
+          baseVersion: firstDatedVersion(base),
+          headVersion: firstDatedVersion(head),
+          headSectionEntries: firstDatedEntryCount(head),
+          baseLatest: "v1.1.0",
+          headLatest: "v1.2.0",
+        }),
+      ),
+    ).toBe(true);
+  });
+  it("distinct pre-releases are distinct versions", () => {
+    const base = "## v1.2.0-rc.1 — 2026-10-20\n";
+    const head = "## v1.2.0-rc.2 — 2026-10-24\n\n## v1.2.0-rc.1 — 2026-10-20\n";
+    expect(isReleaseMove(inputs({ baseVersion: firstDatedVersion(base), headVersion: firstDatedVersion(head), baseLatest: "v1.2.0-rc.1", headLatest: "v1.2.0-rc.2" }))).toBe(true);
+  });
+});
+
+// A VERSION HEADING CLOSES THE SECTION AT ANY LEVEL (Bugbot on zheref/nen#528,
+// PRRT_kwDOUKPjns6v4kDu): a `### vX.Y.Z` below a `## vX.Y.Z` release is the
+// previous release, not a subsection, and its bullets are not the head's.
+describe("firstDatedEntryCount -- a version heading closes the section at any level", () => {
+  it("stops a `##` release at a following `### vX.Y.Z`, and still counts a `### Added` subsection", () => {
+    const text = "## v2.0.0 — 2026-10-24\n\n### Added\n\n- **A** a\n\n### v1.9.0 — theme\n\n- **B** b\n- **C** c\n";
+    expect(firstDatedEntryCount(text)).toBe(1);
   });
 });
 
