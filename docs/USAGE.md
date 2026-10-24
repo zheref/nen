@@ -217,7 +217,7 @@ including every refusal reason. The raw NUL-delimited stream
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **91 shapes** and **94 ids** (`nen.runner.plan`,
+binary carries**, writing or reading — **92 shapes** and **95 ids** (`nen.runner.plan`,
 `nen.stop.mark` and `nen.wc.worktree.copies` each have two versions, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -260,7 +260,7 @@ file formats).
 - **`dev`** — `nen.dev.release-publish/v0.1`
 - **`exits`** — `nen.exits/v0.1`
 - **`direct`** — `nen.direct.answer/v0.1` · `nen.direct.matrix/v0.1` · `nen.direct.registry/v0.1` · `nen.direct.resolve/v0.1`
-- **`issue`** — `nen.issue.body-check/v0.1` · `nen.issue.criteria/v0.1` · `nen.issue.edit-body/v0.3` · `nen.issue.questions/v0.1` · `nen.issue.reconcile/v0.1`
+- **`issue`** — `nen.issue.body-check/v0.1` · `nen.issue.criteria/v0.1` · `nen.issue.edit-body/v0.3` · `nen.issue.questions/v0.1` · `nen.issue.questions.batch/v0.1` · `nen.issue.reconcile/v0.1`
 - **`loop`** — `nen.loop.iterate/v0.1`
 - **`phase`** — `nen.phase.ledger/v0.1`
 - **`pr`** — `nen.pr.converge/v0.1` · `nen.pr.edit-body/v0.1` · `nen.pr.mark-ready/v0.1` · `nen.pr.merge-delivery/v0.1` · `nen.pr.merge-unit/v0.1` · `nen.pr.open/v0.1` · `nen.pr.sections/v0.1` · `nen.pr.ready.head-mismatch/v0.1` · `nen.pr.ready/v0.1` · `nen.pr.threads-settle/v0.1` · `nen.pr.threads/v0.1`
@@ -5108,7 +5108,9 @@ paths under it some effort changed). **Efforts that share any path stack** -- th
 side -- so the verdict is `stack(<order>)` (NN#488 AC-2: two efforts that both touch `plugin.json`
 stack). **The order is never nen's choice**: when the branches **already chain** -- each contains the one
 before (`git merge-base --is-ancestor`) -- it is the order git holds (`order: chain`); otherwise it is the
-order the caller listed `--efforts` in, which is the order its epic names (`order: given`).
+order the caller listed `--efforts` in, which is the order its epic names (`order: given`), and when git
+could not answer the ancestry question that order is used and said so (`stackSource: "ancestry-unread"`).
+**Only the efforts that share a path are stacked**; an effort sharing nothing is left out of the order.
 
 **Declared paths, before authoring (NN#488 AC-1).** Before an effort is authored there is no branch tip
 to diff, so `--declared <file>` names a JSON object of effort → the repository-relative paths it declares
@@ -5142,7 +5144,7 @@ and `; diff not read -- <reason>` where declared paths stood in, and one
 (`disjoint` \| `stack` \| `unknown`), `base`, `alwaysOverlaps` (the workflow's list, then the flag's),
 `overlaps` (`[{path, efforts, always}]`, path-sorted), `efforts` (`[{effort, files, unreadReason,
 sources}]`, `files: null` when unread), `unread`, `stack` (the efforts in stack order on `stack`, else
-null), `stackSource` (`chain` \| `given` on `stack`, else null). Exit 0 on `disjoint`; exit 1 on `stack`
+null), `stackSource` (`chain` \| `given` \| `ancestry-unread` on `stack`, else null). Exit 0 on `disjoint`; exit 1 on `stack`
 and `unknown` -- an effort with nothing read is never read as "touches nothing"; exit 2 on a malformed
 flag, an unreadable or malformed `--declared`, or a flag another `wc` verb owns. Writes nothing.
 **Changed from v0.26.0**: the `overlap(<paths>)` verdict is gone; efforts that overlap and do not chain
