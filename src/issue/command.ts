@@ -510,7 +510,8 @@ usage:
       hit, as before. A bare use of a policed one is reported, never
       blocking: 'nen issue: not
       matched: <field>:<line>: private repository #k (ordinary word: matched
-      only as owner/name, name#N or a URL)', and --json 'ruled: [{ field,
+      only as owner/name, name#N, name.git, a URL, or its owner's slug spaced
+      or split across lines)', and --json 'ruled: [{ field,
       line, index, normalised, form: "bare", class: "ordinary-word" }]'. Any
       other name keeps the bare-word match. A line
       holding %, &, <, \\, *, ~, a backtick or a non-ASCII character is also

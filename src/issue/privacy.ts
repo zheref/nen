@@ -658,11 +658,28 @@ export interface NameMatcher {
 }
 
 /**
- * The markup and quote characters that may stand between `owner/` and an
- * ordinary-word name and still render as the slug (Feitan F1): emphasis,
- * strikethrough, code, quotes and brackets.
+ * The emphasis, strikethrough and quote characters that may stand between
+ * `owner/` and an ordinary-word name and still render as the slug (Feitan F1).
  */
-const MARKUP_RUN = "[_*~`'\"(\\[{]*";
+const QUOTE_RUN = "[_*~'\"]*";
+
+/**
+ * The WRAPPERS -- an opening bracket or a backtick -- count only when their
+ * closer follows the name and what follows the closer is neither an
+ * extension (`.` and a letter) nor another `/` (zheref/nen#535, round 2
+ * F8): `owner/[name]` is the slug, while `pages/[name].tsx`,
+ * `app/(name)/page.tsx` and `src/{name}/x` are code paths.
+ */
+const WRAPPERS: readonly (readonly [string, string])[] = [["(", ")"], ["[", "]"], ["{", "}"], ["`", "`"]];
+
+/** The name after a slash: plain (quote run allowed), or wrapped as above. */
+function afterSlash(escaped: string): string {
+  const wrapped = WRAPPERS.map(
+    ([open, close]): string =>
+      `${QUOTE_RUN}\\${open}${QUOTE_RUN}${escaped}${QUOTE_RUN}\\${close}(?!\\.[A-Za-z]|\\/)`,
+  );
+  return `(?:${QUOTE_RUN}${escaped}(?![A-Za-z0-9-])|${wrapped.join("|")})`;
+}
 
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\/-]/g, "\\$&");
@@ -712,9 +729,11 @@ export function compileMatcher(
     ]),
   );
   // REPOSITORY-SHAPED (zheref/nen#535), four forms, each failing closed:
-  //   1. the name after `<owner char>/`, past any run of markup or quote
-  //      characters GitHub renders away (`owner/_name_`, `owner/[name]`,
-  //      `owner/"name"`, Feitan F1) -- `owner/name`, `owner/name#N` and every
+  //   1. the name after `<owner char>/`, past any run of emphasis or quote
+  //      characters GitHub renders away (`owner/_name_`, `owner/"name"`,
+  //      Feitan F1), or inside a bracket or backtick pair whose closer is not
+  //      followed by an extension or a `/` (`owner/[name]`, never
+  //      `pages/[name].tsx`; round 2 F8) -- `owner/name`, `owner/name#N` and every
   //      URL path naming it, since `github.com/owner/name` holds `owner/name`;
   //      a path segment `dir/name` reads as `owner/name` too;
   //   2. one of the list's OWN owners for that name, spaces or a line break
@@ -728,8 +747,8 @@ export function compileMatcher(
       const escaped = escapeRegExp(name);
       const owners = [...(ownersOf.get(key) ?? [])].map(escapeRegExp).join("|");
       const forms = [
-        `(?<=[A-Za-z0-9-]\\/${MARKUP_RUN})${escaped}(?![A-Za-z0-9-])`,
-        ...(owners === "" ? [] : [`(?<![A-Za-z0-9-])(?:${owners})\\s*\\/\\s*${MARKUP_RUN}${escaped}(?![A-Za-z0-9-])`]),
+        `(?<=[A-Za-z0-9-]\\/)${afterSlash(escaped)}`,
+        ...(owners === "" ? [] : [`(?<![A-Za-z0-9-])(?:${owners})\\s*\\/\\s*${afterSlash(escaped)}`]),
         `(?<![A-Za-z0-9-])${escaped}#[0-9]`,
         `(?<![A-Za-z0-9-])${escaped}\\.git(?![A-Za-z0-9-])`,
       ];
@@ -882,8 +901,12 @@ export function findPrivateNameOccurrences(
   for (const { field, text } of fields) {
     const lines = text.split(/\r?\n/);
     const read = lines.map(readings);
+    // A cross-line hit's second half (Nobunaga N7): the key is reported for
+    // the next line too, so the name there is never also listed as ruled.
+    let carried = new Set<string>();
     lines.forEach((_line, offset): void => {
-      const reported = new Set<string>();
+      const reported = new Set<string>(carried);
+      const crossed = new Set<string>();
       const lineRuled = new Map<string, RuledOccurrence>();
       const record = (key: string, index: number, normalised: boolean, form: HitForm): void => {
         const ignored = matcher.ignored.has(key);
@@ -934,11 +957,13 @@ export function findPrivateNameOccurrences(
             const bottom = (next[k] ?? next[0]) as readonly [string, boolean];
             if (shaped.test(top[0]) || shaped.test(bottom[0]) || !shaped.test(`${top[0]}\n${bottom[0]}`)) continue;
             record(key, index, top[1] || bottom[1], "repository-shaped");
+            crossed.add(key);
             break;
           }
         }
       }
       for (const [key, occurrence] of lineRuled) if (!reported.has(key)) ruled.push(occurrence);
+      carried = crossed;
     });
   }
   return { hits, ruled };

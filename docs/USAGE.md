@@ -10130,10 +10130,14 @@ which is the API text fields, not exempt from the rule:
   **only in repository-shaped forms**, never as a bare word:
   - `owner/name`, `owner/name#N` and every URL path naming it
     (`https://github.com/owner/name` holds `owner/name`), with any run of
-    `_`, `*`, `~`, backticks, quotes or opening brackets between the slash
-    and the name (`owner/_name_`, `owner/[name]`, `owner/"name"`), which GitHub
-    renders as the slug. Any `<letter, digit or ->/name` counts, so a path
-    segment `dir/name` is a hit too, failing closed;
+    `_`, `*`, `~` or quotes between the slash and the name (`owner/_name_`,
+    `owner/"name"`), or the name inside `()`, `[]`, `{}` or backticks whose
+    closer is followed by neither an extension (`.` and a letter) nor a `/`
+    (`owner/[name]`), which GitHub renders as the slug. So `pages/[name].tsx`,
+    `app/(name)/page.tsx` and `src/{name}/x` are code paths and pass, reported.
+    The cost that remains: any `<letter, digit or ->/name` counts, so a plain
+    path segment `dir/name` (and a backticked one, which the markup-stripped
+    reading turns into `dir/name`) is a hit, failing closed;
   - one of the list's **own** owners for that name with spaces around the slash
     (`owner / name`, `owner/ name`), or with the slug split across a line
     break (`owner/` ending one line, the name starting the next): each line is
@@ -10155,7 +10159,8 @@ which is the API text fields, not exempt from the rule:
   **Its report.** A bare use of a still-policed ordinary-word name is
   **ruled** — *not matched by rule* — and never silent: stderr prints
   `<verb>: not matched: <field>:<line>: private repository #<k> (ordinary word:
-  matched only as owner/name, name#N or a URL)`, without the name, and `--json`
+  matched only as owner/name, name#N, name.git, a URL, or its owner's slug
+  spaced or split across lines)`, without the name, and `--json`
   lists it under `ruled` with `form: "bare"` and `class: "ordinary-word"`. A
   line that also names the repository repository-shaped reports the hit there
   instead. A name the ignore file or the named list **exempts** reports exactly

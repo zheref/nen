@@ -109,7 +109,7 @@ describe("every guarded verb, named once (zheref/nen#363)", () => {
     expect(section).toContain("**Ordinary-word names** ([#535]");
     expect(section).toContain("SCOWL 2020.12.07");
     expect(section).toContain("Copyright 2000-2018 by Kevin Atkinson");
-    expect(section).toContain("(ordinary word: matched only as owner/name, name#N or a URL)");
+    expect(section).toContain("(ordinary word: matched only as owner/name, name#N, name.git, a URL, or its owner's slug spaced or split across lines)");
     expect(issueCommand.usage).toContain("ORDINARY-WORD NAMES (zheref/nen#535)");
     for (const command of [ideaCommand, prCommand, wakeCommand]) {
       expect(command.usage, command.name).toContain("zheref/nen#535");
@@ -149,7 +149,7 @@ describe("privateNameLines -- the verb that refused, on every line", () => {
     const lines = privateNameLines(refused, TARGET, "nen pr open");
     expect(lines).toContain("nen pr open: body:3: private repository #2");
     expect(lines).toContain("nen pr open: ignored: title:1: private repository #1 (ignore file)");
-    expect(lines).toContain("nen pr open: not matched: body:5: private repository #2 (ordinary word: matched only as owner/name, name#N or a URL)");
+    expect(lines).toContain("nen pr open: not matched: body:5: private repository #2 (ordinary word: matched only as owner/name, name#N, name.git, a URL, or its owner's slug spaced or split across lines)");
     expect(lines.some((line): boolean => line.startsWith("nen pr open: 1 mention(s)"))).toBe(true);
     expect(lines.join("\n")).not.toContain("nen issue");
   });

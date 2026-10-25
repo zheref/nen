@@ -33,7 +33,7 @@ import data from "./ordinary-words.json";
 export const ORDINARY_WORD_CLASS = "ordinary-word";
 
 /** The one-line rule every human report states beside a rule-skipped name. */
-export const ORDINARY_WORD_RULE = "ordinary word: matched only as owner/name, name#N or a URL";
+export const ORDINARY_WORD_RULE = "ordinary word: matched only as owner/name, name#N, name.git, a URL, or its owner's slug spaced or split across lines";
 
 /** Where the list came from, as its header records it -- for tests and docs. */
 export const ORDINARY_WORDS_SOURCE: string = data.source;

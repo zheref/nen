@@ -374,6 +374,8 @@ describe("this repository's own review.scopes -- the runner and the host-credent
       "src/issue/ordinary-words.ts",
       "src/issue/ordinary-words.json",
       "src/issue/ordinary-words.COPYRIGHT",
+      "src/dev/ordinary-words.ts",
+      "src/dev/ordinary-words.test.ts",
       "src/dev/release-publish.ts",
       "src/dev/release-publish.test.ts",
     ];

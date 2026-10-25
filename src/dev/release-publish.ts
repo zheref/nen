@@ -783,7 +783,7 @@ export function selfTest(): SelfTestResult {
     const ordinary = capture();
     ok(outcome(() => publish(base({ tag: "v2.0.0" }), fakeGh(["v2.0.0"], [], callsO1, [], undefined, { list: named("landed") }), ordinary.io)) === 0
       && callsO1.filter((c): boolean => c[0] === "release" && c[1] === "create").length === 1, "an ordinary-word private name used bare in the notes publishes (0)");
-    ok(ordinary.text().includes("release-publish: not matched: notes:3: private repository #2 (ordinary word: matched only as owner/name, name#N or a URL)") && !/landed/i.test(ordinary.text()), "and is reported, by index, with the rule -- never the name");
+    ok(ordinary.text().includes("release-publish: not matched: notes:3: private repository #2 (ordinary word: matched only as owner/name, name#N, name.git, a URL, or its owner's slug spaced or split across lines)") && !/landed/i.test(ordinary.text()), "and is reported, by index, with the rule -- never the name");
     const callsO2: string[][] = [];
     const shaped = capture();
     ok(outcome(() => publish(base({ tag: "v2.0.0", title: "Nen v2.0.0 (acme/landed#7)" }), fakeGh(["v2.0.0"], [], callsO2, [], undefined, { list: named("landed") }), shaped.io)) === 4

@@ -601,7 +601,7 @@ describe("ordinary-word names (zheref/nen#535)", () => {
     expect(clean.result).toBe("clean");
     expect(clean.ruled).toEqual([{ field: "notes", line: 1, index: 1, normalised: false, form: "bare", class: "ordinary-word" }]);
     expect(privateNameLines(clean, TARGET, "release-publish")).toEqual([
-      "release-publish: not matched: notes:1: private repository #1 (ordinary word: matched only as owner/name, name#N or a URL)",
+      "release-publish: not matched: notes:1: private repository #1 (ordinary word: matched only as owner/name, name#N, name.git, a URL, or its owner's slug spaced or split across lines)",
     ]);
     const refused = checkPrivateNames(script(), TARGET, [{ field: "body", text: "moved to acme/Mark#4" }], false);
     expect(refused.result).toBe("refused");
@@ -616,6 +616,31 @@ describe("ordinary-word names (zheref/nen#535)", () => {
     for (const body of ["acme/_Mark_", "acme/__Mark__", "acme/[Mark]", "acme/(Mark)", "acme/'Mark'", 'acme/"Mark"', "acme/{Mark}", "acme/`Mark`", "acme/**Mark**", "acme/~~Mark~~"]) {
       expect(forms(LIST, body), body).toEqual(["1:#2:repository-shaped:ordinary-word"]);
     }
+  });
+
+  it("a bracket wrapper counts only when its closer is not followed by an extension or a slash (round 2 F8)", () => {
+    for (const body of ["pages/[mark].tsx", "app/(mark)/page.tsx", "src/{mark}/index.ts", "see pages/[Mark].tsx and app/(Mark)/page.tsx"]) {
+      const found = occurrences(LIST, body);
+      expect(found.hits, body).toEqual([]);
+      expect(found.ruled, body).toHaveLength(1);
+    }
+    for (const body of ["acme/[Mark]", "acme/(Mark)", "acme/{Mark}", "acme/`Mark`", "acme/[Mark](https://example.com)", "acme/(**Mark**)", "acme / [Mark]"]) {
+      expect(forms(LIST, body), body).toEqual(["1:#2:repository-shaped:ordinary-word"]);
+    }
+    // The remaining cost: a backticked path segment reads, markup stripped, as the plain dir/name.
+    expect(forms(LIST, "x/`mark`.ts")).toEqual(["1:#2:repository-shaped:ordinary-word"]);
+  });
+
+  it("a slug split across a line break is ONE hit, never also ruled on the second line (Nobunaga N7)", () => {
+    expect(occurrences(LIST, "see acme/\nMark today")).toEqual({
+      hits: [{ field: "body", line: 1, index: 2, normalised: false, ignored: false, ignoredBy: null, form: "repository-shaped", class: "ordinary-word" }],
+      ruled: [],
+    });
+  });
+
+  it("the rule line names every repository-shaped form (round 2 N8)", async () => {
+    const { ORDINARY_WORD_RULE } = await import("./ordinary-words.js");
+    for (const form of ["owner/name", "name#N", "name.git", "a URL", "its owner's slug spaced or split across lines"]) expect(ORDINARY_WORD_RULE).toContain(form);
   });
 
   it("reads a look-alike slash as a slash (Feitan F2)", () => {
