@@ -25,12 +25,14 @@
 //   - EXCEPT A NAME THAT IS AN ORDINARY WORD (zheref/nen#535, the maintainer's
 //     ruling of 2026-10-25): a private repository whose whole name equals a
 //     word of the list embedded in the binary (./ordinary-words.ts) is matched
-//     ONLY in the forms that name a repository -- `owner/name`, `name#N`,
-//     `owner/name#N` and a URL path (`https://github.com/owner/name`) -- and
-//     never as a bare word, so prose, a flag (`--name`) or a dotted identifier
-//     (`a.b.name/v1`) using the word passes. A bare use is still REPORTED
-//     (`ruled`, class `ordinary-word`), never silent, and never blocks. Any
-//     other name keeps the bare-word match;
+//     ONLY in the forms that name a repository -- `owner/name` (markup or
+//     quotes after the slash included), `owner/name#N`, a URL path, the list's
+//     own owner with spaces around the slash or across a line break, `name#N`
+//     and `name.git` (`compileMatcher`) -- and never as a bare word, so prose
+//     or a dotted identifier (`a.b.name/v1`) using the word passes. A bare use
+//     of a policed one is still REPORTED (`ruled`, class `ordinary-word`),
+//     never silent, and never blocks; an exempt one reports as an ignored hit,
+//     as before. Any other name keeps the bare-word match;
 //   - a line holding `%`, `&`, `<`, `\`, `*`, a backtick or a non-ASCII
 //     character is also read NORMALISED, twice (see `normalise` below), so a
 //     name spelt through an escape, an entity, URL encoding, inline markup or an
@@ -655,6 +657,13 @@ export interface NameMatcher {
   readonly exemptedBy: ReadonlyMap<string, ExemptionSource>;
 }
 
+/**
+ * The markup and quote characters that may stand between `owner/` and an
+ * ordinary-word name and still render as the slug (Feitan F1): emphasis,
+ * strikethrough, code, quotes and brackets.
+ */
+const MARKUP_RUN = "[_*~`'\"(\\[{]*";
+
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\/-]/g, "\\$&");
 }
@@ -672,10 +681,13 @@ export function compileMatcher(
   const names: string[] = [];
   const policedIndexOf = new Map<string, number>();
   const exemptedBy = new Map<string, ExemptionSource>();
+  const ownersOf = new Map<string, Set<string>>();
   list.forEach((entry, position): void => {
     const name = entry.replace(/^.*\//, "");
     const key = name.toLowerCase();
     if (name === "") return;
+    const owner = entry.slice(0, entry.length - name.length - 1);
+    if (owner !== "") ownersOf.set(key, (ownersOf.get(key) ?? new Set<string>()).add(owner));
     const slug = entry.toLowerCase();
     // The named list holds exact slugs only, so it can never exempt a twin
     // under another owner; the ignore file's bare names can.
@@ -699,18 +711,29 @@ export function compileMatcher(
       new RegExp(`(?<![A-Za-z0-9-])${escapeRegExp(name)}(?![A-Za-z0-9-])`, "i"),
     ]),
   );
-  // REPOSITORY-SHAPED (zheref/nen#535): the name right after `<owner char>/`
-  // -- `owner/name`, `owner/name#N`, and every URL path naming it, since
-  // `github.com/owner/name` holds `owner/name` -- or a bounded name followed
-  // by `#<digit>`. A path segment `dir/name` reads as `owner/name`,
-  // failing closed.
+  // REPOSITORY-SHAPED (zheref/nen#535), four forms, each failing closed:
+  //   1. the name after `<owner char>/`, past any run of markup or quote
+  //      characters GitHub renders away (`owner/_name_`, `owner/[name]`,
+  //      `owner/"name"`, Feitan F1) -- `owner/name`, `owner/name#N` and every
+  //      URL path naming it, since `github.com/owner/name` holds `owner/name`;
+  //      a path segment `dir/name` reads as `owner/name` too;
+  //   2. one of the list's OWN owners for that name, spaces or a line break
+  //      around the slash (`owner / name`, `owner/` then `name` on the next
+  //      line, Feitan F3) -- tested on each line joined with the next as well;
+  //   3. a bounded name followed by `#<digit>` (`name#N`);
+  //   4. a bounded `name.git` (Feitan F4).
   const shaped = new Map<string, RegExp>(
     names.map((name): [string, RegExp] => {
+      const key = name.toLowerCase();
       const escaped = escapeRegExp(name);
-      return [
-        name.toLowerCase(),
-        new RegExp(`(?<=[A-Za-z0-9-]\\/)${escaped}(?![A-Za-z0-9-])|(?<![A-Za-z0-9-])${escaped}#[0-9]`, "i"),
+      const owners = [...(ownersOf.get(key) ?? [])].map(escapeRegExp).join("|");
+      const forms = [
+        `(?<=[A-Za-z0-9-]\\/${MARKUP_RUN})${escaped}(?![A-Za-z0-9-])`,
+        ...(owners === "" ? [] : [`(?<![A-Za-z0-9-])(?:${owners})\\s*\\/\\s*${MARKUP_RUN}${escaped}(?![A-Za-z0-9-])`]),
+        `(?<![A-Za-z0-9-])${escaped}#[0-9]`,
+        `(?<![A-Za-z0-9-])${escaped}\\.git(?![A-Za-z0-9-])`,
       ];
+      return [key, new RegExp(forms.join("|"), "i")];
     }),
   );
   const ordinary = new Set(names.filter(isOrdinaryWord).map((name): string => name.toLowerCase()));
@@ -790,6 +813,10 @@ function normaliseReading(line: string, stripTags: boolean): string {
   // Every dash, and U+2212 MINUS SIGN, which is a math symbol (Sm) rather than
   // a dash (Pd) but renders as one.
   text = text.replace(/[\p{Pd}\u2212]/gu, "-");
+  // Look-alike slashes NFKC keeps (U+2215 DIVISION SLASH, U+2044 FRACTION
+  // SLASH, U+29F8 BIG SOLIDUS, U+2571 BOX DRAWINGS DIAGONAL): each renders as
+  // `/`, so `owner\u2215name` is the slug (Feitan F2).
+  text = text.replace(/[\u2215\u2044\u29F8\u2571]/gu, "/");
   return text;
 }
 
@@ -813,9 +840,38 @@ export function findPrivateNames(matcher: NameMatcher, fields: readonly CheckedT
 }
 
 /**
+ * Every reading a line is scanned under, raw first: `[text, normalised]`.
+ * Decoded with tags kept FIRST, so a name inside a link destination or an
+ * attribute is read before the tag-stripped reading removes it.
+ */
+function readings(line: string): readonly (readonly [string, boolean])[] {
+  if (!needsNormalising(line)) return [[line, false]];
+  const withTags = normaliseKeepingTags(line);
+  const first = normalise(line);
+  return [
+    [line, false],
+    [withTags, true],
+    [normaliseMarkup(withTags), true],
+    [first, true],
+    [normaliseMarkup(first), true],
+  ];
+}
+
+/**
  * Every hit AND every rule-skipped bare use of an ordinary-word name
  * (zheref/nen#535), per line: a name reported as a hit on a line is never
  * also reported as ruled there, whichever reading found which.
+ *
+ * PRECEDENCE (Nobunaga N1): a bare use of an ordinary-word name that the
+ * ignore file or the named list EXEMPTS is reported exactly as before the
+ * rule -- an ignored hit, `ignored: true` with its `ignoredBy` -- so an
+ * exemption reads the same whether or not the name is also a common word;
+ * `ruled` holds only the bare uses of a still-policed ordinary-word name.
+ *
+ * ACROSS A LINE BREAK (Feitan F3): an ordinary-word name's repository-shaped
+ * form is also tested on each line joined with the next, so `owner/` at a
+ * line's end and the name at the next line's start is a hit on the first
+ * line -- counted only when neither line holds the form on its own.
  */
 export function findPrivateNameOccurrences(
   matcher: NameMatcher,
@@ -824,50 +880,63 @@ export function findPrivateNameOccurrences(
   const hits: PrivateNameHit[] = [];
   const ruled: RuledOccurrence[] = [];
   for (const { field, text } of fields) {
-    text.split(/\r?\n/).forEach((line, offset): void => {
+    const lines = text.split(/\r?\n/);
+    const read = lines.map(readings);
+    lines.forEach((_line, offset): void => {
       const reported = new Set<string>();
       const lineRuled = new Map<string, RuledOccurrence>();
-      const scan = (candidate: string, normalised: boolean): void => {
+      const record = (key: string, index: number, normalised: boolean, form: HitForm): void => {
+        const ignored = matcher.ignored.has(key);
+        reported.add(key);
+        hits.push({
+          field,
+          line: offset + 1,
+          index,
+          normalised,
+          ignored,
+          ignoredBy: ignored ? (matcher.exemptedBy.get(key) ?? null) : null,
+          form,
+          class: matcher.ordinary.has(key) ? ORDINARY_WORD_CLASS : null,
+        });
+      };
+      for (const [candidate, normalised] of read[offset] ?? []) {
         for (const [key, pattern] of matcher.patterns) {
           if (reported.has(key)) continue;
           const ignored = matcher.ignored.has(key);
           const index = ignored ? matcher.indexOf.get(key) : matcher.policedIndexOf.get(key);
           if (index === undefined) continue;
-          const ordinary = matcher.ordinary.has(key);
-          const shapedHit = matcher.shaped.get(key)?.test(candidate) ?? false;
-          if (!shapedHit) {
-            if (!pattern.test(candidate)) continue;
-            if (ordinary) {
-              // A bare use of an ordinary word: reported once per line, never a hit.
-              if (!lineRuled.has(key)) {
-                lineRuled.set(key, { field, line: offset + 1, index, normalised, form: "bare", class: ORDINARY_WORD_CLASS });
-              }
-              continue;
-            }
+          if (matcher.shaped.get(key)?.test(candidate) ?? false) {
+            record(key, index, normalised, "repository-shaped");
+            continue;
           }
-          reported.add(key);
-          hits.push({
-            field,
-            line: offset + 1,
-            index,
-            normalised,
-            ignored,
-            ignoredBy: ignored ? (matcher.exemptedBy.get(key) ?? null) : null,
-            form: shapedHit ? "repository-shaped" : "bare",
-            class: ordinary ? ORDINARY_WORD_CLASS : null,
-          });
+          if (!pattern.test(candidate)) continue;
+          if (matcher.ordinary.has(key) && !ignored) {
+            // A bare use of a policed ordinary word: reported once per line, never a hit.
+            if (!lineRuled.has(key)) {
+              lineRuled.set(key, { field, line: offset + 1, index, normalised, form: "bare", class: ORDINARY_WORD_CLASS });
+            }
+            continue;
+          }
+          record(key, index, normalised, "bare");
         }
-      };
-      scan(line, false);
-      if (needsNormalising(line)) {
-        // Decoded with tags kept FIRST, so a name inside a link destination or
-        // an attribute is read before the tag-stripped reading removes it.
-        const withTags = normaliseKeepingTags(line);
-        scan(withTags, true);
-        scan(normaliseMarkup(withTags), true);
-        const first = normalise(line);
-        scan(first, true);
-        scan(normaliseMarkup(first), true);
+      }
+      const next = read[offset + 1];
+      if (next !== undefined) {
+        const here = read[offset] ?? [];
+        for (const key of matcher.ordinary) {
+          if (reported.has(key)) continue;
+          const shaped = matcher.shaped.get(key);
+          const ignored = matcher.ignored.has(key);
+          const index = ignored ? matcher.indexOf.get(key) : matcher.policedIndexOf.get(key);
+          if (shaped === undefined || index === undefined) continue;
+          for (let k = 0; k < Math.max(here.length, next.length); k++) {
+            const top = (here[k] ?? here[0]) as readonly [string, boolean];
+            const bottom = (next[k] ?? next[0]) as readonly [string, boolean];
+            if (shaped.test(top[0]) || shaped.test(bottom[0]) || !shaped.test(`${top[0]}\n${bottom[0]}`)) continue;
+            record(key, index, top[1] || bottom[1], "repository-shaped");
+            break;
+          }
+        }
       }
       for (const [key, occurrence] of lineRuled) if (!reported.has(key)) ruled.push(occurrence);
     });

@@ -61,8 +61,9 @@
 // (zheref/nen#535) included: a private name that is an ordinary word is
 // matched only as owner/name, name#N or a URL, so notes that use the word
 // publish and say so on a 'not matched:' line. Same opt-out
-// (--skip-private-name-check), same ignore file (--private-names-ignore-file, resolved against --repo), same
-// lines (prefixed `release-publish:`), same `privateNameCheck` in --json. NOT
+// (--skip-private-name-check), same ignore file (--private-names-ignore-file,
+// resolved against --repo), same lines (prefixed `release-publish:`), same
+// `privateNameCheck` in --json. NOT
 // on --dry-run, which reads nothing from GitHub at all -- it skips the
 // repository, tag and release reads too -- and says so in its plan.
 //

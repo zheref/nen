@@ -352,7 +352,7 @@ describe("this repository's own review.scopes -- the runner and the host-credent
       "src/stage/triage.ts",
       "src/supply/bootstrap.ts",
       "src/scaffold/templates.ts",
-      "src/issue/privacy.ts",
+      "src/issue/file.ts",
       "src/github/graphql.ts",
       "src/wc/swap.ts",
       "src/canon/checkout.ts",
@@ -364,5 +364,20 @@ describe("this repository's own review.scopes -- the runner and the host-credent
     ];
     const classified = classifyScopes(ruledOut, loadWorkflow(process.cwd()).workflow.review.scopes);
     expect(classified.scopes.map((scope): string => scope.scope)).toEqual(["code"]);
+  });
+
+  it("raises the security scope on the outbound private-name guard (zheref/nen#535, Feitan F6 on NN-PR-#541)", () => {
+    const guard = [
+      "src/issue/privacy.ts",
+      "src/issue/privacy.test.ts",
+      "src/issue/privacyguard.ts",
+      "src/issue/ordinary-words.ts",
+      "src/issue/ordinary-words.json",
+      "src/issue/ordinary-words.COPYRIGHT",
+      "src/dev/release-publish.ts",
+      "src/dev/release-publish.test.ts",
+    ];
+    const classified = classifyScopes([...guard, "src/issue/command.ts"], loadWorkflow(process.cwd()).workflow.review.scopes);
+    expect(classified.scopes.find((scope): boolean => scope.scope === "security")?.paths).toEqual(guard);
   });
 });

@@ -62,8 +62,9 @@ usage:
       'privateNameCheck' --json shape ('nen issue --help', PRIVATE REPOSITORY
       NAMES), and the same ordinary-word rule (zheref/nen#535): a private
       name that is an ordinary word is matched only as owner/name, name#N or
-      a URL, its bare uses reported and never blocking. A private repository named in a filing to a PUBLIC target exits
-      4 and files nothing; a check that could not run (an unreadable
+      a URL, its bare uses reported and never blocking. A private
+      repository named in a filing to a PUBLIC target exits 4 and files
+      nothing; a check that could not run (an unreadable
       visibility or list, a list that reads empty, a credential whose
       X-OAuth-Scopes lacks 'repo') exits 1, never a pass; a private target is
       not checked, an internal one is. The guard's lines go to

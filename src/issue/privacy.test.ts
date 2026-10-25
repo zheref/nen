@@ -612,6 +612,59 @@ describe("ordinary-word names (zheref/nen#535)", () => {
     expect(privateNameLines(refused, TARGET).join("\n")).not.toMatch(/mark/i);
   });
 
+  it("matches through a markup or quote run after the slash (Feitan F1)", () => {
+    for (const body of ["acme/_Mark_", "acme/__Mark__", "acme/[Mark]", "acme/(Mark)", "acme/'Mark'", 'acme/"Mark"', "acme/{Mark}", "acme/`Mark`", "acme/**Mark**", "acme/~~Mark~~"]) {
+      expect(forms(LIST, body), body).toEqual(["1:#2:repository-shaped:ordinary-word"]);
+    }
+  });
+
+  it("reads a look-alike slash as a slash (Feitan F2)", () => {
+    for (const slash of ["\u2215", "\u2044", "\u29F8", "\u2571", "\uFF0F"]) {
+      expect(occurrences(LIST, `zheref${slash}Mark`).hits, slash).toMatchObject([{ index: 2, normalised: true, form: "repository-shaped" }]);
+    }
+  });
+
+  it("matches the list's own owner with spaces around the slash, and across a line break (Feitan F3)", () => {
+    expect(forms(LIST, "acme / Mark")).toEqual(["1:#2:repository-shaped:ordinary-word"]);
+    expect(forms(LIST, "acme/ Mark")).toEqual(["1:#2:repository-shaped:ordinary-word"]);
+    expect(forms(LIST, "acme /Mark")).toEqual(["1:#2:repository-shaped:ordinary-word"]);
+    expect(forms(LIST, "it moved to acme/\nMark last year")).toEqual(["1:#2:repository-shaped:ordinary-word"]);
+    expect(forms(LIST, "it moved to acme /\n  _Mark_ last year")).toEqual(["1:#2:repository-shaped:ordinary-word"]);
+    // A form complete on one line is reported there, once -- never also on the line above.
+    expect(forms(LIST, "first line\nacme/Mark")).toEqual(["2:#2:repository-shaped:ordinary-word"]);
+    // An owner the list does not carry, spaced, is prose: "this / Mark" passes, reported.
+    const prose = occurrences(LIST, "read this / Mark the gate");
+    expect(prose.hits).toEqual([]);
+    expect(prose.ruled).toHaveLength(1);
+  });
+
+  it("matches name.git, and accepts the bare forms the ruling allows (Feitan F4)", () => {
+    expect(forms(LIST, "clone Mark.git")).toEqual(["1:#2:repository-shaped:ordinary-word"]);
+    for (const body of ["the Mark repo", "repo: Mark", "owner:Mark", "Mark/issues/3", "Mark #12", "gh repo clone Mark", "a sentence ends in Mark."]) {
+      const found = occurrences(LIST, body);
+      expect(found.hits, body).toEqual([]);
+      expect(found.ruled, body).toHaveLength(1);
+    }
+  });
+
+  it("an EXEMPT ordinary-word name used bare reports as an ignored hit, exactly as before the rule (Nobunaga N1)", () => {
+    const viaIgnore = findPrivateNameOccurrences(compileMatcher(["acme/Mark"], parseIgnoreList("mark\n")), [{ field: "body", text: "Mark the gate" }]);
+    expect(viaIgnore.hits).toEqual([{ field: "body", line: 1, index: 1, normalised: false, ignored: true, ignoredBy: "ignore-file", form: "bare", class: "ordinary-word" }]);
+    expect(viaIgnore.ruled).toEqual([]);
+    const viaNamed = findPrivateNameOccurrences(compileMatcher(["acme/Mark"], null, parseNamedList("acme/Mark\n")), [{ field: "body", text: "Mark the gate" }]);
+    expect(viaNamed.hits).toMatchObject([{ ignored: true, ignoredBy: "named-list", form: "bare" }]);
+    expect(viaNamed.ruled).toEqual([]);
+    const lines = privateNameLines(
+      { result: "clean", targetVisibility: "public", listSize: 1, owners: 1, hits: viaIgnore.hits, ruled: viaIgnore.ruled, error: null },
+      TARGET,
+    );
+    expect(lines).toEqual(["nen issue: ignored: body:1: private repository #1 (ignore file)"]);
+    // Not exempt: the same text is ruled, never a hit.
+    const policed = findPrivateNameOccurrences(compileMatcher(["acme/Mark"]), [{ field: "body", text: "Mark the gate" }]);
+    expect(policed.hits).toEqual([]);
+    expect(policed.ruled).toEqual([{ field: "body", line: 1, index: 1, normalised: false, form: "bare", class: "ordinary-word" }]);
+  });
+
   it("the ignore file and the named list still exempt an ordinary-word name's shaped hit, unchanged", () => {
     const ignored = findPrivateNames(compileMatcher(["acme/Mark"], parseIgnoreList("mark\n")), [{ field: "body", text: "acme/Mark" }]);
     expect(ignored).toEqual([{ field: "body", line: 1, index: 1, normalised: false, ignored: true, ignoredBy: "ignore-file", form: "repository-shaped", class: "ordinary-word" }]);

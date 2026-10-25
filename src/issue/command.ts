@@ -501,9 +501,14 @@ usage:
       ORDINARY-WORD NAMES (zheref/nen#535): a private repository whose whole
       name equals, case-insensitively, a word of the list embedded in the
       binary (SCOWL; docs/USAGE.md, the private-name guard) is matched only
-      as 'owner/name', 'name#N', 'owner/name#N' or a URL path naming it --
-      never as a bare word, so prose, a flag or a dotted identifier using the
-      word passes. A bare use is reported, never blocking: 'nen issue: not
+      repository-shaped: 'owner/name', 'owner/name#N' and a URL path naming
+      it (markup or quotes after the slash included), the list's own owner
+      with spaces around the slash or across a line break, 'name#N' and
+      'name.git' -- never as a bare word, so prose or a dotted identifier
+      using the word passes (a flag such as '--name' was never a match). A
+      name the ignore file or the named list exempts reports as an ignored
+      hit, as before. A bare use of a policed one is reported, never
+      blocking: 'nen issue: not
       matched: <field>:<line>: private repository #k (ordinary word: matched
       only as owner/name, name#N or a URL)', and --json 'ruled: [{ field,
       line, index, normalised, form: "bare", class: "ordinary-word" }]'. Any
