@@ -10137,7 +10137,11 @@ which is the API text fields, not exempt from the rule:
     `app/(name)/page.tsx` and `src/{name}/x` are code paths and pass, reported.
     The cost that remains: any `<letter, digit or ->/name` counts, so a plain
     path segment `dir/name` (and a backticked one, which the markup-stripped
-    reading turns into `dir/name`) is a hit, failing closed;
+    reading turns into `dir/name`) is a hit, failing closed. And where the text
+    holds a CommonMark link reference definition for the name (`[name]: <url>`,
+    anywhere, case-insensitive), `[name]` is a wrapper whatever follows it —
+    `owner/[name]/issues/1` and `owner/[name].git` render as the slug with the
+    name linked — so `pages/[name].tsx` refuses in such a text too;
   - one of the list's **own** owners for that name with spaces around the slash
     (`owner / name`, `owner/ name`), or with the slug split across a line
     break (`owner/` ending one line, the name starting the next): each line is

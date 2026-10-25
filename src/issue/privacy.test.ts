@@ -631,6 +631,22 @@ describe("ordinary-word names (zheref/nen#535)", () => {
     expect(forms(LIST, "x/`mark`.ts")).toEqual(["1:#2:repository-shaped:ordinary-word"]);
   });
 
+  it("a [name]: link reference definition anywhere in the text makes [name] a wrapper whatever follows (round 3)", () => {
+    const definition = "\n\n[mark]: https://example.com";
+    for (const body of ["acme/[Mark]/issues/1", "acme/[Mark].git"]) {
+      expect(forms(LIST, body + definition), body).toEqual(["1:#2:repository-shaped:ordinary-word"]);
+      expect(forms(LIST, body + "\n\n[MARK]: <https://example.com>"), body).toEqual(["1:#2:repository-shaped:ordinary-word"]);
+      const without = occurrences(LIST, body);
+      expect(without.hits, body).toEqual([]);
+      expect(without.ruled, body).toHaveLength(1);
+    }
+    // The cost: with the definition, a code path's brackets are a wrapper too.
+    expect(forms(LIST, "pages/[mark].tsx" + definition)).toEqual(["1:#2:repository-shaped:ordinary-word"]);
+    // ( { and the backtick keep round 2's rule.
+    expect(occurrences(LIST, "app/(mark)/page.tsx" + definition).hits).toEqual([]);
+    expect(occurrences(LIST, "src/{mark}/index.ts" + definition).hits).toEqual([]);
+  });
+
   it("a slug split across a line break is ONE hit, never also ruled on the second line (Nobunaga N7)", () => {
     expect(occurrences(LIST, "see acme/\nMark today")).toEqual({
       hits: [{ field: "body", line: 1, index: 2, normalised: false, ignored: false, ignoredBy: null, form: "repository-shaped", class: "ordinary-word" }],

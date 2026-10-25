@@ -632,6 +632,10 @@ export interface NameMatcher {
    * bounded before and followed by `#<digit>` (`name#N`).
    */
   readonly shaped: ReadonlyMap<string, RegExp>;
+  /** `shaped` for a text that holds a `[name]:` link reference definition: `[…]` always wraps. */
+  readonly shapedLinked: ReadonlyMap<string, RegExp>;
+  /** The `[name]:` link reference definition test, per lowercase name (whole text, case-insensitive). */
+  readonly definition: ReadonlyMap<string, RegExp>;
   /** Lowercase names that are ordinary words: matched by `shaped` only. */
   readonly ordinary: ReadonlySet<string>;
   readonly indexOf: ReadonlyMap<string, number>;
@@ -672,11 +676,17 @@ const QUOTE_RUN = "[_*~'\"]*";
  */
 const WRAPPERS: readonly (readonly [string, string])[] = [["(", ")"], ["[", "]"], ["{", "}"], ["`", "`"]];
 
-/** The name after a slash: plain (quote run allowed), or wrapped as above. */
-function afterSlash(escaped: string): string {
+/**
+ * The name after a slash: plain (quote run allowed), or wrapped as above.
+ * `linked`: the text holds a CommonMark link reference definition for the
+ * name (`[name]: <url>`, round 3), so `owner/[name]/issues/1` and
+ * `owner/[name].git` render as the slug with the name linked -- `[…]` then
+ * counts as a wrapper whatever follows its closer.
+ */
+function afterSlash(escaped: string, linked: boolean = false): string {
   const wrapped = WRAPPERS.map(
     ([open, close]): string =>
-      `${QUOTE_RUN}\\${open}${QUOTE_RUN}${escaped}${QUOTE_RUN}\\${close}(?!\\.[A-Za-z]|\\/)`,
+      `${QUOTE_RUN}\\${open}${QUOTE_RUN}${escaped}${QUOTE_RUN}\\${close}${linked && open === "[" ? "" : "(?!\\.[A-Za-z]|\\/)"}`,
   );
   return `(?:${QUOTE_RUN}${escaped}(?![A-Za-z0-9-])|${wrapped.join("|")})`;
 }
@@ -741,22 +751,28 @@ export function compileMatcher(
   //      line, Feitan F3) -- tested on each line joined with the next as well;
   //   3. a bounded name followed by `#<digit>` (`name#N`);
   //   4. a bounded `name.git` (Feitan F4).
-  const shaped = new Map<string, RegExp>(
-    names.map((name): [string, RegExp] => {
-      const key = name.toLowerCase();
-      const escaped = escapeRegExp(name);
-      const owners = [...(ownersOf.get(key) ?? [])].map(escapeRegExp).join("|");
-      const forms = [
-        `(?<=[A-Za-z0-9-]\\/)${afterSlash(escaped)}`,
-        ...(owners === "" ? [] : [`(?<![A-Za-z0-9-])(?:${owners})\\s*\\/\\s*${afterSlash(escaped)}`]),
-        `(?<![A-Za-z0-9-])${escaped}#[0-9]`,
-        `(?<![A-Za-z0-9-])${escaped}\\.git(?![A-Za-z0-9-])`,
-      ];
-      return [key, new RegExp(forms.join("|"), "i")];
-    }),
+  const shapedFor = (linked: boolean): Map<string, RegExp> =>
+    new Map<string, RegExp>(
+      names.map((name): [string, RegExp] => {
+        const key = name.toLowerCase();
+        const escaped = escapeRegExp(name);
+        const owners = [...(ownersOf.get(key) ?? [])].map(escapeRegExp).join("|");
+        const forms = [
+          `(?<=[A-Za-z0-9-]\\/)${afterSlash(escaped, linked)}`,
+          ...(owners === "" ? [] : [`(?<![A-Za-z0-9-])(?:${owners})\\s*\\/\\s*${afterSlash(escaped, linked)}`]),
+          `(?<![A-Za-z0-9-])${escaped}#[0-9]`,
+          `(?<![A-Za-z0-9-])${escaped}\\.git(?![A-Za-z0-9-])`,
+        ];
+        return [key, new RegExp(forms.join("|"), "i")];
+      }),
+    );
+  const shaped = shapedFor(false);
+  const shapedLinked = shapedFor(true);
+  const definition = new Map<string, RegExp>(
+    names.map((name): [string, RegExp] => [name.toLowerCase(), new RegExp(`\\[${escapeRegExp(name)}\\]:`, "i")]),
   );
   const ordinary = new Set(names.filter(isOrdinaryWord).map((name): string => name.toLowerCase()));
-  return { patterns, shaped, ordinary, indexOf, policedIndexOf, ignored, exemptedBy };
+  return { patterns, shaped, shapedLinked, definition, ordinary, indexOf, policedIndexOf, ignored, exemptedBy };
 }
 
 /**
@@ -901,6 +917,16 @@ export function findPrivateNameOccurrences(
   for (const { field, text } of fields) {
     const lines = text.split(/\r?\n/);
     const read = lines.map(readings);
+    // A `[name]:` link reference definition anywhere in this text (round 3):
+    // read raw and normalised, so an escaped definition still counts.
+    const whole = [text, normalise(text)];
+    const linkedKeys = new Set(
+      [...matcher.definition]
+        .filter(([, definition]): boolean => whole.some((candidate): boolean => definition.test(candidate)))
+        .map(([key]): string => key),
+    );
+    const shapedOf = (key: string): RegExp | undefined =>
+      linkedKeys.has(key) ? matcher.shapedLinked.get(key) : matcher.shaped.get(key);
     // A cross-line hit's second half (Nobunaga N7): the key is reported for
     // the next line too, so the name there is never also listed as ruled.
     let carried = new Set<string>();
@@ -928,7 +954,7 @@ export function findPrivateNameOccurrences(
           const ignored = matcher.ignored.has(key);
           const index = ignored ? matcher.indexOf.get(key) : matcher.policedIndexOf.get(key);
           if (index === undefined) continue;
-          if (matcher.shaped.get(key)?.test(candidate) ?? false) {
+          if (shapedOf(key)?.test(candidate) ?? false) {
             record(key, index, normalised, "repository-shaped");
             continue;
           }
@@ -948,7 +974,7 @@ export function findPrivateNameOccurrences(
         const here = read[offset] ?? [];
         for (const key of matcher.ordinary) {
           if (reported.has(key)) continue;
-          const shaped = matcher.shaped.get(key);
+          const shaped = shapedOf(key);
           const ignored = matcher.ignored.has(key);
           const index = ignored ? matcher.indexOf.get(key) : matcher.policedIndexOf.get(key);
           if (shaped === undefined || index === undefined) continue;
