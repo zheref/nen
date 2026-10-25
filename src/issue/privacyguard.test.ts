@@ -101,6 +101,24 @@ describe("every guarded verb, named once (zheref/nen#363)", () => {
     expect(RELEASE_USAGE).toContain("--private-names-ignore-file");
   });
 
+  // THE ORDINARY-WORD RULE (zheref/nen#535) is stated once, in USAGE's shared
+  // section and 'nen issue --help', and cited from every other guarded help,
+  // so a reader of any one of them learns that a bare common word passes.
+  it("the ordinary-word rule is stated in the shared section and cited from every guarded help", () => {
+    const section = guardSection().replace(/\s+/g, " ");
+    expect(section).toContain("**Ordinary-word names** ([#535]");
+    expect(section).toContain("SCOWL 2020.12.07");
+    expect(section).toContain("Copyright 2000-2018 by Kevin Atkinson");
+    expect(section).toContain("(ordinary word: matched only as owner/name, name#N, name.git, a URL, or its owner's slug spaced or split across lines)");
+    expect(issueCommand.usage).toContain("ORDINARY-WORD NAMES (zheref/nen#535)");
+    for (const command of [ideaCommand, prCommand, wakeCommand]) {
+      expect(command.usage, command.name).toContain("zheref/nen#535");
+      expect(command.usage.replace(/\s+/g, " "), command.name).toMatch(/ordinary word|ordinary-word name/);
+    }
+    const publisher = readFileSync(join(process.cwd(), "src", "dev", "release-publish.ts"), "utf8");
+    expect(publisher).toContain("the ordinary-word rule\n// (zheref/nen#535)");
+  });
+
   it("release-publish parses the guard's flags", () => {
     const options = parseReleaseArgs(["--skip-private-name-check", "--private-names-ignore-file", "ignore.txt", "--allow-all-ignored"]);
     expect(options).toMatchObject({ skipPrivateNameCheck: true, privateNamesIgnoreFile: "ignore.txt", allowAllIgnored: true });
@@ -114,9 +132,10 @@ describe("privateNameLines -- the verb that refused, on every line", () => {
     listSize: 2,
     owners: 1,
     hits: [
-      { field: "body", line: 3, index: 2, normalised: false, ignored: false, ignoredBy: null },
-      { field: "title", line: 1, index: 1, normalised: false, ignored: true, ignoredBy: "ignore-file" },
+      { field: "body", line: 3, index: 2, normalised: false, ignored: false, ignoredBy: null, form: "bare", class: null },
+      { field: "title", line: 1, index: 1, normalised: false, ignored: true, ignoredBy: "ignore-file", form: "bare", class: null },
     ],
+    ruled: [{ field: "body", line: 5, index: 2, normalised: false, form: "bare", class: "ordinary-word" }],
     error: null,
   };
 
@@ -130,6 +149,7 @@ describe("privateNameLines -- the verb that refused, on every line", () => {
     const lines = privateNameLines(refused, TARGET, "nen pr open");
     expect(lines).toContain("nen pr open: body:3: private repository #2");
     expect(lines).toContain("nen pr open: ignored: title:1: private repository #1 (ignore file)");
+    expect(lines).toContain("nen pr open: not matched: body:5: private repository #2 (ordinary word: matched only as owner/name, name#N, name.git, a URL, or its owner's slug spaced or split across lines)");
     expect(lines.some((line): boolean => line.startsWith("nen pr open: 1 mention(s)"))).toBe(true);
     expect(lines.join("\n")).not.toContain("nen issue");
   });
@@ -144,10 +164,10 @@ describe("the shared adapter", () => {
 
   it("readIgnoreFlag: resolves the file against --repo, and a missing one is a usage error, never an empty list", () => {
     const root = mkdtempSync(join(tmpdir(), "nen-guard-"));
-    writeFileSync(join(root, "ignore.txt"), "# generic\nvault\nacme/thing\n");
+    writeFileSync(join(root, "ignore.txt"), "# generic\nvault\nacme/gizmo\n");
     const list = readIgnoreFlag(context(["--private-names-ignore-file", "ignore.txt"], new ScriptedSeams([]), root).context);
     expect([...(list?.names ?? [])]).toEqual(["vault"]);
-    expect([...(list?.slugs ?? [])]).toEqual(["acme/thing"]);
+    expect([...(list?.slugs ?? [])]).toEqual(["acme/gizmo"]);
     expect(() => readIgnoreFlag(context(["--private-names-ignore-file", "nope.txt"], new ScriptedSeams([]), root).context)).toThrow(VerbUsageError);
   });
 
@@ -219,10 +239,10 @@ describe("the committed named list, read by every guarded verb (zheref/nen#441)"
     // branch.base chooses nothing.
     mkdirSync(join(dir, "scripts"));
     writeFileSync(join(dir, "scripts", "named.txt"), "evil/other\n");
-    const seams = new ScriptedSeams(onMain(root, DECLARED, "# ruled\nAcme/Thing\n"));
+    const seams = new ScriptedSeams(onMain(root, DECLARED, "# ruled\nAcme/Gizmo\n"));
     const { context: ctx, err } = context([], seams, dir);
     const list = readNamedList(ctx, "nen issue");
-    expect([...(list?.slugs ?? [])]).toEqual(["acme/thing"]);
+    expect([...(list?.slugs ?? [])]).toEqual(["acme/gizmo"]);
     expect(seams.calls.map((call): string => [call.command, ...call.args].join(" "))).toEqual([
       `git -C ${root} symbolic-ref -q refs/remotes/origin/HEAD`,
       `git -C ${root} show refs/remotes/origin/main:nen/workflow.json`,
@@ -244,9 +264,9 @@ describe("the committed named list, read by every guarded verb (zheref/nen#441)"
 
   it("the default branch's path wins over the checkout's, and the difference is said", () => {
     const { dir, root } = repo('{"privateNames":{"namedFile":"scripts/mine.txt"}}');
-    const seams = new ScriptedSeams(onMain(root, DECLARED, "acme/thing\n"));
+    const seams = new ScriptedSeams(onMain(root, DECLARED, "acme/gizmo\n"));
     const { context: ctx, err } = context([], seams, dir);
-    expect([...(readNamedList(ctx, "nen issue")?.slugs ?? [])]).toEqual(["acme/thing"]);
+    expect([...(readNamedList(ctx, "nen issue")?.slugs ?? [])]).toEqual(["acme/gizmo"]);
     expect(err).toEqual([
       "nen issue: named list read from refs/remotes/origin/main:scripts/named.txt; the checkout declares 'scripts/mine.txt', which is head content and decides nothing.",
     ]);
@@ -271,7 +291,7 @@ describe("the committed named list, read by every guarded verb (zheref/nen#441)"
 
   it("a bare name on the committed list is a usage error (exit 2) naming the line, never the entry", () => {
     const { dir, root } = repo(DECLARED);
-    const seams = new ScriptedSeams(onMain(root, DECLARED, "acme/thing\nvault\n"));
+    const seams = new ScriptedSeams(onMain(root, DECLARED, "acme/gizmo\nvault\n"));
     let thrown: unknown;
     try {
       readNamedList(context([], seams, dir).context, "nen issue");
@@ -298,20 +318,20 @@ describe("the committed named list, read by every guarded verb (zheref/nen#441)"
     const seams = new ScriptedSeams([
       visibilityRow(TARGET.slug, "public"),
       FULL_REACH_ROW,
-      privateListRow(["o/thing", "o/vault"]),
-      ...onMain(root, DECLARED, "o/thing\n"),
+      privateListRow(["o/gizmo", "o/vault"]),
+      ...onMain(root, DECLARED, "o/gizmo\n"),
     ]);
     const { context: ctx, err } = context([], seams, dir);
-    const check = guardPrivateNames(ctx, TARGET, [{ field: "body", text: "thing" }], null, "nen issue");
+    const check = guardPrivateNames(ctx, TARGET, [{ field: "body", text: "gizmo" }], null, "nen issue");
     expect(check.result).toBe("clean");
-    expect(check.hits).toEqual([{ field: "body", line: 1, index: 1, normalised: false, ignored: true, ignoredBy: "named-list" }]);
+    expect(check.hits).toEqual([{ field: "body", line: 1, index: 1, normalised: false, ignored: true, ignoredBy: "named-list", form: "bare", class: null }]);
     expect(err).toEqual(["nen issue: ignored: body:1: private repository #1 (named list)"]);
     expect(seams.calls[0]?.args.join(" ")).toBe(`api repos/${TARGET.slug}`);
     const skipped = new ScriptedSeams([]);
-    expect(guardPrivateNames(context(["--skip-private-name-check"], skipped, dir).context, TARGET, [{ field: "body", text: "thing" }], null, "nen issue").result).toBe("skipped-by-flag");
+    expect(guardPrivateNames(context(["--skip-private-name-check"], skipped, dir).context, TARGET, [{ field: "body", text: "gizmo" }], null, "nen issue").result).toBe("skipped-by-flag");
     expect(skipped.calls).toEqual([]);
     const privateTarget = new ScriptedSeams([visibilityRow(TARGET.slug, "private")]);
-    expect(guardPrivateNames(context([], privateTarget, dir).context, TARGET, [{ field: "body", text: "thing" }], null, "nen issue").result).toBe("skipped-private-target");
+    expect(guardPrivateNames(context([], privateTarget, dir).context, TARGET, [{ field: "body", text: "gizmo" }], null, "nen issue").result).toBe("skipped-private-target");
     expect(privateTarget.calls).toHaveLength(1);
   });
 
@@ -321,9 +341,9 @@ describe("the committed named list, read by every guarded verb (zheref/nen#441)"
     const undeclared = repo(null);
     expect(() => readIgnoreFlag(context(["--allow-all-ignored"], new ScriptedSeams([]), undeclared.dir).context)).toThrow(/or a committed named list declared by --repo's nen\/workflow.json/);
     // The remedy the every-name refusal names is now one a verb takes.
-    const seams = new ScriptedSeams([visibilityRow(TARGET.slug, "public"), FULL_REACH_ROW, privateListRow(["o/thing"]), ...onMain(declared.root, DECLARED, "o/thing\n")]);
-    const check = guardPrivateNames(context(["--allow-all-ignored"], seams, declared.dir).context, TARGET, [{ field: "body", text: "thing" }], null, "nen issue");
+    const seams = new ScriptedSeams([visibilityRow(TARGET.slug, "public"), FULL_REACH_ROW, privateListRow(["o/gizmo"]), ...onMain(declared.root, DECLARED, "o/gizmo\n")]);
+    const check = guardPrivateNames(context(["--allow-all-ignored"], seams, declared.dir).context, TARGET, [{ field: "body", text: "gizmo" }], null, "nen issue");
     expect(check.result).toBe("clean");
-    expect(check.hits).toEqual([{ field: "body", line: 1, index: 1, normalised: false, ignored: true, ignoredBy: "named-list" }]);
+    expect(check.hits).toEqual([{ field: "body", line: 1, index: 1, normalised: false, ignored: true, ignoredBy: "named-list", form: "bare", class: null }]);
   });
 });

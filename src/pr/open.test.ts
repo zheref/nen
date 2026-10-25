@@ -63,7 +63,7 @@ async function capture(
 }
 
 /** The guard's verdict on a private target: skipped, nothing read. */
-const SKIPPED_PRIVATE = { result: "skipped-private-target", targetVisibility: "private", listSize: null, owners: null, hits: [], error: null };
+const SKIPPED_PRIVATE = { result: "skipped-private-target", targetVisibility: "private", listSize: null, owners: null, hits: [], ruled: [], error: null };
 
 const calls = (seams: ScriptedSeams): readonly string[] => seams.calls.map((call): string => [call.command, ...call.args].join(" "));
 // The body travels on stdin since zheref/nen#363 (`--body-file -`): the bytes
@@ -423,7 +423,7 @@ describe("nen pr open -- the private-name guard (zheref/nen#363)", () => {
     expect(result.code).toBe(4);
     const doc = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
     expect(doc).toMatchObject({ contract: OPEN_CONTRACT, dryRun: true, opened: false });
-    expect((doc["privateNameCheck"] as { hits: unknown[] }).hits).toEqual([{ field: "title", line: 1, index: 1, normalised: false, ignored: false, ignoredBy: null }]);
+    expect((doc["privateNameCheck"] as { hits: unknown[] }).hits).toEqual([{ field: "title", line: 1, index: 1, normalised: false, ignored: false, ignoredBy: null, form: "bare", class: null }]);
   });
 
   it("a PRIVATE target is not checked -- the list is never read -- and the body bytes go to gh on stdin", async () => {

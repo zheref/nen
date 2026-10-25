@@ -863,7 +863,7 @@ describe("nen issue comment -- the general comment primitive", () => {
       source: "inline",
       argv: ["issue", "comment", "12", "--repo", "o/n", "--body", "hi"],
       body: "hi",
-      privateNameCheck: { result: "skipped-private-target", targetVisibility: "private", listSize: null, owners: null, hits: [], error: null },
+      privateNameCheck: { result: "skipped-private-target", targetVisibility: "private", listSize: null, owners: null, hits: [], ruled: [], error: null },
     });
   });
 
@@ -1148,7 +1148,7 @@ describe("nen issue edit-body -- replaces an issue's body outright, byte for byt
       outcome: "written",
       bodyCheck: { expectedSha256: null, currentSha256: EMPTY_SHA256, currentBytes: 0, result: "none", atomic: false },
       currentBodyOut: null,
-      privateNameCheck: { result: "skipped-private-target", targetVisibility: "private", listSize: null, owners: null, hits: [], error: null },
+      privateNameCheck: { result: "skipped-private-target", targetVisibility: "private", listSize: null, owners: null, hits: [], ruled: [], error: null },
     });
   });
 
@@ -1220,7 +1220,7 @@ describe("nen issue edit-body -- replaces an issue's body outright, byte for byt
       outcome: "dry-run",
       bodyCheck: { expectedSha256: null, currentSha256: EMPTY_SHA256, currentBytes: 0, result: "none", atomic: false },
       currentBodyOut: null,
-      privateNameCheck: { result: "skipped-private-target", targetVisibility: "private", listSize: null, owners: null, hits: [], error: null },
+      privateNameCheck: { result: "skipped-private-target", targetVisibility: "private", listSize: null, owners: null, hits: [], ruled: [], error: null },
     });
   });
 
@@ -2968,7 +2968,8 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
       targetVisibility: "public",
       listSize: 2,
       owners: 1,
-      hits: [{ field: "body", line: 1, index: 2, normalised: false, ignored: false, ignoredBy: null }],
+      hits: [{ field: "body", line: 1, index: 2, normalised: false, ignored: false, ignoredBy: null, form: "bare", class: null }],
+      ruled: [],
       error: null,
     });
     expect(result.out.join("\n")).not.toMatch(/vault/i);
@@ -3089,7 +3090,7 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
     expect(report["outcome"]).toBe("private-name");
     expect(report["written"]).toBe(false);
     expect((report["privateNameCheck"] as { hits: unknown[] }).hits).toEqual([
-      { field: "body", line: 3, index: 2, normalised: false, ignored: false, ignoredBy: null },
+      { field: "body", line: 3, index: 2, normalised: false, ignored: false, ignoredBy: null, form: "bare", class: null },
     ]);
   });
 
@@ -3132,7 +3133,8 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
         targetVisibility: "public",
         listSize: 2,
         owners: 1,
-        hits: [{ field: "body", line: 1, index: 2, normalised: false, ignored: true, ignoredBy: "ignore-file" }],
+        hits: [{ field: "body", line: 1, index: 2, normalised: false, ignored: true, ignoredBy: "ignore-file", form: "bare", class: null }],
+        ruled: [],
         error: null,
       });
     });
@@ -3503,7 +3505,7 @@ describe("nen issue consolidate-close -- the private-name guard on the close com
     expect(result.code).toBe(4);
     const report = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
     expect(report["refused"]).toBe(true);
-    expect((report["privateNameCheck"] as { hits: unknown[] }).hits).toEqual([{ field: "close-comment[5]", line: 1, index: 1, normalised: false, ignored: false, ignoredBy: null }]);
+    expect((report["privateNameCheck"] as { hits: unknown[] }).hits).toEqual([{ field: "close-comment[5]", line: 1, index: 1, normalised: false, ignored: false, ignoredBy: null, form: "bare", class: null }]);
     expect(result.out.join("\n")).not.toMatch(/hidden-thing/i);
   });
 

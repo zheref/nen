@@ -584,7 +584,7 @@ describe("nen pr threads settle -- the private-name guard (zheref/nen#363)", () 
     expect(result.code).toBe(4);
     const doc = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
     expect(doc).toMatchObject({ contract: SETTLE_CONTRACT, ok: false, dryRun: true });
-    expect((doc["privateNameCheck"] as { hits: unknown[] }).hits).toEqual([{ field: "entry[1]", line: 1, index: 1, normalised: false, ignored: false, ignoredBy: null }]);
+    expect((doc["privateNameCheck"] as { hits: unknown[] }).hits).toEqual([{ field: "entry[1]", line: 1, index: 1, normalised: false, ignored: false, ignoredBy: null, form: "bare", class: null }]);
   });
 
   it("a PRIVATE target is not checked: the list is never read and the batch settles", async () => {

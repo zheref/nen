@@ -10123,6 +10123,82 @@ which is the API text fields, not exempt from the rule:
   `.` **bound** a word, failing closed: `_name_`, `__name__`, `my_name`,
   `name.git` and a sentence's `name.` all match, and `owner/name` slugs and URLs
   match through the name.
+- **Ordinary-word names** ([#535](https://github.com/zheref/nen/issues/535), the
+  maintainer's ruling of 2026-10-25: a common word is not a private repository
+  name per se). A private repository whose **whole name** equals, case-insensitively
+  and with nothing stripped, a word of the list embedded in the binary is matched
+  **only in repository-shaped forms**, never as a bare word:
+  - `owner/name`, `owner/name#N` and every URL path naming it
+    (`https://github.com/owner/name` holds `owner/name`), with any run of
+    `_`, `*`, `~` or quotes between the slash and the name (`owner/_name_`,
+    `owner/"name"`), or the name inside `()`, `[]`, `{}` or backticks whose
+    closer is followed by neither an extension (`.` and a letter) nor a `/`
+    (`owner/[name]`), which GitHub renders as the slug. So `pages/[name].tsx`,
+    `app/(name)/page.tsx` and `src/{name}/x` are code paths and pass, reported.
+    The cost that remains: any `<letter, digit or ->/name` counts, so a plain
+    path segment `dir/name` (and a backticked one, which the markup-stripped
+    reading turns into `dir/name`) is a hit, failing closed. And where the text
+    holds a CommonMark link reference definition for the name (`[name]: <url>`,
+    anywhere, case-insensitive), `[name]` is a wrapper whatever follows it —
+    `owner/[name]/issues/1` and `owner/[name].git` render as the slug with the
+    name linked — so `pages/[name].tsx` refuses in such a text too;
+  - one of the list's **own** owners for that name with spaces around the slash
+    (`owner / name`, `owner/ name`), or with the slug split across a line
+    break (`owner/` ending one line, the name starting the next): each line is
+    also tested joined with the next, and the hit is reported on the first;
+  - `name#N` (a `#` and a digit) and `name.git`;
+  - each read through the normalised pass below too, where the look-alike
+    slashes U+2215, U+2044, U+29F8 and U+2571 also read as `/`.
+
+  **Accepted, by the ruling — reported, never blocking:** prose (`the name
+  repo`, `repo: name`, a sentence's `name.`), a dotted identifier
+  (`a.b.name/v1`), `owner:name`, `name/issues/3`, `name #12`, an unknown
+  owner spaced (`this / name`). **A flag** (`--name`) was never an occurrence
+  at all, since `-` is a word character, so it is neither a hit nor reported.
+  `mark` and `landed` are ordinary words; `kro-pwa`, `mark2`, `marktool`,
+  `mark-tool` and `my_mark` are not, and keep the bare-word match: a
+  hyphenated, dotted, underscored or otherwise multi-word name is never
+  ordinary.
+
+  **Its report.** A bare use of a still-policed ordinary-word name is
+  **ruled** — *not matched by rule* — and never silent: stderr prints
+  `<verb>: not matched: <field>:<line>: private repository #<k> (ordinary word:
+  matched only as owner/name, name#N, name.git, a URL, or its owner's slug
+  spaced or split across lines)`, without the name, and `--json`
+  lists it under `ruled` with `form: "bare"` and `class: "ordinary-word"`. A
+  line that also names the repository repository-shaped reports the hit there
+  instead. A name the ignore file or the named list **exempts** reports exactly
+  as before the rule, as an `ignored:` hit, whatever its form: an exemption
+  wins over the rule. Every hit carries `form` (`"bare"` |
+  `"repository-shaped"`) and `class` (`"ordinary-word"` or `null`). The ignore
+  file, the named list, `--skip-private-name-check` and every exit code are
+  unchanged.
+
+  **The list** is data in the binary (`src/issue/ordinary-words.json`, bundled
+  like every JSON import), so the verdict is the same on every host and no host
+  dictionary is read: 10,737 lowercase ASCII words from **SCOWL 2020.12.07**
+  (Spell Checking Oriented Word Lists, <http://wordlist.aspell.net/>) —
+  `english-words.10`, `english-words.20`, `english-upper.10` and the month and
+  weekday names of `english-upper.35`, entries with an apostrophe or a
+  non-letter dropped. It is **generated, never edited**:
+  `bun src/dev/ordinary-words.ts --tarball <scowl-2020.12.07.tar.gz> [--write]`
+  checks the tarball's sha256, re-derives the list and SCOWL's `Copyright`
+  file, and reports drift; `src/dev/ordinary-words.test.ts` pins the count
+  and the words' sha256 and compares the committed file to its own render, so a
+  changed word is a changed pin in a reviewable diff. Licence, quoted from
+  SCOWL's `Copyright` file, which is vendored verbatim as
+  `src/issue/ordinary-words.COPYRIGHT` with the notices of every source it
+  draws on (Moby Words II, Brian Kelk's UK English Wordlist, VarCon, WordNet
+  and the rest): *The collective work is Copyright 2000-2018 by Kevin Atkinson
+  as well as any of the copyrights mentioned below: Copyright 2000-2018 by Kevin
+  Atkinson. Permission to use, copy, modify, distribute and sell these word
+  lists, the associated scripts, the output created from the scripts, and its
+  documentation for any purpose is hereby granted without fee, provided that
+  the above copyright notice appears in all copies and that both that copyright
+  notice and this permission notice appear in supporting documentation. Kevin
+  Atkinson makes no representations about the suitability of this array for
+  any purpose. It is provided "as is" without express or implied warranty.* A
+  word is never added to clear one refusal — that is the caller's ignore file.
 - **The normalised second pass.** A line holding `%`, `&`, `<`, `\`, `*`,
   `~`, a backtick or a non-ASCII character is also read normalised: `%XX`
   decoded, UTF-8 decoded, HTML entities decoded, inline tags and backslash
@@ -10229,7 +10305,7 @@ and the write is published unchecked. `consolidate-close`, `wake fire` and
 `wake verify` carry their text in the argv they checked.
 
 **Its output.** Every line the guard prints goes to stderr — a hit, an
-`ignored:` hit, the skip notice, and an unavailable check's reason — and
+`ignored:` hit, an ordinary-word `not matched:` line, the skip notice, and an unavailable check's reason — and
 begins with the verb that ran it, so a caller can tell the guard's lines from
 the verb's own and from `gh`'s, and knows which verb refused: `nen issue:` for
 the four `issue` verbs (as since #329), `nen idea file:`, `nen pr open:`,
@@ -10244,9 +10320,13 @@ other guarded verb used no `4` before.
 
 Every `--json` report of a guarded verb carries `privateNameCheck: { result,
 targetVisibility, listSize, owners, hits: [{ field, line, index, normalised,
-ignored, ignoredBy }], error }` — `listSize` and `owners` are counts (never names), `null`
+ignored, ignoredBy, form, class }], ruled: [{ field, line, index, normalised, form,
+class }], error }` — `listSize` and `owners` are counts (never names), `null`
 when the list was not read; `ignoredBy` is `"ignore-file"`, `"named-list"` or
-`null` — where `result` is `clean` | `skipped-private-target` | `skipped-by-flag` |
+`null`; `form` (`bare` | `repository-shaped`), `class` (`ordinary-word` | `null`)
+and `ruled` — the bare uses *not matched by rule* — are the [ordinary-word
+rule](#the-private-name-guard)'s (`ruled` is `[]` whenever the text was not
+checked) — where `result` is `clean` | `skipped-private-target` | `skipped-by-flag` |
 `refused` | `unavailable`; a run whose only hits are ignored is `clean` and
 still lists them. A clean run with no hits and a private target add nothing to
 the human output. A refusal's `--json` report is the verb's own refusal shape

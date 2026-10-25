@@ -57,9 +57,13 @@
 // create, on the same runner and against github.com only. A hit exits 4 and
 // publishes nothing; a check that could not run exits 1 (a credential whose
 // X-OAuth-Scopes lacks `repo` included); a private repository is not checked,
-// an internal one is. Same opt-out (--skip-private-name-check), same
-// ignore file (--private-names-ignore-file, resolved against --repo), same
-// lines (prefixed `release-publish:`), same `privateNameCheck` in --json. NOT
+// an internal one is. The same matching, the ordinary-word rule
+// (zheref/nen#535) included: a private name that is an ordinary word is
+// matched only as owner/name, name#N or a URL, so notes that use the word
+// publish and say so on a 'not matched:' line. Same opt-out
+// (--skip-private-name-check), same ignore file (--private-names-ignore-file,
+// resolved against --repo), same lines (prefixed `release-publish:`), same
+// `privateNameCheck` in --json. NOT
 // on --dry-run, which reads nothing from GitHub at all -- it skips the
 // repository, tag and release reads too -- and says so in its plan.
 //
@@ -549,6 +553,7 @@ const FIXTURE_CHANGELOG = `# Changelog
 ## v2.0.0 — the new one
 
 - a thing that landed
+- gadget-tools now reads its own notes
 
 ## v1.0.0 — the old one
 
@@ -767,9 +772,22 @@ export function selfTest(): SelfTestResult {
     const named = (name: string): RunResult => ({ status: 0, stdout: JSON.stringify([{ full_name: `acme/${name}` }, { full_name: "acme/hidden-thing" }]), stderr: "" });
     const callsG1: string[][] = [];
     const hit = capture();
-    ok(outcome(() => publish(base({ tag: "v2.0.0" }), fakeGh(["v2.0.0"], [], callsG1, [], undefined, { list: named("landed") }), hit.io)) === 4, "a private repository named in the notes refuses (4)");
+    ok(outcome(() => publish(base({ tag: "v2.0.0" }), fakeGh(["v2.0.0"], [], callsG1, [], undefined, { list: named("gadget-tools") }), hit.io)) === 4, "a private repository named in the notes refuses (4)");
     ok(!callsG1.some((c): boolean => c[1] === "create"), "and no release was created");
-    ok(hit.text().includes("release-publish: notes:3: private repository #2") && !/landed/i.test(hit.text()), "the refusal names the field, the line and an index -- never the name");
+    ok(hit.text().includes("release-publish: notes:4: private repository #1") && !/gadget/i.test(hit.text()), "the refusal names the field, the line and an index -- never the name");
+    // THE ORDINARY-WORD RULE (zheref/nen#535): `landed` is an ordinary word, so
+    // the notes' bare "a thing that landed" is reported, never a refusal -- the
+    // v0.28.0 publication this rule was made for -- while the repository-shaped
+    // `acme/landed#7` still refuses.
+    const callsO1: string[][] = [];
+    const ordinary = capture();
+    ok(outcome(() => publish(base({ tag: "v2.0.0" }), fakeGh(["v2.0.0"], [], callsO1, [], undefined, { list: named("landed") }), ordinary.io)) === 0
+      && callsO1.filter((c): boolean => c[0] === "release" && c[1] === "create").length === 1, "an ordinary-word private name used bare in the notes publishes (0)");
+    ok(ordinary.text().includes("release-publish: not matched: notes:3: private repository #2 (ordinary word: matched only as owner/name, name#N, name.git, a URL, or its owner's slug spaced or split across lines)") && !/landed/i.test(ordinary.text()), "and is reported, by index, with the rule -- never the name");
+    const callsO2: string[][] = [];
+    const shaped = capture();
+    ok(outcome(() => publish(base({ tag: "v2.0.0", title: "Nen v2.0.0 (acme/landed#7)" }), fakeGh(["v2.0.0"], [], callsO2, [], undefined, { list: named("landed") }), shaped.io)) === 4
+      && !callsO2.some((c): boolean => c[1] === "create") && shaped.text().includes("release-publish: title:1: private repository #2"), "the same name in a repository-shaped form refuses (4), nothing created");
     const callsG2: string[][] = [];
     ok(outcome(() => publish(base({ tag: "v2.0.0", title: "Nen v2.0.0 for hidden-thing" }), fakeGh(["v2.0.0"], [], callsG2), quiet)) === 4 && !callsG2.some((c): boolean => c[1] === "create"), "a private repository named in --title refuses (4), nothing created");
     const callsG3: string[][] = [];

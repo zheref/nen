@@ -179,11 +179,13 @@ PRIVATE-NAME FLAGS (zheref/nen#363): [--skip-private-name-check]
   'threads reply', 'threads settle' and 'open' write caller text to GitHub,
   and run the private-name guard 'nen issue' runs (see 'nen issue --help',
   PRIVATE REPOSITORY NAMES) before the write -- on --dry-run too: the text
-  is compared against the credential's live private repository list, a
-  private repository named in text bound for a PUBLIC target exits 4 and
-  writes nothing, a check that could not run exits 1 (a credential whose
-  X-OAuth-Scopes lacks 'repo' included: its list may be partial), a private
-  target is not checked and an internal one is. The guard's stderr lines begin 'nen pr <subcommand>:'
+  is compared against the credential's live private repository list (an
+  ordinary-word name matched only as owner/name, name#N or a URL,
+  zheref/nen#535), a private repository named in text bound for a PUBLIC
+  target exits 4 and writes nothing, a check that could not run exits 1 (a
+  credential whose X-OAuth-Scopes lacks 'repo' included: its list may be
+  partial), a private target is not checked and an internal one is. The
+  guard's stderr lines begin 'nen pr <subcommand>:'
   and never print the name; --json adds 'privateNameCheck'. Fields checked:
   'open' title and body, before any other call; 'edit-body' body, after the
   certifying read; 'threads reply' body, before the walk; 'threads settle'
