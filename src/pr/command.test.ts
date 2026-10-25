@@ -2270,7 +2270,7 @@ describe("nen pr edit-body -- replaces a pull request's body outright, byte for 
       bytes: 5,
       written: true,
       dryRun: false,
-      privateNameCheck: { result: "skipped-private-target", targetVisibility: "private", listSize: null, owners: null, hits: [], error: null },
+      privateNameCheck: { result: "skipped-private-target", targetVisibility: "private", listSize: null, owners: null, hits: [], ruled: [], error: null },
     });
   });
 
@@ -2333,7 +2333,7 @@ describe("nen pr edit-body -- replaces a pull request's body outright, byte for 
       bytes: 2,
       written: false,
       dryRun: true,
-      privateNameCheck: { result: "skipped-private-target", targetVisibility: "private", listSize: null, owners: null, hits: [], error: null },
+      privateNameCheck: { result: "skipped-private-target", targetVisibility: "private", listSize: null, owners: null, hits: [], ruled: [], error: null },
     });
   });
 

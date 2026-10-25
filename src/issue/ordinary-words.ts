@@ -1,0 +1,65 @@
+// src/issue/ordinary-words.ts -- which private repository names are ORDINARY
+// WORDS, for the private-name guard (zheref/nen#535; ./privacy.ts).
+//
+// THE MAINTAINER'S RULING (2026-10-25): a private repository named after a
+// common word must not make every use of that word a "private repository
+// name". So a name that IS an ordinary word is matched only in the forms that
+// name a repository -- `owner/name`, `name#N`, `owner/name#N`, a URL path
+// (`https://github.com/owner/name`) -- and never as a bare word; any other
+// name keeps the bare-word match (./privacy.ts, `compileMatcher`).
+//
+// THE DECISION IS DATA SHIPPED IN THE BINARY. `./ordinary-words.json` is
+// bundled by `bun build --compile` like every other JSON import, so the
+// verdict is the same on every host and never reads a host dictionary (a CI
+// Linux image carries none, and a check must not depend on the host it ran
+// on). Its source and licence live in the file itself and in docs/USAGE.md
+// ("Ordinary-word names"): SCOWL 2020.12.07, english-words.10/.20,
+// english-upper.10 and the month and weekday names of english-upper.35,
+// Copyright 2000-2018 Kevin Atkinson, permissive (use, copy, modify,
+// distribute and sell, notice retained).
+//
+// EXACT, AND NOTHING STRIPPED. The whole name, lowercased, must equal a listed
+// word: `mark` and `landed` qualify; `mark2`, `marktool`, `mark-tool`,
+// `mark.tools` and `my_mark` do not. A hyphenated, dotted, underscored or
+// otherwise multi-word name is never ordinary, whatever its parts are -- the
+// list holds ASCII letters only, so no such name can equal an entry.
+
+import data from "./ordinary-words.json";
+
+/** The class a rule-skipped name carries in --json (`privateNameCheck`). */
+export const ORDINARY_WORD_CLASS = "ordinary-word";
+
+/** The one-line rule every human report states beside a rule-skipped name. */
+export const ORDINARY_WORD_RULE = "ordinary word: matched only as owner/name, name#N or a URL";
+
+/** Where the list came from, as its header records it -- for tests and docs. */
+export const ORDINARY_WORDS_SOURCE: string = data.source;
+
+const WORD = /^[a-z]+$/;
+
+function loadWords(words: readonly unknown[]): ReadonlySet<string> {
+  const set = new Set<string>();
+  for (const word of words) {
+    // A malformed entry is a build defect, refused loudly rather than read as
+    // a wider rule: every entry is one lowercase ASCII word.
+    if (typeof word !== "string" || !WORD.test(word)) {
+      throw new Error(`src/issue/ordinary-words.json carries an entry that is not one lowercase ASCII word`);
+    }
+    set.add(word);
+  }
+  return set;
+}
+
+const WORDS: ReadonlySet<string> = loadWords(data.words);
+
+/** How many words the embedded list holds. */
+export const ORDINARY_WORD_COUNT: number = WORDS.size;
+
+/**
+ * Whether a private repository's NAME (the part after the owner) is an
+ * ordinary word: its whole lowercase form equals a listed word. Nothing is
+ * trimmed, split or stemmed.
+ */
+export function isOrdinaryWord(name: string): boolean {
+  return WORDS.has(name.toLowerCase());
+}

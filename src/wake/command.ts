@@ -67,7 +67,8 @@ composes around --now, --flag-marker and --redrive-marker. Before anything is
 written -- and without --run too, so the dry run's verdict is the real run's --
 that caller text is checked against the credential's live private repository
 list exactly as 'nen issue comment' checks a body ('nen issue --help', PRIVATE
-REPOSITORY NAMES): a private repository named in text bound for a PUBLIC or
+REPOSITORY NAMES; an ordinary-word name only as owner/name, name#N or a URL,
+zheref/nen#535): a private repository named in text bound for a PUBLIC or
 INTERNAL --repo-slug exits 4 and writes nothing (no label removed, no
 workflow redriven, no comment posted); a check that could not run exits 1,
 never a pass; a private --repo-slug is not checked. --now must be an ISO-8601

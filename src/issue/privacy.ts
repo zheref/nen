@@ -22,6 +22,15 @@
 //     and `.` BOUND a word, failing closed: `_name_`, `__name__`, `my_name`,
 //     `name.git` and a sentence's `name.` all match, and `owner/name` slugs and
 //     URLs match through the name;
+//   - EXCEPT A NAME THAT IS AN ORDINARY WORD (zheref/nen#535, the maintainer's
+//     ruling of 2026-10-25): a private repository whose whole name equals a
+//     word of the list embedded in the binary (./ordinary-words.ts) is matched
+//     ONLY in the forms that name a repository -- `owner/name`, `name#N`,
+//     `owner/name#N` and a URL path (`https://github.com/owner/name`) -- and
+//     never as a bare word, so prose, a flag (`--name`) or a dotted identifier
+//     (`a.b.name/v1`) using the word passes. A bare use is still REPORTED
+//     (`ruled`, class `ordinary-word`), never silent, and never blocks. Any
+//     other name keeps the bare-word match;
 //   - a line holding `%`, `&`, `<`, `\`, `*`, a backtick or a non-ASCII
 //     character is also read NORMALISED, twice (see `normalise` below), so a
 //     name spelt through an escape, an entity, URL encoding, inline markup or an
@@ -82,6 +91,7 @@ import { plainLine } from "../cli/plain.js";
 import type { Target } from "../github/target.js";
 import { SchemaError } from "../schema/errors.js";
 import { parseWorkflow } from "../schema/workflow.js";
+import { isOrdinaryWord, ORDINARY_WORD_CLASS, ORDINARY_WORD_RULE } from "./ordinary-words.js";
 
 /** The exit code a private-name refusal answers with, in every verb that runs the check. */
 export const PRIVATE_NAME_EXIT = 4;
@@ -130,6 +140,15 @@ const MAX_PAGES = 100;
 
 export type Visibility = "public" | "private" | "internal";
 
+/**
+ * How a hit matched (zheref/nen#535): `bare`, the name as a word on its own;
+ * `repository-shaped`, as `owner/name`, `name#N` or a URL path naming it.
+ */
+export type HitForm = "bare" | "repository-shaped";
+
+/** The class a name the ordinary-word rule narrowed carries; null for any other name. */
+export type NameClass = typeof ORDINARY_WORD_CLASS;
+
 /** One place a private name was found. `index` is 1-based into the sorted list. */
 export interface PrivateNameHit {
   /** Which input carried it: `title` or `body`. */
@@ -143,6 +162,25 @@ export interface PrivateNameHit {
   readonly ignored: boolean;
   /** Which list exempted it (zheref/nen#441); null when `ignored` is false. */
   readonly ignoredBy: ExemptionSource | null;
+  /** How it matched (zheref/nen#535). An ordinary-word name only ever hits `repository-shaped`. */
+  readonly form: HitForm;
+  /** `ordinary-word` when the name is one (zheref/nen#535), else null. */
+  readonly class: NameClass | null;
+}
+
+/**
+ * A BARE use of an ordinary-word private name (zheref/nen#535): found, not
+ * matched by rule, never blocking -- and never silent. Carries the same
+ * coordinates a hit does and never the name. A line that also names the
+ * repository in a repository-shaped form reports the hit there instead.
+ */
+export interface RuledOccurrence {
+  readonly field: string;
+  readonly line: number;
+  readonly index: number;
+  readonly normalised: boolean;
+  readonly form: "bare";
+  readonly class: NameClass;
 }
 
 /**
@@ -367,6 +405,12 @@ export interface PrivateNameCheck {
   readonly listSize: number | null;
   readonly owners: number | null;
   readonly hits: readonly PrivateNameHit[];
+  /**
+   * Bare uses of ordinary-word private names the rule did not match
+   * (zheref/nen#535): reported, never blocking. Empty when the text was not
+   * checked.
+   */
+  readonly ruled: readonly RuledOccurrence[];
   /** Why the check could not be performed; null unless `unavailable`. */
   readonly error: string | null;
 }
@@ -578,7 +622,16 @@ function sortedUnique(values: readonly string[]): readonly string[] {
  * are applied only after every occurrence is found.
  */
 export interface NameMatcher {
+  /** The bare-word test, per lowercase name. */
   readonly patterns: ReadonlyMap<string, RegExp>;
+  /**
+   * The repository-shaped test, per lowercase name (zheref/nen#535): the name
+   * after `<owner char>/` (`owner/name`, `owner/name#N`, a URL path), or
+   * bounded before and followed by `#<digit>` (`name#N`).
+   */
+  readonly shaped: ReadonlyMap<string, RegExp>;
+  /** Lowercase names that are ordinary words: matched by `shaped` only. */
+  readonly ordinary: ReadonlySet<string>;
   readonly indexOf: ReadonlyMap<string, number>;
   /**
    * Each still-policed name's index: the FIRST entry carrying it that the
@@ -646,7 +699,22 @@ export function compileMatcher(
       new RegExp(`(?<![A-Za-z0-9-])${escapeRegExp(name)}(?![A-Za-z0-9-])`, "i"),
     ]),
   );
-  return { patterns, indexOf, policedIndexOf, ignored, exemptedBy };
+  // REPOSITORY-SHAPED (zheref/nen#535): the name right after `<owner char>/`
+  // -- `owner/name`, `owner/name#N`, and every URL path naming it, since
+  // `github.com/owner/name` holds `owner/name` -- or a bounded name followed
+  // by `#<digit>`. A path segment `dir/name` reads as `owner/name`,
+  // failing closed.
+  const shaped = new Map<string, RegExp>(
+    names.map((name): [string, RegExp] => {
+      const escaped = escapeRegExp(name);
+      return [
+        name.toLowerCase(),
+        new RegExp(`(?<=[A-Za-z0-9-]\\/)${escaped}(?![A-Za-z0-9-])|(?<![A-Za-z0-9-])${escaped}#[0-9]`, "i"),
+      ];
+    }),
+  );
+  const ordinary = new Set(names.filter(isOrdinaryWord).map((name): string => name.toLowerCase()));
+  return { patterns, shaped, ordinary, indexOf, policedIndexOf, ignored, exemptedBy };
 }
 
 /**
@@ -741,33 +809,70 @@ function needsNormalising(line: string): boolean {
 
 /** Every hit in the given fields, raw first, then each normalised reading. */
 export function findPrivateNames(matcher: NameMatcher, fields: readonly CheckedText[]): readonly PrivateNameHit[] {
+  return findPrivateNameOccurrences(matcher, fields).hits;
+}
+
+/**
+ * Every hit AND every rule-skipped bare use of an ordinary-word name
+ * (zheref/nen#535), per line: a name reported as a hit on a line is never
+ * also reported as ruled there, whichever reading found which.
+ */
+export function findPrivateNameOccurrences(
+  matcher: NameMatcher,
+  fields: readonly CheckedText[],
+): { readonly hits: readonly PrivateNameHit[]; readonly ruled: readonly RuledOccurrence[] } {
   const hits: PrivateNameHit[] = [];
+  const ruled: RuledOccurrence[] = [];
   for (const { field, text } of fields) {
     text.split(/\r?\n/).forEach((line, offset): void => {
       const reported = new Set<string>();
+      const lineRuled = new Map<string, RuledOccurrence>();
       const scan = (candidate: string, normalised: boolean): void => {
         for (const [key, pattern] of matcher.patterns) {
-          if (reported.has(key) || !pattern.test(candidate)) continue;
+          if (reported.has(key)) continue;
           const ignored = matcher.ignored.has(key);
           const index = ignored ? matcher.indexOf.get(key) : matcher.policedIndexOf.get(key);
           if (index === undefined) continue;
+          const ordinary = matcher.ordinary.has(key);
+          const shapedHit = matcher.shaped.get(key)?.test(candidate) ?? false;
+          if (!shapedHit) {
+            if (!pattern.test(candidate)) continue;
+            if (ordinary) {
+              // A bare use of an ordinary word: reported once per line, never a hit.
+              if (!lineRuled.has(key)) {
+                lineRuled.set(key, { field, line: offset + 1, index, normalised, form: "bare", class: ORDINARY_WORD_CLASS });
+              }
+              continue;
+            }
+          }
           reported.add(key);
-          hits.push({ field, line: offset + 1, index, normalised, ignored, ignoredBy: ignored ? (matcher.exemptedBy.get(key) ?? null) : null });
+          hits.push({
+            field,
+            line: offset + 1,
+            index,
+            normalised,
+            ignored,
+            ignoredBy: ignored ? (matcher.exemptedBy.get(key) ?? null) : null,
+            form: shapedHit ? "repository-shaped" : "bare",
+            class: ordinary ? ORDINARY_WORD_CLASS : null,
+          });
         }
       };
       scan(line, false);
-      if (!needsNormalising(line)) return;
-      // Decoded with tags kept FIRST, so a name inside a link destination or
-      // an attribute is read before the tag-stripped reading removes it.
-      const withTags = normaliseKeepingTags(line);
-      scan(withTags, true);
-      scan(normaliseMarkup(withTags), true);
-      const first = normalise(line);
-      scan(first, true);
-      scan(normaliseMarkup(first), true);
+      if (needsNormalising(line)) {
+        // Decoded with tags kept FIRST, so a name inside a link destination or
+        // an attribute is read before the tag-stripped reading removes it.
+        const withTags = normaliseKeepingTags(line);
+        scan(withTags, true);
+        scan(normaliseMarkup(withTags), true);
+        const first = normalise(line);
+        scan(first, true);
+        scan(normaliseMarkup(first), true);
+      }
+      for (const [key, occurrence] of lineRuled) if (!reported.has(key)) ruled.push(occurrence);
     });
   }
-  return hits;
+  return { hits, ruled };
 }
 
 // --- the check, as a verb runs it -----------------------------------------------
@@ -788,16 +893,16 @@ export function checkPrivateNames(
   named: NamedList | null | (() => NamedList | null) = null,
 ): PrivateNameCheck {
   const unread = { listSize: null, owners: null };
-  if (skip) return { result: "skipped-by-flag", targetVisibility: null, ...unread, hits: [], error: null };
+  if (skip) return { result: "skipped-by-flag", targetVisibility: null, ...unread, hits: [], ruled: [], error: null };
   let visibility: Visibility;
   try {
     visibility = readTargetVisibility(seams, target);
   } catch (error) {
     if (!(error instanceof PrivateListUnavailableError)) throw error;
-    return { result: "unavailable", targetVisibility: null, ...unread, hits: [], error: error.message };
+    return { result: "unavailable", targetVisibility: null, ...unread, hits: [], ruled: [], error: error.message };
   }
   if (visibility === "private") {
-    return { result: "skipped-private-target", targetVisibility: visibility, ...unread, hits: [], error: null };
+    return { result: "skipped-private-target", targetVisibility: visibility, ...unread, hits: [], ruled: [], error: null };
   }
   let list: readonly string[];
   try {
@@ -805,7 +910,7 @@ export function checkPrivateNames(
     list = readPrivateList(seams);
   } catch (error) {
     if (!(error instanceof PrivateListUnavailableError)) throw error;
-    return { result: "unavailable", targetVisibility: visibility, ...unread, hits: [], error: error.message };
+    return { result: "unavailable", targetVisibility: visibility, ...unread, hits: [], ruled: [], error: error.message };
   }
   const counts = {
     listSize: list.length,
@@ -831,12 +936,13 @@ export function checkPrivateNames(
       targetVisibility: visibility,
       ...counts,
       hits: [],
+      ruled: [],
       error: `every private name is ignored (${subject} exempt${exemptors.length === 1 ? "s" : ""} all ${counts.listSize}), so nothing would be checked; pass --allow-all-ignored if that is meant`,
     };
   }
-  const hits = findPrivateNames(matcher, fields);
+  const { hits, ruled } = findPrivateNameOccurrences(matcher, fields);
   const blocking = hits.some((hit): boolean => !hit.ignored);
-  return { result: blocking ? "refused" : "clean", targetVisibility: visibility, ...counts, hits, error: null };
+  return { result: blocking ? "refused" : "clean", targetVisibility: visibility, ...counts, hits, ruled, error: null };
 }
 
 /** Whether a verdict stops the write. */
@@ -866,9 +972,14 @@ export function privateNameLines(check: PrivateNameCheck, target: Target, verb: 
   const ignoredLines = check.hits
     .filter((hit): boolean => hit.ignored)
     .map((hit): string => `${verb}: ignored: ${where(hit)} (${hit.ignoredBy === "named-list" ? "named list" : "ignore file"})`);
+  // A bare use of an ordinary-word name (zheref/nen#535) is never silent either.
+  const ruledLines = check.ruled.map(
+    (occurrence): string =>
+      `${verb}: not matched: ${occurrence.field}:${occurrence.line}: private repository #${occurrence.index}${occurrence.normalised ? " (spelt through an escape, entity, encoding, markup or invisible character)" : ""} (${ORDINARY_WORD_RULE})`,
+  );
   switch (check.result) {
     case "clean":
-      return ignoredLines;
+      return [...ruledLines, ...ignoredLines];
     case "skipped-private-target":
       return [];
     case "skipped-by-flag":
@@ -885,6 +996,7 @@ export function privateNameLines(check: PrivateNameCheck, target: Target, verb: 
     case "refused": {
       const blocking = check.hits.filter((hit): boolean => !hit.ignored);
       return [
+        ...ruledLines,
         ...ignoredLines,
         ...blocking.map((hit): string => `${verb}: ${where(hit)}`),
         `${verb}: ${blocking.length} mention(s) of a private repository in text bound for PUBLIC ${target.slug}; nothing was written. Redact them and retry.`,

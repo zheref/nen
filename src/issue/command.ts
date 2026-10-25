@@ -497,7 +497,17 @@ usage:
       and never cached). Each repository's NAME is matched case-insensitively
       and whole-word, taken literally: a word is a run of [A-Za-z0-9-], so
       '_' and '.' bound a word ('_name_', 'name.git', a sentence's 'name.'
-      match) and 'owner/name' slugs and URLs match through the name. A line
+      match) and 'owner/name' slugs and URLs match through the name.
+      ORDINARY-WORD NAMES (zheref/nen#535): a private repository whose whole
+      name equals, case-insensitively, a word of the list embedded in the
+      binary (SCOWL; docs/USAGE.md, the private-name guard) is matched only
+      as 'owner/name', 'name#N', 'owner/name#N' or a URL path naming it --
+      never as a bare word, so prose, a flag or a dotted identifier using the
+      word passes. A bare use is reported, never blocking: 'nen issue: not
+      matched: <field>:<line>: private repository #k (ordinary word: matched
+      only as owner/name, name#N or a URL)', and --json 'ruled: [{ field,
+      line, index, normalised, form: "bare", class: "ordinary-word" }]'. Any
+      other name keeps the bare-word match. A line
       holding %, &, <, \\, *, ~, a backtick or a non-ASCII character is also
       read normalised -- %XX and UTF-8 decoded, HTML entities decoded, inline
       tags and backslash escapes dropped, NFKC, format and default-ignorable
@@ -555,8 +565,9 @@ usage:
       under --json. --json carries
       'privateNameCheck: { result: clean | skipped-private-target |
       skipped-by-flag | refused | unavailable, targetVisibility, listSize,
-      owners, hits: [{ field, line, index, normalised, ignored, ignoredBy }],
-      error }'
+      owners, hits: [{ field, line, index, normalised, ignored, ignoredBy,
+      form: bare | repository-shaped, class: ordinary-word | null }],
+      ruled, error }'
       (listSize/owners are counts, null when the list was not read); a
       refused 'comment' report carries no 'body'.
 
