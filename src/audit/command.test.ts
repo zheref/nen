@@ -367,7 +367,8 @@ describe("nen audit deps -- hanten round 2 on NN#508 (Feitan probes K-Q, red bef
     await expectAudit(pnpmCase(pnpm(`  lodash@4.17.15:\n    resolution: {integrity: x}\n    deep: ${"[".repeat(5000)}${"]".repeat(5000)}\n`)), [], 3, /nests deeper than 1000 \(maxDepth\)/);
   });
 
-  it("Q: a FIFO at the lockfile name is refused, never hangs", async () => {
+  // Windows has no FIFO (mkfifo does not exist there), so the fixture cannot be built.
+  it.skipIf(process.platform === "win32")("Q: a FIFO at the lockfile name is refused, never hangs (POSIX only: Windows has no FIFO)", async () => {
     const dir = tree({ "package.json": pkg("pnpm@9.15.9") });
     (await import("node:child_process")).execFileSync("mkfifo", [join(dir, "pnpm-lock.yaml")]);
     await expectAudit(dir, [], 3, /pnpm-lock\.yaml is not a regular file/);
@@ -381,6 +382,15 @@ describe("nen audit deps -- hanten round 2 on NN#508 (Feitan probes K-Q, red bef
       "node_modules/@scope/two": { version: "1.0.0", resolved: "https://art.example/api/npm/npm-remote/@scope%2ftwo/-/two-1.0.0.tgz" },
       "node_modules/ok": { version: "1.0.0", resolved: "https://art.example/api/npm/npm-remote/lodash%2f..%2fok/-/ok-1.0.0.tgz" } } }) }), ["--query"], 1,
       /3 packages\)\nunqueried: 1 package-lock\.json[^\n]*\nfinding: GHSA-test-high HIGH "lodash@4\.17\.15"/, prefixed);
+  });
+
+  it("Bugbot on NN-PR-#547: an unscoped claim resolving a SCOPED tarball of the same base name is unqueried, never clean", async () => {
+    for (const url of ["https://registry.npmjs.org/@other/lodash/-/lodash-4.17.15.tgz", "https://registry.npmjs.org/%40other/lodash/-/lodash-4.17.15.tgz", "https://registry.npmjs.org/@other%2flodash/-/lodash-4.17.15.tgz"]) {
+      await expectAudit(tree({ "package.json": pkg("npm@10.9.0"), "package-lock.json": JSON.stringify({ lockfileVersion: 3, packages: { "": {}, "node_modules/lodash": { version: "4.17.15", resolved: url } } }) }), ["--query"], 1,
+        /0 packages\)\nunqueried: 1 package-lock\.json[^\n]*\naudit: 0 finding\(s\) [^\n]*, 1 unqueried, across 0 packages\n$/);
+    }
+    await expectAudit(tree({ "package.json": pkg("npm@10.9.0"), "package-lock.json": JSON.stringify({ lockfileVersion: 3, packages: { "": {}, "node_modules/@scope/ok": { version: "2.0.0", resolved: "https://registry.npmjs.org/@outer/@scope/ok/-/ok-2.0.0.tgz" } } }) }), [], 0,
+      /0 packages\)\nunqueried: 1 package-lock\.json/);
   });
 
   it("O: an uppercase scheme, a dot-segment or a %2f traversal toward another name is unqueried", async () => {
