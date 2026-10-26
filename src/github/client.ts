@@ -283,6 +283,21 @@ export class GitHubClient {
     return response.data;
   }
 
+  // The GitHub Actions workflow run(s) behind ONE check suite, REST
+  // `actions/runs?check_suite_id=`, as the RAW payload `{ total_count,
+  // workflow_runs }` (zheref/nen#546). Read only for a round check whose
+  // reviewer declares a `workflow` producer, so a repository that declares
+  // none makes no such call -- and needs no `actions:read` for it.
+  async checkSuiteWorkflowRuns(repo: RepoRef, checkSuiteId: number): Promise<unknown> {
+    const response = await this.octokit.request("GET /repos/{owner}/{repo}/actions/runs", {
+      owner: repo.owner,
+      repo: repo.repo,
+      check_suite_id: checkSuiteId,
+      per_page: 5,
+    });
+    return response.data;
+  }
+
   // ONE file's text at ONE commit, REST `contents/{path}?ref={sha}` -- the
   // same route ../release/unitcheck.ts's `fetchJsonAtRef` takes through `gh`
   // for `nen/workflow.json` (Feitan FEI-3), on this client's own token. Read by

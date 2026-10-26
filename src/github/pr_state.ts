@@ -99,7 +99,13 @@ import {
   type RoundPolicy,
 } from "../gates/predicates.js";
 import { parseCheckRollup } from "./parse.js";
-import type { GateIdentities, ReviewerIdentity } from "../schema/gates.js";
+import type { GateIdentities, ReviewerIdentity, RoundCheckProducer } from "../schema/gates.js";
+import {
+  GITHUB_ACTIONS_APP_SLUG,
+  matchProducer,
+  workflowRunsBySuite,
+  type WorkflowRunEvidence,
+} from "../gates/producer.js";
 import {
   digPath,
   type CheckRollupPage,
@@ -159,6 +165,16 @@ export interface PrStateSource {
    * `pullRequestCommits`.
    */
   commitCheckRuns?(repo: PrRef, sha: string): Promise<unknown>;
+  /**
+   * The GitHub Actions workflow run(s) of ONE check suite, the RAW REST
+   * payload of `actions/runs?check_suite_id=` -- `{ total_count,
+   * workflow_runs: [...] }`, each run carrying `check_suite_id`, `path`,
+   * `event` and `repository.full_name` (zheref/nen#546). Read only for a
+   * round check whose reviewer declares a `workflow` producer. OPTIONAL: a
+   * source without it reads no workflow evidence, and such a round is then
+   * UNVERIFIED -- owed with that reason, never counted by name.
+   */
+  checkSuiteWorkflowRuns?(repo: PrRef, checkSuiteId: number): Promise<unknown>;
   /**
    * One file's UTF-8 text at one commit (REST `contents/{path}?ref=`), or
    * `null` when the file does not exist there (404). Any other failure THROWS.
@@ -259,6 +275,117 @@ export const EARLIER_COMMIT_READS_DEFAULT = 20;
  * than 250 commits, so a listing that long may have left older ones out (L1).
  */
 export const PULL_REQUEST_COMMITS_CAP = 250;
+
+/**
+ * How many check suites one evaluation may look up workflow runs for
+ * (zheref/nen#546). Only a name-matching, definitive-SUCCESS round check of a
+ * reviewer that declares a `workflow` producer is ever looked up, so this is
+ * a runaway backstop, not a working limit: hitting it leaves the remaining
+ * suites UNVERIFIED -- owed -- with a warning, never counted.
+ */
+export const WORKFLOW_RUN_READS_MAX = 10;
+
+/**
+ * Look up the GitHub Actions run behind each check suite, for the
+ * `workflow`-producer comparison (zheref/nen#546). FAILS CLOSED: a source that
+ * cannot read runs, a thrown or unreadable read, a suite with no run naming
+ * it, or two runs disagreeing about the same suite each leave that suite
+ * WITHOUT evidence, with a warning saying which and why -- and a suite without
+ * evidence is unverified, so its round stays owed. Nothing here can make a
+ * check match a producer it does not.
+ */
+export async function readWorkflowRuns(
+  source: PrStateSource,
+  repo: PrRef,
+  suiteIds: readonly number[],
+  known: ReadonlyMap<number, WorkflowRunEvidence> = new Map(),
+  budget: { reads: number } = { reads: 0 },
+): Promise<{ readonly runs: readonly WorkflowRunEvidence[]; readonly warnings: readonly string[] }> {
+  const wanted = [...new Set(suiteIds)].filter((id): boolean => !known.has(id));
+  if (wanted.length === 0) return { runs: [], warnings: [] };
+  const read = source.checkSuiteWorkflowRuns;
+  const at = `${repo.owner}/${repo.repo}`;
+  if (read === undefined) {
+    return {
+      runs: [],
+      warnings: [
+        `round-check producer: this GitHub source cannot read workflow runs, so check suite(s) ${wanted.join(", ")} on ${at} are unverified and their round checks are not counted`,
+      ],
+    };
+  }
+  const runs: WorkflowRunEvidence[] = [];
+  const warnings: string[] = [];
+  for (const suite of wanted) {
+    if (budget.reads >= WORKFLOW_RUN_READS_MAX) {
+      warnings.push(
+        `round-check producer: stopped after ${WORKFLOW_RUN_READS_MAX} workflow-run reads on ${at}; check suite ${suite} is unverified and its round check is not counted`,
+      );
+      continue;
+    }
+    budget.reads += 1;
+    let payload: unknown;
+    try {
+      payload = await read.call(source, repo, suite);
+    } catch (error) {
+      warnings.push(
+        `round-check producer: reading the workflow run of check suite ${suite} on ${at} failed (${error instanceof Error ? error.message : String(error)}); it is unverified and its round check is not counted`,
+      );
+      continue;
+    }
+    const list = digPath(payload, "workflow_runs");
+    const candidates: WorkflowRunEvidence[] = [];
+    if (Array.isArray(list)) {
+      for (const run of list) {
+        const id = digPath(run, "check_suite_id");
+        const path = digPath(run, "path");
+        const event = digPath(run, "event");
+        const repository = digPath(run, "repository", "full_name");
+        if (id !== suite) continue;
+        if (typeof path !== "string" || path === "" || typeof event !== "string" || event === "") continue;
+        if (typeof repository !== "string" || repository === "") continue;
+        candidates.push({ checkSuiteId: suite, path, repository, event });
+      }
+    }
+    const distinct = new Set(candidates.map((run): string => `${run.repository}\u0000${run.path}\u0000${run.event}`));
+    if (candidates.length === 0 || distinct.size !== 1) {
+      warnings.push(
+        `round-check producer: check suite ${suite} on ${at} ${candidates.length === 0 ? "names no readable workflow run" : "names workflow runs that disagree"}; it is unverified and its round check is not counted`,
+      );
+      continue;
+    }
+    runs.push(candidates[0]!);
+  }
+  return { runs, warnings };
+}
+
+/**
+ * The check suites at HEAD whose workflow run a declared `workflow` producer
+ * needs (zheref/nen#546): a name-matching, COMPLETED, definitive-SUCCESS
+ * round check created by GitHub Actions. Nothing else could become a round,
+ * so nothing else is looked up -- and a file that declares no workflow
+ * producer looks up nothing at all.
+ */
+export function headWorkflowSuitesWanted(identities: GateIdentities, headChecks: readonly unknown[]): number[] {
+  const constrained = identities.reviewers.filter(
+    (reviewer): boolean => reviewer.roundCheckPattern !== null && reviewer.roundCheckProducer?.kind === "workflow",
+  );
+  if (constrained.length === 0) return [];
+  const parsed = parseCheckRollup(headChecks, "$.checks");
+  if (!parsed.ok) return [];
+  const suites: number[] = [];
+  for (const entry of latestChecks(parsed.value)) {
+    if (entry.kind !== "check_run" || entry.name === null) continue;
+    if (entry.status !== "COMPLETED" || entry.conclusion !== "SUCCESS") continue;
+    if ((entry.appSlug ?? "").toLowerCase() !== GITHUB_ACTIONS_APP_SLUG) continue;
+    const suite = entry.checkSuiteId;
+    if (typeof suite !== "number") continue;
+    const name = entry.name;
+    if (constrained.some((reviewer): boolean => reviewer.roundCheckPattern!.test(name)) && !suites.includes(suite)) {
+      suites.push(suite);
+    }
+  }
+  return suites;
+}
 
 /**
  * `unevaluated` carries a REMEDY, always.
@@ -723,6 +850,8 @@ function timestampOf(event: unknown): string {
 export interface EarlierRoundCheckWanted {
   readonly reviewer: string;
   readonly pattern: RegExp;
+  /** The reviewer's declared producer (zheref/nen#546); absent or null: any. */
+  readonly producer?: RoundCheckProducer | null;
 }
 
 /**
@@ -785,10 +914,14 @@ export async function readEarlierRoundChecks(
   headSha: string,
   wanted: readonly EarlierRoundCheckWanted[],
   maxCommitReads: number,
+  knownWorkflowRuns: ReadonlyMap<number, WorkflowRunEvidence> = new Map(),
+  workflowBudget: { reads: number } = { reads: 0 },
 ): Promise<{
   readonly checks: readonly EarlierHeadCheck[];
   readonly warnings: readonly string[];
   readonly commitReads: number;
+  /** Workflow runs looked up for `workflow`-producer candidates (#546). */
+  readonly workflowRuns?: readonly WorkflowRunEvidence[];
 }> {
   const none = { checks: [], warnings: [], commitReads: 0 };
   if (wanted.length === 0 || headSha === "") return none;
@@ -832,6 +965,8 @@ export async function readEarlierRoundChecks(
 
   const remaining = [...wanted];
   const found: EarlierHeadCheck[] = [];
+  const workflowRuns = new Map(knownWorkflowRuns);
+  const lookedUp: WorkflowRunEvidence[] = [];
   let commitReads = 0;
   for (const sha of shas) {
     if (remaining.length === 0) break;
@@ -866,7 +1001,7 @@ export async function readEarlierRoundChecks(
     }
     for (const entry of [...remaining]) {
       let unattributed = false;
-      const run = runs.find((candidate): boolean => {
+      const attributed = runs.filter((candidate): boolean => {
         const name = digPath(candidate, "name");
         const status = digPath(candidate, "status");
         const conclusion = digPath(candidate, "conclusion");
@@ -887,6 +1022,48 @@ export async function readEarlierRoundChecks(
         }
         return listed.some((pull): boolean => pull.number === prNumber && isRepository(pull.baseRepoUrl, pull.baseRepoName, repo));
       });
+      // zheref/nen#546: with a declared producer, the attributed run must ALSO
+      // be that producer's. A same-name run from another producer, or one
+      // whose producer cannot be read, is passed over WITH a warning and the
+      // walk keeps looking -- so an impersonating run on a newer commit
+      // cannot hide the reviewer's own clean run on an older one, and cannot
+      // stand in for it either. No producer declared: the first attributed
+      // run, exactly as before.
+      let run: unknown;
+      let evidence: Pick<EarlierHeadCheck, "appSlug" | "appId" | "checkSuiteId"> = {};
+      for (const candidate of attributed) {
+        const appSlug = digPath(candidate, "app", "slug");
+        const appId = digPath(candidate, "app", "id");
+        const suite = digPath(candidate, "check_suite", "id");
+        const candidateEvidence = {
+          ...(typeof appSlug === "string" && appSlug !== "" ? { appSlug } : {}),
+          ...(typeof appId === "number" && Number.isSafeInteger(appId) && appId > 0 ? { appId } : {}),
+          ...(typeof suite === "number" && Number.isSafeInteger(suite) && suite > 0 ? { checkSuiteId: suite } : {}),
+        };
+        const producer = entry.producer ?? null;
+        if (
+          producer?.kind === "workflow" &&
+          (candidateEvidence.appSlug ?? "").toLowerCase() === GITHUB_ACTIONS_APP_SLUG &&
+          candidateEvidence.checkSuiteId !== undefined &&
+          !workflowRuns.has(candidateEvidence.checkSuiteId)
+        ) {
+          const looked = await readWorkflowRuns(source, repo, [candidateEvidence.checkSuiteId], workflowRuns, workflowBudget);
+          warnings.push(...looked.warnings);
+          for (const evidenceRun of looked.runs) {
+            workflowRuns.set(evidenceRun.checkSuiteId, evidenceRun);
+            lookedUp.push(evidenceRun);
+          }
+        }
+        const verdict = matchProducer(producer, candidateEvidence, workflowRuns);
+        if (verdict.verdict === "match") {
+          run = candidate;
+          evidence = candidateEvidence;
+          break;
+        }
+        warnings.push(
+          `earlier-head round checks: a successful '${String(digPath(candidate, "name"))}' run for ${entry.reviewer} on ${sha.slice(0, 7)} of ${at} was not counted: ${verdict.detail}`,
+        );
+      }
       if (run === undefined) {
         if (unattributed) {
           warnings.push(
@@ -900,11 +1077,12 @@ export async function readEarlierRoundChecks(
         name: digPath(run, "name") as string,
         status: "COMPLETED",
         conclusion: "SUCCESS",
+        ...evidence,
       });
       remaining.splice(remaining.indexOf(entry), 1);
     }
   }
-  return { checks: found, warnings, commitReads };
+  return { checks: found, warnings, commitReads, ...(lookedUp.length === 0 ? {} : { workflowRuns: lookedUp }) };
 }
 
 /**
@@ -985,6 +1163,7 @@ export function earlierRoundCheckWanted(
   configured: readonly string[],
   headChecks: readonly unknown[],
   reviews: readonly unknown[],
+  workflowRuns: ReadonlyMap<number, WorkflowRunEvidence> = new Map(),
 ): EarlierRoundCheckWanted[] {
   if (policy !== "bounded") return [];
   const parsed = parseCheckRollup(headChecks, "$.checks");
@@ -1004,7 +1183,7 @@ export function earlierRoundCheckWanted(
     });
   const completedAtHead = (reviewer: ReviewerIdentity): boolean =>
     reviewer.roundCheckPattern !== null &&
-    roundCheckState(latest, reviewer.roundCheckPattern).state === "completed";
+    roundCheckState(latest, reviewer.roundCheckPattern, reviewer.roundCheckProducer ?? null, workflowRuns).state === "completed";
   const knownRounds = members.filter((name): boolean => {
     const reviewer = identities.reviewer(name);
     return (
@@ -1022,10 +1201,12 @@ export function earlierRoundCheckWanted(
     const isConfigured = configured.includes(reviewer.name);
     if (!isConfigured && !members.includes(reviewer.name)) continue;
     if (!isConfigured && quorumAlreadyMet) continue;
-    const atHead = roundCheckState(latest, pattern).state;
+    // Producer-aware (zheref/nen#546): an impersonating SUCCESS at head is
+    // not `completed`, so it cannot suppress the read of the real one.
+    const atHead = roundCheckState(latest, pattern, reviewer.roundCheckProducer ?? null, workflowRuns).state;
     if (atHead === "completed" || atHead === "pending") continue;
     if (posted(reviewer)) continue;
-    wanted.push({ reviewer: reviewer.name, pattern });
+    wanted.push({ reviewer: reviewer.name, pattern, producer: reviewer.roundCheckProducer ?? null });
   }
   return wanted;
 }
@@ -1298,12 +1479,28 @@ export async function fetchPrState(
   // zheref/nen#388). So under strict they are read ONLY for a reviewer with a
   // review request PENDING that the bounded rule would want read -- no call
   // otherwise -- and only the detail text uses them.
+  // zheref/nen#546: the workflow run behind each head round check whose
+  // reviewer declares a `workflow` producer -- ZERO calls for a file that
+  // declares none, so every existing configuration reads exactly as before.
+  const workflowBudget = { reads: 0 };
+  const workflowDeclared = identities.reviewers.some(
+    (reviewer): boolean => reviewer.roundCheckProducer?.kind === "workflow",
+  );
+  const headWorkflow = await readWorkflowRuns(
+    source,
+    repo,
+    headWorkflowSuitesWanted(identities, checkRollupNodes),
+    new Map(),
+    workflowBudget,
+  );
+  const headWorkflowRuns = workflowRunsBySuite(headWorkflow.runs);
   const boundedWanted = earlierRoundCheckWanted(
     identities,
     "bounded",
     normalizeReviewers(reviewers),
     checkRollupNodes,
     reviews,
+    headWorkflowRuns,
   );
   const earlierWanted =
     options.policy === "bounded"
@@ -1319,11 +1516,14 @@ export async function fetchPrState(
     head,
     earlierWanted,
     options.maxEarlierCommitReads ?? EARLIER_COMMIT_READS_DEFAULT,
+    headWorkflowRuns,
+    workflowBudget,
   );
+  const workflowRuns = [...headWorkflow.runs, ...(earlier.workflowRuns ?? [])];
 
   return {
     ok: true,
-    warnings: [...threads.warnings, ...earlier.warnings, ...requestWarnings],
+    warnings: [...threads.warnings, ...headWorkflow.warnings, ...earlier.warnings, ...requestWarnings],
     state: {
       mergeable,
       // CON-42/1's draft clause (zheref/nen#331): a draft is never ready.
@@ -1341,7 +1541,22 @@ export async function fetchPrState(
       exclude_run_id: options.excludeRun === "" ? null : options.excludeRun,
       // Earlier-head round-check runs (option B, 2026-09-29), `[]` when none
       // were wanted, none were found, or the read failed closed.
-      earlier_round_checks: earlier.checks,
+      // Producer evidence (zheref/nen#546) rides on each entry, snake-cased
+      // like the rest of the blob, and only when it was read.
+      earlier_round_checks: earlier.checks.map(serializeEarlierCheck),
+      // zheref/nen#546: the workflow run behind each check suite a
+      // `workflow`-producer round check came from. ABSENT unless a reviewer
+      // declares a workflow producer, so every other blob is unchanged.
+      ...(workflowDeclared
+        ? {
+            round_check_workflow_runs: workflowRuns.map((run): Record<string, unknown> => ({
+              check_suite_id: run.checkSuiteId,
+              path: run.path,
+              repository: run.repository,
+              event: run.event,
+            })),
+          }
+        : {}),
       // zheref/nen#240: every `review_requested` login, or `null` when the
       // timeline could not be read. ABSENT when no round cap is declared.
       ...(requestedLogins === undefined ? {} : { review_requested_logins: requestedLogins }),
@@ -1366,6 +1581,19 @@ export async function fetchPrState(
       default_branch: snapshot.defaultBranch ?? "",
       default_branch_sha: snapshot.defaultBranchOid ?? "",
     },
+  };
+}
+
+/** One earlier-head run as the blob carries it (../gates/ready.ts reads it). */
+function serializeEarlierCheck(check: EarlierHeadCheck): Record<string, unknown> {
+  return {
+    sha: check.sha,
+    name: check.name,
+    status: check.status,
+    conclusion: check.conclusion,
+    ...(check.appSlug === undefined || check.appSlug === null ? {} : { app_slug: check.appSlug }),
+    ...(check.appId === undefined || check.appId === null ? {} : { app_id: check.appId }),
+    ...(check.checkSuiteId === undefined || check.checkSuiteId === null ? {} : { check_suite_id: check.checkSuiteId }),
   };
 }
 

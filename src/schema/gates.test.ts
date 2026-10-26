@@ -16,6 +16,7 @@ import {
   visibleKey,
   pointerSegment,
   type GatesKeyLevel,
+  type RoundCheckProducer,
 } from "./gates.js";
 import { SchemaError } from "./errors.js";
 import { VERSION } from "../version.js";
@@ -1136,5 +1137,87 @@ describe("reviewer wake (#440)", () => {
     expect(() => parseGateIdentities("gates.json", {
       version: 1, reviewers: [{ name: "lane", wake }],
     })).toThrow(/reviewers\[0\]\.wake/);
+  });
+});
+
+describe("round_check_producer (zheref/nen#546) -- optional, refused by pointer when malformed", () => {
+  const at = "/fake/nen/gates.json";
+  const roundCheck = { pattern: "^Cursor Bugbot$", ignoreCase: false };
+  const file = (producer: unknown, reviewer: Record<string, unknown> = {}): unknown => ({
+    version: 1,
+    reviewers: [
+      { name: "a", login_pattern: { pattern: "a", ignoreCase: true } },
+      {
+        name: "bugbot",
+        login_pattern: { pattern: "^cursor\\[bot\\]$", ignoreCase: false },
+        round_check_pattern: roundCheck,
+        round_check_producer: producer,
+        ...reviewer,
+      },
+    ],
+    default_approvers: ["a"],
+    base_reviewers: ["a"],
+    delivery: { author_pattern: { pattern: "bot", ignoreCase: true }, head_ref_prefixes: ["x/"] },
+  });
+  const read = (producer: unknown, reviewer: Record<string, unknown> = {}): RoundCheckProducer | null | undefined =>
+    parseGateIdentities(at, file(producer, reviewer)).reviewer("bugbot")?.roundCheckProducer;
+
+  it("is tabled as a key of the next release, with both producer shapes", () => {
+    const spec = GATES_KNOWN_KEYS.reviewers?.items?.round_check_producer;
+    expect(spec?.introducedIn).toBe(NEXT_RELEASE);
+    expect(Object.keys(spec?.object ?? {})).toEqual(["app", "workflow"]);
+  });
+
+  it("ABSENT (or null) is the pre-#546 reading: no producer, the name alone (AC-5)", () => {
+    expect(read(undefined)).toBeNull();
+    expect(read(null)).toBeNull();
+    expect(loadGateIdentities(BANKAI_REPO).reviewers.every((entry): boolean => entry.roundCheckProducer === null)).toBe(true);
+  });
+
+  it("reads an App producer, with and without a pinned id", () => {
+    expect(read({ app: { slug: "cursor" } })).toEqual({ kind: "app", slug: "cursor", id: null });
+    expect(read({ app: { slug: "cursor", id: 1210556 } })).toEqual({ kind: "app", slug: "cursor", id: 1210556 });
+  });
+
+  it("reads a workflow producer: path, repository and the trusted events", () => {
+    expect(
+      read({ workflow: { path: ".github/workflows/review.yml", repository: "zheref/hatsu", events: ["pull_request_target", "workflow_run"] } }),
+    ).toEqual({
+      kind: "workflow",
+      path: ".github/workflows/review.yml",
+      repository: "zheref/hatsu",
+      events: ["pull_request_target", "workflow_run"],
+    });
+  });
+
+  it.each([
+    ["neither shape", {}, /reviewers\[1\]\.round_check_producer, must declare exactly one of 'app' or 'workflow', got neither/],
+    ["both shapes", { app: { slug: "cursor" }, workflow: { path: ".github/workflows/a.yml", repository: "o/r", events: ["push"] } }, /got both/],
+    ["a non-object", "cursor", /reviewers\[1\]\.round_check_producer, expected an object/],
+    ["an empty slug", { app: { slug: "" } }, /reviewers\[1\]\.round_check_producer\.app\.slug, expected a non-empty string/],
+    ["an upper-case slug", { app: { slug: "Cursor" } }, /\.app\.slug, expected a GitHub App slug/],
+    ["a zero id", { app: { slug: "cursor", id: 0 } }, /\.app\.id, expected a positive integer/],
+    ["a string id", { app: { slug: "cursor", id: "1" } }, /\.app\.id, expected a positive integer/],
+    ["a path outside .github/workflows", { workflow: { path: "scripts/review.yml", repository: "o/r", events: ["push"] } }, /\.workflow\.path, expected a workflow file path/],
+    ["a nested workflow path", { workflow: { path: ".github/workflows/a/b.yml", repository: "o/r", events: ["push"] } }, /\.workflow\.path/],
+    ["a repository with no owner", { workflow: { path: ".github/workflows/a.yml", repository: "nen", events: ["push"] } }, /\.workflow\.repository, expected 'owner\/name'/],
+    ["no events", { workflow: { path: ".github/workflows/a.yml", repository: "o/r" } }, /\.workflow\.events, expected an array/],
+    ["an empty event list", { workflow: { path: ".github/workflows/a.yml", repository: "o/r", events: [] } }, /\.workflow\.events, is empty/],
+    ["a malformed event", { workflow: { path: ".github/workflows/a.yml", repository: "o/r", events: ["Pull Request"] } }, /\.workflow\.events\[0\], expected a GitHub Actions event name/],
+    ["a duplicate event", { workflow: { path: ".github/workflows/a.yml", repository: "o/r", events: ["push", "push"] } }, /\.workflow\.events, names 'push' twice/],
+  ])("refuses %s, naming its configuration location", (_label, producer, message) => {
+    expect(() => parseGateIdentities(at, file(producer))).toThrow(message);
+    expect(() => parseGateIdentities(at, file(producer))).toThrow(SchemaError);
+  });
+
+  it("refuses a producer on a reviewer with no round_check_pattern -- it would constrain nothing", () => {
+    expect(() => parseGateIdentities(at, file({ app: { slug: "cursor" } }, { round_check_pattern: undefined }))).toThrow(
+      /reviewers\[1\]\.round_check_producer, is declared on a reviewer with no round_check_pattern/,
+    );
+  });
+
+  it("refuses an unknown key inside the producer, as every other block does (zheref/nen#310)", () => {
+    expect(() => parseGateIdentities(at, file({ app: { slug: "cursor", name: "Cursor" } }))).toThrow(GatesUnknownKeyError);
+    expect(() => parseGateIdentities(at, file({ app: { slug: "cursor" }, url: "https://example.test" }))).toThrow(GatesUnknownKeyError);
   });
 });

@@ -336,11 +336,20 @@ ready:
   --gates naming a file outside the checkout, that file supplies the rest and
   base/default-tip intersection supplies checks.excluded (read: gates-flag).
   'watch until --pr' and 'pr merge' run this same read.
+  ROUND-CHECK PRODUCER (zheref/nen#546): a check's NAME is not its identity.
+  A reviewer's round_check_producer -- {app:{slug,id?}} or {workflow:{path,
+  repository,events}} -- counts a round_check_pattern SUCCESS only from that
+  App (checkSuite.app), or from that workflow file's run in that repository
+  on one of those events (actions/runs?check_suite_id=, actions:read). At
+  head, at an earlier head and in flight alike: another producer's check is
+  owed as round-check-producer-mismatch, unread evidence as
+  round-check-producer-unverified, each with a producer detail. Without the
+  key a round check reads by name and SUCCESS, exactly as before.
   checks.excluded requires the SAME complete declaration at BOTH the base
   and default-branch tip, pinned by OID from the same GitHub snapshot. A
   missing/unreadable/refused side authorises none; diagnostics name it.
   JSON's rounds-owed row adds owedRounds: { reviewer, reason,
-  coveredByQuorum, kind?, state? }[].
+  coveredByQuorum, kind?, state?, producer? }[].
   Event state is in-flight|no-run|completed-without-review|posted. Event
   lanes are never requested; their review job proves activity only. It includes excused quorum members; [] means
   computed with none owed, absent means uncomputed (including CON-30).

@@ -106,6 +106,14 @@ import type {
 // case-insensitive, optional `[bot]` -- whose escaping also leaves nothing
 // catastrophic to compile. PURE still: no file read, no clock, no network.
 import { exactLoginPattern } from "../schema/pattern.js";
+// zheref/nen#546: who PRODUCED a round check, compared against the reviewer's
+// declared `round_check_producer`. Pure, like everything here.
+import {
+  matchProducer,
+  workflowRunsBySuite,
+  type ProducerEvidence,
+  type WorkflowRunEvidence,
+} from "./producer.js";
 
 // --- shared helpers ----------------------------------------------------------
 
@@ -1106,6 +1114,14 @@ export interface RoundInputs {
    * every replayed blob) gets exactly the head-only reading it always had.
    */
   readonly earlierChecks?: readonly EarlierHeadCheck[];
+  /**
+   * The GitHub Actions workflow runs behind the check suites of round checks
+   * whose reviewer declares a `workflow` producer (zheref/nen#546) -- read by
+   * ../github/pr_state.ts only when such a reviewer exists. OPTIONAL and empty
+   * by default: a check whose suite has no entry here is UNVERIFIED for a
+   * workflow producer, which keeps its round owed, never counts it.
+   */
+  readonly workflowRuns?: readonly WorkflowRunEvidence[];
 }
 
 /**
@@ -1119,6 +1135,15 @@ export interface EarlierHeadCheck {
   readonly name: string;
   readonly status: string | null;
   readonly conclusion: string | null;
+  /**
+   * Producer evidence off the REST run (zheref/nen#546): `app.slug`,
+   * `app.id`, `check_suite.id`. OPTIONAL: an entry without them is
+   * UNVERIFIED for a reviewer that declares a producer, and counts as
+   * before for one that does not.
+   */
+  readonly appSlug?: string | null;
+  readonly appId?: number | null;
+  readonly checkSuiteId?: number | null;
 }
 
 // The four reasons are the four branches that already exist in
@@ -1128,7 +1153,14 @@ export type OwedRoundReason =
   | "review-requested-not-yet-posted"
   | "no-round-at-head"
   | "delivery-holistic-pass-never-posted"
-  | "delivery-no-definitive-success-review-check";
+  | "delivery-no-definitive-success-review-check"
+  // zheref/nen#546 -- not one of the shell's four: the shell never asked who
+  // produced a round check. A successful check of the right NAME whose
+  // producer is a DIFFERENT App or workflow (`mismatch`), or whose producer
+  // evidence was not read (`unverified`), when the reviewer declares a
+  // `round_check_producer`. Both stay owed; `producer` on the round says why.
+  | "round-check-producer-mismatch"
+  | "round-check-producer-unverified";
 
 export type EventRoundState = "in-flight" | "no-run" | "completed-without-review" | "posted";
 
@@ -1182,6 +1214,8 @@ export interface OwedRound {
   readonly reviewer: string;
   readonly reason: OwedRoundReason;
   readonly state?: EventRoundState;
+  /** The producer explanation, for the two `round-check-producer-*` reasons. */
+  readonly producer?: string;
 }
 
 // `tostring | test($p; "i")` over the request list. gh hands back `{login}` for
@@ -1224,6 +1258,7 @@ export function pendingRounds(
   // NOT here, and that omission was itself the bug (Cursor Bugbot + Sasuke,
   // bankai-core#577).
   const checks = latestChecks(inputs.checks);
+  const workflowRuns = workflowRunsBySuite(inputs.workflowRuns);
   const owed: OwedRound[] = [];
 
   for (const name of names) {
@@ -1274,8 +1309,15 @@ export function pendingRounds(
       headSha,
       policy,
       deliveryPr,
+      workflowRuns,
     );
-    if (!outcome.had) owed.push({ reviewer: name, reason: outcome.reason });
+    if (!outcome.had) {
+      owed.push({
+        reviewer: name,
+        reason: outcome.reason,
+        ...(outcome.producer === undefined ? {} : { producer: outcome.producer }),
+      });
+    }
   }
 
   return owed;
@@ -1314,7 +1356,7 @@ export function roundsAtHead(
     const identity: ReviewerIdentity | undefined = identities.reviewer(name);
     const loginPattern = identity?.loginPattern ?? exactLoginPattern(name);
     if (inputs.reviewRequests.some((request): boolean => requestMatches(request, loginPattern))) continue;
-    const outcome = reviewerRound(identity, loginPattern, inputs.reviews, checks, [], headSha, "strict", deliveryPr);
+    const outcome = reviewerRound(identity, loginPattern, inputs.reviews, checks, [], headSha, "strict", deliveryPr, workflowRunsBySuite(inputs.workflowRuns));
     if (outcome.had) found.push({ reviewer: name, via: outcome.via });
   }
   return found;
@@ -1345,6 +1387,7 @@ export function reviewerRoundFacts(
   deliveryPr = false,
 ): ReviewerRoundFacts[] {
   const checks = latestChecks(inputs.checks);
+  const workflowRuns = workflowRunsBySuite(inputs.workflowRuns);
   return normalizeReviewerNames(reviewers).map((name): ReviewerRoundFacts => {
     const identity: ReviewerIdentity | undefined = identities.reviewer(name);
     const loginPattern = identity?.loginPattern ?? exactLoginPattern(name);
@@ -1357,6 +1400,7 @@ export function reviewerRoundFacts(
       headSha,
       policy,
       deliveryPr,
+      workflowRuns,
     );
     return {
       reviewer: name,
@@ -1397,6 +1441,8 @@ type RoundOutcome =
   | {
       readonly had: false;
       readonly reason: Exclude<OwedRoundReason, "review-requested-not-yet-posted">;
+      /** Why a name-matching SUCCESS did not count (zheref/nen#546). */
+      readonly producer?: string;
     };
 
 // --- reviewerRound -------------------------------------------------------------
@@ -1416,6 +1462,7 @@ function reviewerRound(
   headSha: string,
   policy: RoundPolicy,
   deliveryPr: boolean,
+  workflowRuns: ReadonlyMap<number, WorkflowRunEvidence>,
 ): RoundOutcome {
   const event = eventRoundDecision(identity, reviews, checks, headSha, policy, deliveryPr);
   if (event !== null) return event.outcome;
@@ -1528,11 +1575,26 @@ function reviewerRound(
   // CANCELLED, TIMED_OUT and the rest are not. The direction is fail-safe: a
   // repository's round-check reviewer can only become owed where it used to be
   // cleared, never the reverse.
+  //
+  // AND ONLY FROM THE DECLARED PRODUCER, when the reviewer declares one
+  // (zheref/nen#546). A name is chosen by whoever creates the check; the App
+  // that created its suite, and the workflow run behind that suite, are
+  // GitHub's record. With `round_check_producer` stated, a name-matching
+  // SUCCESS counts only when its producer MATCHES -- a different producer is
+  // a mismatch and evidence that was not read is unverified, both owed, each
+  // with its explanation (AC-1, AC-3). The SAME test is applied to the head
+  // run, to the in-flight run that supersedes history and to the earlier-head
+  // run (AC-4), so neither limb is weakened and neither is widened. With no
+  // producer declared, `matchProducer` always matches: the reading below is
+  // the pre-#546 one, unchanged.
   if (identity?.roundCheckPattern != null) {
     const pattern = identity.roundCheckPattern;
-    if (hasDefinitiveSuccessCheck(checks, pattern)) {
+    const producer = identity.roundCheckProducer ?? null;
+    const atHead = producedSuccessCheck(checks, pattern, producer, workflowRuns);
+    if (atHead.found) {
       return { had: true, via: "round-check" };
     }
+    const refusals = [...atHead.refusals];
     // BOUNDED, EARLIER-HEAD LIMB FOR A ROUND CHECK (maintainer ruling
     // 2026-09-29, option B). Not a new policy: it is zheref/nen#214's
     // `bounded` reading, applied to the reviewer whose CHECK IS ITS ROUND.
@@ -1553,22 +1615,82 @@ function reviewerRound(
     // latestChecks()' own reason -- "work is happening now and the gate must
     // wait for it" -- so an enrolled reviewer whose check is still running is
     // still owed, exactly as before.
-    if (policy === "bounded" && !hasInFlightCheck(checks, pattern)) {
-      const earlier = earlierRoundCheck(earlierChecks, pattern, headSha);
-      if (earlier !== null) return { had: true, via: "round-check-earlier-head", earlier };
+    if (policy === "bounded" && !hasInFlightCheck(checks, pattern, producer, workflowRuns)) {
+      const earlier = earlierRoundCheck(earlierChecks, pattern, headSha, producer, workflowRuns);
+      if (earlier.found !== null) return { had: true, via: "round-check-earlier-head", earlier: earlier.found };
+      refusals.push(...earlier.refusals);
+    }
+    if (refusals.length > 0) {
+      return {
+        had: false,
+        reason: refusals.some((refusal): boolean => refusal.verdict === "missing")
+          ? "round-check-producer-unverified"
+          : "round-check-producer-mismatch",
+        producer: refusals.map((refusal): string => `${refusal.where} ${refusal.detail}`).join("; "),
+      };
     }
   }
 
   return { had: false, reason: "no-round-at-head" };
 }
 
+/** A name-matching SUCCESS that did not count, and why (zheref/nen#546). */
+interface ProducerRefusal {
+  readonly verdict: "mismatch" | "missing";
+  readonly detail: string;
+  /** Which run: `'<name>' at head` or `'<name>' at earlier head <sha7>`. */
+  readonly where: string;
+}
+
+/** A rollup entry's producer evidence; a legacy status context carries none. */
+function rollupProducerEvidence(entry: RollupEntry): ProducerEvidence {
+  return entry.kind === "check_run"
+    ? { appSlug: entry.appSlug ?? null, appId: entry.appId ?? null, checkSuiteId: entry.checkSuiteId ?? null }
+    : {};
+}
+
+// hasDefinitiveSuccessCheck() for a ROUND check, with the producer asked too.
+// Every name-matching definitive SUCCESS is weighed; the first whose producer
+// matches is the round, and the others are reported as refusals.
+function producedSuccessCheck(
+  checks: readonly RollupEntry[],
+  pattern: RegExp,
+  producer: ReviewerIdentity["roundCheckProducer"],
+  workflowRuns: ReadonlyMap<number, WorkflowRunEvidence>,
+): { readonly found: boolean; readonly refusals: readonly ProducerRefusal[] } {
+  const refusals: ProducerRefusal[] = [];
+  for (const entry of checks) {
+    const name = rollupEntryCheckName(entry);
+    if (name === null || !pattern.test(name)) continue;
+    if (lifecycleStatus(entry) !== "COMPLETED" || rollupEntryStatus(entry) !== "SUCCESS") continue;
+    const verdict = matchProducer(producer, rollupProducerEvidence(entry), workflowRuns);
+    if (verdict.verdict === "match") return { found: true, refusals: [] };
+    refusals.push({ verdict: verdict.verdict, detail: verdict.detail, where: `'${name}' at head` });
+  }
+  return { found: false, refusals };
+}
+
 // A run of this pattern at head that has not COMPLETED -- queued or in
-// progress. Read by NAME only, as hasDefinitiveSuccessCheck() reads it, on a
-// rollup already reduced by latestChecks().
-function hasInFlightCheck(checks: readonly RollupEntry[], pattern: RegExp): boolean {
+// progress. Read by NAME, as hasDefinitiveSuccessCheck() reads it, on a
+// rollup already reduced by latestChecks(). With a declared producer
+// (zheref/nen#546) a run whose producer is KNOWN to be another one is not the
+// reviewer's work and does not hold the earlier-head limb back; a run whose
+// producer is merely unread still does -- it may be the reviewer's, and the
+// in-flight rule exists to wait for exactly that.
+function hasInFlightCheck(
+  checks: readonly RollupEntry[],
+  pattern: RegExp,
+  producer: ReviewerIdentity["roundCheckProducer"] = null,
+  workflowRuns: ReadonlyMap<number, WorkflowRunEvidence> = new Map(),
+): boolean {
   return checks.some((entry): boolean => {
     const name = rollupEntryCheckName(entry);
-    return name !== null && pattern.test(name) && lifecycleStatus(entry) !== "COMPLETED";
+    return (
+      name !== null &&
+      pattern.test(name) &&
+      lifecycleStatus(entry) !== "COMPLETED" &&
+      matchProducer(producer, rollupProducerEvidence(entry), workflowRuns).verdict !== "mismatch"
+    );
   });
 }
 
@@ -1577,21 +1699,36 @@ function hasInFlightCheck(checks: readonly RollupEntry[], pattern: RegExp): bool
 // rule (C1 above): a NEUTRAL may be a run cancelled by the next push, and a
 // missing conclusion says nothing. Attribution to THIS pull request is the
 // transport's filter (`pull_requests`), since the blob carries no PR number.
+// With a declared producer (zheref/nen#546) the run's own producer must match
+// as well; a name-matching SUCCESS from another producer, or with its
+// producer unread, is returned as a refusal so the verdict can say why.
 function earlierRoundCheck(
   earlierChecks: readonly EarlierHeadCheck[],
   pattern: RegExp,
   headSha: string,
-): EarlierHeadCheck | null {
-  return (
-    earlierChecks.find(
-      (check): boolean =>
-        check.sha !== "" &&
-        check.sha !== headSha &&
-        pattern.test(check.name) &&
-        check.status === "COMPLETED" &&
-        check.conclusion === "SUCCESS",
-    ) ?? null
-  );
+  producer: ReviewerIdentity["roundCheckProducer"] = null,
+  workflowRuns: ReadonlyMap<number, WorkflowRunEvidence> = new Map(),
+): { readonly found: EarlierHeadCheck | null; readonly refusals: readonly ProducerRefusal[] } {
+  const refusals: ProducerRefusal[] = [];
+  for (const check of earlierChecks) {
+    if (
+      check.sha === "" ||
+      check.sha === headSha ||
+      !pattern.test(check.name) ||
+      check.status !== "COMPLETED" ||
+      check.conclusion !== "SUCCESS"
+    ) {
+      continue;
+    }
+    const verdict = matchProducer(
+      producer,
+      { appSlug: check.appSlug ?? null, appId: check.appId ?? null, checkSuiteId: check.checkSuiteId ?? null },
+      workflowRuns,
+    );
+    if (verdict.verdict === "match") return { found: check, refusals: [] };
+    refusals.push({ verdict: verdict.verdict, detail: verdict.detail, where: `'${check.name}' at earlier head ${check.sha.slice(0, 7)}` });
+  }
+  return { found: null, refusals };
 }
 
 // --- roundQuorum ---------------------------------------------------------------
@@ -1668,6 +1805,11 @@ export interface QuorumMember {
     readonly conclusion: string | null;
     readonly from: "head" | "earlier-head" | null;
     readonly sha: string | null;
+    /**
+     * Why a name-matching SUCCESS at head was NOT the round: its producer is
+     * not the declared one, or was not read (zheref/nen#546). Absent otherwise.
+     */
+    readonly producer?: string;
   } | null;
 }
 
@@ -1742,22 +1884,41 @@ export interface QuorumResult {
 // the reviewer (a round, or work in progress that supersedes history), so only
 // `absent`, `skipped` and `unsuccessful` ever send it looking at earlier
 // commits.
+//
+// WITH A DECLARED PRODUCER (zheref/nen#546) the same test hasInFlightCheck()
+// and the round limb apply: a SUCCESS counts as `completed` only when its
+// producer matches. One that does not is `unsuccessful` -- it completed
+// without a round -- and carries `producer`, the reason; an in-flight run
+// KNOWN to be another producer's is not this reviewer's work and is passed
+// over, while one whose producer is unread stays `pending`.
 export function roundCheckState(
   checks: readonly RollupEntry[],
   pattern: RegExp,
-): { readonly name: string | null; readonly state: RoundCheckState; readonly conclusion: string | null } {
+  producer: ReviewerIdentity["roundCheckProducer"] = null,
+  workflowRuns: ReadonlyMap<number, WorkflowRunEvidence> = new Map(),
+): {
+  readonly name: string | null;
+  readonly state: RoundCheckState;
+  readonly conclusion: string | null;
+  readonly producer?: string;
+} {
   let pending: string | null = null;
-  let unsuccessful: { name: string; conclusion: string | null } | null = null;
+  let unsuccessful: { name: string; conclusion: string | null; producer?: string } | null = null;
   let skipped: string | null = null;
   for (const entry of checks) {
     const name = rollupEntryCheckName(entry);
     if (name === null || !pattern.test(name)) continue;
+    const verdict = matchProducer(producer, rollupProducerEvidence(entry), workflowRuns);
     if (lifecycleStatus(entry) !== "COMPLETED") {
-      pending ??= name;
+      if (verdict.verdict !== "mismatch") pending ??= name;
       continue;
     }
     const conclusion = rollupEntryStatus(entry);
-    if (conclusion === "SUCCESS") return { name, state: "completed", conclusion };
+    if (conclusion === "SUCCESS") {
+      if (verdict.verdict === "match") return { name, state: "completed", conclusion };
+      unsuccessful ??= { name, conclusion, producer: verdict.detail };
+      continue;
+    }
     if (checkRunConclusion(entry) === "SKIPPED") {
       skipped ??= name;
       continue;
@@ -1765,7 +1926,14 @@ export function roundCheckState(
     unsuccessful ??= { name, conclusion };
   }
   if (pending !== null) return { name: pending, state: "pending", conclusion: null };
-  if (unsuccessful !== null) return { name: unsuccessful.name, state: "unsuccessful", conclusion: unsuccessful.conclusion };
+  if (unsuccessful !== null) {
+    return {
+      name: unsuccessful.name,
+      state: "unsuccessful",
+      conclusion: unsuccessful.conclusion,
+      ...(unsuccessful.producer === undefined ? {} : { producer: unsuccessful.producer }),
+    };
+  }
   if (skipped !== null) return { name: skipped, state: "skipped", conclusion: "SKIPPED" };
   return { name: null, state: "absent", conclusion: null };
 }
@@ -1782,6 +1950,7 @@ export function roundQuorum(
   // The same reduction `pendingRounds` applies before its loop, for the same
   // reason (bankai-core#577): a superseded run must not decide a round.
   const checks = latestChecks(inputs.checks);
+  const workflowRuns = workflowRunsBySuite(inputs.workflowRuns);
 
   const members = quorum.anyOf.map((name): QuorumMember => {
     // The loader refuses a member that is not a declared reviewer, so this is
@@ -1799,6 +1968,7 @@ export function roundQuorum(
       headSha,
       policy,
       deliveryPr,
+      workflowRuns,
     );
     const currentHead =
       policy !== "bounded" || (deliveryPr && identity?.deliveryHolisticPass === true);
@@ -1818,7 +1988,7 @@ export function roundQuorum(
           sha: earlier.sha,
         };
       } else {
-        const atHead = roundCheckState(checks, roundCheckPattern);
+        const atHead = roundCheckState(checks, roundCheckPattern, identity?.roundCheckProducer ?? null, workflowRuns);
         roundCheck = {
           pattern: roundCheckPattern.source,
           ...atHead,
