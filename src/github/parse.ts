@@ -329,6 +329,8 @@ function parseCheckRun(
 ): ParseResult<CheckRun> {
   const name = optionalString(record, "name", path);
   if (!name.ok) return fail(name.error.path, name.error.message);
+  const title = optionalString(record, "title", path);
+  if (!title.ok) return fail(title.error.path, title.error.message);
   const status = optionalEnum<CheckStatus>(record, "status", path, CHECK_STATUSES);
   if (!status.ok) return fail(status.error.path, status.error.message);
   const conclusion = optionalEnum<CheckConclusion>(
@@ -347,6 +349,7 @@ function parseCheckRun(
 
   return ok({
     kind: "check_run",
+    ...(title.value === null ? {} : { title: title.value }),
     name: name.value,
     status: status.value,
     conclusion: conclusion.value,
