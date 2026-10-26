@@ -2,9 +2,9 @@
 // through the real `runFamily`, with git and gh scripted.
 
 import { describe, expect, it } from "vitest";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { runFamily, type Io } from "../index.js";
 import type { CommandResult, Seams } from "../seam/exec.js";
 import { noPortProbe } from "../seam/scripted.js";
@@ -435,6 +435,28 @@ describe("nen run import -- Hatsu's futon run manifest into nen's (zheref/nen#48
     expect(verified.code).toBe(0);
   });
 
+  it("--dry-run over a legacy-path manifest moves nothing, creates no .nen and prints the mode it would set (N6 on #522)", async () => {
+    const { root, common } = repo();
+    hatsuRun(common);
+    const legacy = join(common, "hatsu", "runs", `${HATSU_ID}.json`);
+    mkdirSync(dirname(legacy), { recursive: true });
+    const seeded = JSON.stringify({ contract: "nen.run/v0.1", id: HATSU_ID, repo: "zheref/nen", startedAt: "2026-10-22T00:00:00.000Z", idleAnswers: { "direct-mismatch": "default", "publish-offer": "refuse" }, prs: [], parked: [] });
+    writeFileSync(legacy, seeded);
+    if (process.platform !== "win32") chmodSync(legacy, 0o644);
+    const dry = await capture([...IMPORT, "--dry-run"], { common, repoFlag: root, prs: OPEN_ALL });
+    expect(dry.code).toBe(0);
+    expect(dry.out[0]).toMatch(/^dry-run: run /);
+    expect(dry.err.join("\n")).toMatch(/would move run manifest '0123456789abcdef0123456789abcdef' .*dry run: nothing moved/);
+    const modeLine = "mode: would set file 0600, directory 0700 (would narrow: file 0644 -> 0600) -- dry run, nothing written";
+    if (process.platform !== "win32") {
+      expect(dry.out.at(-1)).toBe(modeLine);
+      // N5: the move's line on stderr and the plan's on stdout agree.
+      expect(dry.err).toContain(`nen: ${modeLine}`);
+    }
+    expect(readFileSync(legacy, "utf8")).toBe(seeded);
+    expect(existsSync(join(common, ".nen"))).toBe(false);
+  });
+
   it("is idempotent, and a dry run writes nothing", async () => {
     const { root, common } = repo();
     hatsuRun(common);
@@ -588,6 +610,34 @@ describe("manifest modes and dry forms through the verbs (zheref/nen#522)", () =
     expect(existsSync(old)).toBe(true);
     expect(JSON.parse(readFileSync(old, "utf8")).parked).toEqual([]);
     expect(existsSync(join(common, ".nen"))).toBe(false);
+  });
+
+  it.runIf(POSIX)("a legacy move followed by a plan that writes nothing still reports the move's modes in --json (N5)", async () => {
+    const { root, common } = repo();
+    const old = legacy(common);
+    chmodSync(old, 0o644);
+    const result = await capture(START, { common, repoFlag: root, json: true });
+    const doc = JSON.parse(result.out.join("\n"));
+    expect(doc.outcome).toBe("existing");
+    expect(doc.mode).toEqual({ verdict: "set", file: "0600", directory: "0700", repaired: ["file 0644 -> 0600"], reason: null });
+  });
+
+  it.runIf(POSIX)("a symlinked legacy manifest is refused by every verb, and the link's target keeps its mode (N1)", async () => {
+    const { root, common } = repo();
+    const victim = join(mkdtempSync(join(tmpdir(), "nen-run-victim-")), "victim.txt");
+    writeFileSync(victim, JSON.stringify(LEGACY));
+    chmodSync(victim, 0o644);
+    mkdirSync(join(common, "hatsu", "runs"), { recursive: true });
+    const link = join(common, "hatsu", "runs", "r1.json");
+    symlinkSync(victim, link);
+    for (const argv of [START, ["run", "verify", "--id", "r1", "--target", "zheref/nen"], ["run", "verify", "--id", "r1", "--target", "zheref/nen", "--dry-run"]]) {
+      const result = await capture(argv, { common, repoFlag: root });
+      expect(result.code, argv.join(" ")).toBe(1);
+      expect(result.err.join("\n")).toMatch(/is a symbolic link; nen reads, moves and writes a run manifest only as a regular file/);
+    }
+    expect(bits(victim)).toBe(0o644);
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(existsSync(join(common, ".nen", "runs", "r1.json"))).toBe(false);
   });
 
   it("a win32 host: the write stands and the verb says the mode was not set, in text and --json (AC-3)", async () => {

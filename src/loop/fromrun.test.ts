@@ -161,7 +161,7 @@ describe("nen loop slots --from-run (CLI)", () => {
     expect(existsSync(join(common, ".nen", "runs", "r1.json"))).toBe(false);
     expect(existsSync(join(common, ".nen", "runs"))).toBe(false);
     expect(existsSync(join(common, "hatsu", "runs", "r1.json"))).toBe(true);
-    expect(result.err.join("\n")).toMatch(/read run manifest 'r1' in place at .*hatsu.runs.r1\.json; not moved/);
+    expect(result.err.join("\n")).toMatch(/read run manifest 'r1' in place at .*hatsu.runs.r1\.json; not moved to .* -- 'nen run verify --id r1 --target zheref\/nen' moves it/);
     const other = await capture(["loop", "slots", "--from-run", "r1", "--target", "o/other", "--local-cap", "1"], common, {});
     expect(other.code).toBe(2);
   });

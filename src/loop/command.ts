@@ -69,7 +69,9 @@ from a valid stop marker (.nen/last-stop.json) in the worktree checked out on
 the PR's head branch, stacked when the PR's base is another recorded delivery PR's head
 branch. A PR closed without a merge frees its slot. Anything that could not be
 read keeps its effort HELD and is listed under 'unread'. --from-run and
---efforts are refused together: during a run no field is caller-typed.
+--efforts are refused together: during a run no field is caller-typed. A
+manifest still at the legacy path is read in place, never moved; stderr names
+the 'nen run verify' line that moves it (zheref/nen#522).
 
 --local-cap is REQUIRED. It used to default to 7, and that default was removed
 (issue #52): a concurrency guard must be chosen, not inherited -- every real
@@ -282,7 +284,7 @@ async function slotsFromRun(context: CommandContext, root: string, id: string, c
     // which prints it under --dry-run and makes it, at 0600, without.
     const located = locateRunManifest(gitCommonDir(context.seams, root), id, { dryRun: true });
     if (located.migratedFrom !== null) {
-      context.io.err(`nen: read run manifest '${id}' in place at ${located.migratedFrom}; not moved to ${located.path} -- 'nen run verify --id ${id}' moves it (--dry-run prints the move).`);
+      context.io.err(`nen: read run manifest '${id}' in place at ${located.migratedFrom}; not moved to ${located.path} -- 'nen run verify --id ${id} --target ${target.slug}' moves it (--dry-run prints the move).`);
     }
     manifest = readRunManifest(located.readPath);
     if (manifest === null) {
