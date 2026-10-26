@@ -122,6 +122,19 @@ function endpointUrl(where: string, value: unknown): URL {
   return url;
 }
 
+/**
+ * The vuln endpoint is a BASE an advisory id is appended to, so its path must
+ * end in `/` (N1, AC-4): `new URL("GHSA-x", "https://api.osv.dev/v1/vulns")`
+ * is `https://api.osv.dev/v1/GHSA-x` -- a path the contract never named. The
+ * slash is required rather than added, so the URL queried is the one written.
+ */
+function vulnBase(where: string, value: unknown): URL {
+  const url = endpointUrl(where, value);
+  if (!url.pathname.endsWith("/")) wiring(`${where} must end in '/': an advisory id is appended to it`);
+  if (url.search !== "" || url.hash !== "") wiring(`${where} must carry no query or fragment: an advisory id is appended to its path`);
+  return url;
+}
+
 function bound(row: Record<string, unknown>, where: string, key: keyof typeof DEFAULT_BOUNDS): number {
   if (!(key in row)) return DEFAULT_BOUNDS[key];
   const value = row[key];
@@ -211,7 +224,7 @@ export function loadRow(path: string, rowName: string): AuditRow {
     name: rowName,
     stacks: row["stacks"],
     endpoint: endpointUrl(`${where}.endpoint`, row["endpoint"]),
-    vulnEndpoint: endpointUrl(`${where}.vulnEndpoint`, row["vulnEndpoint"]),
+    vulnEndpoint: vulnBase(`${where}.vulnEndpoint`, row["vulnEndpoint"]),
     ecosystem,
     severityLevels: levels,
     severityFloor: floor,

@@ -13,7 +13,8 @@ import type { Command } from "../cli/command.js";
 import { prCommand } from "../pr/command.js";
 import { issueCommand } from "./command.js";
 import { converge, extractCriteria, readVerifyRows, type ClosingIssue } from "./criteria.js";
-import { checkIssueBody, IssueShapeError, parseCatalogue } from "./shape.js";
+import { checkIssueBody, criterionId, IssueShapeError, parseCatalogue } from "./shape.js";
+import { convergeInputFromView, criteriaConjunct } from "../pr/converge.js";
 
 async function run(
   command: Command,
@@ -79,7 +80,7 @@ describe("AC-1: an epic-scoped row is a criterion with its full id", () => {
     writeFileSync(join(dir, "ak.md"), "- AC-12-001: first\n- AC-12-002: second\n");
     const result = await run(issueCommand, ["issue", "criteria", "--body-file", "ak.md"], [], { repoFlag: dir });
     expect(result.code).toBe(0);
-    expect(result.out.split("\n")).toEqual([expect.stringMatching(/^2 AC row\(s\), 0 duplicate number\(s\) -- '/), "AC-12-001 line 1: first", "AC-12-002 line 2: second"]);
+    expect(result.out.split("\n")).toEqual([expect.stringMatching(/^2 AC row\(s\), 0 duplicate id\(s\) -- '/), "AC-12-001 line 1: first", "AC-12-002 line 2: second"]);
   });
 });
 
@@ -173,5 +174,96 @@ describe("AC-3: with a catalogue, the id shape is its acceptance row pattern's",
   it("leaves SC rows untouched: an epic-shaped SC id is still a row-shape miss", () => {
     const report = checkIssueBody(`${EPIC_BODY}\n## Success criteria\n\n- SC-12-001: 90% of rows\n`, EPIC_CATALOGUE(), "k");
     expect(report.misses.map((miss) => [miss.section, miss.kind])).toEqual([["success", "row-shape"], ["success", "no-rows"]]);
+  });
+});
+
+describe("hanten round 1 on #519", () => {
+  it("F1: an id stated twice blocks converge, so one verify row never clears two criteria", () => {
+    const report = converge([issue("- AC-1: login works\n- AC-01: logout revokes the token\n")], "| AC-1 | satisfied | test x |\n");
+    expect(report.blocking).toEqual(["zheref/nen#519: duplicate criterion id AC-1 at lines 1, 2"]);
+    expect(converge([issue("- AC-12-001: a\n- AC-12-001: b\n")], "| AC-12-001 | satisfied | t |\n").blocking).toEqual(["zheref/nen#519: duplicate criterion id AC-12-001 at lines 1, 2"]);
+  });
+
+  it("F2: a long digit run is a string, never a rounded number", () => {
+    expect(criterionId("AC", "9007199254740993")).toBe("AC-9007199254740993");
+    expect(criterionId("AC", "9007199254740993")).not.toBe(criterionId("AC", "9007199254740992"));
+    expect(criterionId("AC", "0007")).toBe("AC-7");
+    const rows = readVerifyRows("| AC-12345678901234567890 | satisfied | a |\n| AC-12345678901234567891 | satisfied | b |\n", { prefix: "AC", tail: "[0-9]+" });
+    expect(rows.map((row) => (row.criterion?.kind === "id" ? row.criterion.id : null))).toEqual(["AC-12345678901234567890", "AC-12345678901234567891"]);
+    // Under an unbounded catalogue shape, a run past nine digits is unrecognised: it is never ordered by a rounded number.
+    const hatsu = extractCriteria("## Acceptance criteria\n\n- AC-9007199254740993: a\n- AC-9007199254740992: b\n", HATSU_CATALOGUE());
+    expect(hatsu.criteria).toEqual([]);
+    expect(hatsu.unrecognised.map((row) => row.line)).toEqual([3, 4]);
+    // Two 20-digit epic ids stay two ids.
+    const epic = extractCriteria("## Acceptance criteria\n\n- AC-12345678901234567890-001: a\n- AC-12345678901234567891-001: b\n", EPIC_CATALOGUE());
+    expect(epic.criteria.map((row) => row.id)).toEqual(["AC-12345678901234567890-001", "AC-12345678901234567891-001"]);
+    expect(epic.duplicates).toEqual([]);
+  });
+
+  it("F2: an escaped hyphen before the id group reads the same shape", () => {
+    expect(catalogueWith("^- AC\\-([0-9]+): .+$").criteriaIdTail).toBe("[0-9]+");
+  });
+
+  it("F3: a catastrophically backtracking id group is refused, and a verify cell is bounded", () => {
+    for (const bad of ["^- AC-((?:[0-9]+)+): .+$", "^- AC-((?:[0-9]|[0-9][0-9])+): .+$", "^- AC-([0-9]{1,}): .+$", "^- AC-(.+): .+$"]) {
+      expect(() => catalogueWith(bad)).toThrow(/rows\.acceptance\.pattern/);
+    }
+    expect(catalogueWith("^- AC-([0-9]{1,9}(?:-[0-9]{1,9})*): .+$").criteriaIdTail).toBe("[0-9]{1,9}(?:-[0-9]{1,9})*");
+    const started = Date.now();
+    const cell = `AC-${"1".repeat(36)}x`;
+    expect(cell).toHaveLength(40);
+    const rows = readVerifyRows(`| ${cell} | satisfied | e |\n`, { prefix: "AC", tail: "[0-9]+" });
+    expect(Date.now() - started).toBeLessThan(50);
+    expect(rows[0]?.criterion).toBeNull();
+    const long = readVerifyRows(`| AC-${"1-".repeat(40)}1 | satisfied | e |\n`);
+    expect(long[0]?.problem).toMatch(/at most 64 characters/);
+  });
+
+  it("F4: a named group or a backreference in the id group is refused at parse time, never thrown later", () => {
+    expect(() => catalogueWith("^- AC-((?<nenCellId>[0-9]+)): .+$")).toThrow(IssueShapeError);
+    expect(() => catalogueWith("^- AC-(([0-9])\\2): .+$")).toThrow(/rows\.acceptance\.pattern/);
+  });
+
+  it("N1: order is kept within an epic, two epics each start at 001, and a miss names the expected id in the shape", () => {
+    expect(checkIssueBody("## Acceptance criteria\n\n- AC-1-001: a\n- AC-1-002: b\n- AC-2-001: c\n", EPIC_CATALOGUE(), "k").misses).toEqual([]);
+    const continued = checkIssueBody("## Acceptance criteria\n\n- AC-12-003: a\n- AC-12-004: b\n", EPIC_CATALOGUE(), "k");
+    expect(continued.misses.map((miss) => miss.detail)).toEqual([
+      "AC-12-003 is row 1 of AC-12-*; expected AC-12-001: rows are numbered AC-12-001 to AC-12-002 in order",
+      "AC-12-004 is row 2 of AC-12-*; expected AC-12-002: rows are numbered AC-12-001 to AC-12-002 in order",
+    ]);
+    const repeated = checkIssueBody("## Acceptance criteria\n\n- AC-12-001: a\n- AC-12-001: b\n", EPIC_CATALOGUE(), "k");
+    expect(repeated.misses.map((miss) => miss.detail)).toEqual(["AC-12-001 repeats an earlier row's id"]);
+  });
+
+  it("N2 and N6: under another prefix a cell naming the default AC- is malformed, and the problem names the shape", () => {
+    const cr = parseCatalogue({
+      sections: { acceptance: { heading: "Acceptance criteria", rows: "acceptance" } },
+      kinds: { k: { required: ["acceptance"] } },
+      rows: { acceptance: { pattern: "^- CR-([0-9]+-[0-9]{3}): .+$", prefix: "^- CR-" } },
+    });
+    const report = converge([issue("## Acceptance criteria\n\n- CR-1-001: a\n", 519, "zheref/nen", cr)], "| AC-1 | satisfied | x |\n", undefined, cr);
+    expect(report.malformed).toEqual([{ line: 1, cell: "AC-1", reason: "'AC-1' is not a criterion: write CR-<id>, <CODE>#<N>/CR-<id>, <owner/name>#<N>/CR-<id> or none (<id> in the shape '[0-9]+-[0-9]{3}')" }]);
+  });
+
+  it("N3: the merge and composite path reads verify rows in the catalogue's grammar", () => {
+    const cr = parseCatalogue({
+      sections: { acceptance: { heading: "Acceptance criteria", rows: "acceptance" } },
+      kinds: { k: { required: ["acceptance"] } },
+      rows: { acceptance: { pattern: "^- CR-([0-9]+): .+$", prefix: "^- CR-" } },
+    });
+    const seams = new ScriptedSeams([{ match: "gh api repos/o/n/issues/7", result: { stdout: JSON.stringify({ number: 7, title: "t", state: "open", labels: [], body: "## Acceptance criteria\n\n- CR-1: one\n" }) } }]);
+    const parsed = {
+      number: 5,
+      url: "u",
+      headRefOid: "abc1234",
+      baseRefName: "main",
+      body: "Closes #7\n\n| Criterion | Coverage | Evidence |\n|---|---|---|\n| NN#7/CR-1 | satisfied | a.test.ts |\n",
+      closingIssuesReferences: [{ number: 7, url: "https://github.com/o/n/issues/7", repository: { name: "n", owner: { login: "o" } } }],
+    };
+    const input = convergeInputFromView(seams, { owner: "o", repo: "n", slug: "o/n" }, 5, parsed, cr, "main");
+    expect(criteriaConjunct(input).ok).toBe(true);
+    const unthreaded = criteriaConjunct({ ...input, catalogue: null });
+    expect(unthreaded.ok).toBe(false);
+    expect(unthreaded.blocking).toEqual(["o/n#7/CR-1: missing-row (no verify row names CR-1)"]);
   });
 });

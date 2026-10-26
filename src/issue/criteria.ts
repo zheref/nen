@@ -19,8 +19,7 @@
 // wrong number of cells) is `malformed-row`, never skipped, and two rows for
 // one criterion are `duplicate-rows`: nen will not pick one.
 
-import { escapeRegExp } from "../pr/template.js";
-import { criterionGrammar, criterionId, DEFAULT_CRITERION_GRAMMAR, maskedLines, readIdRows, sectionLines, type CriterionGrammar, type IssueSectionsCatalogue } from "./shape.js";
+import { criterionCellPatterns, criterionGrammar, criterionId, DEFAULT_CRITERION_GRAMMAR, MAX_CRITERION_CELL, maskedLines, readIdRows, sectionLines, type CriterionGrammar, type IssueSectionsCatalogue } from "./shape.js";
 
 /** The `--json` contract of `nen issue criteria`. */
 export const ISSUE_CRITERIA_CONTRACT = "nen.issue.criteria/v0.1";
@@ -104,16 +103,6 @@ export interface VerifyRow {
 
 const WRAPPER = /^(?:\*\*|__|`)(.*)(?:\*\*|__|`)$/;
 
-/** The verify-row cell grammar for one criterion grammar: a bare id, and an issue-qualified one. */
-function cellPatterns(grammar: CriterionGrammar): { bare: RegExp; qualified: RegExp; mention: RegExp } {
-  const id = `${escapeRegExp(grammar.prefix)}-(?<nenCellId>${grammar.tail})`;
-  return {
-    bare: new RegExp(`^${id}$`),
-    qualified: new RegExp(`^(?<nenCellPrefix>[A-Za-z][A-Za-z0-9]*|[A-Za-z0-9._-]+\\/[A-Za-z0-9._-]+)?#(?<nenCellIssue>\\d{1,9})\\/${id}$`),
-    mention: new RegExp(`${escapeRegExp(grammar.prefix)}-`, "i"),
-  };
-}
-
 function unwrap(cell: string): string {
   let text = cell.trim();
   for (let match = WRAPPER.exec(text); match !== null; match = WRAPPER.exec(text)) text = (match[1] as string).trim();
@@ -145,7 +134,10 @@ function cellsOf(text: string): string[] | null {
 function parseCriterionCell(cell: string, grammar: CriterionGrammar): RowCriterion | null {
   const text = unwrap(cell);
   if (/^none$/i.test(text)) return { kind: "none" };
-  const patterns = cellPatterns(grammar);
+  // A cell is author-controlled text: past the cap it is not matched at all,
+  // and one that mentions the prefix is then malformed (zheref/nen#519, F3).
+  if (text.length > MAX_CRITERION_CELL) return null;
+  const patterns = criterionCellPatterns(grammar);
   const bare = patterns.bare.exec(text);
   if (bare !== null) return { kind: "id", id: criterionId(grammar.prefix, bare.groups?.["nenCellId"] as string) };
   const qualified = patterns.qualified.exec(text);
@@ -168,8 +160,12 @@ function parseCriterionCell(cell: string, grammar: CriterionGrammar): RowCriteri
  */
 export function readVerifyRows(body: string, grammar: CriterionGrammar = DEFAULT_CRITERION_GRAMMAR): VerifyRow[] {
   const rows: VerifyRow[] = [];
-  const mention = cellPatterns(grammar).mention;
+  const mention = criterionCellPatterns(grammar).mention;
   const p = grammar.prefix;
+  // The placeholder names the shape the grammar reads (N6): `<n>` for the
+  // default, `<id>` and the shape for a catalogue's.
+  const n = grammar.tail === DEFAULT_CRITERION_GRAMMAR.tail ? "<n>" : "<id>";
+  const shapeNote = n === "<n>" ? "" : ` (<id> in the shape '${grammar.tail}')`;
   for (const line of maskedLines(body, { keepInlineCode: true })) {
     const cells = cellsOf(line.text);
     if (cells === null || cells.length === 0) continue;
@@ -177,7 +173,7 @@ export function readVerifyRows(body: string, grammar: CriterionGrammar = DEFAULT
     const criterion = parseCriterionCell(first, grammar);
     if (criterion === null) {
       if (mention.test(first)) {
-        rows.push({ line: line.line, raw: line.text.trim(), cell: first, criterion: null, word: null, evidence: "", problem: `'${first}' is not a criterion: write ${p}-<n>, <CODE>#<N>/${p}-<n>, <owner/name>#<N>/${p}-<n> or none` });
+        rows.push({ line: line.line, raw: line.text.trim(), cell: first, criterion: null, word: null, evidence: "", problem: `'${first}' is not a criterion: write ${p}-${n}, <CODE>#<N>/${p}-${n}, <owner/name>#<N>/${p}-${n} or none${shapeNote}${unwrap(first).length > MAX_CRITERION_CELL ? `; a criterion cell is at most ${MAX_CRITERION_CELL} characters` : ""}` });
       }
       continue;
     }
@@ -265,7 +261,7 @@ export interface ConvergeReport {
   readonly unrequested: readonly { readonly line: number; readonly word: CoverageWord | null; readonly evidence: string; readonly problem: string | null }[];
   /** Rows naming a criterion no closing issue carries, or naming one ambiguously. */
   readonly unmatched: readonly UnmatchedRow[];
-  /** Rows whose first cell mentions AC- and names no criterion. */
+  /** Rows whose first cell mentions the prefix (or, under another prefix, the default AC-) and names no criterion. */
   readonly malformed: readonly UnmatchedRow[];
   readonly counts: Readonly<Record<Coverage, number>> & { readonly words: Readonly<Record<CoverageWord, number>> };
   /** One line per row that sets exit 1: a criterion, an unrecognised issue row, a none row with a problem, an unmatched or malformed verify row. */
@@ -429,7 +425,11 @@ export function converge(issues: readonly ClosingIssue[], prBody: string, policy
     else if (entry.coverage === "covered-without-evidence" && policy.evidenceRequired) blocking.push(`${where}: no evidence`);
   }
   for (const issue of issues) {
-    for (const row of issue.report.unrecognised) blocking.push(`${issue.label ?? `${issue.target}#${issue.number}`}: unrecognised criterion row at line ${row.line}`);
+    const name = issue.label ?? `${issue.target}#${issue.number}`;
+    for (const row of issue.report.unrecognised) blocking.push(`${name}: unrecognised criterion row at line ${row.line}`);
+    // AN ID STATED TWICE BLOCKS (zheref/nen#519, F1): one verify row would
+    // otherwise clear both rows, and the second is never verified.
+    for (const duplicate of issue.report.duplicates) blocking.push(`${name}: duplicate criterion id ${duplicate.id} at lines ${duplicate.lines.join(", ")}`);
   }
   for (const row of unrequested) if (row.problem !== null) blocking.push(`none row line ${row.line}: ${row.problem}`);
   for (const row of unmatched) blocking.push(`row line ${row.line} '${row.cell}': unmatched -- ${row.reason}`);
