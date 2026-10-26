@@ -17217,7 +17217,10 @@ and `package.json` redirect and suppression keys are printed as
 Any other ecosystem has no reader and is exit 2.
 
 **Row keys.** Required: `stacks`, `endpoint` and `vulnEndpoint` (https; http
-only on loopback, for a fixture; no credentials in the URL), `ecosystem`,
+only on loopback, for a fixture; no credentials in the URL; `vulnEndpoint` is
+the base an advisory id is appended to, so its path **must end in `/`** and it
+carries no query or fragment -- without the slash the id would replace the
+last path segment and be sent to a path the contract never named), `ecosystem`,
 `severityLevels`, `severityFloor` (drawn from the levels), `timeoutSeconds`;
 on an `npm` row also `registryHosts` and `managers` (`{lockfiles, format,
 lockfileMarkers}`, `format` one of `pnpm-lock`, `yarn-lock`, `npm-lock`).
@@ -17252,22 +17255,43 @@ the row gains `vulnEndpoint`, `severityLevels`, `severityFloor` and
   host off `registryHosts` or over http, a Swift pin on a branch or a bare
   revision, a Swift `registry` pin. Workspace, link, directory and
   `localSourceControl` entries are the tree's own code and count as local.
+- **The artefact decides, not the entry's own label.** A pnpm entry is local
+  or unqueried only by the keys of its own `resolution` map (`directory`,
+  `type`, `repo`, `commit`, `tarball`), its trailing comment stripped -- never
+  by a word elsewhere in its body, such as a dependency named `is-directory`;
+  a resolution that is missing, repeated or not one readable map is not
+  scanned. Where a registry entry carries a `resolved` or `tarball` URL, the
+  name and version are read off its path (`/<name>/-/<base>-<version>.tgz`,
+  scoped `@scope/pkg` included) and must equal the pair the entry claims; a
+  disagreement, or a registry URL that is not a tarball path, is unqueried.
+  An npm `link: true` entry whose `resolved` is a URL is read like any other
+  entry, not as local.
 - An OSV answer that is **malformed** (results of the wrong length or type, a
   `vulns` that is not an array, an id that is not an advisory id, a
   `next_page_token` that is not a string), not JSON, over `maxResponseBytes`,
-  a non-2xx status, a redirect (refused, never followed), past
-  `timeoutSeconds`, or unreachable is **not scanned**, never clean. An id
+  a non-2xx status, a redirect (named as one, never followed and never
+  retried), past `timeoutSeconds`, or unreachable is **not scanned**, never
+  clean. Only a reset or refused connection is retried, once. An id
   whose severity is missing or outside `severityLevels` is **UNRATED**, and
   UNRATED counts as a finding.
-- It executes nothing and reads no environment variable of its own. The
-  runtime's `fetch` honours the host's `HTTPS_PROXY`, `HTTP_PROXY` and
-  `NO_PROXY` and its TLS trust store: those are the host's network
-  configuration, and are the only part of the environment that reaches the
-  query. Over https a proxy carries the tunnel and cannot read or forge the
-  answer; blocking it is not scanned.
+- It executes nothing and reads no environment variable of its own.
+  Certificate verification is forced on for every request, whatever
+  `NODE_TLS_REJECT_UNAUTHORIZED` says. Two host settings still reach the
+  query, and they are its only environment inputs: the runtime's `fetch`
+  honours `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`, and
+  `NODE_EXTRA_CA_CERTS`, the one trust-store input it honours, can add a
+  certificate authority. Over https a proxy carries the tunnel and cannot read
+  or forge the answer; blocking it is not scanned.
+- What it reads, exactly: the `--contract` file; under `--repo`, for an `npm`
+  row, `package.json`, the one lockfile it selects, and each of the row's
+  `auditConfigKeys` files present (only to report keys), and the presence
+  (never the content) of the row's other lockfiles; for a `SwiftURL` row,
+  every `Package.resolved` the reader finds at the root and in each
+  `.xcodeproj` / `.xcworkspace` bundle. It writes nothing.
 
 In [izanami's table](#nen-parse-izanami) this verb is `write-flag-gated` on
-`--query`: the resolving form reads two files and writes nothing, and
+`--query`: the resolving form reads only the files listed above and writes
+nothing, and
 `--query` sends the tree's dependency list off the machine to the host the
 contract names, so it is never certified for an unattended watch.
 

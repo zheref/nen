@@ -9,7 +9,8 @@
 // SC-1: THE INTERIM FIXTURE, PORTED. Hatsu's
 // scripts/dependency_audit_resolve_fixture.mts (zheref/hatsu, HA-PR-#442) is
 // the oracle: every lockfile case it carries is a case here with the same exit
-// code and the same verdict lines. The cases it ran against Hatsu's OWN tree
+// code and the same verdicts (the audit-config lines reworded from "evidence
+// for Feitan" to "evidence for review"). The cases it ran against Hatsu's OWN tree
 // (its 60-entry package-lock.json, and the stack catalogue of its
 // contracts/scans.json) are Hatsu's facts, not this verb's, and stay with
 // Hatsu; the row shape itself is held here through ./fixtures/hatsu-scans.json,
@@ -277,6 +278,57 @@ describe("nen audit deps -- pnpm (the tree the npm-only row reported NOT SCANNED
   });
 });
 
+describe("nen audit deps -- hanten round 1 on NN#508 (Feitan probes A-F, red before the fix)", () => {
+  const pnpmCase = (lock: string): string => tree({ "package.json": pkg("pnpm@9.15.9"), "pnpm-lock.yaml": lock });
+
+  it("F1/A: a '# type: directory' comment on a registry entry's resolution does not make it local", async () => {
+    await expectAudit(pnpmCase(pnpm("  ok@1.0.0:\n    resolution: {integrity: x}\n  lodash@4.17.15:\n    resolution: {integrity: sha512-a} # type: directory\n")), ["--query"], 1,
+      /^resolved: [^\n]*2 packages\)\nfinding: GHSA-test-high HIGH "lodash@4\.17\.15"/);
+  });
+
+  it("F1/B: a v6 dependency named 'is-directory' does not make the depending entry local", async () => {
+    await expectAudit(tree({ "package.json": pkg("pnpm@8.15.0"), "pnpm-lock.yaml": pnpm("  /ok@1.0.0:\n    resolution: {integrity: x}\n  /lodash@4.17.15:\n    resolution: {integrity: sha512-a}\n    dependencies:\n      is-directory: 0.3.1\n", "'6.0'") }), ["--query"], 1,
+      /^resolved: [^\n]*2 packages\)\nfinding: GHSA-test-high HIGH "lodash@4\.17\.15"/);
+  });
+
+  it("F1: a resolution that is missing, repeated or unreadable is not scanned, never local", async () => {
+    await expectAudit(pnpmCase(pnpm("  lodash@4.17.15:\n    integrity: x\n")), [], 3, /entry "lodash@4\.17\.15" has no resolution \(truncated\)/);
+    await expectAudit(pnpmCase(pnpm("  lodash@4.17.15:\n    resolution: {integrity: x}\n    resolution: {directory: x, type: directory}\n")), [], 3, /has more than one resolution/);
+    await expectAudit(pnpmCase(pnpm("  lodash@4.17.15:\n    resolution: {integrity: x, type: directory\n")), [], 3, /has an unterminated flow map/);
+    await expectAudit(pnpmCase(pnpm("  lodash@4.17.15:\n    resolution: {integrity: x} type: directory\n")), [], 3, /has text after its resolution/);
+  });
+
+  it("F1: a block-form resolution is read by its keys, comments stripped", async () => {
+    await expectAudit(pnpmCase(pnpm("  lodash@4.17.15:\n    resolution:\n      integrity: sha512-a # type: directory\n  'local@file:pkgs/local':\n    resolution:\n      directory: pkgs/local\n      type: directory\n")), ["--query"], 1,
+      /1 packages\)\nlocal: 1 [^\n]*\nfinding: GHSA-test-high HIGH "lodash@4\.17\.15"/);
+  });
+
+  it("F2/C: an npm v3 entry claiming ok@1.0.0 while resolving lodash-4.17.15.tgz is unqueried, never clean", async () => {
+    await expectAudit(tree({ "package.json": pkg("npm@10.9.0"), "package-lock.json": JSON.stringify({ lockfileVersion: 3, packages: { "": {}, "node_modules/lodash": { name: "ok", version: "1.0.0", resolved: "https://registry.npmjs.org/lodash/-/lodash-4.17.15.tgz" } } }) }), ["--query"], 1,
+      /0 packages\)\nunqueried: 1 package-lock\.json[^\n]*\naudit: 0 finding\(s\) [^\n]*, 1 unqueried, across 0 packages\n$/);
+  });
+
+  it("F2/D: a yarn classic version disagreeing with its resolved tarball is unqueried", async () => {
+    await expectAudit(tree({ "package.json": pkg("yarn@1.22.22"), "yarn.lock": `${CLASSIC_HEAD}lodash@^4.17.15:\n  version "1.0.0"\n  resolved "${REG}/lodash/-/lodash-4.17.15.tgz#abc"\n` }), ["--query"], 1,
+      /unqueried: 1 yarn\.lock[^\n]*\naudit: 0 finding\(s\) [^\n]*, 1 unqueried/);
+  });
+
+  it("F2/E: a pnpm key naming a clean pair with the vulnerable pair's registry tarball is unqueried", async () => {
+    await expectAudit(pnpmCase(pnpm("  ok@1.0.0:\n    resolution: {integrity: sha512-a, tarball: https://registry.npmjs.org/lodash/-/lodash-4.17.15.tgz}\n")), ["--query"], 1,
+      /unqueried: 1 pnpm-lock\.yaml[^\n]*\naudit: 0 finding\(s\) [^\n]*, 1 unqueried/);
+  });
+
+  it("F2/F: npm 'link: true' on a registry-resolved entry is read as that entry, not local", async () => {
+    await expectAudit(tree({ "package.json": pkg("npm@10.9.0"), "package-lock.json": JSON.stringify({ lockfileVersion: 3, packages: { "": {}, "node_modules/ok": { version: "1.0.0" }, "node_modules/lodash": { version: "4.17.15", resolved: "https://registry.npmjs.org/lodash/-/lodash-4.17.15.tgz", link: true } } }) }), ["--query"], 1,
+      /^resolved: [^\n]*2 packages\)\nfinding: GHSA-test-high HIGH "lodash@4\.17\.15"/);
+  });
+
+  it("F2: a scoped tarball that agrees is queried; a registry URL that is not a tarball path is unqueried", async () => {
+    await expectAudit(tree({ "package.json": pkg("npm@10.9.0"), "package-lock.json": JSON.stringify({ lockfileVersion: 3, packages: { "": {}, "node_modules/@scope/ok": { version: "2.0.0", resolved: "https://registry.npmjs.org/@scope/ok/-/ok-2.0.0.tgz" }, "node_modules/odd": { version: "1.0.0", resolved: "https://registry.npmjs.org/odd" } } }) }), [], 0,
+      /1 packages\)\nunqueried: 1 package-lock\.json/);
+  });
+});
+
 describe("nen audit deps -- stacks", () => {
   it("reaches the node row for every stack it lists, and is not scanned for one it does not", async () => {
     const dir = tree({ "package.json": pkg("pnpm@9.15.9"), "pnpm-lock.yaml": PNPM9 });
@@ -475,8 +527,9 @@ describe("nen audit deps -- OSV answers that cannot be read are never clean (AC-
     await expectAudit(dir(), ["--query"], 3, /not scanned: OSV query timed out after 1s\n$/, modeContract("hang", (row): void => { row["timeoutSeconds"] = 1; }));
     await expectAudit(dir(), ["--query"], 3, /not scanned: OSV answered HTTP 503 at 127\.0\.0\.1:\d+\n$/, modeContract("down"));
     seen.length = 0;
-    await expectAudit(dir(), ["--query"], 3, /not scanned: OSV unreachable at 127\.0\.0\.1:\d+\n$/, modeContract("redirect"));
+    await expectAudit(dir(), ["--query"], 3, /^resolved: [^\n]*\nnot scanned: OSV answered a redirect at 127\.0\.0\.1:\d+, never followed\n$/, modeContract("redirect"));
     expect(seen.some((request: Seen): boolean => request.url.startsWith("/m/ok/")), "a redirect was followed").toBe(false);
+    expect(seen.filter((request: Seen): boolean => request.url === "/m/redirect/querybatch"), "a redirect was posted more than once").toHaveLength(1);
     await expectAudit(dir(), ["--query"], 3, /not scanned: OSV unreachable at 127\.0\.0\.1:1\n$/, contract((row): void => { row["endpoint"] = "http://127.0.0.1:1/v1/querybatch"; }));
   }, 20_000);
 
@@ -534,6 +587,8 @@ describe("nen audit deps -- wiring stops are exit 2 on stderr, never a verdict",
     const malformed: Array<[string, Edit]> = [
       ["the retired run-row manager shape", (row): void => { row["managers"] = { pnpm: { run: "pnpm audit --audit-level=high", lockfiles: ["pnpm-lock.yaml"], format: "pnpm-lock" } }; }],
       ["a non-https endpoint off loopback", (row): void => { row["endpoint"] = "http://osv.example/v1/querybatch"; }],
+      ["a vulnEndpoint with no trailing slash (N1)", (row): void => { row["vulnEndpoint"] = "https://api.osv.dev/v1/vulns"; }],
+      ["a vulnEndpoint with a query string", (row): void => { row["vulnEndpoint"] = "https://api.osv.dev/v1/vulns/?x=1"; }],
       ["an endpoint carrying credentials", (row): void => { row["endpoint"] = "https://user:pass@osv.example/v1/querybatch"; }],
       ["a zero timeout", (row): void => { row["timeoutSeconds"] = 0; }],
       ["a lockfileMarkers regex that does not compile", (row): void => { ((row["managers"] as Record<string, Record<string, Record<string, string>>>)["yarn"] as Record<string, Record<string, string>>)["lockfileMarkers"] = { berry: "([", classic: "x" }; }],
