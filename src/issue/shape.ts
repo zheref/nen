@@ -158,35 +158,199 @@ export function criterionGrammar(catalogue: IssueSectionsCatalogue | null): Crit
 
 /**
  * A row's id as reported and compared: `<PREFIX>-<tail>` as written, whole --
- * `AC-12-001` is never `AC-12` -- except that a tail of one digit run is its
- * number (`AC-01` is `AC-1`), the reading every `AC-{n}` row always had.
+ * `AC-12-001` is never `AC-12`, and `AC-12-001` is not `AC-12-1` -- except that
+ * a tail of ONE digit run is read by value (`AC-01` is `AC-1`), the reading
+ * every `AC-{n}` row always had. The value is taken as a string, leading zeros
+ * dropped, never through a float: `AC-9007199254740993` stays itself
+ * (zheref/nen#519, F2).
  */
 export function criterionId(prefix: string, tail: string): string {
-  return /^\d+$/.test(tail) ? `${prefix}-${Number(tail)}` : `${prefix}-${tail}`;
+  return /^\d+$/.test(tail) ? `${prefix}-${tail.replace(/^0+(?=\d)/, "")}` : `${prefix}-${tail}`;
 }
 
-/** The number a row is ordered by: its id's last digit run (`AC-12-003` is 3), or 0 when it has none. */
-export function idNumber(tail: string): number {
+/** The longest digit run a row is ordered by: nine digits, past which a number is not read. */
+const MAX_ORDER_DIGITS = 9;
+
+/**
+ * The number a row is ordered by: its id's last digit run (`AC-12-003` is 3),
+ * 0 when it has none, and null when that run is longer than nine digits
+ * (leading zeros aside) -- such a row is unrecognised, never ordered by a
+ * rounded number (zheref/nen#519, F2).
+ */
+export function idNumber(tail: string): number | null {
   const runs = tail.match(/\d+/g);
-  return runs === null ? 0 : Number(runs[runs.length - 1]);
+  if (runs === null) return 0;
+  const last = (runs[runs.length - 1] as string).replace(/^0+(?=\d)/, "");
+  return last.length > MAX_ORDER_DIGITS ? null : Number(last);
+}
+
+/** The admitted acceptance-row grammar for one prefix and id shape: the id in `nenRowId`, the text in `nenRowText`. */
+export function idRowPattern(prefix: string, tail: string): RegExp {
+  return new RegExp(`^(?:\\*\\*|__)?${escapeRegExp(prefix)}-(?<nenRowId>${tail})(?:\\*\\*|__)?\\s*:(?:\\*\\*|__)?\\s*(?<nenRowText>.*)$`);
+}
+
+/** The longest verify-row first cell read as a criterion; a longer one mentioning the prefix is malformed (F3). */
+export const MAX_CRITERION_CELL = 64;
+
+/**
+ * The verify-row cell grammar for one criterion grammar: a bare id and an
+ * issue-qualified one, and the mention that makes an unreadable first cell a
+ * malformed row. Under a prefix other than `AC`, a cell naming the default
+ * `AC-` is a mention too: reported, never dropped (zheref/nen#519, N2).
+ */
+export function criterionCellPatterns(grammar: CriterionGrammar): { readonly bare: RegExp; readonly qualified: RegExp; readonly mention: RegExp } {
+  const prefix = escapeRegExp(grammar.prefix);
+  const id = `${prefix}-(?<nenCellId>${grammar.tail})`;
+  return {
+    bare: new RegExp(`^${id}$`),
+    qualified: new RegExp(`^(?<nenCellPrefix>[A-Za-z][A-Za-z0-9]*|[A-Za-z0-9._-]+\\/[A-Za-z0-9._-]+)?#(?<nenCellIssue>\\d{1,9})\\/${id}$`),
+    mention: new RegExp(grammar.prefix.toUpperCase() === DEFAULT_CRITERIA_PREFIX ? `${prefix}-` : `(?:${prefix}|${DEFAULT_CRITERIA_PREFIX})-`, "i"),
+  };
+}
+
+/** What one parsed piece of an id shape holds, for the safety rules below. */
+interface TailFacts {
+  /** It carries a quantifier (`+`, `*`, `?`, `{m,n}`). */
+  quantified: boolean;
+  /** It carries an alternation. */
+  alternation: boolean;
+  /** It is a sequence whose first atom is a literal `-` and whose other atoms are digits, unquantified groups none. */
+  dashLed: boolean;
 }
 
 /**
- * The id group an acceptance row `pattern` opens right after `<id>-`:
- * `^- AC-([0-9]+): ...` gives `[0-9]+`, `^- AC-([0-9]+-[0-9]{3}): ...` gives
- * `[0-9]+-[0-9]{3}`. A non-capturing or named group is read the same way. A
+ * Hold an id shape to the SAFE SUBSET (zheref/nen#519, F3 and F4), or say why
+ * not. The shape is matched against author-controlled text -- every list row
+ * of an issue and every first cell of a PR body's tables -- so it may hold
+ * only: digit classes (`[0-9]`, `[1-9]`, `\d`), digits and a literal `-` (or
+ * `\-`); a group `( ... )` or `(?: ... )`; the quantifiers `+`, `*`, `?`,
+ * `{m}` and `{m,n}` with n at most 64, never lazy and never `{m,}`. A
+ * quantified group may hold no alternation, and may hold a quantifier only
+ * when it is DASH-LED (`(?:-[0-9]{1,9})*`): every repetition then starts with
+ * the `-` no digit atom can match, so the match cannot backtrack
+ * exponentially. Named groups, backreferences, lookarounds, `.` and every
+ * other construct are refused.
+ */
+function unsafeTail(tail: string): string | null {
+  let at = 0;
+  const fail = (why: string): never => {
+    throw new Error(why);
+  };
+  const quantifier = (): boolean => {
+    const char = tail[at];
+    if (char === "+" || char === "*" || char === "?") {
+      at += 1;
+    } else if (char === "{") {
+      const bound = /^\{(\d{1,2})(?:,(\d{1,2}))?\}/.exec(tail.slice(at));
+      if (bound === null) fail(`'${tail.slice(at, at + 8)}' is not a bounded {m} or {m,n} quantifier (n at most 64)`);
+      const low = Number((bound as RegExpExecArray)[1]);
+      const high = (bound as RegExpExecArray)[2] === undefined ? low : Number((bound as RegExpExecArray)[2]);
+      if (high > 64 || low > high) fail(`'${(bound as RegExpExecArray)[0]}' is not a bounded {m,n} quantifier with m <= n <= 64`);
+      at += (bound as RegExpExecArray)[0].length;
+    } else {
+      return false;
+    }
+    if (tail[at] === "?" || tail[at] === "+") fail("a lazy or possessive quantifier is not admitted");
+    if (tail[at] === "+" || tail[at] === "*" || tail[at] === "{") fail("a quantifier on a quantifier is not admitted");
+    return true;
+  };
+  const sequence = (): TailFacts => {
+    const facts: TailFacts = { quantified: false, alternation: false, dashLed: false };
+    let first = true;
+    let dashLed = false;
+    let digitsAfterDash = true;
+    while (at < tail.length && tail[at] !== ")" && tail[at] !== "|") {
+      const char = tail[at] as string;
+      let atom: "dash" | "digit" | "group";
+      let inner: TailFacts | null = null;
+      if (char === "[") {
+        const close = tail.indexOf("]", at);
+        if (close < 0) fail("a character class never closes");
+        const body = tail.slice(at + 1, close);
+        if (!/^(?:[0-9](?:-[0-9])?)+$/.test(body)) fail(`the class '[${body}]' is not a digit class`);
+        at = close + 1;
+        atom = "digit";
+      } else if (char === "\\") {
+        const next = tail[at + 1];
+        if (next === "d") atom = "digit";
+        else if (next === "-") atom = "dash";
+        else fail(`'\\${next ?? ""}' is not admitted (a backreference, a word or other escape)`);
+        at += 2;
+      } else if (char === "-") {
+        atom = "dash";
+        at += 1;
+      } else if (/[0-9]/.test(char)) {
+        atom = "digit";
+        at += 1;
+      } else if (char === "(") {
+        if (tail[at + 1] === "?") {
+          if (tail[at + 2] !== ":") fail("a named group or a lookaround is not admitted");
+          at += 3;
+        } else {
+          at += 1;
+        }
+        inner = alternation();
+        if (tail[at] !== ")") fail("a group never closes");
+        at += 1;
+        atom = "group";
+      } else {
+        fail(`'${char}' is not admitted`);
+      }
+      const quantified = quantifier();
+      if (inner !== null) {
+        if (quantified && inner.alternation) fail("a quantified group may not hold an alternation");
+        if (quantified && inner.quantified && !inner.dashLed) fail("a quantified group may hold a quantifier only when it starts with a literal '-'");
+        facts.quantified ||= inner.quantified;
+        facts.alternation ||= inner.alternation;
+      }
+      facts.quantified ||= quantified;
+      if (first) dashLed = atom! === "dash" && !quantified;
+      else if (atom! !== "digit") digitsAfterDash = false;
+      first = false;
+    }
+    facts.dashLed = dashLed && digitsAfterDash;
+    return facts;
+  };
+  const alternation = (): TailFacts => {
+    const facts = sequence();
+    while (tail[at] === "|") {
+      at += 1;
+      const next = sequence();
+      facts.quantified ||= next.quantified;
+      facts.alternation = true;
+      facts.dashLed = false;
+    }
+    return facts;
+  };
+  try {
+    alternation();
+    if (at !== tail.length) fail(`'${tail.slice(at)}' is not admitted`);
+    return null;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
+/**
+ * The id group an acceptance row `pattern` opens right after `<id>-` (or
+ * `<id>\-`): `^- AC-([0-9]+): ...` gives `[0-9]+`, `^- AC-([0-9]+-[0-9]{3}):
+ * ...` gives `[0-9]+-[0-9]{3}`; a non-capturing group reads the same. A
  * pattern with no group there declares no id shape and is refused, naming the
  * field: the shape is the catalogue's, never a binary default substituted for
- * it (zheref/nen#519 AC-3).
+ * it (zheref/nen#519 AC-3). The group is held to the safe subset
+ * (`unsafeTail`), and compiled inside every grammar that will carry it --
+ * the issue row, the bare and the qualified verify cell -- so a shape that
+ * would fail there is refused here, at exit 2, never thrown later (F3, F4).
  */
 function idTailOf(pattern: string, id: string, where: string): string {
   const refuse = (why: string): never => {
-    throw new IssueShapeError(`${where} declares no criterion id shape: ${why}. Write the id as a group right after '${id}-', e.g. '^- ${id}-([0-9]+): ...'.`);
+    throw new IssueShapeError(`${where} declares no usable criterion id shape: ${why}. Write the id as a group right after '${id}-', e.g. '^- ${id}-([0-9]+): ...'.`);
   };
-  const marker = `${id}-(`;
-  const at = pattern.indexOf(marker);
+  const plain = pattern.indexOf(`${id}-(`);
+  const escaped = pattern.indexOf(`${id}\\-(`);
+  const at = plain >= 0 ? plain : escaped;
   if (at < 0) return refuse(`no group opens right after '${id}-'`);
-  const open = at + marker.length - 1;
+  const open = at + (plain >= 0 ? `${id}-(` : `${id}\\-(`).length - 1;
   let depth = 0;
   let inClass = false;
   let close = -1;
@@ -213,15 +377,16 @@ function idTailOf(pattern: string, id: string, where: string): string {
   if (close < 0) return refuse(`the group after '${id}-' never closes`);
   let tail = pattern.slice(open + 1, close);
   if (tail.startsWith("?:")) tail = tail.slice(2);
-  else if (/^\?<[A-Za-z_$][\w$]*>/.test(tail)) tail = tail.replace(/^\?<[A-Za-z_$][\w$]*>/, "");
-  else if (tail.startsWith("?")) return refuse(`the group after '${id}-' is a lookaround, not the id`);
-  let compiled: RegExp;
+  else if (tail.startsWith("?")) return refuse(`the group after '${id}-' is a named group or a lookaround, not a plain id group`);
+  const unsafe = unsafeTail(tail);
+  if (unsafe !== null) return refuse(`its id group '${tail}' is outside the safe subset (${unsafe})`);
   try {
-    compiled = new RegExp(`^(?:${tail})$`);
+    if (new RegExp(`^(?:${tail})$`).test("")) return refuse(`its id group '${tail}' matches an empty id`);
+    idRowPattern(id, tail);
+    criterionCellPatterns({ prefix: id, tail });
   } catch (error) {
     return refuse(`its id group '${tail}' does not compile (${error instanceof Error ? error.message : String(error)})`);
   }
-  if (tail === "" || compiled.test("")) return refuse(`its id group '${tail}' matches an empty id`);
   return tail;
 }
 
@@ -613,7 +778,7 @@ const LIST_LEAD = /^(\s{0,3}(?:>\s?)*)\s*(?:[-*+]|\d{1,9}[.)])\s+(?:\[[ xX]\]\s+
 export interface IdRow {
   /** The row's whole id, `criterionId`'s reading: `AC-3`, `AC-12-001`. */
   readonly id: string;
-  /** The id's last digit run (`idNumber`): what row order is checked by. */
+  /** The id's last digit run (`idNumber`): what row order is checked by, within the id's leading group. */
   readonly number: number;
   /** The text after `<PREFIX>-<id>:`, trimmed. */
   readonly text: string;
@@ -641,7 +806,7 @@ export function readIdRows(lines: readonly MaskedLine[], prefix: string, tail?: 
   const id = escapeRegExp(prefix);
   const shape = tail ?? ROW_ID_TAIL;
   const first = new RegExp(`^(?:\\*\\*|__|~~|\\*|_)*${id}-(?:\\d|(?:${shape}))`);
-  const admitted = new RegExp(`^(?:\\*\\*|__)?${id}-(?<nenRowId>${shape})(?:\\*\\*|__)?\\s*:(?:\\*\\*|__)?\\s*(?<nenRowText>.*)$`);
+  const admitted = idRowPattern(prefix, shape);
   const rows: IdRow[] = [];
   const unrecognised: { line: number; text: string }[] = [];
   const otherItems: { line: number; text: string; rest: string }[] = [];
@@ -660,9 +825,15 @@ export function readIdRows(lines: readonly MaskedLine[], prefix: string, tail?: 
       continue;
     }
     const written = match.groups?.["nenRowId"] as string;
+    const number = idNumber(written);
+    if (number === null) {
+      // A digit run past nine digits is never ordered by a rounded number (F2).
+      unrecognised.push({ line: line.line, text: line.text.trim() });
+      continue;
+    }
     const text = (match.groups?.["nenRowText"] as string).trim();
     const rowId = criterionId(prefix, written);
-    rows.push({ id: rowId, number: idNumber(written), text, line: line.line, canonical: `- ${tail === undefined ? rowId : `${prefix}-${written}`}: ${text}` });
+    rows.push({ id: rowId, number, text, line: line.line, canonical: `- ${tail === undefined ? rowId : `${prefix}-${written}`}: ${text}` });
   }
   return { rows, unrecognised, otherItems };
 }
@@ -750,7 +921,7 @@ export function checkIssueBody(body: string, catalogue: IssueSectionsCatalogue, 
       found = extent.flatMap((at): { id: string; number: number; rest: string; line: number }[] => {
         const line = masked[at] as MaskedLine;
         const match = pattern.exec(line.text);
-        return match === null ? [] : [{ id: `${prefix}-${Number(match[1])}`, number: Number(match[1]), rest: match[2] ?? "", line: line.line }];
+        return match === null ? [] : [{ id: criterionId(prefix, match[1] as string), number: Number(match[1]), rest: match[2] ?? "", line: line.line }];
       });
     } else {
       // The v1 shape: every list item in a rows section is a row in its pattern's shape.
@@ -787,15 +958,41 @@ export function checkIssueBody(body: string, catalogue: IssueSectionsCatalogue, 
       misses.push({ section: id, kind: "no-rows", line: headingIndex + 1, detail: `'${title}' carries no ${prefix}-{n} row` });
     }
     if (rule.rows.contiguous) {
-      const numbered = new Set<number>();
-      found.forEach((row, position): void => {
-        if (numbered.has(row.number)) {
-          misses.push({ section: id, kind: "row-order", line: row.line, detail: `${row.id} repeats an earlier row's number` });
-        } else if (row.number !== position + 1) {
-          misses.push({ section: id, kind: "row-order", line: row.line, detail: `${row.id} is row ${position + 1}; rows are numbered ${prefix}-1 to ${prefix}-${found.length} in order` });
+      // ORDER IS KEPT WITHIN AN ID'S LEADING GROUP (zheref/nen#519, N1): the
+      // id with its last digit run removed -- `AC-` for `AC-3`, `AC-12-` for
+      // `AC-12-003`. Each group's last runs read 1..n in document order, a
+      // repeat is the WHOLE id seen twice, and an epic-scoped miss names the
+      // expected id in the row's own shape (its last run's width kept).
+      const split = (rowId: string): { lead: string; run: string } => {
+        const match = /^(.*?)(\d+)$/.exec(rowId);
+        return match === null ? { lead: rowId, run: "" } : { lead: match[1] as string, run: match[2] as string };
+      };
+      const totals = new Map<string, number>();
+      for (const row of found) totals.set(split(row.id).lead, (totals.get(split(row.id).lead) ?? 0) + 1);
+      const positions = new Map<string, number>();
+      const seen = new Set<string>();
+      for (const row of found) {
+        const { lead, run } = split(row.id);
+        const position = (positions.get(lead) ?? 0) + 1;
+        positions.set(lead, position);
+        if (seen.has(row.id)) {
+          misses.push({ section: id, kind: "row-order", line: row.line, detail: `${row.id} repeats an earlier row's id` });
+        } else if (row.number !== position) {
+          const total = totals.get(lead) ?? position;
+          if (lead === `${prefix}-`) {
+            misses.push({ section: id, kind: "row-order", line: row.line, detail: `${row.id} is row ${position}; rows are numbered ${prefix}-1 to ${prefix}-${total} in order` });
+          } else {
+            const shaped = (value: number): string => `${lead}${String(value).padStart(run.length, "0")}`;
+            misses.push({
+              section: id,
+              kind: "row-order",
+              line: row.line,
+              detail: `${row.id} is row ${position} of ${lead}*; expected ${shaped(position)}: rows are numbered ${shaped(1)} to ${shaped(total)} in order`,
+            });
+          }
         }
-        numbered.add(row.number);
-      });
+        seen.add(row.id);
+      }
     }
     const measure = rule.rows.measure !== undefined ? new RegExp(rule.rows.measure) : rule.rows.measurable ? /[0-9]|%/ : null;
     if (measure !== null) {
