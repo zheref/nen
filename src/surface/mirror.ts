@@ -51,8 +51,8 @@
 // ../canon/mirror.ts anchors its own at the first line: a marker-shaped line
 // further down (a quoted example, a nested fence) must never be mistaken for the
 // real one. A TOML file carries it as its `# ` first line and a JSON file as a
-// top-level `"$generated"` key (./packs.ts says why), and `readMarker` reads
-// all three.
+// top-level `"$generated"` key, except native Antigravity hooks, whose one
+// hook-definition name carries the marker (./packs.ts). `readMarker` reads all.
 //
 // IT NEVER OVERWRITES A FILE IT DID NOT WRITE. `writeSurfaceMirror` refuses --
 // before writing anything at all -- any destination that exists and does NOT
@@ -145,7 +145,7 @@ function parseMarkerText(text: string): Marker | null {
  * The marker a committed file carries, or null when it carries none (a
  * hand-written file, or one whose banner was deleted). Markdown: the first
  * markdown line as an HTML comment. TOML: a `# ` first line. JSON: the
- * top-level `$generated` key.
+ * top-level `$generated` key, or a native hook-definition name.
  */
 export function readMarker(text: string): Marker | null {
   const first = splitDocument(text).body.split("\n")[0] ?? "";
@@ -163,6 +163,10 @@ export function readMarker(text: string): Marker | null {
       if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
         const value = (parsed as Record<string, unknown>)["$generated"];
         if (typeof value === "string") return parseMarkerText(value);
+        for (const [name, definition] of Object.entries(parsed)) {
+          const marker = parseMarkerText(name);
+          if (marker !== null && typeof definition === "object" && definition !== null && !Array.isArray(definition)) return marker;
+        }
       }
     } catch {
       return null;
@@ -314,6 +318,8 @@ export interface GeneratedFile {
    * `beforeLinkRewrite`'s reason.
    */
   readonly beforeToolNames?: readonly string[];
+  /** Exact pre-#543 hook bytes: recognized as generated but stale. */
+  readonly beforeNativeHooks?: string;
 }
 
 export interface GenerateOptions {
@@ -1003,7 +1009,17 @@ export function generateSurfaceMirrorReport(options: GenerateOptions): GenerateR
     else {
       hooks = "written";
       const marker = markerText(row.surface, stamp);
-      files.push({ path: row.hooks.file, content: renderHooks(row.hooks, options.hooks, marker, options.hooksRoot ?? null) });
+      files.push({
+        path: row.hooks.file,
+        content: renderHooks(row.hooks, options.hooks, marker, options.hooksRoot ?? null),
+        ...(row.hooks.shape === "antigravity-json" ? {
+          beforeNativeHooks: renderHooks({
+            ...row.hooks,
+            shape: "groups",
+            events: { ...row.hooks.events, SessionStart: "PreInvocation" },
+          }, options.hooks, marker, options.hooksRoot ?? null),
+        } : {}),
+      });
       // The scripts travel with the manifest: a mirror installed as a plugin
       // root has to resolve `<root>/hooks/<file>` to a file it ships.
       if (row.hooks.scriptsDir !== null) {
@@ -1421,6 +1437,8 @@ export function checkSurfaceMirror(
       file.beforeToolNames.some((before): boolean => withoutStamp(existing) === withoutStamp(before))
     )
       stale.push(file.path);
+    // Exact pre-#543 bytes were generated in a shape the native parser skips.
+    else if (file.beforeNativeHooks !== undefined && withoutStamp(existing) === withoutStamp(file.beforeNativeHooks)) stale.push(file.path);
     // Aimed from another location (Nobunaga, the #270 review): the links OUT
     // of the mirror are spelled for where it was generated -- a copied
     // install, a check run from another root -- and every other byte is a

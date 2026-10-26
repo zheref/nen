@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, wr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run, type Io } from "../index.js";
-import { markerFor } from "./mirror.js";
+import { markerFor, markerText } from "./mirror.js";
 import { CHECK_CONTRACT, CHECK_INSTALLED_CONTRACT, GENERATE_CONTRACT } from "./command.js";
 
 const SKILLS = join(process.cwd(), "src", "surface", "fixtures", "skills");
@@ -327,8 +327,8 @@ describe("--hooks", () => {
       "antigravity: scout: dropped Grep, Glob from tools (no documented antigravity name: a name both Antigravity pages give (the maintainer's ruling of 2026-10-22, zheref/nen#505 OQ-1)); wrote view_file",
       "--hooks carries PostToolUse, which no row maps; only Stop, PreToolUse and SessionStart are carried",
     ]);
-    const doc = JSON.parse(readFileSync(join(out, "hooks.json"), "utf8")) as { hooks: Record<string, unknown> };
-    expect(Object.keys(doc.hooks)).toEqual(["Stop", "PreToolUse", "PreInvocation"]);
+    const doc = JSON.parse(readFileSync(join(out, "hooks.json"), "utf8")) as Record<string, Record<string, unknown>>;
+    expect(Object.keys(doc[markerText("antigravity")]!)).toEqual(["Stop", "PreToolUse", "SessionStart"]);
     // A regenerate without --hooks removes it as an orphan: it is ours.
     const again = await capture([...generateArgv("antigravity", out), "--json"]);
     expect(json(again)["deleted"]).toEqual(["hooks.json", "hooks/bell.hook", "hooks/guard.hook"]);
@@ -348,10 +348,11 @@ describe("--hooks", () => {
     const root = "${HATSU_PLUGIN_ROOT:-$HOME/.gemini/config/plugins/demo}";
     const result = await capture([...generateArgv("antigravity", out, ["--hooks", join(PACKS, "hooks.json"), "--hooks-root", root]), "--json"]);
     expect(result.code).toBe(0);
-    const doc = JSON.parse(readFileSync(join(out, "hooks.json"), "utf8")) as { hooks: Record<string, { hooks: { command: string }[] }[]> };
-    expect(doc.hooks["Stop"]?.[0]?.hooks[0]?.command).toBe(`sh -c 'exec "${root}"/hooks/bell.hook' --`);
+    const doc = JSON.parse(readFileSync(join(out, "hooks.json"), "utf8")) as Record<string, Record<string, { command: string }[]>>;
+    const native = doc[markerText("antigravity")]!;
+    expect(native["Stop"]?.[0]?.command).toBe(`sh -c 'exec "${root}"/hooks/bell.hook' --`);
     // A command with no `$` left is not wrapped.
-    expect(doc.hooks["PreInvocation"]?.[0]?.hooks[0]?.command).toBe("sh -c 'echo warm'");
+    expect(native["SessionStart"]?.[0]?.command).toBe("sh -c 'echo warm'");
     const literal = await capture([...generateArgv("cursor", tempDir(), ["--hooks", join(PACKS, "hooks.json"), "--hooks-root", "/opt/demo"]), "--json"]);
     expect(literal.code).toBe(0);
     // A root the wrapper cannot hold is refused at exit 2, naming the character.
