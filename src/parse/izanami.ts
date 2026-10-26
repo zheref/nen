@@ -1006,8 +1006,11 @@ const DEV_FORWARDING_CHECKER = RO_FWD(
 const DEV_CHECKER = RO("runs this checkout's own checker harness -- the 'running a checker script' row of izanami's allow table");
 
 export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
-  // zheref/nen#508. Without --query it reads package.json and one lockfile (or
-  // Package.resolved) under --repo and writes nothing. --query POSTs every pin
+  // zheref/nen#508. Without --query it reads the --contract file and, under
+  // --repo, package.json, the one selected lockfile and the row's
+  // auditConfigKeys files present (or every Package.resolved the Swift reader
+  // finds at the root and in .xcodeproj/.xcworkspace bundles), and writes
+  // nothing. --query POSTs every pin
   // to the endpoint a caller's contract names: still no write, but it is
   // network egress of the tree's dependency list to a host the contract chose,
   // so it is not watchable unattended -- the same fail-closed trade as a write.

@@ -26,28 +26,53 @@
 // the tree choose what is read -- and a file over the row's `maxLockfileBytes`
 // is not read at all.
 
-import { lstatSync, readFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { isRecord, type Manager, type NodeRow } from "./row.js";
 import { notScanned, tally, type Entry, type Evidence, type Resolution } from "./verdict.js";
 
 const q = (value: string): string => JSON.stringify(value);
 
-/** A file directly in `dir`: its text, a refusal naming why it was not read, or neither when absent. */
+/**
+ * A file directly in `dir`: its text, a refusal naming why it was not read, or
+ * neither when absent.
+ *
+ * OPENED, THEN CHECKED, THEN READ FROM THE SAME DESCRIPTOR (F4, SEC-7). An
+ * lstat followed by a read by path is check-then-use: a concurrent writer could
+ * swap the file for a symbolic link between the two calls. `O_NOFOLLOW` makes
+ * the open itself refuse a link (ELOOP), `O_NONBLOCK` keeps a FIFO planted at
+ * the name from blocking the open, and the type and size are read off the
+ * descriptor that is then read. The lstat first is kept for the host with no
+ * `O_NOFOLLOW` (Windows), where it is the only link check there is.
+ */
 export function readRegular(dir: string, file: string, maxBytes: number): { text?: string; refused?: string } {
+  const path = join(dir, file);
   let stat;
   try {
-    stat = lstatSync(join(dir, file));
+    stat = lstatSync(path);
   } catch {
     return {};
   }
   if (stat.isSymbolicLink()) return { refused: `${file} is a symlink, never followed` };
   if (!stat.isFile()) return { refused: `${file} is not a regular file` };
-  if (stat.size > maxBytes) return { refused: `${file} is larger than ${String(maxBytes)} bytes (maxLockfileBytes)` };
+  let fd: number;
   try {
-    return { text: readFileSync(join(dir, file), "utf8").replace(/^\uFEFF/, "") };
+    fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "ELOOP") return { refused: `${file} is a symlink, never followed` };
+    if (code === "ENOENT") return {};
+    return { refused: `${file} is unreadable` };
+  }
+  try {
+    const opened = fstatSync(fd);
+    if (!opened.isFile()) return { refused: `${file} is not a regular file` };
+    if (opened.size > maxBytes) return { refused: `${file} is larger than ${String(maxBytes)} bytes (maxLockfileBytes)` };
+    return { text: readFileSync(fd, "utf8").replace(/^\uFEFF/, "") };
   } catch {
     return { refused: `${file} is unreadable` };
+  } finally {
+    closeSync(fd);
   }
 }
 
@@ -99,6 +124,49 @@ function registry(p: Parser, name: string, version: string, what: string): Entry
   return { kind: "registry", pin: { name, version } };
 }
 
+/**
+ * The name and version a registry tarball URL names: `/<name>/-/<base>-<version>.tgz`,
+ * `<name>` scoped as `@scope/pkg` or `@scope%2fpkg`, `<base>` its unscoped part.
+ * `undefined` when the path is not that shape.
+ */
+export function tarballPin(url: string): { name: string; version: string } | undefined {
+  let path: string;
+  try {
+    path = new URL(url).pathname;
+  } catch {
+    return undefined;
+  }
+  const m = /^\/(.+)\/-\/([^/]+)\.tgz$/.exec(path);
+  if (m === null) return undefined;
+  let name: string;
+  let file: string;
+  try {
+    name = decodeURIComponent(m[1] ?? "");
+    file = decodeURIComponent(m[2] ?? "");
+  } catch {
+    return undefined;
+  }
+  const base = name.slice(name.lastIndexOf("/") + 1);
+  if (!file.startsWith(`${base}-`)) return undefined;
+  return { name, version: file.slice(base.length + 1) };
+}
+
+/**
+ * THE ARTEFACT DECIDES, NOT THE LOCKFILE'S OWN LABEL (F2, SEC-13). A registry
+ * entry whose `resolved`/`tarball` URL is present is queried only when the
+ * name and version that URL names equal the pair the entry claims: a lockfile
+ * that says `ok@1.0.0` while resolving `lodash-4.17.15.tgz` installs lodash,
+ * and querying `ok` would read that tree clean. A disagreement, or a registry
+ * URL whose path is not a tarball's, is UNQUERIED -- never clean.
+ */
+function registryPin(p: Parser, name: string, version: string, url: string | undefined, what: string): Entry {
+  if (url !== undefined) {
+    const pin = tarballPin(url);
+    if (pin === undefined || pin.name !== name || pin.version !== version) return { kind: "unqueried" };
+  }
+  return registry(p, name, version, what);
+}
+
 function counted(p: Parser): void {
   p.count += 1;
   if (p.count > p.row.maxEntries) notScanned(`${p.lockfile} has more than ${String(p.row.maxEntries)} entries (maxEntries)`);
@@ -106,6 +174,86 @@ function counted(p: Parser): void {
 
 function requireNewline(p: Parser, text: string): void {
   if (text !== "" && !text.endsWith("\n")) notScanned(`${p.lockfile} does not end with a newline (truncated)`);
+}
+
+/** One YAML flow map `{k: v, ...}` at the start of `text`: its top-level entries, and what follows it. */
+function flowMap(text: string, what: string): { entries: Map<string, string>; rest: string } {
+  const t = text.trimStart();
+  if (!t.startsWith("{")) notScanned(`pnpm-lock.yaml entry ${q(what)} has a resolution that is not a flow map`);
+  let depth = 0;
+  let quote: string | null = null;
+  let end = -1;
+  const cuts: number[] = [];
+  for (let i = 0; i < t.length; i += 1) {
+    const c = t[i];
+    if (quote !== null) {
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (c === "'" || c === '"') quote = c;
+    else if (c === "{") depth += 1;
+    else if (c === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        end = i;
+        break;
+      }
+    } else if (c === "," && depth === 1) cuts.push(i);
+  }
+  if (end < 0) notScanned(`pnpm-lock.yaml entry ${q(what)} has an unterminated flow map`);
+  const entries = new Map<string, string>();
+  let from = 1;
+  for (const cut of [...cuts, end]) {
+    const item = t.slice(from, cut).trim();
+    from = cut + 1;
+    if (item === "" && cuts.length === 0) break;
+    const m = /^([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*([\s\S]*)$/.exec(item);
+    if (m === null) notScanned(`pnpm-lock.yaml entry ${q(what)} has a flow-map item this parser does not read`);
+    const key = m[1] ?? "";
+    if (entries.has(key)) notScanned(`pnpm-lock.yaml entry ${q(what)} repeats the key ${q(key)}`);
+    entries.set(key, unquote(m[2] ?? ""));
+  }
+  return { entries, rest: t.slice(end + 1) };
+}
+
+/**
+ * THE ENTRY'S OWN `resolution` MAP, AND NOTHING ELSE OF IT (F1, SEC-13). Whether
+ * an entry is local, unqueried or a registry package is read from the keys of
+ * its `resolution` value only -- never from its whole body text, where a
+ * dependency named `is-directory` or a `# type: directory` comment would make a
+ * vulnerable package "local", and local is never queried. A trailing comment is
+ * stripped; a resolution this parser cannot read as one map, repeated, or
+ * missing is NOT SCANNED, never local.
+ */
+function pnpmResolution(key: string, flow: string | undefined, body: readonly string[]): Map<string, string> {
+  if (flow !== undefined) {
+    const entry = flowMap(flow, key);
+    const raw = entry.entries.get("resolution");
+    if (raw === undefined) notScanned(`pnpm-lock.yaml entry ${q(key)} has no resolution (truncated)`);
+    return flowMap(raw, key).entries;
+  }
+  const at = body.flatMap((line: string, i: number): number[] => (/^ {4}resolution:/.test(line) ? [i] : []));
+  if (at.length === 0) notScanned(`pnpm-lock.yaml entry ${q(key)} has no resolution (truncated)`);
+  if (at.length > 1) notScanned(`pnpm-lock.yaml entry ${q(key)} has more than one resolution`);
+  const first = at[0] as number;
+  const value = (body[first] ?? "").replace(/^ {4}resolution:/, "");
+  if (/^\s*(?:#.*)?$/.test(value)) {
+    // The block form: `resolution:` then its keys, one per line, at indent 6.
+    const entries = new Map<string, string>();
+    for (const line of body.slice(first + 1)) {
+      if (!/^ {6}\S/.test(line)) break;
+      const m = /^ {6}([A-Za-z_][A-Za-z0-9_-]*):\s*(.*?)\s*$/.exec(line);
+      if (m === null) notScanned(`pnpm-lock.yaml entry ${q(key)} has a resolution line this parser does not read`);
+      const raw = m[2] ?? "";
+      const stripped = /^['"]/.test(raw) ? raw.replace(/(['"])\s+#.*$/, "$1") : raw.replace(/(?:^|\s+)#.*$/, "");
+      entries.set(m[1] ?? "", unquote(stripped));
+    }
+    if (entries.size === 0) notScanned(`pnpm-lock.yaml entry ${q(key)} has an empty resolution`);
+    return entries;
+  }
+  const map = flowMap(value, key);
+  if (!/^\s*(?:#.*)?$/.test(map.rest)) notScanned(`pnpm-lock.yaml entry ${q(key)} has text after its resolution this parser does not read`);
+  return map.entries;
 }
 
 // pnpm: every line of the `packages:` section is read or refused.
@@ -147,10 +295,11 @@ export function parsePnpm(p: Parser, text: string): Entry[] {
   return sections.map((s): Entry => {
     counted(p);
     if (s.flow === undefined && s.body.length === 0) notScanned(`pnpm-lock.yaml entry ${q(s.key)} has no body (truncated)`);
-    const body = s.flow ?? s.body.join("\n");
-    if (/\bdirectory:|type:\s*directory/.test(body)) return { kind: "local" };
-    if (/\brepo:|\bcommit:|type:\s*git/.test(body)) return { kind: "unqueried" };
-    const tarball = /\btarball:\s*['"]?([^,}'"\s]+)/.exec(body)?.[1];
+    const resolution = pnpmResolution(s.key, s.flow, s.body);
+    const type = resolution.get("type");
+    if (resolution.has("directory") || type === "directory") return { kind: "local" };
+    if (resolution.has("repo") || resolution.has("commit") || type !== undefined) return { kind: "unqueried" };
+    const tarball = resolution.get("tarball");
     if (!onRegistry(p, tarball)) return { kind: "unqueried" };
     const key = s.key.replace(/^\//, "");
     let pair: [string, string] | undefined;
@@ -161,7 +310,7 @@ export function parsePnpm(p: Parser, text: string): Entry[] {
       const paren = key.indexOf("(");
       pair = splitAt(paren > 0 ? key.slice(0, paren) : key);
     }
-    return registry(p, pair?.[0] ?? "", pair?.[1] ?? "", s.key);
+    return registryPin(p, pair?.[0] ?? "", pair?.[1] ?? "", tarball, s.key);
   });
 }
 
@@ -228,15 +377,19 @@ export function parseYarn(p: Parser, text: string, markers: NonNullable<Manager[
       entries.push({ kind: "unqueried" });
       continue;
     }
-    entries.push(registry(p, alias !== null ? (alias[2] ?? "") : (pair?.[0] ?? ""), version, spec));
+    entries.push(registryPin(p, alias !== null ? (alias[2] ?? "") : (pair?.[0] ?? ""), version, resolved, spec));
   }
   return entries;
 }
 
 function npmEntry(p: Parser, name: string, value: unknown, what: string): Entry {
   if (!isRecord(value)) notScanned(`${p.lockfile} entry ${q(what)} is not an object`);
-  if (value["link"] === true) return { kind: "local" };
   const resolved = typeof value["resolved"] === "string" ? value["resolved"] : undefined;
+  // A link resolves to a path in the tree (`packages/ws`) and is the tree's own
+  // code. One whose `resolved` is a URL installs that URL's artefact, and is
+  // read like any other entry (F2): `link: true` is the lockfile's label, the
+  // URL is what is fetched.
+  if (value["link"] === true && (resolved === undefined || !/^[A-Za-z][A-Za-z0-9+.-]*:/.test(resolved))) return { kind: "local" };
   let version = typeof value["version"] === "string" ? value["version"] : "";
   let real = typeof value["name"] === "string" ? value["name"] : name;
   const alias = /^npm:(.+)@([^@]+)$/.exec(version);
@@ -245,7 +398,7 @@ function npmEntry(p: Parser, name: string, value: unknown, what: string): Entry 
     version = alias[2] ?? "";
   }
   if (/^(?:file:|git|https?:|github:)/.test(version) || !onRegistry(p, resolved)) return { kind: "unqueried" };
-  return registry(p, real, version, what);
+  return registryPin(p, real, version, resolved, what);
 }
 
 /** package-lock.json / npm-shrinkwrap.json: v2/v3 by `packages`, v1 by nested `dependencies` under maxDepth. */
