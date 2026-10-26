@@ -17,7 +17,7 @@
 // a 0700 directory, then a rename, never a partial file.
 
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import specRun from "./schemas/spec-run.v0.1.json";
 
 export const RUN_RECORD_CONTRACT = "nen.run.record/v0.1";
@@ -150,14 +150,31 @@ function locate(input: RecordInput): { path: string | null; dir: string | null; 
   return { dir, path: join(dir, `${input.id}.json`), reason: null };
 }
 
-/** True when something is at `path` and it is a link or not a directory (lstat); absent is false. */
-function notARealDirectory(path: string): boolean {
-  try {
-    const entry = lstatSync(path);
-    return entry.isSymbolicLink() || !entry.isDirectory();
-  } catch {
-    return false;
+/**
+ * The first component of the record directory below the state home (the
+ * schema's `directory`, e.g. `hatsu` then `hatsu/specs`) that is a link or not
+ * a directory, by lstat; null when none is (absent components are fine). Every
+ * component, not only the last: mkdir and chmod follow a linked ancestor
+ * (Cursor Bugbot on NN-PR-#549).
+ */
+function irregularRecordDir(input: RecordInput, dir: string): string | null {
+  const depth = input.schema.directory.split("/").filter((part): boolean => part !== "").length;
+  const components: string[] = [];
+  let at = dir;
+  for (let i = 0; i < depth; i += 1) {
+    components.unshift(at);
+    at = dirname(at);
   }
+  for (const component of components) {
+    let entry;
+    try {
+      entry = lstatSync(component);
+    } catch {
+      return null;
+    }
+    if (entry.isSymbolicLink() || !entry.isDirectory()) return component;
+  }
+  return null;
 }
 
 export function readRecord(input: RecordInput): RecordReport {
@@ -165,7 +182,8 @@ export function readRecord(input: RecordInput): RecordReport {
   const where = locate(input);
   if (where.path === null) return make("could-not-read", null, [], null, where.reason);
   // As the write refuses it (Feitan F2), a record directory that is a link or not a directory is never read through (zheref/nen#522 N8).
-  if (where.dir !== null && notARealDirectory(where.dir)) return make("could-not-read", where.path, [], null, `${where.dir} is not a real directory (a link or a file); nen reads no record through one`);
+  const irregular = where.dir === null ? null : irregularRecordDir(input, where.dir);
+  if (irregular !== null) return make("could-not-read", where.path, [], null, `${irregular} is not a real directory (a link or a file); nen reads no record through one`);
   if (!existsSync(where.path)) return make("absent", where.path, [], null, `no record for ${input.id}; a run never started is not a run with nothing recorded`);
   let value: unknown;
   try {
@@ -187,6 +205,8 @@ export function writeRecord(input: RecordInput, value: unknown, dryRun: boolean)
   // Feitan F2 (SEC-2): the directory is a real directory this user owns, never a link followed; the
   // temp file is created exclusively at 0600, and any failure removes it and is reported, never thrown.
   const temp = `${where.path}.${process.pid}.tmp`;
+  const irregular = irregularRecordDir(input, where.dir);
+  if (irregular !== null) return make("could-not-read", where.path, [], null, `${irregular} is not a real directory (a link or a file); nen writes no record through one`);
   try {
     mkdirSync(where.dir, { recursive: true, mode: 0o700 });
     const dir = lstatSync(where.dir);

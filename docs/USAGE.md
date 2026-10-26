@@ -9477,8 +9477,9 @@ intent: a write prints `mode: file 0600, directory 0700`, with `(narrowed: file 
 0755 -> 0700)` when it narrowed one, and `--json` carries `mode` as `{ verdict, file, directory,
 repaired, reason }` (`verdict` `set` \| `would-set` \| `not-set`; when the plan itself writes nothing --
 `existing`, `unchanged`, a conflict -- it is the legacy move's modes if this call moved (or, dry, would
-move) one, else `null`; when both the move and the plan write, the move's narrowing stays in `repaired`). A manifest path, a legacy manifest or a runs directory that is a **symbolic
-link** or otherwise not a regular file (directory) is refused at exit 1, naming it: nen never reads,
+move) one, else `null`; when both the move and the plan write, the move's narrowing stays in `repaired`). A manifest path, a legacy manifest or a runs directory -- or any component of it below the git
+common dir, such as `.nen` -- that is a **symbolic link** or otherwise not a regular file (directory) is
+refused at exit 1, naming it: nen never reads,
 moves, `chmod`s or writes through a link, since `chmod` follows one and would narrow a file outside the
 runs directory. **Where a mode cannot be set** -- a `win32` host, a `chmod` that
 fails, a read-back that is not `0600`/`0700` -- the write still stands (the run's record matters more
@@ -9889,7 +9890,8 @@ write is the **whole** document to a temp file created exclusively (`wx`) at
 `0600` in a `0700` directory (narrowed to `0700` when it was wider), then a
 rename. A record directory that is a link, not a directory, or owned by
 another user is refused, nothing written through it (and `read` answers
-`could-not-read` for a linked or non-directory one, reading nothing through it); a failed write removes
+`could-not-read` for a linked or non-directory one, reading nothing through it; every component of
+the schema's directory below the state home is checked, `hatsu` as well as `hatsu/specs`); a failed write removes
 its temp file and is `could-not-read`, never a crash.
 
 **Usage**

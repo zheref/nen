@@ -100,8 +100,9 @@ the next write. The modes are READ BACK and printed as 'mode: file 0600,
 directory 0700' (with '(narrowed: file 0644 -> 0600, ...)' when a write
 narrowed one); --json carries 'mode': { verdict, file, directory, repaired,
 reason } -- the legacy move's narrowing included, null when neither the
-plan nor a legacy move writes. A manifest, legacy manifest or runs directory that is a symbolic
-link (or not a regular file) is refused at exit 1: nen never chmods or writes
+plan nor a legacy move writes. A manifest, legacy manifest or runs directory (or any component of
+it below the git common dir, such as .nen) that is a symbolic link (or not a
+regular file) is refused at exit 1: nen never chmods or writes
 through a link. Where a mode cannot be set -- a win32
 host, a chmod that fails, a read-back that is not 0600/0700 -- the write
 stands and the verb says 'mode: not set (<reason>)', verdict not-set; it never

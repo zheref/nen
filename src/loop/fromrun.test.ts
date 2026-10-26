@@ -179,6 +179,20 @@ describe("nen loop slots --from-run (CLI)", () => {
     expect(result.err.join("\n")).toMatch(/\.nen.runs' is a symbolic link; nen keeps run manifests only in a real directory/);
   });
 
+  it.skipIf(process.platform === "win32")("refuses a .nen that is a link, at exit 1 naming it, counting nothing through it (Bugbot on NN-PR-#549)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-slots-run-"));
+    const common = join(root, ".git");
+    const elsewhere = mkdtempSync(join(tmpdir(), "nen-slots-ancestor-"));
+    mkdirSync(join(elsewhere, "runs"));
+    writeFileSync(join(elsewhere, "runs", "r1.json"), JSON.stringify({ ...manifest([row(480)]), repo: "zheref/nen" }));
+    mkdirSync(common, { recursive: true });
+    symlinkSync(elsewhere, join(common, ".nen"));
+    const result = await capture(["loop", "slots", "--from-run", "r1", "--target", "zheref/nen", "--local-cap", "1"], common, { 480: "OPEN" }, false);
+    expect(result.code).toBe(1);
+    expect(result.out).toEqual([]);
+    expect(result.err.join("\n")).toContain(`'${join(common, ".nen")}' is a symbolic link; nen keeps run manifests only in a real directory`);
+  });
+
   it("refuses --efforts beside --from-run, --target without it, and a run nobody started", async () => {
     const common = seeded([]);
     expect((await capture(["loop", "slots", "--from-run", "r1", "--efforts", "e.json", "--target", "o/n", "--local-cap", "1"], common, {})).code).toBe(2);

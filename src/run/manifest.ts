@@ -196,12 +196,41 @@ export function refuseIrregularManifest(path: string): void {
   );
 }
 
-/** Refuse a runs directory that is a link or not a directory: its mode would be some other directory's. */
+/**
+ * How many path components a runs directory sits below the git common dir:
+ * `.nen/runs` and the legacy `hatsu/runs` are both two. Every one of them is
+ * checked, not only the last (Cursor Bugbot on NN-PR-#549): a `.nen` that is a
+ * link would otherwise be followed by mkdir and chmod, narrowing and writing
+ * into a directory outside the common dir while the verb reported `set`.
+ */
+const RUNS_DIR_DEPTH = Math.max(RUNS_COMMON_SEGMENTS.length, ...RUNS_LEGACY_SEGMENTS.map((segments): number => segments.length));
+
+/** The first of `dir` and its ancestors up to `depth` components that is a link or not a directory (lstat), else null. */
+export function irregularDirComponent(dir: string, depth: number): { readonly path: string; readonly link: boolean } | null {
+  const components: string[] = [];
+  let at = dir;
+  for (let i = 0; i < depth; i += 1) {
+    components.unshift(at);
+    at = dirname(at);
+  }
+  for (const component of components) {
+    const entry = entryAt(component);
+    if (entry === null) return null;
+    if (entry.isSymbolicLink() || !entry.isDirectory()) return { path: component, link: entry.isSymbolicLink() };
+  }
+  return null;
+}
+
+/**
+ * Refuse a runs directory, or any of its components below the git common dir,
+ * that is a link or not a directory: its mode would be some other directory's,
+ * and a write would land outside the common dir.
+ */
 function refuseIrregularDir(dir: string): void {
-  const entry = entryAt(dir);
-  if (entry === null || entry.isDirectory()) return;
+  const bad = irregularDirComponent(dir, RUNS_DIR_DEPTH);
+  if (bad === null) return;
   throw new RunManifestError(
-    `'${dir}' is ${entry.isSymbolicLink() ? "a symbolic link" : "not a directory"}; nen keeps run manifests only in a real directory it can hold at 0700. Move it aside.`,
+    `'${bad.path}' is ${bad.link ? "a symbolic link" : "not a directory"}; nen keeps run manifests only in a real directory under the git common dir, which it can hold at 0700, never through a link. Move it aside.`,
   );
 }
 const noPosixModes = (platform: NodeJS.Platform): string | null =>
@@ -304,6 +333,7 @@ function settleModes(path: string, before: readonly string[], ops: ModeOps, fail
 
 /** Narrow the directory before a write, collecting a chmod failure rather than throwing it. */
 function narrowDir(dir: string, ops: ModeOps, failures: string[]): void {
+  refuseIrregularDir(dir);
   const mode = modeOf(dir);
   if (mode === null || mode === MANIFEST_DIR_MODE) return;
   try {
