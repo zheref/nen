@@ -160,11 +160,20 @@ export function tarballNames(url: string, name: string, version: string): boolea
     }
   };
   const segments = (m[1] ?? "").split("/");
-  const last = decode(segments[segments.length - 1] ?? "");
-  const before = decode(segments[segments.length - 2] ?? "");
+  const at = (back: number): string | undefined => decode(segments[segments.length - back] ?? "");
+  // A segment that is (or, decoded, begins) a scope: `@x`, `%40x`, `@x%2fy`.
+  const scope = (segment: string | undefined): boolean => segment !== undefined && segment.startsWith("@");
+  const last = at(1);
+  const before = at(2);
+  // BOUND BOTH WAYS (Bugbot on NN-PR-#547): an unscoped claim matches only a
+  // tarball whose name segment is not preceded by a scope, so
+  // `@other/lodash/-/lodash-4.17.15.tgz` is never `lodash`; a scoped claim
+  // matches its exact `@scope/pkg` (two segments, or one spelled with %2f),
+  // and the segment before that may not be a scope either.
   const named = name.startsWith("@")
-    ? last === name || (before !== undefined && last !== undefined && !before.includes("/") && !last.includes("/") && `${before}/${last}` === name)
-    : last === name;
+    ? (last === name && !scope(before)) ||
+      (before !== undefined && last !== undefined && !before.includes("/") && !last.includes("/") && `${before}/${last}` === name && !scope(at(3)))
+    : last === name && !scope(before);
   const base = name.slice(name.lastIndexOf("/") + 1);
   return named && decode(m[2] ?? "") === `${base}-${version}`;
 }
