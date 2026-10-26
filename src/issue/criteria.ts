@@ -19,7 +19,7 @@
 // wrong number of cells) is `malformed-row`, never skipped, and two rows for
 // one criterion are `duplicate-rows`: nen will not pick one.
 
-import { criterionCellPatterns, criterionGrammar, criterionId, DEFAULT_CRITERION_GRAMMAR, MAX_CRITERION_CELL, maskedLines, readIdRows, sectionLines, type CriterionGrammar, type IssueSectionsCatalogue } from "./shape.js";
+import { criterionCellPatterns, criterionGrammar, criterionId, DEFAULT_CRITERION_GRAMMAR, MAX_CRITERION_CELL, MAX_QUALIFIED_CELL, maskedLines, readIdRows, sectionLines, type CriterionGrammar, type IssueSectionsCatalogue } from "./shape.js";
 
 /** The `--json` contract of `nen issue criteria`. */
 export const ISSUE_CRITERIA_CONTRACT = "nen.issue.criteria/v0.1";
@@ -103,6 +103,15 @@ export interface VerifyRow {
 
 const WRAPPER = /^(?:\*\*|__|`)(.*)(?:\*\*|__|`)$/;
 
+/**
+ * Whether a cell is past the caps: its id -- after the last '/', so an
+ * `<owner/name>#<N>/` qualifier never counts against it -- over
+ * MAX_CRITERION_CELL, or the whole cell over MAX_QUALIFIED_CELL.
+ */
+function overCap(text: string): boolean {
+  return text.length > MAX_QUALIFIED_CELL || text.slice(text.lastIndexOf("/") + 1).length > MAX_CRITERION_CELL;
+}
+
 function unwrap(cell: string): string {
   let text = cell.trim();
   for (let match = WRAPPER.exec(text); match !== null; match = WRAPPER.exec(text)) text = (match[1] as string).trim();
@@ -136,7 +145,7 @@ function parseCriterionCell(cell: string, grammar: CriterionGrammar): RowCriteri
   if (/^none$/i.test(text)) return { kind: "none" };
   // A cell is author-controlled text: past the cap it is not matched at all,
   // and one that mentions the prefix is then malformed (zheref/nen#519, F3).
-  if (text.length > MAX_CRITERION_CELL) return null;
+  if (overCap(text)) return null;
   const patterns = criterionCellPatterns(grammar);
   const bare = patterns.bare.exec(text);
   if (bare !== null) return { kind: "id", id: criterionId(grammar.prefix, bare.groups?.["nenCellId"] as string) };
@@ -173,7 +182,7 @@ export function readVerifyRows(body: string, grammar: CriterionGrammar = DEFAULT
     const criterion = parseCriterionCell(first, grammar);
     if (criterion === null) {
       if (mention.test(first)) {
-        rows.push({ line: line.line, raw: line.text.trim(), cell: first, criterion: null, word: null, evidence: "", problem: `'${first}' is not a criterion: write ${p}-${n}, <CODE>#<N>/${p}-${n}, <owner/name>#<N>/${p}-${n} or none${shapeNote}${unwrap(first).length > MAX_CRITERION_CELL ? `; a criterion cell is at most ${MAX_CRITERION_CELL} characters` : ""}` });
+        rows.push({ line: line.line, raw: line.text.trim(), cell: first, criterion: null, word: null, evidence: "", problem: `'${first}' is not a criterion: write ${p}-${n}, <CODE>#<N>/${p}-${n}, <owner/name>#<N>/${p}-${n} or none${shapeNote}${overCap(unwrap(first)) ? `; a criterion id is at most ${MAX_CRITERION_CELL} characters, its cell at most ${MAX_QUALIFIED_CELL}` : ""}` });
       }
       continue;
     }
@@ -221,6 +230,8 @@ export interface ClosingIssue {
   readonly report: CriteriaReport;
   /** How the issue is named in a report, when it is not `owner/name#N` (a `--criteria` list read off the command line). */
   readonly label?: string;
+  /** The criteria are a `--criteria` list: a criterion's `line` is its position in the list, said so in a refusal. */
+  readonly listed?: boolean;
 }
 
 export type Coverage =
@@ -429,7 +440,7 @@ export function converge(issues: readonly ClosingIssue[], prBody: string, policy
     for (const row of issue.report.unrecognised) blocking.push(`${name}: unrecognised criterion row at line ${row.line}`);
     // AN ID STATED TWICE BLOCKS (zheref/nen#519, F1): one verify row would
     // otherwise clear both rows, and the second is never verified.
-    for (const duplicate of issue.report.duplicates) blocking.push(`${name}: duplicate criterion id ${duplicate.id} at lines ${duplicate.lines.join(", ")}`);
+    for (const duplicate of issue.report.duplicates) blocking.push(`${name}: duplicate criterion id ${duplicate.id} at ${issue.listed === true ? "positions" : "lines"} ${duplicate.lines.join(", ")}`);
   }
   for (const row of unrequested) if (row.problem !== null) blocking.push(`none row line ${row.line}: ${row.problem}`);
   for (const row of unmatched) blocking.push(`row line ${row.line} '${row.cell}': unmatched -- ${row.reason}`);

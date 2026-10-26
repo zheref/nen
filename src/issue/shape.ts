@@ -189,8 +189,20 @@ export function idRowPattern(prefix: string, tail: string): RegExp {
   return new RegExp(`^(?:\\*\\*|__)?${escapeRegExp(prefix)}-(?<nenRowId>${tail})(?:\\*\\*|__)?\\s*:(?:\\*\\*|__)?\\s*(?<nenRowText>.*)$`);
 }
 
-/** The longest verify-row first cell read as a criterion; a longer one mentioning the prefix is malformed (F3). */
+/**
+ * The longest criterion id span read: an issue row's text between
+ * `<PREFIX>-` and its first ':', and a verify cell's id after any issue
+ * qualifier. A longer one is unrecognised (a row) or malformed (a cell),
+ * never matched (zheref/nen#519, F3, F5).
+ */
 export const MAX_CRITERION_CELL = 64;
+
+/**
+ * The longest verify cell read at all: an id span plus the longest qualifier
+ * GitHub can issue -- a 39-character owner, '/', a 100-character name, '#',
+ * nine digits and '/'.
+ */
+export const MAX_QUALIFIED_CELL = MAX_CRITERION_CELL + 39 + 1 + 100 + 1 + 9 + 1;
 
 /**
  * The verify-row cell grammar for one criterion grammar: a bare id and an
@@ -211,57 +223,87 @@ export function criterionCellPatterns(grammar: CriterionGrammar): { readonly bar
 /** What one parsed piece of an id shape holds, for the safety rules below. */
 interface TailFacts {
   /** It carries a quantifier (`+`, `*`, `?`, `{m,n}`). */
-  quantified: boolean;
+  readonly quantified: boolean;
   /** It carries an alternation. */
-  alternation: boolean;
-  /** It is a sequence whose first atom is a literal `-` and whose other atoms are digits, unquantified groups none. */
-  dashLed: boolean;
+  readonly alternation: boolean;
+  /** Every way through it starts with an unquantified literal `-`. */
+  readonly startsDash: boolean;
+  /** Every way through it ends with an unquantified literal `-`. */
+  readonly endsDash: boolean;
+  /** It can end in a digit run of variable length, which a following digit would make ambiguous. */
+  readonly endsVariable: boolean;
+  /** A sequence: an unquantified `-` first, digit atoms after it, no group. */
+  readonly dashLed: boolean;
+  /** A sequence: digit atoms, then an unquantified `-` last, no group. */
+  readonly dashEnded: boolean;
+}
+
+interface Quantifier {
+  readonly min: number;
+  readonly max: number;
 }
 
 /**
- * Hold an id shape to the SAFE SUBSET (zheref/nen#519, F3 and F4), or say why
- * not. The shape is matched against author-controlled text -- every list row
- * of an issue and every first cell of a PR body's tables -- so it may hold
- * only: digit classes (`[0-9]`, `[1-9]`, `\d`), digits and a literal `-` (or
- * `\-`); a group `( ... )` or `(?: ... )`; the quantifiers `+`, `*`, `?`,
- * `{m}` and `{m,n}` with n at most 64, never lazy and never `{m,}`. A
- * quantified group may hold no alternation, and may hold a quantifier only
- * when it is DASH-LED (`(?:-[0-9]{1,9})*`): every repetition then starts with
- * the `-` no digit atom can match, so the match cannot backtrack
- * exponentially. Named groups, backreferences, lookarounds, `.` and every
- * other construct are refused.
+ * Hold an id shape to the SAFE SUBSET (zheref/nen#519, F3, F4, F5), or say
+ * why not. The shape is matched against author-controlled text -- every list
+ * row of an issue and every first cell of a PR body's tables -- so it may
+ * hold only: digit classes (`[0-9]`, `[1-9]`, `\d`), digits and a literal `-`
+ * (or `\-`); a group `( ... )` or `(?: ... )`; the quantifiers `+`, `*`, `?`,
+ * `{m}` and `{m,n}` with n at most 64, never lazy and never `{m,}`. Two rules
+ * keep every match linear in the text:
+ *
+ * - A DIGIT RUN OF VARIABLE LENGTH ENDS AT A DASH. After a digit atom whose
+ *   quantifier lets its length vary, the next atom is an unquantified `-`, a
+ *   group every way through which starts with one, or the end -- never
+ *   another digit atom, directly or across an optional `-` or an optional
+ *   group. Two variable runs side by side ('[0-9]+[0-9]+', '[0-9]+-?[0-9]+')
+ *   backtrack polynomially on a long run; one that ends at a dash cannot.
+ * - A QUANTIFIED GROUP holds no alternation, and holds a quantifier only
+ *   when it is DASH-LED (`(?:-[0-9]{1,9})*`) or DASH-ENDED
+ *   (`(?:[0-9]+-)?`): every repetition is then fenced by a `-` no digit atom
+ *   can match.
+ *
+ * Named groups, backreferences, lookarounds, `.` and every other construct
+ * are refused.
  */
 function unsafeTail(tail: string): string | null {
   let at = 0;
   const fail = (why: string): never => {
     throw new Error(why);
   };
-  const quantifier = (): boolean => {
+  const quantifier = (): Quantifier | null => {
     const char = tail[at];
-    if (char === "+" || char === "*" || char === "?") {
-      at += 1;
-    } else if (char === "{") {
+    let found: Quantifier;
+    if (char === "+") found = { min: 1, max: Infinity };
+    else if (char === "*") found = { min: 0, max: Infinity };
+    else if (char === "?") found = { min: 0, max: 1 };
+    else if (char === "{") {
       const bound = /^\{(\d{1,2})(?:,(\d{1,2}))?\}/.exec(tail.slice(at));
-      if (bound === null) fail(`'${tail.slice(at, at + 8)}' is not a bounded {m} or {m,n} quantifier (n at most 64)`);
-      const low = Number((bound as RegExpExecArray)[1]);
-      const high = (bound as RegExpExecArray)[2] === undefined ? low : Number((bound as RegExpExecArray)[2]);
-      if (high > 64 || low > high) fail(`'${(bound as RegExpExecArray)[0]}' is not a bounded {m,n} quantifier with m <= n <= 64`);
-      at += (bound as RegExpExecArray)[0].length;
+      if (bound === null) return fail(`'${tail.slice(at, at + 8)}' is not a bounded {m} or {m,n} quantifier (n at most 64)`);
+      const low = Number(bound[1]);
+      const high = bound[2] === undefined ? low : Number(bound[2]);
+      if (high > 64 || low > high) fail(`'${bound[0]}' is not a bounded {m,n} quantifier with m <= n <= 64`);
+      at += bound[0].length - 1;
+      found = { min: low, max: high };
     } else {
-      return false;
+      return null;
     }
+    at += 1;
     if (tail[at] === "?" || tail[at] === "+") fail("a lazy or possessive quantifier is not admitted");
-    if (tail[at] === "+" || tail[at] === "*" || tail[at] === "{") fail("a quantifier on a quantifier is not admitted");
-    return true;
+    if (tail[at] === "*" || tail[at] === "{") fail("a quantifier on a quantifier is not admitted");
+    return found;
   };
+  const variable = (q: Quantifier | null): boolean => q !== null && q.min !== q.max;
   const sequence = (): TailFacts => {
-    const facts: TailFacts = { quantified: false, alternation: false, dashLed: false };
-    let first = true;
-    let dashLed = false;
-    let digitsAfterDash = true;
+    const atoms: { kind: "dash" | "digit" | "group"; quantifier: Quantifier | null }[] = [];
+    let quantified = false;
+    let alternation = false;
+    // A variable digit run is open: the next digit must be fenced by a dash.
+    let pending = false;
+    const adjacent = "two digit runs meet with no unquantified '-' between them, and a run of variable length must end at a '-' or the end of the id";
     while (at < tail.length && tail[at] !== ")" && tail[at] !== "|") {
       const char = tail[at] as string;
-      let atom: "dash" | "digit" | "group";
+      let kind: "dash" | "digit" | "group";
       let inner: TailFacts | null = null;
       if (char === "[") {
         const close = tail.indexOf("]", at);
@@ -269,18 +311,18 @@ function unsafeTail(tail: string): string | null {
         const body = tail.slice(at + 1, close);
         if (!/^(?:[0-9](?:-[0-9])?)+$/.test(body)) fail(`the class '[${body}]' is not a digit class`);
         at = close + 1;
-        atom = "digit";
+        kind = "digit";
       } else if (char === "\\") {
         const next = tail[at + 1];
-        if (next === "d") atom = "digit";
-        else if (next === "-") atom = "dash";
-        else fail(`'\\${next ?? ""}' is not admitted (a backreference, a word or other escape)`);
+        if (next === "d") kind = "digit";
+        else if (next === "-") kind = "dash";
+        else return fail(`'\\${next ?? ""}' is not admitted (a backreference, a word or other escape)`);
         at += 2;
       } else if (char === "-") {
-        atom = "dash";
+        kind = "dash";
         at += 1;
       } else if (/[0-9]/.test(char)) {
-        atom = "digit";
+        kind = "digit";
         at += 1;
       } else if (char === "(") {
         if (tail[at + 1] === "?") {
@@ -289,41 +331,70 @@ function unsafeTail(tail: string): string | null {
         } else {
           at += 1;
         }
-        inner = alternation();
+        inner = alternationOf();
         if (tail[at] !== ")") fail("a group never closes");
         at += 1;
-        atom = "group";
+        kind = "group";
       } else {
-        fail(`'${char}' is not admitted`);
+        return fail(`'${char}' is not admitted`);
       }
-      const quantified = quantifier();
-      if (inner !== null) {
-        if (quantified && inner.alternation) fail("a quantified group may not hold an alternation");
-        if (quantified && inner.quantified && !inner.dashLed) fail("a quantified group may hold a quantifier only when it starts with a literal '-'");
-        facts.quantified ||= inner.quantified;
-        facts.alternation ||= inner.alternation;
+      const q = quantifier();
+      if (kind === "digit") {
+        if (pending) fail(adjacent);
+        pending = variable(q);
+      } else if (kind === "dash") {
+        if (q === null || q.min >= 1) pending = false;
+      } else {
+        const group = inner as TailFacts;
+        if (q !== null && group.alternation) fail("a quantified group may not hold an alternation");
+        if (q !== null && group.quantified && !group.dashLed && !group.dashEnded) {
+          fail("a quantified group may hold a quantifier only when it starts with a literal '-' ('(?:-[0-9]+)*') or ends with one ('(?:[0-9]+-)?')");
+        }
+        if (pending && !group.startsDash) fail(adjacent);
+        const optional = q !== null && q.min === 0;
+        // Repeated with no dash at its end, the group is itself a run of variable length.
+        const repeatsAsRun = variable(q) && !group.endsDash;
+        pending = (optional ? pending : false) || group.endsVariable || repeatsAsRun;
+        quantified ||= group.quantified;
+        alternation ||= group.alternation;
       }
-      facts.quantified ||= quantified;
-      if (first) dashLed = atom! === "dash" && !quantified;
-      else if (atom! !== "digit") digitsAfterDash = false;
-      first = false;
+      quantified ||= q !== null;
+      atoms.push({ kind, quantifier: q });
     }
-    facts.dashLed = dashLed && digitsAfterDash;
-    return facts;
+    const first = atoms[0];
+    const last = atoms[atoms.length - 1];
+    const startsDash = first !== undefined && first.kind === "dash" && first.quantifier === null;
+    const endsDash = last !== undefined && last.kind === "dash" && last.quantifier === null;
+    const digitsBetween = (from: number, to: number): boolean => atoms.slice(from, to).every((atom): boolean => atom.kind === "digit");
+    return {
+      quantified,
+      alternation,
+      startsDash,
+      endsDash,
+      endsVariable: pending,
+      dashLed: startsDash && digitsBetween(1, atoms.length),
+      dashEnded: endsDash && atoms.length > 1 && digitsBetween(0, atoms.length - 1),
+    };
   };
-  const alternation = (): TailFacts => {
-    const facts = sequence();
+  const alternationOf = (): TailFacts => {
+    let facts = sequence();
     while (tail[at] === "|") {
       at += 1;
       const next = sequence();
-      facts.quantified ||= next.quantified;
-      facts.alternation = true;
-      facts.dashLed = false;
+      facts = {
+        quantified: facts.quantified || next.quantified,
+        alternation: true,
+        startsDash: facts.startsDash && next.startsDash,
+        endsDash: facts.endsDash && next.endsDash,
+        endsVariable: facts.endsVariable || next.endsVariable,
+        dashLed: false,
+        dashEnded: false,
+      };
     }
     return facts;
   };
   try {
-    alternation();
+    alternationOf();
     if (at !== tail.length) fail(`'${tail.slice(at)}' is not admitted`);
     return null;
   } catch (error) {
@@ -380,13 +451,15 @@ function idTailOf(pattern: string, id: string, where: string): string {
   else if (tail.startsWith("?")) return refuse(`the group after '${id}-' is a named group or a lookaround, not a plain id group`);
   const unsafe = unsafeTail(tail);
   if (unsafe !== null) return refuse(`its id group '${tail}' is outside the safe subset (${unsafe})`);
+  let whole: RegExp;
   try {
-    if (new RegExp(`^(?:${tail})$`).test("")) return refuse(`its id group '${tail}' matches an empty id`);
+    whole = new RegExp(`^(?:${tail})$`);
     idRowPattern(id, tail);
     criterionCellPatterns({ prefix: id, tail });
   } catch (error) {
     return refuse(`its id group '${tail}' does not compile (${error instanceof Error ? error.message : String(error)})`);
   }
+  if (whole.test("")) return refuse(`its id group '${tail}' matches an empty id`);
   return tail;
 }
 
@@ -819,7 +892,14 @@ export function readIdRows(lines: readonly MaskedLine[], prefix: string, tail?: 
       if (!quoted) otherItems.push({ line: line.line, text: line.text.trim(), rest });
       continue;
     }
-    const match = admitted.exec(rest);
+    // THE ID SPAN IS BOUNDED (zheref/nen#519, F5): the text between
+    // `<PREFIX>-` and the first ':' is author-controlled, so past
+    // MAX_CRITERION_CELL characters the row is unrecognised -- converge
+    // blocks on it -- and the id shape is never run over it.
+    const idAt = rest.indexOf(`${prefix}-`);
+    const colon = rest.indexOf(":", idAt);
+    const span = (colon < 0 ? rest.length : colon) - (idAt + prefix.length + 1);
+    const match = span > MAX_CRITERION_CELL ? null : admitted.exec(rest);
     if (quoted || match === null) {
       unrecognised.push({ line: line.line, text: line.text.trim() });
       continue;
