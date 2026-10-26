@@ -104,9 +104,10 @@ Exit codes:
   2  wiring: an argument, the contract, or an internal error; stderr only
   3  not scanned: the tree or OSV could not be read, with the reason
 
-A pnpm entry is local or unqueried only by its own resolution map's keys; a
-registry entry's resolved/tarball URL must name the pair the entry claims, or
-the entry is unqueried. A redirect is not scanned, never followed.
+pnpm-lock.yaml is parsed as strict YAML (no alias, anchor, tag, merge key
+or repeated key); an entry is local or unqueried only by its own resolution
+map's keys; a registry entry's resolved/tarball URL must name the pair the
+entry claims, or the entry is unqueried. A redirect is not scanned, never followed.
 
 It never executes the repository's package manager or any program the tree
 supplies, and reads no environment variable of its own. Certificates are
@@ -149,7 +150,7 @@ function resolutionLines(row: AuditRow, tree: Resolution): string[] {
   if (tree.local > 0) lines.push(`local: ${String(tree.local)} ${files} entries are workspace, link or directory packages, not queried`);
   if (tree.unqueried > 0) {
     const what = row.reader === "lockfile"
-      ? "come from git, file: or a host off registryHosts"
+      ? "come from git, file:, a host off registryHosts, a resolution type other than directory, or a resolved URL that names another package or version"
       : "are pinned to a branch or revision, a registry identity, or a non-git location";
     lines.push(`unqueried: ${String(tree.unqueried)} ${files} entries ${what} -- never clean`);
   }
@@ -275,7 +276,7 @@ export const auditCommand: Command = {
   subcommands: SUBCOMMANDS,
   exits: [
     { verb: "audit deps", code: EXIT_WIRING, meaning: "its own meaning of 2, beside usage: wiring -- an unreadable or invalid contract or row, an ecosystem with no reader, or an internal error; never a verdict about the tree" },
-    { verb: "audit deps", code: EXIT_NOT_SCANNED, meaning: "not scanned: the lockfile or the advisory service could not be read (a symlink, a truncated or unrecognised lockfile, a bound exceeded, a malformed, failing, oversized or timed-out OSV answer); never clean" },
+    { verb: "audit deps", code: EXIT_NOT_SCANNED, meaning: "not scanned: the lockfile or the advisory service could not be read (a symlink, a truncated or unrecognised lockfile, a bound exceeded, a malformed, failing, oversized, timed-out, redirected or unreachable OSV answer); never clean" },
   ],
   async run(context: CommandContext): Promise<number> {
     try {

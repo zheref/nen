@@ -129,6 +129,12 @@ describe("nen exits", () => {
     expect(mirror.verbs.map((row): number => row.code)).toEqual([3, 4, 5]);
   });
 
+  it("names every not-scanned cause of audit deps 3, a redirect and an unreachable host included (zheref/nen#508)", async () => {
+    const audit = JSON.parse((await run(["audit", "deps"], true)).out) as ExitsReport;
+    expect(audit.verbs.map((row): number => row.code)).toEqual([2, 3]);
+    expect(audit.verbs.find((row): boolean => row.code === 3)?.meaning).toMatch(/timed-out, redirected or unreachable OSV answer/);
+  });
+
   it("says a verb with no row of its own returns only the scheme", async () => {
     const result = await run(["labels", "sync"], false);
     expect(result.code).toBe(0);
