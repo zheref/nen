@@ -26,7 +26,8 @@
 // the tree choose what is read -- and a file over the row's `maxLockfileBytes`
 // is not read at all.
 
-import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readSync } from "node:fs";
+import { isAlias, isMap, isScalar, parseDocument, visit, type Document, type Node, type Pair } from "yaml";
 import { join } from "node:path";
 import { isRecord, type Manager, type NodeRow } from "./row.js";
 import { notScanned, tally, type Entry, type Evidence, type Resolution } from "./verdict.js";
@@ -68,7 +69,15 @@ export function readRegular(dir: string, file: string, maxBytes: number): { text
     const opened = fstatSync(fd);
     if (!opened.isFile()) return { refused: `${file} is not a regular file` };
     if (opened.size > maxBytes) return { refused: `${file} is larger than ${String(maxBytes)} bytes (maxLockfileBytes)` };
-    return { text: readFileSync(fd, "utf8").replace(/^\uFEFF/, "") };
+    // At most min(size, maxBytes) + 1 bytes into one fixed buffer (F9): a file
+    // that grew after the fstat, or past the bound, is refused, never read to EOF.
+    const cap = Math.min(opened.size, maxBytes) + 1;
+    const buffer = Buffer.alloc(cap);
+    let read = 0;
+    for (let n = -1; n !== 0 && read < cap; read += n) n = readSync(fd, buffer, read, cap - read, null);
+    if (read > maxBytes) return { refused: `${file} is larger than ${String(maxBytes)} bytes (maxLockfileBytes)` };
+    if (read > opened.size) return { refused: `${file} changed while it was read` };
+    return { text: buffer.subarray(0, read).toString("utf8").replace(/^\uFEFF/, "") };
   } catch {
     return { refused: `${file} is unreadable` };
   } finally {
@@ -125,30 +134,39 @@ function registry(p: Parser, name: string, version: string, what: string): Entry
 }
 
 /**
- * The name and version a registry tarball URL names: `/<name>/-/<base>-<version>.tgz`,
- * `<name>` scoped as `@scope/pkg` or `@scope%2fpkg`, `<base>` its unscoped part.
- * `undefined` when the path is not that shape.
+ * Whether a registry tarball URL names exactly `name@version`. The tarball's
+ * path is `<prefix>/<name>/-/<base>-<version>.tgz`, where `<name>` is the
+ * one segment before `/-/` (two for `@scope/pkg`, or one spelled
+ * `@scope%2fpkg`) and `<prefix>` is whatever path the registry is mounted
+ * under (N8: `https://art.example/api/npm/npm-remote/lodash/-/lodash-4.17.21.tgz`
+ * is lodash on a registry served below `/api/npm/npm-remote`). Segments are
+ * split BEFORE they are decoded, so `lodash%2f..%2fok` is one segment that
+ * names no package; the URL parser has already resolved `..` in the path.
  */
-export function tarballPin(url: string): { name: string; version: string } | undefined {
+export function tarballNames(url: string, name: string, version: string): boolean {
   let path: string;
   try {
     path = new URL(url).pathname;
   } catch {
-    return undefined;
+    return false;
   }
-  const m = /^\/(.+)\/-\/([^/]+)\.tgz$/.exec(path);
-  if (m === null) return undefined;
-  let name: string;
-  let file: string;
-  try {
-    name = decodeURIComponent(m[1] ?? "");
-    file = decodeURIComponent(m[2] ?? "");
-  } catch {
-    return undefined;
-  }
+  const m = /^(.*)\/-\/([^/]+)\.tgz$/.exec(path);
+  if (m === null) return false;
+  const decode = (segment: string): string | undefined => {
+    try {
+      return decodeURIComponent(segment);
+    } catch {
+      return undefined;
+    }
+  };
+  const segments = (m[1] ?? "").split("/");
+  const last = decode(segments[segments.length - 1] ?? "");
+  const before = decode(segments[segments.length - 2] ?? "");
+  const named = name.startsWith("@")
+    ? last === name || (before !== undefined && last !== undefined && !before.includes("/") && !last.includes("/") && `${before}/${last}` === name)
+    : last === name;
   const base = name.slice(name.lastIndexOf("/") + 1);
-  if (!file.startsWith(`${base}-`)) return undefined;
-  return { name, version: file.slice(base.length + 1) };
+  return named && decode(m[2] ?? "") === `${base}-${version}`;
 }
 
 /**
@@ -160,10 +178,7 @@ export function tarballPin(url: string): { name: string; version: string } | und
  * URL whose path is not a tarball's, is UNQUERIED -- never clean.
  */
 function registryPin(p: Parser, name: string, version: string, url: string | undefined, what: string): Entry {
-  if (url !== undefined) {
-    const pin = tarballPin(url);
-    if (pin === undefined || pin.name !== name || pin.version !== version) return { kind: "unqueried" };
-  }
+  if (url !== undefined && !tarballNames(url, name, version)) return { kind: "unqueried" };
   return registry(p, name, version, what);
 }
 
@@ -176,84 +191,86 @@ function requireNewline(p: Parser, text: string): void {
   if (text !== "" && !text.endsWith("\n")) notScanned(`${p.lockfile} does not end with a newline (truncated)`);
 }
 
-/** One YAML flow map `{k: v, ...}` at the start of `text`: its top-level entries, and what follows it. */
-function flowMap(text: string, what: string): { entries: Map<string, string>; rest: string } {
-  const t = text.trimStart();
-  if (!t.startsWith("{")) notScanned(`pnpm-lock.yaml entry ${q(what)} has a resolution that is not a flow map`);
+/**
+ * THE PNPM LOCKFILE IS READ AS STRICT YAML, BY A YAML PARSER (F5-F8, SEC-13).
+ * Whether an entry is local, unqueried or a registry package is decided from
+ * the keys of its own `resolution` map as the `yaml` package parses them --
+ * the way pnpm's own reader sees the document -- never by a hand-rolled
+ * scanner, which hanten round 2 showed disagreeing with YAML on escaped
+ * quotes, mid-scalar quotes, multi-line scalars and repeated keys, each a way
+ * to hide a vulnerable package. The document must parse with no error and
+ * unique keys; an alias, an anchor, an explicit tag or a `<<` merge key
+ * anywhere is NOT SCANNED, never resolved; a resolution that is not a map of
+ * scalars is NOT SCANNED, never local.
+ *
+ * BOUNDED BEFORE IT IS PARSED. The byte bound (`maxLockfileBytes`) is applied
+ * when the file is read. The parser composes nested collections recursively,
+ * so a deep `[[[[...` or a deep indentation would exhaust the stack: the
+ * text's flow-bracket depth and its indentation depth (in two-space levels)
+ * are each held to `maxDepth` first, counted over the raw text, quotes
+ * included, so the count can only over-refuse. No alias is ever expanded: the
+ * document is never converted with its aliases resolved, and any alias in it
+ * is refused; any throw from the parser is NOT SCANNED.
+ */
+function pnpmDocument(p: Parser, text: string): Document.Parsed {
   let depth = 0;
-  let quote: string | null = null;
-  let end = -1;
-  const cuts: number[] = [];
-  for (let i = 0; i < t.length; i += 1) {
-    const c = t[i];
-    if (quote !== null) {
-      if (c === quote) quote = null;
-      continue;
-    }
-    if (c === "'" || c === '"') quote = c;
-    else if (c === "{") depth += 1;
-    else if (c === "}") {
-      depth -= 1;
-      if (depth === 0) {
-        end = i;
-        break;
+  let deepest = 0;
+  for (const c of text) {
+    if (c === "[" || c === "{") deepest = Math.max(deepest, (depth += 1));
+    else if ((c === "]" || c === "}") && depth > 0) depth -= 1;
+  }
+  const indent = Math.max(0, ...text.split(/\r?\n/).map((line: string): number => /^ */.exec(line)?.[0].length ?? 0));
+  if (deepest > p.row.maxDepth || indent / 2 > p.row.maxDepth) notScanned(`pnpm-lock.yaml nests deeper than ${String(p.row.maxDepth)} (maxDepth)`);
+  let doc: Document.Parsed;
+  try {
+    doc = parseDocument(text, { uniqueKeys: true, merge: false, prettyErrors: true, strict: true });
+  } catch {
+    notScanned("pnpm-lock.yaml does not parse as strict YAML");
+  }
+  const error = doc.errors[0];
+  if (error !== undefined) notScanned(`pnpm-lock.yaml does not parse as strict YAML (${error.code}${error.linePos?.[0] !== undefined ? `, line ${String(error.linePos[0].line)}` : ""})`);
+  let refused: string | undefined;
+  visit(doc, {
+    Node(_key: unknown, node: Node): symbol | void {
+      if (isAlias(node)) refused = "an alias";
+      else if (node.anchor !== undefined) refused = `an anchor (&${node.anchor})`;
+      else if (node.tag !== undefined) refused = `an explicit tag (${node.tag})`;
+      return refused === undefined ? undefined : visit.BREAK;
+    },
+    Pair(_key: unknown, pair: Pair): symbol | void {
+      if (isScalar(pair.key) && pair.key.value === "<<") {
+        refused = "a << merge key";
+        return visit.BREAK;
       }
-    } else if (c === "," && depth === 1) cuts.push(i);
-  }
-  if (end < 0) notScanned(`pnpm-lock.yaml entry ${q(what)} has an unterminated flow map`);
-  const entries = new Map<string, string>();
-  let from = 1;
-  for (const cut of [...cuts, end]) {
-    const item = t.slice(from, cut).trim();
-    from = cut + 1;
-    if (item === "" && cuts.length === 0) break;
-    const m = /^([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*([\s\S]*)$/.exec(item);
-    if (m === null) notScanned(`pnpm-lock.yaml entry ${q(what)} has a flow-map item this parser does not read`);
-    const key = m[1] ?? "";
-    if (entries.has(key)) notScanned(`pnpm-lock.yaml entry ${q(what)} repeats the key ${q(key)}`);
-    entries.set(key, unquote(m[2] ?? ""));
-  }
-  return { entries, rest: t.slice(end + 1) };
+      return undefined;
+    },
+  });
+  if (refused !== undefined) notScanned(`pnpm-lock.yaml carries ${refused}, which this parser does not resolve`);
+  return doc;
 }
 
-/**
- * THE ENTRY'S OWN `resolution` MAP, AND NOTHING ELSE OF IT (F1, SEC-13). Whether
- * an entry is local, unqueried or a registry package is read from the keys of
- * its `resolution` value only -- never from its whole body text, where a
- * dependency named `is-directory` or a `# type: directory` comment would make a
- * vulnerable package "local", and local is never queried. A trailing comment is
- * stripped; a resolution this parser cannot read as one map, repeated, or
- * missing is NOT SCANNED, never local.
- */
-function pnpmResolution(key: string, flow: string | undefined, body: readonly string[]): Map<string, string> {
-  if (flow !== undefined) {
-    const entry = flowMap(flow, key);
-    const raw = entry.entries.get("resolution");
-    if (raw === undefined) notScanned(`pnpm-lock.yaml entry ${q(key)} has no resolution (truncated)`);
-    return flowMap(raw, key).entries;
-  }
-  const at = body.flatMap((line: string, i: number): number[] => (/^ {4}resolution:/.test(line) ? [i] : []));
-  if (at.length === 0) notScanned(`pnpm-lock.yaml entry ${q(key)} has no resolution (truncated)`);
-  if (at.length > 1) notScanned(`pnpm-lock.yaml entry ${q(key)} has more than one resolution`);
-  const first = at[0] as number;
-  const value = (body[first] ?? "").replace(/^ {4}resolution:/, "");
-  if (/^\s*(?:#.*)?$/.test(value)) {
-    // The block form: `resolution:` then its keys, one per line, at indent 6.
-    const entries = new Map<string, string>();
-    for (const line of body.slice(first + 1)) {
-      if (!/^ {6}\S/.test(line)) break;
-      const m = /^ {6}([A-Za-z_][A-Za-z0-9_-]*):\s*(.*?)\s*$/.exec(line);
-      if (m === null) notScanned(`pnpm-lock.yaml entry ${q(key)} has a resolution line this parser does not read`);
-      const raw = m[2] ?? "";
-      const stripped = /^['"]/.test(raw) ? raw.replace(/(['"])\s+#.*$/, "$1") : raw.replace(/(?:^|\s+)#.*$/, "");
-      entries.set(m[1] ?? "", unquote(stripped));
+const RESOLUTION_STRINGS = ["tarball", "directory", "type", "repo", "commit"];
+
+/** One entry's `resolution` map, read from the parsed document: scalar keys to scalar values. */
+function pnpmResolution(key: string, value: unknown): Map<string, string> {
+  if (value === null || (isScalar(value) && value.value === null)) notScanned(`pnpm-lock.yaml entry ${q(key)} has no body (truncated)`);
+  if (!isMap(value)) notScanned(`pnpm-lock.yaml entry ${q(key)} is not a map`);
+  const resolution = value.get("resolution", true);
+  if (resolution === undefined) notScanned(`pnpm-lock.yaml entry ${q(key)} has no resolution (truncated)`);
+  if (!isMap(resolution)) notScanned(`pnpm-lock.yaml entry ${q(key)} has a resolution that is not a map`);
+  const entries = new Map<string, string>();
+  for (const pair of resolution.items) {
+    if (!isScalar(pair.key) || typeof pair.key.value !== "string") notScanned(`pnpm-lock.yaml entry ${q(key)} has a resolution key that is not a string`);
+    const name = pair.key.value;
+    if (!isScalar(pair.value)) notScanned(`pnpm-lock.yaml entry ${q(key)} has a resolution value for ${q(name)} that is not a scalar`);
+    const raw = pair.value.value;
+    if (RESOLUTION_STRINGS.includes(name) && (typeof raw !== "string" || raw === "")) {
+      notScanned(`pnpm-lock.yaml entry ${q(key)} has a resolution ${q(name)} that is not a non-empty string`);
     }
-    if (entries.size === 0) notScanned(`pnpm-lock.yaml entry ${q(key)} has an empty resolution`);
-    return entries;
+    entries.set(name, String(raw));
   }
-  const map = flowMap(value, key);
-  if (!/^\s*(?:#.*)?$/.test(map.rest)) notScanned(`pnpm-lock.yaml entry ${q(key)} has text after its resolution this parser does not read`);
-  return map.entries;
+  if (entries.size === 0) notScanned(`pnpm-lock.yaml entry ${q(key)} has an empty resolution`);
+  return entries;
 }
 
 // pnpm: every line of the `packages:` section is read or refused.
@@ -292,10 +309,25 @@ export function parsePnpm(p: Parser, text: string): Entry[] {
       notScanned(`pnpm-lock.yaml line ${String(i + 1)} is not indented as a packages entry`);
     }
   });
-  return sections.map((s): Entry => {
+  for (const s of sections) {
     counted(p);
     if (s.flow === undefined && s.body.length === 0) notScanned(`pnpm-lock.yaml entry ${q(s.key)} has no body (truncated)`);
-    const resolution = pnpmResolution(s.key, s.flow, s.body);
+  }
+  const doc = pnpmDocument(p, text);
+  const parsed = new Map<string, unknown>();
+  const packages = doc.get("packages", true);
+  if (sections.length > 0) {
+    if (!isMap(packages)) notScanned("pnpm-lock.yaml packages is not a map");
+    for (const pair of packages.items) {
+      if (!isScalar(pair.key) || typeof pair.key.value !== "string") notScanned("pnpm-lock.yaml has a packages key that is not a string");
+      parsed.set(pair.key.value, pair.value);
+    }
+  }
+  if (parsed.size !== sections.length || !sections.every((s): boolean => parsed.has(s.key))) {
+    notScanned("pnpm-lock.yaml packages keys read by line and by YAML disagree");
+  }
+  return sections.map((s): Entry => {
+    const resolution = pnpmResolution(s.key, parsed.get(s.key));
     const type = resolution.get("type");
     if (resolution.has("directory") || type === "directory") return { kind: "local" };
     if (resolution.has("repo") || resolution.has("commit") || type !== undefined) return { kind: "unqueried" };

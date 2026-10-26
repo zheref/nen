@@ -450,7 +450,7 @@ The complete list:
 | `review ledger` | `3` / `4` | refused: the branch is the trunk or not a branch, no ledger opened / lost: no ledger here, but one was opened under this key before -- recover it, never a fresh init |
 | [`loop iterate`](#nen-loop-iterate) | `2` | its own meaning of 2, beside usage: the loop's count cannot be established -- a lost ledger, a ledger in two homes, an unreadable ledger, or a git that cannot name the common dir; never retried as a typo |
 | [`audit deps`](#nen-audit-deps) | `2` | its own meaning of 2, beside usage: wiring -- an unreadable or invalid contract or row, an ecosystem with no reader, or an internal error; never a verdict about the tree ([#508](https://github.com/zheref/nen/issues/508)) |
-| [`audit deps`](#nen-audit-deps) | `3` | not scanned: the lockfile or the advisory service could not be read -- a symlink, a truncated or unrecognised lockfile, a bound exceeded, a malformed, failing, oversized or timed-out OSV answer; never clean ([#508](https://github.com/zheref/nen/issues/508)) |
+| [`audit deps`](#nen-audit-deps) | `3` | not scanned: the lockfile or the advisory service could not be read -- a symlink, a truncated or unrecognised lockfile, a bound exceeded, a malformed, failing, oversized, timed-out, redirected or unreachable OSV answer; never clean ([#508](https://github.com/zheref/nen/issues/508)) |
 | [`canon lint`](#nen-canon-lint) | `2` | its own meaning of 2, beside usage: wiring -- an unreadable or invalid contract, baseline or file, a symlink leaving the root, a failed git read, a `nen/workflow.json` that does not load |
 | [`canon clause check`](#nen-canon-clause-check) | `2` | its own meaning of 2, beside usage: a tooling failure -- an unreadable file or base, no definitions at all, a leaf pattern matching nothing, a failed git read |
 | [`bootstrap`](#nen-bootstrap) | `3`–`7` | not on the three-code scheme at all: it relays the bootstrap script's own published codes unchanged ([Getting the binary](#getting-the-binary)), and those numbers mean the script's things |
@@ -17255,17 +17255,29 @@ the row gains `vulnEndpoint`, `severityLevels`, `severityFloor` and
   host off `registryHosts` or over http, a Swift pin on a branch or a bare
   revision, a Swift `registry` pin. Workspace, link, directory and
   `localSourceControl` entries are the tree's own code and count as local.
-- **The artefact decides, not the entry's own label.** A pnpm entry is local
-  or unqueried only by the keys of its own `resolution` map (`directory`,
-  `type`, `repo`, `commit`, `tarball`), its trailing comment stripped -- never
-  by a word elsewhere in its body, such as a dependency named `is-directory`;
-  a resolution that is missing, repeated or not one readable map is not
-  scanned. Where a registry entry carries a `resolved` or `tarball` URL, the
-  name and version are read off its path (`/<name>/-/<base>-<version>.tgz`,
-  scoped `@scope/pkg` included) and must equal the pair the entry claims; a
-  disagreement, or a registry URL that is not a tarball path, is unqueried.
-  An npm `link: true` entry whose `resolved` is a URL is read like any other
-  entry, not as local.
+- **The artefact decides, not the entry's own label.** `pnpm-lock.yaml` is
+  parsed as **strict YAML** by a YAML parser, the way pnpm reads it, and a
+  pnpm entry is local or unqueried only by the keys of its own parsed
+  `resolution` map (`directory`, `type`, `repo`, `commit`, `tarball`) -- never
+  by a word elsewhere in its body, such as a dependency named `is-directory`,
+  or a comment. A document that does not parse, a **repeated key**, an
+  **alias**, an **anchor**, an **explicit tag** or a `<<` **merge key**
+  anywhere, and a resolution that is missing, not a map, or holds a value
+  that is not a scalar (one of those five keys holding anything but a
+  non-empty string) are not scanned, never local. The parser is bounded
+  before it runs: besides `maxLockfileBytes`, the text's flow-bracket depth
+  and its indentation depth (in two-space levels) are each held to
+  `maxDepth`, counted over the raw text so the count can only over-refuse,
+  and nothing it does is ever expanded through an alias. Where a registry
+  entry carries a `resolved` or `tarball` URL, its path must name exactly the
+  pair the entry claims: the one segment before `/-/` (two for
+  `@scope/pkg`, or one spelled `@scope%2fpkg`) is the name, and the file is
+  `<base>-<version>.tgz`. Segments are split before they are decoded, and
+  whatever path comes before the name is the registry's mount point, so a
+  registry served under a prefix (`https://art.example/api/npm/npm-remote/`)
+  on `registryHosts` is read correctly. A disagreement, or a registry URL
+  that is not a tarball path, is unqueried. An npm `link: true` entry whose
+  `resolved` is a URL is read like any other entry, not as local.
 - An OSV answer that is **malformed** (results of the wrong length or type, a
   `vulns` that is not an array, an id that is not an advisory id, a
   `next_page_token` that is not a string), not JSON, over `maxResponseBytes`,
@@ -17276,7 +17288,10 @@ the row gains `vulnEndpoint`, `severityLevels`, `severityFloor` and
   UNRATED counts as a finding.
 - It executes nothing and reads no environment variable of its own.
   Certificate verification is forced on for every request, whatever
-  `NODE_TLS_REJECT_UNAUTHORIZED` says. Two host settings still reach the
+  `NODE_TLS_REJECT_UNAUTHORIZED` says. That guarantee is the shipped Bun
+  runtime's, which honours the per-request `tls` option; the test suite runs
+  under Node, whose `fetch` ignores that option, so the suite does not
+  exercise it. Two host settings still reach the
   query, and they are its only environment inputs: the runtime's `fetch`
   honours `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`, and
   `NODE_EXTRA_CA_CERTS`, the one trust-store input it honours, can add a
@@ -17314,7 +17329,10 @@ nen audit deps --repo <path> --contract <file> --row <name> [--stack <id>] [--qu
 
 **Output and exit codes** — human lines: `resolved: osv <ecosystem> for
 <manager> (<how it was selected>, <files>, <n> packages)` first, then
-`audit-config:` evidence lines, `local:` and `unqueried:` counts, and with
+`audit-config:` evidence lines, `local:` and `unqueried:` counts (the
+`unqueried:` line names its causes: git, `file:`, a host off `registryHosts`,
+a resolution type other than directory, or a resolved URL that names another
+package or version), and with
 `--query` one `finding:` (at or above the floor, or UNRATED) or
 `below-floor:` line per advisory id with every pin it was returned for, and
 one closing `audit: <n> finding(s) at or above <floor> or unrated, <u>
