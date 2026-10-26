@@ -64,6 +64,13 @@ export interface RowRule {
   readonly measure?: string;
   /** The catalogue's technology terms are advisories on these rows (acceptance criteria state intent). */
   readonly technology?: boolean;
+  /**
+   * The id's shape after `<PREFIX>-`, as a regular-expression source: the
+   * first group its acceptance row `pattern` opens after the prefix
+   * (zheref/nen#519). Set on the acceptance row only; every other row reads
+   * `<PREFIX>-<n>`.
+   */
+  readonly idTail?: string;
 }
 
 export interface SectionRule {
@@ -109,6 +116,13 @@ export interface IssueSectionsCatalogue {
   readonly technologyTerms: TechnologyTerms | null;
   /** The acceptance-criterion row prefix (`AC` by default) -- one extraction for body-check, criteria and converge. */
   readonly criteriaPrefix: string;
+  /**
+   * The criterion id's shape after `<PREFIX>-`, a regular-expression source:
+   * the group the catalogue's acceptance row pattern declares, or
+   * `DEFAULT_CRITERION_ID_TAIL` when it declares no acceptance pattern
+   * (zheref/nen#519).
+   */
+  readonly criteriaIdTail: string;
   /** The section ids whose rows are the acceptance criteria; criteria are read inside these sections only. */
   readonly criteriaSections: readonly string[];
   /** The open-question grammar the catalogue declares; null when it declares none (nen's default applies). */
@@ -117,6 +131,99 @@ export interface IssueSectionsCatalogue {
 
 /** The documented default acceptance-criterion prefix. */
 export const DEFAULT_CRITERIA_PREFIX = "AC";
+
+/**
+ * The documented default criterion id shape after `<PREFIX>-`: one number, or
+ * several joined by hyphens -- `AC-3`, and an epic-scoped `AC-12-001` read
+ * whole (zheref/nen#519). It applies only when no catalogue declares an
+ * acceptance row pattern; with one, the pattern's own id group is the shape.
+ */
+export const DEFAULT_CRITERION_ID_TAIL = "\\d{1,9}(?:-\\d{1,9})*";
+
+/** The id shape every other numbered row (`SC-`, `AS-`, `OQ-`) is read in: one number. */
+const ROW_ID_TAIL = "\\d{1,9}";
+
+/** The criterion id grammar one catalogue (or none) gives: the prefix and the id shape after it. */
+export interface CriterionGrammar {
+  readonly prefix: string;
+  readonly tail: string;
+}
+
+export const DEFAULT_CRITERION_GRAMMAR: CriterionGrammar = { prefix: DEFAULT_CRITERIA_PREFIX, tail: DEFAULT_CRITERION_ID_TAIL };
+
+/** The criterion grammar of `catalogue`, or the documented default with none. */
+export function criterionGrammar(catalogue: IssueSectionsCatalogue | null): CriterionGrammar {
+  return catalogue === null ? DEFAULT_CRITERION_GRAMMAR : { prefix: catalogue.criteriaPrefix, tail: catalogue.criteriaIdTail };
+}
+
+/**
+ * A row's id as reported and compared: `<PREFIX>-<tail>` as written, whole --
+ * `AC-12-001` is never `AC-12` -- except that a tail of one digit run is its
+ * number (`AC-01` is `AC-1`), the reading every `AC-{n}` row always had.
+ */
+export function criterionId(prefix: string, tail: string): string {
+  return /^\d+$/.test(tail) ? `${prefix}-${Number(tail)}` : `${prefix}-${tail}`;
+}
+
+/** The number a row is ordered by: its id's last digit run (`AC-12-003` is 3), or 0 when it has none. */
+export function idNumber(tail: string): number {
+  const runs = tail.match(/\d+/g);
+  return runs === null ? 0 : Number(runs[runs.length - 1]);
+}
+
+/**
+ * The id group an acceptance row `pattern` opens right after `<id>-`:
+ * `^- AC-([0-9]+): ...` gives `[0-9]+`, `^- AC-([0-9]+-[0-9]{3}): ...` gives
+ * `[0-9]+-[0-9]{3}`. A non-capturing or named group is read the same way. A
+ * pattern with no group there declares no id shape and is refused, naming the
+ * field: the shape is the catalogue's, never a binary default substituted for
+ * it (zheref/nen#519 AC-3).
+ */
+function idTailOf(pattern: string, id: string, where: string): string {
+  const refuse = (why: string): never => {
+    throw new IssueShapeError(`${where} declares no criterion id shape: ${why}. Write the id as a group right after '${id}-', e.g. '^- ${id}-([0-9]+): ...'.`);
+  };
+  const marker = `${id}-(`;
+  const at = pattern.indexOf(marker);
+  if (at < 0) return refuse(`no group opens right after '${id}-'`);
+  const open = at + marker.length - 1;
+  let depth = 0;
+  let inClass = false;
+  let close = -1;
+  for (let index = open; index < pattern.length; index += 1) {
+    const char = pattern[index] as string;
+    if (char === "\\") {
+      index += 1;
+      continue;
+    }
+    if (inClass) {
+      if (char === "]") inClass = false;
+      continue;
+    }
+    if (char === "[") inClass = true;
+    else if (char === "(") depth += 1;
+    else if (char === ")") {
+      depth -= 1;
+      if (depth === 0) {
+        close = index;
+        break;
+      }
+    }
+  }
+  if (close < 0) return refuse(`the group after '${id}-' never closes`);
+  let tail = pattern.slice(open + 1, close);
+  if (tail.startsWith("?:")) tail = tail.slice(2);
+  else if (/^\?<[A-Za-z_$][\w$]*>/.test(tail)) tail = tail.replace(/^\?<[A-Za-z_$][\w$]*>/, "");
+  else if (tail.startsWith("?")) return refuse(`the group after '${id}-' is a lookaround, not the id`);
+  let compiled: RegExp;
+  try {
+    compiled = new RegExp(`^(?:${tail})$`);
+  } catch (error) {
+    return refuse(`its id group '${tail}' does not compile (${error instanceof Error ? error.message : String(error)})`);
+  }
+  if (tail === "" || compiled.test("")) return refuse(`its id group '${tail}' matches an empty id`);
+  return tail;
+}
 
 const ROW_PREFIX = /^[A-Za-z][A-Za-z0-9]*$/;
 
@@ -215,6 +322,7 @@ export function parseCatalogue(raw: unknown): IssueSectionsCatalogue {
     noneText: null,
     technologyTerms: null,
     criteriaPrefix: DEFAULT_CRITERIA_PREFIX,
+    criteriaIdTail: DEFAULT_CRITERION_ID_TAIL,
     criteriaSections,
     questions: null,
   };
@@ -267,13 +375,14 @@ function parseSectionsV1(raw: Record<string, unknown>, contract: string | null):
         compiles(entry[field] as string, `rows.${key}.${field}`);
       }
     }
+    const rowId = rowIdOf(entry["prefix"], `rows.${key}`);
     rowRules.set(key, {
-      prefix: rowIdOf(entry["prefix"], `rows.${key}`),
+      prefix: rowId,
       contiguous: true,
       pattern: entry["pattern"],
       ...(typeof entry["resolvedPattern"] === "string" ? { resolvedPattern: entry["resolvedPattern"] } : {}),
       ...(typeof entry["measure"] === "string" ? { measure: entry["measure"] } : {}),
-      ...(key === "acceptance" ? { technology: true } : {}),
+      ...(key === "acceptance" ? { technology: true, idTail: idTailOf(entry["pattern"], rowId, `rows.${key}.pattern`) } : {}),
     });
   }
   const sections: SectionRule[] = [];
@@ -355,6 +464,7 @@ function parseSectionsV1(raw: Record<string, unknown>, contract: string | null):
     noneText: typeof noneText === "string" ? noneText : null,
     technologyTerms,
     criteriaPrefix: acceptance?.prefix ?? DEFAULT_CRITERIA_PREFIX,
+    criteriaIdTail: acceptance?.idTail ?? DEFAULT_CRITERION_ID_TAIL,
     criteriaSections: [...rowsOf.entries()].filter(([, key]): boolean => key === "acceptance").map(([id]): string => id),
     questions,
   };
@@ -501,11 +611,14 @@ function rowPattern(prefix: string): RegExp {
 const LIST_LEAD = /^(\s{0,3}(?:>\s?)*)\s*(?:[-*+]|\d{1,9}[.)])\s+(?:\[[ xX]\]\s+)?/;
 
 export interface IdRow {
+  /** The row's whole id, `criterionId`'s reading: `AC-3`, `AC-12-001`. */
+  readonly id: string;
+  /** The id's last digit run (`idNumber`): what row order is checked by. */
   readonly number: number;
-  /** The text after `<PREFIX>-<n>:`, trimmed. */
+  /** The text after `<PREFIX>-<id>:`, trimmed. */
   readonly text: string;
   readonly line: number;
-  /** The row as `- <PREFIX>-<n>: <text>`, the form a catalogue pattern is matched against. */
+  /** The row as `- <PREFIX>-<id>: <text>`, the form a catalogue pattern is matched against. */
   readonly canonical: string;
 }
 
@@ -516,11 +629,19 @@ export interface IdRowsRead {
   readonly otherItems: readonly { readonly line: number; readonly text: string; readonly rest: string }[];
 }
 
-/** Read the `<prefix>-<n>` rows of `lines` in the one admitted grammar. */
-export function readIdRows(lines: readonly MaskedLine[], prefix: string): IdRowsRead {
+/**
+ * Read the `<prefix>-<id>` rows of `lines` in the one admitted grammar. The id
+ * after `<prefix>-` is `tail`, a regular-expression source: one number when
+ * none is given (every `SC-`, `AS-`, `OQ-` row), the criterion grammar's
+ * shape for acceptance rows (zheref/nen#519). Given a `tail`, a row's
+ * `canonical` carries its id as written, so a catalogue pattern is matched
+ * against what the row says.
+ */
+export function readIdRows(lines: readonly MaskedLine[], prefix: string, tail?: string): IdRowsRead {
   const id = escapeRegExp(prefix);
-  const first = new RegExp(`^(?:\\*\\*|__|~~|\\*|_)*${id}-\\d`);
-  const admitted = new RegExp(`^(?:\\*\\*|__)?${id}-(\\d{1,9})(?:\\*\\*|__)?\\s*:(?:\\*\\*|__)?\\s*(.*)$`);
+  const shape = tail ?? ROW_ID_TAIL;
+  const first = new RegExp(`^(?:\\*\\*|__|~~|\\*|_)*${id}-(?:\\d|(?:${shape}))`);
+  const admitted = new RegExp(`^(?:\\*\\*|__)?${id}-(?<nenRowId>${shape})(?:\\*\\*|__)?\\s*:(?:\\*\\*|__)?\\s*(?<nenRowText>.*)$`);
   const rows: IdRow[] = [];
   const unrecognised: { line: number; text: string }[] = [];
   const otherItems: { line: number; text: string; rest: string }[] = [];
@@ -538,9 +659,10 @@ export function readIdRows(lines: readonly MaskedLine[], prefix: string): IdRows
       unrecognised.push({ line: line.line, text: line.text.trim() });
       continue;
     }
-    const number = Number(match[1]);
-    const text = (match[2] as string).trim();
-    rows.push({ number, text, line: line.line, canonical: `- ${prefix}-${number}: ${text}` });
+    const written = match.groups?.["nenRowId"] as string;
+    const text = (match.groups?.["nenRowText"] as string).trim();
+    const rowId = criterionId(prefix, written);
+    rows.push({ id: rowId, number: idNumber(written), text, line: line.line, canonical: `- ${tail === undefined ? rowId : `${prefix}-${written}`}: ${text}` });
   }
   return { rows, unrecognised, otherItems };
 }
@@ -622,34 +744,34 @@ export function checkIssueBody(body: string, catalogue: IssueSectionsCatalogue, 
     if (rule.rows === undefined) continue;
     const prefix = rule.rows.prefix;
     const rowMissesFrom = misses.length;
-    let found: { number: number; rest: string; line: number }[];
+    let found: { id: string; number: number; rest: string; line: number }[];
     if (rule.rows.pattern === undefined) {
       const pattern = rowPattern(prefix);
-      found = extent.flatMap((at): { number: number; rest: string; line: number }[] => {
+      found = extent.flatMap((at): { id: string; number: number; rest: string; line: number }[] => {
         const line = masked[at] as MaskedLine;
         const match = pattern.exec(line.text);
-        return match === null ? [] : [{ number: Number(match[1]), rest: match[2] ?? "", line: line.line }];
+        return match === null ? [] : [{ id: `${prefix}-${Number(match[1])}`, number: Number(match[1]), rest: match[2] ?? "", line: line.line }];
       });
     } else {
       // The v1 shape: every list item in a rows section is a row in its pattern's shape.
       const lines = extent.map((at): MaskedLine => masked[at] as MaskedLine);
-      const idRows = readIdRows(lines, prefix);
+      const idRows = readIdRows(lines, prefix, rule.rows.idTail);
       const open = new RegExp(rule.rows.pattern);
       const resolved = rule.rows.resolvedPattern === undefined ? null : new RegExp(rule.rows.resolvedPattern);
       const idFirst = new RegExp(`^(?:~~)?${escapeRegExp(prefix)}-(\\d{1,9})`);
       found = [];
-      const tryRow = (line: number, canonical: string, number: number, rest: string): void => {
-        if (open.test(canonical) || (resolved !== null && resolved.test(canonical))) found.push({ number, rest, line });
+      const tryRow = (line: number, canonical: string, rowId: string, number: number, rest: string): void => {
+        if (open.test(canonical) || (resolved !== null && resolved.test(canonical))) found.push({ id: rowId, number, rest, line });
         else misses.push({ section: rule.id, kind: "row-shape", line, detail: `not the ${prefix} row shape: '${canonical}'` });
       };
-      for (const row of idRows.rows) tryRow(row.line, row.canonical, row.number, row.text);
+      for (const row of idRows.rows) tryRow(row.line, row.canonical, row.id, row.number, row.text);
       for (const row of idRows.unrecognised) {
         // A resolved question row (`~~OQ-1~~ → A: ...`) carries no colon after its id: matched as written.
         const lead = LIST_LEAD.exec(row.text);
         const quoted = lead !== null && (lead[1] ?? "").includes(">");
         const rest = lead === null ? row.text : row.text.slice(lead[0].length);
         const number = idFirst.exec(rest.replace(/^(?:\*\*|__)/, ""));
-        if (!quoted && resolved !== null && number !== null) tryRow(row.line, `- ${rest}`, Number(number[1]), rest);
+        if (!quoted && resolved !== null && number !== null) tryRow(row.line, `- ${rest}`, `${prefix}-${Number(number[1])}`, Number(number[1]), rest);
         else misses.push({ section: rule.id, kind: "row-shape", line: row.line, detail: `a row naming ${prefix}-<n> in no admitted shape: '${row.text}'` });
       }
       for (const item of idRows.otherItems) {
@@ -660,7 +782,7 @@ export function checkIssueBody(body: string, catalogue: IssueSectionsCatalogue, 
       const shaped = misses.splice(rowMissesFrom).sort((a, b): number => (a.line ?? 0) - (b.line ?? 0));
       misses.push(...shaped);
     }
-    for (const row of found) rows.push({ section: id, id: `${prefix}-${row.number}`, number: row.number, line: row.line });
+    for (const row of found) rows.push({ section: id, id: row.id, number: row.number, line: row.line });
     if (found.length === 0 && rule.none !== true) {
       misses.push({ section: id, kind: "no-rows", line: headingIndex + 1, detail: `'${title}' carries no ${prefix}-{n} row` });
     }
@@ -668,9 +790,9 @@ export function checkIssueBody(body: string, catalogue: IssueSectionsCatalogue, 
       const numbered = new Set<number>();
       found.forEach((row, position): void => {
         if (numbered.has(row.number)) {
-          misses.push({ section: id, kind: "row-order", line: row.line, detail: `${prefix}-${row.number} repeats an earlier row's number` });
+          misses.push({ section: id, kind: "row-order", line: row.line, detail: `${row.id} repeats an earlier row's number` });
         } else if (row.number !== position + 1) {
-          misses.push({ section: id, kind: "row-order", line: row.line, detail: `${prefix}-${row.number} is row ${position + 1}; rows are numbered ${prefix}-1 to ${prefix}-${found.length} in order` });
+          misses.push({ section: id, kind: "row-order", line: row.line, detail: `${row.id} is row ${position + 1}; rows are numbered ${prefix}-1 to ${prefix}-${found.length} in order` });
         }
         numbered.add(row.number);
       });
@@ -679,7 +801,7 @@ export function checkIssueBody(body: string, catalogue: IssueSectionsCatalogue, 
     if (measure !== null) {
       for (const row of found) {
         if (!measure.test(row.rest)) {
-          misses.push({ section: id, kind: "row-unmeasurable", line: row.line, detail: `${prefix}-${row.number} states no number or percentage` });
+          misses.push({ section: id, kind: "row-unmeasurable", line: row.line, detail: `${row.id} states no number or percentage` });
         }
       }
     }
@@ -688,7 +810,7 @@ export function checkIssueBody(body: string, catalogue: IssueSectionsCatalogue, 
       for (const row of found) {
         const source = masked.find((line): boolean => line.line === row.line);
         const raw = body.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n").split("\n")[row.line - 1] ?? source?.text ?? "";
-        const after = raw.replace(LIST_LEAD, "").replace(new RegExp(`^(?:\\*\\*|__)?${escapeRegExp(prefix)}-\\d{1,9}(?:\\*\\*|__)?\\s*:\\s*`), "");
+        const after = raw.replace(LIST_LEAD, "").replace(new RegExp(`^(?:\\*\\*|__)?${escapeRegExp(prefix)}-(?:${rule.rows.idTail ?? ROW_ID_TAIL})(?:\\*\\*|__)?\\s*:\\s*`), "");
         for (const word of terms.words) if (wordPattern(word).test(after)) advisories.push({ kind: "technology", word, line: row.line });
         for (const pattern of terms.patterns) {
           const hit = new RegExp(pattern.pattern).exec(after);

@@ -748,7 +748,10 @@ usage:
       present and empty, a content pattern not matched, a row section with no
       <PREFIX>-{n} row, a row not in its pattern's shape or naming its id in no
       admitted shape (row-shape), rows not numbered 1..n in order, a row whose
-      text fails its measure. A none section may say only noneText. Vague
+      text fails its measure. The acceptance row's id has the shape its
+      pattern's group after the prefix declares (an epic-scoped AC-12-001
+      under '^- AC-([0-9]+-[0-9]{3}): ...'; zheref/nen#519), reported whole,
+      and is ordered by its last number. A none section may say only noneText. Vague
       adjectives, and technology terms on acceptance rows, are advisories,
       never a miss. With several kinds, no --kind and no common list it
       refuses (exit 2): nen will not pick a kind. --ref reads the issue from
@@ -789,11 +792,16 @@ usage:
       Read-only. Lists the acceptance criteria an issue body states: every
       list row '- AC-{n}: <text>' ('*', '+', '1.' and '1)' bullets, a
       task-list checkbox and a bold id read) outside fenced code and comments,
-      with its number, text and line, and any AC number stated twice. A list
-      row naming AC-{n} in no admitted shape, or inside a blockquote, is
-      unrecognised. --requirements-from takes the prefix from the catalogue's
-      acceptance rows and reads them inside its acceptance section only, as
-      'issue body-check' does; with none, AC rows anywhere in the body. A
+      with its whole id, number, text and line, and any id stated twice. The
+      id is one number or several joined by hyphens: an epic-scoped
+      '- AC-12-001:' is the criterion AC-12-001, never AC-12 (zheref/nen#519).
+      A list row naming AC-{n} in no admitted shape, or inside a blockquote,
+      is unrecognised. --requirements-from takes the prefix, and the id shape,
+      from the catalogue's acceptance row: its pattern's group right after
+      the prefix ('^- AC-([0-9]+): ...' reads AC-3 and refuses AC-12-001; a
+      pattern with no such group is a malformed catalogue). Rows are read
+      inside its acceptance section only, as 'issue body-check' does; with
+      none, AC rows anywhere in the body. A
       body with no AC row is reported not verifiable -- nothing to verify,
       never "all verified". 'nen pr converge' compares these rows with a PR's
       verify rows. Exits: 0 whenever the body was read, 1 when the issue could
