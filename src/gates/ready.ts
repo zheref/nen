@@ -1327,10 +1327,11 @@ export function evaluateReady(
       const names = undetermined.map((entry): string =>
         `${entry.kind === "check_run" ? entry.name ?? "unnamed check" : entry.context ?? "unnamed check"} (${entry.kind === "check_run" ? entry.title ?? entry.name ?? "verdict did not report" : "verdict did not report"})`,
       );
-      const failedChecks = cancelledLatestReport(latest).failing;
+      const notGreen = cancelledLatestReport(latest);
       return unknown(
         `readiness undetermined: ${names.join(", ")}` +
-        (failedChecks.length === 0 ? "" : `; failing: ${failedChecks.join(", ")}`),
+        (notGreen.cancelled.length === 0 ? "" : `; cancelled (no verdict): ${notGreen.cancelled.join(", ")}`) +
+        (notGreen.failing.length === 0 ? "" : `; failing: ${notGreen.failing.join(", ")}`),
       );
     }
     if (checksAllGreen(checksExcluded)) {

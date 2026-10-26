@@ -2199,6 +2199,17 @@ describe("readiness verdict did not report (#532)", () => {
       for (const check of checks) expect(row?.missing).toContain(check.name);
     }
   });
+  it("names cancelled no-verdict siblings distinctly beside a placeholder and failure (AC-3)", () => {
+    const cancelled = { ...greenCheck("readiness / cancelled"), conclusion: "CANCELLED" };
+    const failure = { ...greenCheck("readiness / failed"), conclusion: "FAILURE" };
+    const result = evaluateReady(IDENTITIES, readyState({ checks: [placeholder, cancelled, failure] }), OPTIONS);
+    expect(result.ready).toBe(false);
+    const row = result.conjuncts.find((entry) => entry.id === "checks-green");
+    expect(row?.status).toBe("unevaluated");
+    expect(row?.missing).toContain(placeholder.name);
+    expect(row?.missing).toContain("cancelled (no verdict): readiness / cancelled");
+    expect(row?.missing).toContain("failing: readiness / failed");
+  });
   it("a successful placeholder alone is unknown, never green", () => {
     const result = evaluateReady(IDENTITIES, readyState({ checks: [placeholder] }), OPTIONS);
     expect(result.ready).toBe(false);
