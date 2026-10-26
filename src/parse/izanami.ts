@@ -1006,6 +1006,16 @@ const DEV_FORWARDING_CHECKER = RO_FWD(
 const DEV_CHECKER = RO("runs this checkout's own checker harness -- the 'running a checker script' row of izanami's allow table");
 
 export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
+  // zheref/nen#508. Without --query it reads package.json and one lockfile (or
+  // Package.resolved) under --repo and writes nothing. --query POSTs every pin
+  // to the endpoint a caller's contract names: still no write, but it is
+  // network egress of the tree's dependency list to a host the contract chose,
+  // so it is not watchable unattended -- the same fail-closed trade as a write.
+  audit: {
+    subcommands: {
+      deps: GATED(["--query"], "--query sends every dependency pin to the contract's OSV endpoint"),
+    },
+  },
   backlog: {
     subcommands: {
       fetch: RO("fetches open issues and PRs over gh api reads"),

@@ -25,6 +25,7 @@
 // see ../index.ts's header for why those three specifically do.
 
 import type { Command } from "./command.js";
+import { auditCommand } from "../audit/command.js";
 import { backlogCommand } from "../backlog/command.js";
 import { boardCommand } from "../board/command.js";
 import { canonCommand } from "../canon/command.js";
@@ -72,6 +73,7 @@ import { watchCommand } from "../watch/command.js";
 import { wcCommand } from "../wc/command.js";
 
 export const COMMANDS: readonly Command[] = [
+  auditCommand,
   backlogCommand,
   boardCommand,
   canonCommand,

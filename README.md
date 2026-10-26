@@ -451,10 +451,10 @@ it stays pending and holds every pull request's checks with it.
 
 ## The verb surface
 
-`nen --help` lists every command family (47); each
+`nen --help` lists every command family (48); each
 family's own `--help` (`nen pr --help`, `nen board --help`, ...) documents
 its verbs and flags in full. [`docs/USAGE.md`](docs/USAGE.md) documents all
-171 verbs outside the binary — each one's purpose, arguments, exit codes and
+172 verbs outside the binary — each one's purpose, arguments, exit codes and
 `--json` shape — plus the conventions they share and the developer workflows
 they compose into. The families group roughly as:
 
@@ -492,6 +492,10 @@ they compose into. The families group roughly as:
 - **Supply** — `bootstrap`, `wake`, `stop`
 - **Exit vocabulary** — `exits`: every exit code above `0`/`1`/`2`, verb ->
   code -> meaning, as data the docs are held to
+- **Dependency audit** — `audit` (`deps`): a directory's exact dependency pins
+  read from its lockfile or `Package.resolved` (never by running its package
+  manager) and queried at the OSV endpoint a caller's declaring contract
+  names, on four exits: clean, findings, wiring, not scanned
 - **Reports** — `report` (`data`, `render`): the facts an effort's report is
   made of, and the fill that turns them into one
 - **Surfaces** — `surface` (`mirror generate`, `mirror check`, `install`,

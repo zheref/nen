@@ -914,6 +914,8 @@ describe("write-flag-gated rows -- coupled to what ../cli/args.ts accepts (#31 r
   // name EVERY such row, so a future gated verb cannot land without its
   // spellings being driven through the real parser too.
   const GATED_BASE: Readonly<Record<string, string>> = {
+    // zheref/nen#508: --query is network egress of the pins, gated like a write.
+    "audit deps": "nen audit deps --repo . --contract /c.json --row node",
     "canon mirror check": "nen canon mirror check --rules-dir r",
     "canon pin": "nen canon pin --repo .",
     "changelog collate": "nen changelog collate --version v1 --theme t --changelog C.md --fragment-dir d",
