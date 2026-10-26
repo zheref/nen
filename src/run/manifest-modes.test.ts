@@ -6,12 +6,13 @@
 // user.
 
 import { describe, expect, it } from "vitest";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   HOST_MODE_OPS,
   locateRunManifest,
+  readRunManifest,
   planPark,
   planStart,
   renderModes,
@@ -171,5 +172,59 @@ describe("a mode that cannot be set is said, never claimed (AC-3)", () => {
     const dry = withManifest(runManifestPath(common(), "r2"), (existing) => planStart(existing, "r2", "zheref/nen", NOW, null), false, { ops: win32 });
     expect(dry.modes?.verdict).toBe("not-set");
     expect(dry.modes?.reason).toMatch(/win32.*dry run, nothing written/);
+  });
+});
+
+describe.runIf(POSIX)("a manifest path that is not a regular file is refused, never followed (N1, N2 on #522)", () => {
+  function victim(): string {
+    const path = join(mkdtempSync(join(tmpdir(), "nen-run-victim-")), "victim.txt");
+    writeFileSync(path, JSON.stringify(manifest()));
+    chmodSync(path, 0o644);
+    return path;
+  }
+
+  it("a symlinked legacy manifest is refused: nothing moved, the link's target keeps its mode", () => {
+    const root = common();
+    const target = victim();
+    const link = join(root, "hatsu", "runs", "r1.json");
+    mkdirSync(dirname(link), { recursive: true });
+    symlinkSync(target, link);
+    for (const dryRun of [false, true]) {
+      expect(() => locateRunManifest(root, "r1", { dryRun })).toThrow(/is a symbolic link; nen reads, moves and writes a run manifest only as a regular file/);
+    }
+    expect(bits(target)).toBe(0o644);
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(existsSync(runManifestPath(root, "r1"))).toBe(false);
+  });
+
+  it("a dangling legacy link is still something there, and refused", () => {
+    const root = common();
+    const link = join(root, "hatsu", "runs", "r1.json");
+    mkdirSync(dirname(link), { recursive: true });
+    symlinkSync(join(root, "nowhere.json"), link);
+    expect(() => locateRunManifest(root, "r1")).toThrow(/is a symbolic link/);
+  });
+
+  it("a symlinked manifest path is refused for a read and a write; no repair is claimed for the link's target", () => {
+    const root = common();
+    const target = victim();
+    const path = runManifestPath(root, "r1");
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    symlinkSync(target, path);
+    expect(() => readRunManifest(path)).toThrow(/is a symbolic link/);
+    expect(() => writeRunManifest(path, manifest())).toThrow(/is a symbolic link/);
+    expect(() => withManifest(path, (existing) => planStart(existing, "r1", "zheref/nen", NOW, null), false)).toThrow(/is a symbolic link/);
+    expect(bits(target)).toBe(0o644);
+    expect(lstatSync(path).isSymbolicLink()).toBe(true);
+  });
+
+  it("a runs directory that is a link is refused: its mode would be another directory's", () => {
+    const root = common();
+    const elsewhere = mkdtempSync(join(tmpdir(), "nen-run-elsewhere-"));
+    chmodSync(elsewhere, 0o755);
+    mkdirSync(join(root, ".nen"), { recursive: true });
+    symlinkSync(elsewhere, join(root, ".nen", "runs"));
+    expect(() => writeRunManifest(runManifestPath(root, "r1"), manifest())).toThrow(/is a symbolic link; nen keeps run manifests only in a real directory/);
+    expect(bits(elsewhere)).toBe(0o755);
   });
 });

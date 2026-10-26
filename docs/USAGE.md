@@ -493,7 +493,8 @@ verb does by default:
 | [`pr retarget`](#nen-pr-retarget), [`run rerun-failed`](#nen-run-rerun-failed) | no | `--dry-run` | print the one `gh` call as `would run:` and spawn **nothing** — not even a read, so the preview needs no token (Hatsu SDD plan N6). izanami still classifies both **mutating** in every spelling, fail-closed |
 | [`pr cascade-main`](#nen-pr-cascade-main) | no | `--dry-run` | prints `git fetch`, `git merge --no-edit` and (unless `--no-push`) `git push` as `would run:` and spawns **nothing**, so whether the merge would conflict is not known. `--no-push` alone is not a preview: it still merges. izanami keeps the verb **mutating** in every spelling, the dry form included |
 | [`spec index`](#nen-spec-index) | yes | `--write` | then `--dry-run` with it. Without `--write` nothing is written and the verb reports whether `<root>/INDEX.md` is current; `--write --dry-run` reports the regeneration and writes nothing. izanami's table classifies `--write` **mutating** and the other forms **read-only** |
-| [`run start`](#nen-run-start), [`run append`](#nen-run-append), [`run park`](#nen-run-park), [`run import`](#nen-run-import) | no | `--dry-run` | write the run manifest under the git common dir; the dry form reads it (and asks git for the common dir; `append` also reads the PR) and reports the outcome it would write, writing nothing. izanami's table classifies the bare forms **mutating** and the dry forms **read-only**; `run verify`, `run budget`, [`wc overlap`](#nen-wc-overlap), [`stage check`](#nen-stage-check) and `loop slots --from-run` are **read-only** |
+| [`run start`](#nen-run-start), [`run append`](#nen-run-append), [`run park`](#nen-run-park), [`run import`](#nen-run-import) | no | `--dry-run` | write the run manifest under the git common dir (at `0600` in a `0700` directory); the dry form reads it (and asks git for the common dir; `append` also reads the PR) and reports the outcome and the modes it would write, writing nothing -- no file, no directory, no mode change, no move of a legacy-path manifest. izanami's table classifies the bare forms **mutating** and the dry forms **read-only** |
+| [`run verify`](#nen-run-verify), [`run budget`](#nen-run-budget) | no | `--dry-run` | read the run manifest, and write only the **one-time move** of a manifest still at the legacy `<git-common-dir>/hatsu/runs/<id>.json` ([#522](https://github.com/zheref/nen/issues/522)); the dry form prints that move on stderr and reads the file in place, moving nothing. izanami's table classifies the bare forms **mutating** and the dry forms **read-only**; [`wc overlap`](#nen-wc-overlap), [`stage check`](#nen-stage-check) and `loop slots --from-run` (which reads a legacy manifest in place and never moves it) are **read-only** |
 | [`pr edit-body`](#nen-pr-edit-body) | no | `--dry-run` | **still reads GitHub** to certify the number reads as a pull request, and runs the [private-name guard](#the-private-name-guard) ([#363](https://github.com/zheref/nen/issues/363)), before printing the byte count and first/last line |
 | [`pr ledger`](#nen-pr-ledger) | no | `--dry-run` | `post` **still reads GitHub** (the PR head, the login, every comment) and the durable ledgers, checks the findings and runs the private-name guard, then prints the `gh api` call and the body and posts nothing. `read` writes nothing unless `--restore`, which writes only a phase ledger that does not exist yet |
 | [`pr mark-ready`](#nen-pr-mark-ready) | no | `--dry-run` | **still reads GitHub** — the one GraphQL read that certifies the number, its state and its head — so every refusal (not a PR, closed/merged, head mismatch, already ready) answers exactly as the real run would; prints the `markPullRequestReadyForReview` argv and sends nothing |
@@ -1105,8 +1106,8 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`run`](#family-run) | [`nen run append`](#nen-run-append) | record one PR the run opened, whatever its base, read live (base, branch, head); a PR created before the run started is refused; idempotent on the same facts, updated on a moved head or base, refused on another issue, kind or effort | git (rev-parse --git-common-dir), the manifest, github (gh pr view); writes it unless --dry-run | yes |
 | [`run`](#family-run) | [`nen run park`](#nen-run-park) | record an effort parked on an unanswered ask-once row (HR-5's park state), once | git (rev-parse --git-common-dir), the manifest; writes it unless --dry-run | yes |
 | [`run`](#family-run) | [`nen run import`](#nen-run-import) | read Hatsu's futon run manifest (`hatsu.futon.run/v0.2`) into this one, every PR read live, so one manifest owns the run; idempotent, the Hatsu file never written; a conflict or an unread PR refuses the whole import | git (rev-parse --git-common-dir), `<git-common-dir>/hatsu/futon/run-<id>.json` or --from, github (gh pr view); writes the manifest unless --dry-run | yes |
-| [`run`](#family-run) | [`nen run verify`](#nen-run-verify) | read every PR the run recorded live and report open, merged and closed-unmerged with the unmerged list; an unread PR is exit 1 and counted nowhere | the manifest, github (gh pr view) | yes |
-| [`run`](#family-run) | [`nen run budget`](#nen-run-budget) | wall-clock minutes since the run's start and the efforts' recorded tokens against a ceiling (flags, or `idle.budget`); an unread token sum is `unevaluated`; `--claim` refuses at exit 1 once reached or unevaluated | the manifest, `<git-common-dir>/.nen/usage/<effort>.json`, nen/workflow.json (idle.budget, only for a ceiling not flagged) | yes |
+| [`run`](#family-run) | [`nen run verify`](#nen-run-verify) | read every PR the run recorded live and report open, merged and closed-unmerged with the unmerged list; an unread PR is exit 1 and counted nowhere | the manifest, github (gh pr view); moves a legacy-path manifest once unless --dry-run | yes |
+| [`run`](#family-run) | [`nen run budget`](#nen-run-budget) | wall-clock minutes since the run's start and the efforts' recorded tokens against a ceiling (flags, or `idle.budget`); an unread token sum is `unevaluated`; `--claim` refuses at exit 1 once reached or unevaluated | the manifest, `<git-common-dir>/.nen/usage/<effort>.json`, nen/workflow.json (idle.budget, only for a ceiling not flagged); moves a legacy-path manifest once unless --dry-run | yes |
 | [`run`](#family-run) | [`nen run record`](#nen-run-record) | a caller's resumable run record (`hatsu.spec.run/v0.1`) validated against a schema shipped as data — the run id matched whole before any path is built, schema, caller and runId before the fields — and read or written whole at 0600 in a 0700 XDG state directory | ${XDG_STATE_HOME:-$HOME/.local/state}/<schema dir>/; the --from file; WRITES the record under `write` unless --dry-run | yes |
 | [`issue`](#family-issue) | [`nen issue search`](#nen-issue-search) | duplicate-search the backlog before filing: four gh passes (open subject, recently-closed subject, files+rule-ids, lane) reported with what each was for | gh (issue list x4) | yes |
 | [`issue`](#family-issue) | [`nen issue open-pr-check`](#nen-issue-open-pr-check) | which candidate issues carry an OPEN pull request that closing would orphan | gh (pr list) | yes |
@@ -2887,11 +2888,11 @@ The pull request is read first and must be at the pin; `pr ready` must judge the
 | <criterion> | <word> | <evidence> |
 ```
 
-- `<criterion>` -- `AC-{n}`; `<CODE>#<N>/AC-{n}`; `<owner/name>#<N>/AC-{n}`; `#<N>/AC-{n}`; or `none` (a change no criterion asked for). The id after `AC-` is read in the closing issues' own criterion grammar ([`issue criteria`](#nen-issue-criteria): the catalogue's acceptance pattern, else one number or several joined by hyphens) and compared **whole** ([#519](https://github.com/zheref/nen/issues/519)): `NN#519/AC-12-001` matches the criterion `AC-12-001`, and `NN#519/AC-12` does not. One wrapping of `**`, `__` or backticks is read through. A qualified criterion names closing issue `N`; an `owner/name` prefix must be that issue's repository, and a `CODE` prefix is echoed, never resolved. A bare `AC-{n}` names the one closing issue that states `AC-{n}`; when two do, the row is **ambiguous** and matches neither -- nen will not pick.
+- `<criterion>` -- `AC-{n}`; `<CODE>#<N>/AC-{n}`; `<owner/name>#<N>/AC-{n}`; `#<N>/AC-{n}`; or `none` (a change no criterion asked for). The id after `AC-` is read in the closing issues' own criterion grammar ([`issue criteria`](#nen-issue-criteria): the catalogue's acceptance pattern, else one number or several joined by hyphens) and compared **whole** ([#519](https://github.com/zheref/nen/issues/519)): `NN#519/AC-12-001` matches the criterion `AC-12-001`, and `NN#519/AC-12` does not. A first cell longer than 64 characters (wrappers aside) is never matched. A closing issue that states one id on two rows blocks (`<issue>: duplicate criterion id AC-1 at lines 1, 2`), because one verify row would otherwise clear both. One wrapping of `**`, `__` or backticks is read through. A qualified criterion names closing issue `N`; an `owner/name` prefix must be that issue's repository, and a `CODE` prefix is echoed, never resolved. A bare `AC-{n}` names the one closing issue that states `AC-{n}`; when two do, the row is **ambiguous** and matches neither -- nen will not pick.
 - `<word>` -- exactly one of `satisfied`, `partial`, `missing`, `contradicts`, `unrequested`, read case-insensitively.
 - `<evidence>` -- a test name, a `path:line`, a scenario. Empty, a dash, or a `<placeholder>` left from the template counts as **no evidence**. A `|` inside the cell is written `\|`.
 
-A table line whose first cell mentions `AC-` and is none of those spellings (`AC-1, AC-2`, the template's `<CODE>#<N>/AC-<k>` placeholder) is listed as **malformed**, never skipped. Header and separator rows name no criterion and are not rows.
+A table line whose first cell mentions `AC-` -- or, under a catalogue with another prefix, that prefix or the default `AC-` -- and is none of those spellings, or is over the 64-character cap, (`AC-1, AC-2`, the template's `<CODE>#<N>/AC-<k>` placeholder) is listed as **malformed**, never skipped. Header and separator rows name no criterion and are not rows.
 
 **What it reports, per criterion:**
 
@@ -6221,7 +6222,9 @@ head branch. A merged PR is reported ready and prompted, so it frees under every
 without a merge is no longer an effort and is listed as `closedUnmerged`. Anything that could not be
 read -- the PR, an `unevaluated` readiness, a marker that will not parse -- keeps its effort **held** and
 is listed under `unread` with the reason: the conservative count, never "nothing found". `--from-run`
-and `--efforts` are refused together.
+and `--efforts` are refused together. A counter never moves a file: a manifest still at the legacy
+`<git-common-dir>/hatsu/runs/<id>.json` is read **in place** and the move is named on stderr, with the
+[`run verify`](#nen-run-verify) line that makes it ([#522](https://github.com/zheref/nen/issues/522)).
 
 **Usage**
 
@@ -9409,8 +9412,12 @@ umask can only remove bits), then renamed over. A wider mode an earlier build le
 `0755` -- is narrowed on the next write and said so. The modes are **read back**, never asserted from
 intent: a write prints `mode: file 0600, directory 0700`, with `(narrowed: file 0644 -> 0600, directory
 0755 -> 0700)` when it narrowed one, and `--json` carries `mode` as `{ verdict, file, directory,
-repaired, reason }` (`verdict` `set` \| `would-set` \| `not-set`; `null` when nothing was written --
-`existing`, `unchanged`, a conflict). **Where a mode cannot be set** -- a `win32` host, a `chmod` that
+repaired, reason }` (`verdict` `set` \| `would-set` \| `not-set`; when the plan itself writes nothing --
+`existing`, `unchanged`, a conflict -- it is the legacy move's modes if this call moved (or, dry, would
+move) one, else `null`). A manifest path, a legacy manifest or a runs directory that is a **symbolic
+link** or otherwise not a regular file (directory) is refused at exit 1, naming it: nen never reads,
+moves, `chmod`s or writes through a link, since `chmod` follows one and would narrow a file outside the
+runs directory. **Where a mode cannot be set** -- a `win32` host, a `chmod` that
 fails, a read-back that is not `0600`/`0700` -- the write still stands (the run's record matters more
 than its mode) and the verb says `mode: not set (<reason>)`, verdict `not-set`; it never claims the
 mode.
@@ -10764,7 +10771,7 @@ nen issue body-check (--body-file <path> | --ref <CODE>#<N> --target <owner/name
 - `sections` -- section id to `{ heading, rows?, none? }`; every heading is read at level 2. `rows` names a `rows` entry; `none: true` lets the section say only `noneText` in place of rows.
 - `common` -- optional; the sections an issue checked with **no `--kind`** must carry (read as the kind `common`).
 - `kinds` -- kind name to `{ required, optional }` section-id lists (`template` and other keys are echoed data nen does not read); keys beginning `$` are skipped. Every id must be declared under `sections`.
-- `rows` -- row key to `{ pattern, prefix, measure?, resolvedPattern? }`: `prefix` names the row id (`^- AC-` is `AC`); a row, read as `- <ID>-<n>: <text>` with its list marker, task-list checkbox and bold id folded, must match `pattern` (or `resolvedPattern`); the text after the id must match `measure`. Rows are numbered 1..n in order. The `acceptance` row's id is the criterion prefix [`issue criteria`](#nen-issue-criteria) and [`pr converge`](#nen-pr-converge) read with the same catalogue, and **its `pattern` declares the criterion id's shape** ([#519](https://github.com/zheref/nen/issues/519)): the group that opens right after `<ID>-` (`^- AC-([0-9]+): …` reads `AC-3`; `^- AC-([0-9]+-[0-9]{3}): …` reads an epic-scoped `AC-12-001` and refuses `AC-3`). A non-capturing or named group reads the same; an `acceptance` pattern with no group there is a malformed catalogue (exit 2, naming `rows.acceptance.pattern`). An acceptance id is reported whole and ordered by its last number, so `AC-12-001`, `AC-12-002` is in order. Every other row (`SC-`, `AS-`, `OQ-`) is read as `<ID>-<n>`, unchanged. `question`'s two patterns are what [`issue questions`](#nen-issue-questions) reads.
+- `rows` -- row key to `{ pattern, prefix, measure?, resolvedPattern? }`: `prefix` names the row id (`^- AC-` is `AC`); a row, read as `- <ID>-<n>: <text>` with its list marker, task-list checkbox and bold id folded, must match `pattern` (or `resolvedPattern`); the text after the id must match `measure`. Rows are numbered 1..n in order. The `acceptance` row's id is the criterion prefix [`issue criteria`](#nen-issue-criteria) and [`pr converge`](#nen-pr-converge) read with the same catalogue, and **its `pattern` declares the criterion id's shape** ([#519](https://github.com/zheref/nen/issues/519)): the group that opens right after `<ID>-` (`^- AC-([0-9]+): …` reads `AC-3`; `^- AC-([0-9]+-[0-9]{3}): …` reads an epic-scoped `AC-12-001` and refuses `AC-3`). The hyphen may be written `\-`, and a non-capturing group reads the same. The group is matched against author-controlled text (every list row of an issue, every first cell of a PR body's tables), so it must keep to a **safe subset**: digit classes (`[0-9]`, `[1-9]`, `\d`), digits, a literal `-`; groups `( … )` and `(?: … )`; the quantifiers `+`, `*`, `?`, `{m}` and `{m,n}` with `n` at most 64 -- never lazy, never `{m,}`. A quantified group holds no alternation, and holds a quantifier only when it starts with a literal `-` (`(?:-[0-9]{1,9})*`), so no repetition can backtrack exponentially. Named groups, backreferences, lookarounds, `.` and anything else are refused. An `acceptance` pattern with no group there, or with one outside the subset, is a malformed catalogue (exit 2, naming `rows.acceptance.pattern`). An acceptance id is reported whole and ordered **within its leading group** -- the id less its last digit run: `AC-12-001`, `AC-12-002`, `AC-13-001` is in order, and `AC-12-003` as the first `AC-12-` row is a `row-order` miss naming `expected AC-12-001`, in the row's own width. A repeat is the whole id stated twice. Every other row (`SC-`, `AS-`, `OQ-`) is read as `<ID>-<n>`, unchanged. `question`'s two patterns are what [`issue questions`](#nen-issue-questions) reads.
 - `noneText`, `vagueAdjectives`, `technologyTerms` -- optional; vague words anywhere and technology terms on acceptance rows are **advisories**.
 
 nen's older array shape is still read, because its own tests and existing callers use it: `sections` an array of `{ id, title (a string or a list of spellings), level?, content?: [{ name, pattern }], rows?: { prefix, contiguous?, measurable? } }` and `kinds` kind to an array of required section ids. `content` patterns are matched case-insensitively and multi-line against the section's content; `contiguous` requires rows numbered 1..n; `measurable` requires a digit or `%` after the id. Its rows may also be table rows.
@@ -10854,9 +10861,9 @@ nen issue criteria (--ref <CODE>#<N> --target <owner/name> | --body-file <path>)
 | `--body-file <path>` | one of the two | The issue body, read from disk. | As [`issue body-check`](#nen-issue-body-check)'s; resolves against `--repo`'s root. |
 | `--requirements-from <path>` | no | The [issue-sections catalogue](#the-issue-sections-catalogue): the criterion prefix is its `rows.acceptance` id, the id's shape is the group its `rows.acceptance.pattern` opens right after the prefix, and rows are read inside its acceptance section(s) only, as `issue body-check` reads them. | Absent: `AC` rows anywhere in the body, the id one number or several joined by hyphens. Unreadable or malformed (an acceptance pattern declaring no id group included) exits 2. |
 
-**What it reads.** The one row grammar `issue body-check`, `issue questions` and `pr converge` share: every list row `- AC-{n}: <text>` (`*`, `+`, `1.` and `1)` bullets, up to three spaces of indent, a task-list checkbox `[ ]`/`[x]`, and a bold `**AC-{n}**` read) outside fenced code and HTML comments, with its whole id, its number, its text (inline code kept) and its line. **The id** ([#519](https://github.com/zheref/nen/issues/519)): with no catalogue, one number or several joined by hyphens, so Akatsuki's epic-scoped `- AC-12-001:` is the criterion `AC-12-001` -- never truncated to `AC-12`, and `AC-12` is a different id; a single number is read as its value (`AC-01` is `AC-1`, as ever). With `--requirements-from`, the shape is the catalogue's own: the group its acceptance row pattern opens after the prefix, never a binary default, so Hatsu's `^- AC-([0-9]+): …` lists an `AC-12-001` row as unrecognised. `number` is the id's last number (`AC-12-001` is 1); rows are matched by `id`. A list row whose first token is `AC-{n}` in no admitted shape (no colon, say), or one inside a blockquote, is **unrecognised**: listed, never a criterion and never dropped. A heading, a paragraph or a table row naming `AC-1` is prose about a criterion, not one. An id stated on more than one row is listed under `duplicates`; every such row stays in `criteria`.
+**What it reads.** The one row grammar `issue body-check`, `issue questions` and `pr converge` share: every list row `- AC-{n}: <text>` (`*`, `+`, `1.` and `1)` bullets, up to three spaces of indent, a task-list checkbox `[ ]`/`[x]`, and a bold `**AC-{n}**` read) outside fenced code and HTML comments, with its whole id, its number, its text (inline code kept) and its line. **The id** ([#519](https://github.com/zheref/nen/issues/519)): with no catalogue, one number or several joined by hyphens, so Akatsuki's epic-scoped `- AC-12-001:` is the criterion `AC-12-001` -- never truncated to `AC-12`, and `AC-12` is a different id; a single number is read as its value (`AC-01` is `AC-1`, as ever). With `--requirements-from`, the shape is the catalogue's own: the group its acceptance row pattern opens after the prefix, never a binary default, so Hatsu's `^- AC-([0-9]+): …` lists an `AC-12-001` row as unrecognised. **Only a single-run id is read by value** (`AC-01` is `AC-1`, its leading zeros dropped as text, never through a float, so `AC-9007199254740993` is not `AC-9007199254740992`); a multi-run id matches character for character (`AC-12-001` is not `AC-12-1`). `number` is the id's last number (`AC-12-001` is 1); rows are matched by `id`. A row whose last digit run is longer than nine digits (leading zeros aside) is **unrecognised** rather than ordered by a rounded number. A list row whose first token is `AC-{n}` in no admitted shape (no colon, say), or one inside a blockquote, is **unrecognised**: listed, never a criterion and never dropped. A heading, a paragraph or a table row naming `AC-1` is prose about a criterion, not one. An id stated on more than one row is listed under `duplicates`; every such row stays in `criteria`.
 
-**Output and exit codes** -- the line `<n> AC row(s), <n> duplicate number(s) -- <source>`, or `0 AC row(s): not verifiable -- <source>` for a body with none (nothing to verify, never "all verified"), then `AC-<n> line <n>: <text>` per row, `DUPLICATE AC-<n> lines <a>, <b>` and `UNRECOGNISED line <n>: <text>`. `--json`: `{ contract, source, verifiable, criteria, duplicates, unrecognised }` -- `contract` is `nen.issue.criteria/v0.1`, `source` as `body-check`'s, `verifiable` false when there is no AC row, `criteria` each `{ id, number, text, line }`, `duplicates` each `{ id, lines }`, `unrecognised` each `{ line, text }`. Exit 0 whenever the body was read, whatever it holds; exit 1 when `--ref`'s issue could not be read or carried no body (never zero rows); exit 2 on usage or a malformed catalogue.
+**Output and exit codes** -- the line `<n> AC row(s), <n> duplicate id(s) -- <source>`, or `0 AC row(s): not verifiable -- <source>` for a body with none (nothing to verify, never "all verified"), then `AC-<n> line <n>: <text>` per row, `DUPLICATE AC-<n> lines <a>, <b>` and `UNRECOGNISED line <n>: <text>`. `--json`: `{ contract, source, verifiable, criteria, duplicates, unrecognised }` -- `contract` is `nen.issue.criteria/v0.1`, `source` as `body-check`'s, `verifiable` false when there is no AC row, `criteria` each `{ id, number, text, line }`, `duplicates` each `{ id, lines }`, `unrecognised` each `{ line, text }`. Exit 0 whenever the body was read, whatever it holds; exit 1 when `--ref`'s issue could not be read or carried no body (never zero rows); exit 2 on usage or a malformed catalogue.
 
 **Example**
 
@@ -10864,7 +10871,7 @@ nen issue criteria (--ref <CODE>#<N> --target <owner/name> | --body-file <path>)
 nen issue criteria --ref NN#12 --target o/n
 ```
 ```text
-2 AC row(s), 0 duplicate number(s) -- o/n#12
+2 AC row(s), 0 duplicate id(s) -- o/n#12
 AC-1 line 3: lists rows
 AC-2 line 4: exits 2 unread
 ```
@@ -17339,7 +17346,10 @@ and `package.json` redirect and suppression keys are printed as
 Any other ecosystem has no reader and is exit 2.
 
 **Row keys.** Required: `stacks`, `endpoint` and `vulnEndpoint` (https; http
-only on loopback, for a fixture; no credentials in the URL), `ecosystem`,
+only on loopback, for a fixture; no credentials in the URL; `vulnEndpoint` is
+the base an advisory id is appended to, so its path **must end in `/`** and it
+carries no query or fragment -- without the slash the id would replace the
+last path segment and be sent to a path the contract never named), `ecosystem`,
 `severityLevels`, `severityFloor` (drawn from the levels), `timeoutSeconds`;
 on an `npm` row also `registryHosts` and `managers` (`{lockfiles, format,
 lockfileMarkers}`, `format` one of `pnpm-lock`, `yarn-lock`, `npm-lock`).
@@ -17374,22 +17384,43 @@ the row gains `vulnEndpoint`, `severityLevels`, `severityFloor` and
   host off `registryHosts` or over http, a Swift pin on a branch or a bare
   revision, a Swift `registry` pin. Workspace, link, directory and
   `localSourceControl` entries are the tree's own code and count as local.
+- **The artefact decides, not the entry's own label.** A pnpm entry is local
+  or unqueried only by the keys of its own `resolution` map (`directory`,
+  `type`, `repo`, `commit`, `tarball`), its trailing comment stripped -- never
+  by a word elsewhere in its body, such as a dependency named `is-directory`;
+  a resolution that is missing, repeated or not one readable map is not
+  scanned. Where a registry entry carries a `resolved` or `tarball` URL, the
+  name and version are read off its path (`/<name>/-/<base>-<version>.tgz`,
+  scoped `@scope/pkg` included) and must equal the pair the entry claims; a
+  disagreement, or a registry URL that is not a tarball path, is unqueried.
+  An npm `link: true` entry whose `resolved` is a URL is read like any other
+  entry, not as local.
 - An OSV answer that is **malformed** (results of the wrong length or type, a
   `vulns` that is not an array, an id that is not an advisory id, a
   `next_page_token` that is not a string), not JSON, over `maxResponseBytes`,
-  a non-2xx status, a redirect (refused, never followed), past
-  `timeoutSeconds`, or unreachable is **not scanned**, never clean. An id
+  a non-2xx status, a redirect (named as one, never followed and never
+  retried), past `timeoutSeconds`, or unreachable is **not scanned**, never
+  clean. Only a reset or refused connection is retried, once. An id
   whose severity is missing or outside `severityLevels` is **UNRATED**, and
   UNRATED counts as a finding.
-- It executes nothing and reads no environment variable of its own. The
-  runtime's `fetch` honours the host's `HTTPS_PROXY`, `HTTP_PROXY` and
-  `NO_PROXY` and its TLS trust store: those are the host's network
-  configuration, and are the only part of the environment that reaches the
-  query. Over https a proxy carries the tunnel and cannot read or forge the
-  answer; blocking it is not scanned.
+- It executes nothing and reads no environment variable of its own.
+  Certificate verification is forced on for every request, whatever
+  `NODE_TLS_REJECT_UNAUTHORIZED` says. Two host settings still reach the
+  query, and they are its only environment inputs: the runtime's `fetch`
+  honours `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`, and
+  `NODE_EXTRA_CA_CERTS`, the one trust-store input it honours, can add a
+  certificate authority. Over https a proxy carries the tunnel and cannot read
+  or forge the answer; blocking it is not scanned.
+- What it reads, exactly: the `--contract` file; under `--repo`, for an `npm`
+  row, `package.json`, the one lockfile it selects, and each of the row's
+  `auditConfigKeys` files present (only to report keys), and the presence
+  (never the content) of the row's other lockfiles; for a `SwiftURL` row,
+  every `Package.resolved` the reader finds at the root and in each
+  `.xcodeproj` / `.xcworkspace` bundle. It writes nothing.
 
 In [izanami's table](#nen-parse-izanami) this verb is `write-flag-gated` on
-`--query`: the resolving form reads two files and writes nothing, and
+`--query`: the resolving form reads only the files listed above and writes
+nothing, and
 `--query` sends the tree's dependency list off the machine to the host the
 contract names, so it is never certified for an unattended watch.
 

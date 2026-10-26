@@ -451,12 +451,13 @@ converge:
   <owner/name>#<N>/AC-{n}, #<N>/AC-{n} or none, and <word> is satisfied,
   partial, missing, contradicts or unrequested. An id is compared whole:
   NN#519/AC-12-001 names an epic-scoped AC-12-001, never AC-12, and with a
-  catalogue the id is read in its acceptance row pattern's shape (zheref/
-  nen#519). Criteria are read as 'nen issue criteria' reads them; --catalogue <catalogue.json> (deprecated alias
+  catalogue the id is read in its acceptance row pattern's shape
+  (zheref/nen#519); a first cell over 64 characters is malformed, and a
+  criterion id stated twice in one issue blocks. Criteria are read as 'nen
+  issue criteria' reads them; --catalogue <catalogue.json> (deprecated alias
   here: --requirements-from, which on body-check, next-blocker and merge
-  names the body requirements) gives the
-  issue-sections catalogue (its acceptance prefix, id shape and section) and an
-  optional 'coverage' block (blocking words, the none word, evidence
+  names the body requirements) gives the issue-sections catalogue (its
+  acceptance prefix, id shape and section) and an optional 'coverage' block (blocking words, the none word, evidence
   required or optional) -- with none, the defaults are AC rows anywhere in
   the body, missing and contradicts blocking, unrequested on none rows, and
   evidence required. Reports per criterion: covered-with-evidence,
@@ -1084,8 +1085,9 @@ function criteriaForBody(context: CommandContext, cwd: string): { issue: Closing
     const criteria = listed.map((id, index) => {
       const match = pattern.exec(id);
       const written = match?.groups?.["nenListId"];
-      if (written === undefined || /^0+$/.test(written)) throw new VerbUsageError(`--criteria '${id}' is not a ${prefix}-<n> id.`);
-      return { id: criterionId(prefix, written), number: idNumber(written), text: "", line: index + 1 };
+      const order = written === undefined ? null : idNumber(written);
+      if (written === undefined || order === null || /^0+$/.test(written)) throw new VerbUsageError(`--criteria '${id}' is not a ${prefix}-<n> id.`);
+      return { id: criterionId(prefix, written), number: order, text: "", line: index + 1 };
     });
     const seen = new Map<string, number[]>();
     for (const entry of criteria) seen.set(entry.id, [...(seen.get(entry.id) ?? []), entry.line]);

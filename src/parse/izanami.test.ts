@@ -321,7 +321,9 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     expect(classifyCommand("nen run start --id r1 --repo . --dry-run").classification).toBe("read-only");
     expect(classifyCommand("nen run append --id r1 --issue NN#1 --pr 2 --base main --kind delivery --head abcdef1").classification).toBe("mutating");
     expect(classifyCommand("nen run append --id r1 --issue NN#1 --pr 2 --base main --kind delivery --head abcdef1 --dry-run").classification).toBe("read-only");
-    expect(classifyCommand("nen run verify --id r1 --target o/r").classification).toBe("read-only");
+    // zheref/nen#522: verify and budget move a legacy-path manifest on read, so
+    // only their --dry-run form is vouched for (pinned in the test below).
+    expect(classifyCommand("nen run verify --id r1 --target o/r --dry-run").classification).toBe("read-only");
     // zheref/nen#486 AC-5, #513, #510: the N-B stack's verbs each have a row.
     expect(classifyCommand("nen run import --id 0123456789abcdef0123456789abcdef --repo .").classification).toBe("mutating");
     expect(classifyCommand("nen run import --id 0123456789abcdef0123456789abcdef --repo . --dry-run").classification).toBe("read-only");
@@ -333,7 +335,7 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     expect(classifyCommand("nen pr ledger read --target o/r --pr 1 --effort a").classification).toBe("read-only");
     expect(classifyCommand("nen pr ledger read --target o/r --pr 1 --effort a --restore").classification).toBe("mutating");
     expect(classifyCommand("nen pr ledger bogus --target o/r --pr 1").classification).not.toBe("read-only");
-    expect(classifyCommand("nen run budget --id r1 --claim --max-minutes 5 --max-tokens 9").classification).toBe("read-only");
+    expect(classifyCommand("nen run budget --id r1 --claim --max-minutes 5 --max-tokens 9 --dry-run").classification).toBe("read-only");
     expect(classifyCommand("nen wc overlap --efforts a,b --repo .").classification).toBe("read-only");
     expect(classifyCommand("nen stage check --exclusive --target o/r --issue 7").classification).toBe("read-only");
     expect(classifyCommand("nen loop slots --from-run r1 --target o/r --local-cap 2").classification).toBe("read-only");
@@ -434,6 +436,25 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     expect(classifyCommand("nen issue file --target o/r --title x --body-file b.md --dry-run").classification).toBe("read-only");
     expect(classifyCommand("nen issue consolidate-close --target o/r --parent 1 --children 2").classification).toBe("mutating");
     expect(classifyCommand("nen issue attach-sub --target o/r --parent 1 --children 2 --dry-run").classification).toBe("read-only");
+  });
+
+  // zheref/nen#522: the one-time move of a legacy-path run manifest is a write
+  // that run verify and run budget make on read, so both rows are dry-run-gated:
+  // the bare form is mutating, only the exact --dry-run token is read-only, and
+  // the flag the row trusts is one the family's real parser accepts for them.
+  it("run verify and run budget are dry-run-gated: the legacy move is a write (#522)", () => {
+    for (const base of ["nen run verify --id r1 --target o/r", "nen run budget --id r1 --claim --max-minutes 5 --max-tokens 9"]) {
+      expect(classifyCommand(base).classification, base).toBe("mutating");
+      expect(classifyCommand(`${base} --dry-run`).classification, base).toBe("read-only");
+      expect(classifyCommand(`${base} --repo "a --dry-run b"`).classification, base).not.toBe("read-only");
+    }
+    const run = findCommand("run");
+    if (run === undefined) throw new Error("'run' is not a registered family");
+    expect(run.flags?.booleans).toContain("dry-run");
+    for (const sub of ["verify", "budget"]) {
+      const parsed = parseArgs(["run", sub, "--id", "r1", "--dry-run"], mergeFlags(run.flags));
+      expect(parsed.booleans.has("dry-run"), sub).toBe(true);
+    }
   });
 
   // zheref/nen#160: request-reviews grew --dry-run the same day it grew

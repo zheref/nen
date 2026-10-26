@@ -33,7 +33,7 @@
 // the launch answers it was handed, append records the PR it was told about,
 // and the readers report.
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync, type Stats } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { GIT, outputLines, type Seams } from "../seam/exec.js";
 import { withLedgerLock } from "../ledger/lock.js";
@@ -167,7 +167,43 @@ export interface ManifestModes {
 }
 
 const octal = (mode: number): string => (mode & 0o777).toString(8).padStart(4, "0");
-const modeOf = (path: string): number | null => (existsSync(path) ? statSync(path).mode & 0o777 : null);
+/** What is AT the path, never what a link points to (lstat); null when nothing is there. */
+function entryAt(path: string): Stats | null {
+  try {
+    return lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+const present = (path: string): boolean => entryAt(path) !== null;
+const modeOf = (path: string): number | null => {
+  const entry = entryAt(path);
+  return entry === null ? null : entry.mode & 0o777;
+};
+
+/**
+ * Refuse a manifest path that holds anything but a regular file (Nobunaga N1,
+ * N2 on #522). A link is never read through, moved, chmod-ed or written over:
+ * chmod follows a link, so narrowing one would change a file OUTSIDE the runs
+ * directory and then claim `set` for it. Absent is fine -- that is a new run.
+ */
+export function refuseIrregularManifest(path: string): void {
+  const entry = entryAt(path);
+  if (entry === null || entry.isFile()) return;
+  throw new RunManifestError(
+    `'${path}' is ${entry.isSymbolicLink() ? "a symbolic link" : "not a regular file"}; nen reads, moves and writes a run manifest only as a regular file, never through a link or over one. Move it aside.`,
+  );
+}
+
+/** Refuse a runs directory that is a link or not a directory: its mode would be some other directory's. */
+function refuseIrregularDir(dir: string): void {
+  const entry = entryAt(dir);
+  if (entry === null || entry.isDirectory()) return;
+  throw new RunManifestError(
+    `'${dir}' is ${entry.isSymbolicLink() ? "a symbolic link" : "not a directory"}; nen keeps run manifests only in a real directory it can hold at 0700. Move it aside.`,
+  );
+}
 const noPosixModes = (platform: NodeJS.Platform): string | null =>
   platform === "win32" ? "this host (win32) has no POSIX file modes; the manifest takes its directory's access control list" : null;
 
@@ -187,7 +223,8 @@ export function renderModes(modes: ManifestModes | null): string[] {
  * is reported.
  */
 export function createManifestDir(dir: string, ops: ModeOps = HOST_MODE_OPS): void {
-  if (existsSync(dir)) return;
+  refuseIrregularDir(dir);
+  if (present(dir)) return;
   mkdirSync(dirname(dir), { recursive: true });
   try {
     mkdirSync(dir, { mode: MANIFEST_DIR_MODE });
@@ -206,21 +243,25 @@ export function createManifestDir(dir: string, ops: ModeOps = HOST_MODE_OPS): vo
   }
 }
 
-/** The repairs a write would make: every wider mode on the directory and the file. */
-function plannedRepairs(path: string): string[] {
+/**
+ * The repairs a write would make: every wider mode on the directory and the
+ * file. `filePath` is where the file is now -- the legacy path, under a dry
+ * form that has not moved it -- so the dry line and the move's line agree.
+ */
+function plannedRepairs(path: string, filePath: string = path): string[] {
   const repairs: string[] = [];
   const dirMode = modeOf(dirname(path));
   if (dirMode !== null && dirMode !== MANIFEST_DIR_MODE) repairs.push(`directory ${octal(dirMode)} -> ${octal(MANIFEST_DIR_MODE)}`);
-  const fileMode = modeOf(path);
+  const fileMode = modeOf(filePath);
   if (fileMode !== null && fileMode !== MANIFEST_FILE_MODE) repairs.push(`file ${octal(fileMode)} -> ${octal(MANIFEST_FILE_MODE)}`);
   return repairs;
 }
 
 /** What a dry form says about the modes the real write would set. */
-export function plannedModes(path: string, ops: ModeOps = HOST_MODE_OPS): ManifestModes {
+export function plannedModes(path: string, ops: ModeOps = HOST_MODE_OPS, filePath: string = path): ManifestModes {
   const none = noPosixModes(ops.platform);
   if (none !== null) return { verdict: "not-set", file: null, directory: null, repaired: [], reason: `${none} -- dry run, nothing written` };
-  return { verdict: "would-set", file: octal(MANIFEST_FILE_MODE), directory: octal(MANIFEST_DIR_MODE), repaired: plannedRepairs(path), reason: null };
+  return { verdict: "would-set", file: octal(MANIFEST_FILE_MODE), directory: octal(MANIFEST_DIR_MODE), repaired: plannedRepairs(path, filePath), reason: null };
 }
 
 /**
@@ -264,14 +305,19 @@ function narrowDir(dir: string, ops: ModeOps, failures: string[]): void {
  */
 export function writeRunManifest(path: string, manifest: RunManifest, ops: ModeOps = HOST_MODE_OPS): ManifestModes {
   const dir = dirname(path);
+  refuseIrregularManifest(path);
   createManifestDir(dir, ops);
   const posix = noPosixModes(ops.platform) === null;
   const before = posix ? plannedRepairs(path) : [];
   const failures: string[] = [];
   if (posix) narrowDir(dir, ops, failures);
   const temp = `${path}.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`;
+  // Removed in `finally` only once THIS call created it: a 'wx' that failed on
+  // EEXIST found another holder's file at that name, which is not ours (N7).
+  let created = false;
   try {
     writeFileSync(temp, `${JSON.stringify(manifest, null, 2)}\n`, { encoding: "utf8", mode: MANIFEST_FILE_MODE, flag: "wx" });
+    created = true;
     if (posix) {
       try {
         ops.chmod(temp, MANIFEST_FILE_MODE);
@@ -280,8 +326,9 @@ export function writeRunManifest(path: string, manifest: RunManifest, ops: ModeO
       }
     }
     renameSync(temp, path);
+    created = false;
   } finally {
-    rmSync(temp, { force: true });
+    if (created) rmSync(temp, { force: true });
   }
   return settleModes(path, before, ops, failures);
 }
@@ -313,21 +360,22 @@ export interface LocatedManifest {
 export function locateRunManifest(commonDir: string, id: string, options: { readonly dryRun?: boolean; readonly ops?: ModeOps } = {}): LocatedManifest {
   const ops = options.ops ?? HOST_MODE_OPS;
   const path = runManifestPath(commonDir, id);
-  const legacy = RUNS_LEGACY_SEGMENTS.map((segments): string => join(commonDir, ...segments, `${id}.json`)).filter((candidate): boolean => existsSync(candidate));
+  // lstat, not exists: a dangling link at a legacy path is still something there, and refused (N1).
+  const legacy = RUNS_LEGACY_SEGMENTS.map((segments): string => join(commonDir, ...segments, `${id}.json`)).filter((candidate): boolean => present(candidate));
+  refuseIrregularManifest(path);
   if (legacy.length === 0) return { path, readPath: path, migratedFrom: null, moved: false, modes: null };
-  if (existsSync(path) || legacy.length > 1) {
-    throw new RunManifestError(`run '${id}' has a manifest in more than one place (${[...(existsSync(path) ? [path] : []), ...legacy].join(", ")}); nen will not choose which is the run. Keep one and move the others aside.`);
+  if (present(path) || legacy.length > 1) {
+    throw new RunManifestError(`run '${id}' has a manifest in more than one place (${[...(present(path) ? [path] : []), ...legacy].join(", ")}); nen will not choose which is the run. Keep one and move the others aside.`);
   }
   const from = legacy[0] as string;
+  refuseIrregularManifest(from);
   if (options.dryRun === true) {
-    const planned = plannedModes(path, ops);
-    const legacyMode = modeOf(from);
-    const repaired = planned.verdict === "would-set" && legacyMode !== null && legacyMode !== MANIFEST_FILE_MODE ? [...planned.repaired, `file ${octal(legacyMode)} -> ${octal(MANIFEST_FILE_MODE)}`] : planned.repaired;
-    return { path, readPath: from, migratedFrom: from, moved: false, modes: { ...planned, repaired } };
+    return { path, readPath: from, migratedFrom: from, moved: false, modes: plannedModes(path, ops, from) };
   }
   createManifestDir(dirname(path), ops);
   return withLedgerLock(path, () => {
-    if (existsSync(path)) throw new RunManifestError(`run '${id}' appeared at ${path} while ${from} was being moved there; nen will not choose which is the run.`);
+    refuseIrregularManifest(from);
+    if (present(path)) throw new RunManifestError(`run '${id}' appeared at ${path} while ${from} was being moved there; nen will not choose which is the run.`);
     const posix = noPosixModes(ops.platform) === null;
     const before: string[] = [];
     const failures: string[] = [];
@@ -450,7 +498,8 @@ export function parseRunManifest(path: string, value: unknown): RunManifest {
 
 /** The manifest on disk, or null when there is none. Unreadable is a refusal, never null. */
 export function readRunManifest(path: string): RunManifest | null {
-  if (!existsSync(path)) return null;
+  if (!present(path)) return null;
+  refuseIrregularManifest(path);
   let value: unknown;
   try {
     value = JSON.parse(readFileSync(path, "utf8"));
@@ -581,7 +630,7 @@ export function withManifest<T extends { readonly manifest: RunManifest; readonl
   const writes = (outcome: T): boolean => outcome.outcome !== "conflict" && outcome.outcome !== "existing" && outcome.outcome !== "unchanged";
   if (!write) {
     const outcome = plan(readRunManifest(options.readPath ?? path));
-    return { ...outcome, modes: writes(outcome) ? plannedModes(path, ops) : null };
+    return { ...outcome, modes: writes(outcome) ? plannedModes(path, ops, options.readPath ?? path) : null };
   }
   createManifestDir(dirname(path), ops);
   return withLedgerLock(path, () => {

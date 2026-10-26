@@ -1006,8 +1006,11 @@ const DEV_FORWARDING_CHECKER = RO_FWD(
 const DEV_CHECKER = RO("runs this checkout's own checker harness -- the 'running a checker script' row of izanami's allow table");
 
 export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
-  // zheref/nen#508. Without --query it reads package.json and one lockfile (or
-  // Package.resolved) under --repo and writes nothing. --query POSTs every pin
+  // zheref/nen#508. Without --query it reads the --contract file and, under
+  // --repo, package.json, the one selected lockfile and the row's
+  // auditConfigKeys files present (or every Package.resolved the Swift reader
+  // finds at the root and in .xcodeproj/.xcworkspace bundles), and writes
+  // nothing. --query POSTs every pin
   // to the endpoint a caller's contract names: still no write, but it is
   // network egress of the tree's dependency list to a host the contract chose,
   // so it is not watchable unattended -- the same fail-closed trade as a write.
@@ -1298,8 +1301,8 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       // zheref/nen#486 AC-5: reads the consumer's run manifest (never writes it)
       // and every PR over gh pr view; writes nen's manifest unless --dry-run.
       import: DRY("reads the consumer's run manifest and every PR over gh pr view, and writes the run manifest under the git common dir unless --dry-run is given"),
-      verify: RO("reads the run manifest and every recorded PR over gh pr view"),
-      budget: RO("reads the run manifest and the usage ledgers; a claim is a question and writes nothing"),
+      verify: DRY("reads the run manifest and every recorded PR over gh pr view; moves a legacy-path manifest to the common-dir root once unless --dry-run is given (zheref/nen#522)"),
+      budget: DRY("reads the run manifest and the usage ledgers, a claim writing nothing; moves a legacy-path manifest to the common-dir root once unless --dry-run is given (zheref/nen#522)"),
       // zheref/nen#493: a caller's run record under its XDG state directory.
       "record read": RO("reads and validates the run record; writes nothing"),
       "record write": DRY("writes the run record (0600, in a 0700 directory) unless --dry-run is given"),

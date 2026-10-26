@@ -77,7 +77,7 @@ endpoint the declaring contract names about every one of them.
   --query            Query OSV. Without it the verb resolves and stops.
 
 Row keys read (unknown keys are exit 2): endpoint, vulnEndpoint (https, or
-http on loopback only), ecosystem, severityLevels, severityFloor (drawn from
+http on loopback only; vulnEndpoint's path must end in '/'), ecosystem, severityLevels, severityFloor (drawn from
 the levels), timeoutSeconds, stacks; npm rows also registryHosts, managers
 ({lockfiles, format, lockfileMarkers}), unsupportedLockfiles, auditConfigKeys.
 Bounds, defaulted when absent: maxResponseBytes 33554432, maxEntries 500000,
@@ -104,10 +104,15 @@ Exit codes:
   2  wiring: an argument, the contract, or an internal error; stderr only
   3  not scanned: the tree or OSV could not be read, with the reason
 
+A pnpm entry is local or unqueried only by its own resolution map's keys; a
+registry entry's resolved/tarball URL must name the pair the entry claims, or
+the entry is unqueried. A redirect is not scanned, never followed.
+
 It never executes the repository's package manager or any program the tree
-supplies, and reads no environment variable of its own. The runtime's fetch
-honours the host's HTTPS_PROXY / HTTP_PROXY / NO_PROXY and TLS trust store,
-which are the host's network configuration.`;
+supplies, and reads no environment variable of its own. Certificates are
+always verified; the runtime's fetch honours the host's HTTPS_PROXY /
+HTTP_PROXY / NO_PROXY and NODE_EXTRA_CA_CERTS, the host's network
+configuration and the only environment that reaches the query.`;
 
 export interface AuditReport {
   readonly contract: typeof AUDIT_DEPS_CONTRACT;
