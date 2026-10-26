@@ -1569,6 +1569,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
     },
   },
   tag: { subcommands: { cut: MUT("creates a tag locally even without --push") } },
+  tests: { subcommands: { map: RO("reads an issue body and test reports from disk; runs, fetches and writes nothing") } },
   wake: {
     subcommands: {
       fire: GATED(["--run"], "removes/re-applies a label and comments once --run is given"),

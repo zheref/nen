@@ -11,8 +11,8 @@ binary](#getting-the-binary)), or as `bun src/index.ts` from a checkout of this
 repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
-what each version changed: 48 command
-families, 172 verbs, every flag checked against that binary.
+what each version changed: 49 command
+families, 173 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -257,7 +257,7 @@ including every refusal reason. The raw NUL-delimited stream
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **103 shapes** and **107 ids** (`nen.runner.plan`
+binary carries**, writing or reading — **104 shapes** and **108 ids** (`nen.runner.plan`
 and `nen.wc.worktree.copies` each have two versions, `nen.stop.mark` three, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -321,6 +321,7 @@ file formats).
 - **`spec`** — `nen.spec.check/v0.1` · `nen.spec.cite-check/v0.1` · `nen.spec.converge/v0.1` · `nen.spec.coverage/v0.1` · `nen.spec.diff/v0.1` · `nen.spec.index/v0.1` · `nen.spec.inventory/v0.1` · `nen.spec.number/v0.1` · `nen.spec.parity/v0.1` · `nen.spec.tasks/v0.1` · `nen.spec.trace/v0.1`
 - **`stop`** — `nen.stop.answer/v0.1` · `nen.stop.list/v0.1` · `nen.stop.mark/v0.1` · `nen.stop.mark/v0.2` · `nen.stop.mark/v0.3` · `nen.stop.proposed-issue/v0.1`
 - **`surface`** — `nen.surface.capabilities/v0.1` · `nen.surface.install/v0.1` · `nen.surface.mirror.check-installed/v0.1` · `nen.surface.mirror.check-plugin/v0.1` · `nen.surface.mirror.check/v0.1` · `nen.surface.mirror.generate/v0.1` · `nen.surface.status/v0.1`
+- **`tests`** — `nen.tests.map/v0.1`
 - **`usage`** — `nen.usage.ledger/v0.1`
 - **`wc`** — `nen.wc.catch-up/v0.2` · `nen.wc.prune/v0.1` · `nen.wc.publish/v0.1` · `nen.wc.squash/v0.1` · `nen.wc.swap.state/v0.1` · `nen.wc.swap/v0.1` · `nen.wc.worktree.copies/v0.1` · `nen.wc.worktree.copies/v0.2` · `nen.wc.worktree/v0.1` · `nen.wc.worktrees/v0.1`
 - **`workflow`** — `nen.workflow/v0.1`
@@ -997,7 +998,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 172 verbs, grouped as the README groups them. **Reads** is what a
+All 173 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -1149,6 +1150,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`spec`](#family-spec) | [`nen spec tasks groups`](#nen-spec-tasks-groups) | tasks.md grouped by story and platform, each group's state (open, clarifying, captured, delivered) and dependencies in topological order, and per story group the dispatch title and an issue body quoting its scenarios as fenced source data | spec.md/tasks.md under --repo; git rev-parse HEAD for the pinned sha | yes |
 | [`spec`](#family-spec) | [`nen spec trace`](#nen-spec-trace) | `<root>/traceability.md` for one family: per FR and SC, each member's parity state or citation count, the tasks and open markers; reports current / stale / hand-edited / absent and `--write` refuses a hand edit | spec.md/tasks.md/parity.md and nen/repos.json under --repo; WRITES `<root>/traceability.md` under --write unless --dry-run | yes |
 | [`decisions`](#family-decisions) | [`nen decisions summary`](#nen-decisions-summary) | rows per class and per gate and the G5 ids of nen/decisions.json, so prose never carries those numbers | nen/decisions.json under --repo | yes |
+| [`tests`](#family-tests) | [`nen tests map`](#nen-tests-map) | each acceptance criterion of an issue body with the tests whose names carry its id (mapped · unmapped · unrequested); `--require-red` reads one run as the red checkpoint, `--before-report` reads two as red-first · green-only · failing · untested | the issue body and test report files (any `shu test-report` format); no git/gh | yes |
 | [`shu`](#family-shu) | [`nen shu detect`](#nen-shu-detect) | read the markers on disk and PROPOSE a nen/contract.json project block; never writes without --write and never overwrites one | the target repo's own files (framework configs, package.json, project files); writes nen/contract.json only with --write | yes |
 | [`shu`](#family-shu) | [`nen shu build`](#nen-shu-build) | compile or assemble a lane, from the invocation its declaration states | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
 | [`shu`](#family-shu) | [`nen shu test`](#nen-shu-test) | run a lane's test suite, from the invocation its declaration states | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
@@ -12906,6 +12908,100 @@ gates: G1 1 · G1-M 0 · G2 1 · G3 1 · G4 1 · G5 10 · none 28
 g5: semantic-conflict, unsettled-finding, hand-edited-canon-mirror, rewrite-published-history, secret-shape, signing-material, on-device-act, supply-chain-failure, unruled-policy-surface, ambiguous-intent
 ```
 (exit 0; a real run against a Hatsu checkout, the path shortened)
+
+<a id="family-tests"></a>
+
+**`nen tests`**
+
+### `nen tests map`
+
+Each acceptance criterion of an issue body with the tests whose names carry its
+id, and each criterion with none (zheref/nen#552; Hatsu's assessment finding
+D8, scorecard SDD-19 *tests first*). Read-only over local files: an issue body
+and one or more test reports in, a map out. Nothing is run, fetched or written;
+running the suite that writes a report is the repository's declared `test` verb
+([`shu test`](#nen-shu-test)).
+
+The criteria are read exactly as [`issue criteria`](#nen-issue-criteria) reads
+them (`- AC-{n}:` rows outside fenced code and comments; `--requirements-from`
+takes the row prefix and the acceptance section from the catalogue). The tests
+are read from each `--test-report` through
+[`shu test-report`](#nen-shu-test-report)'s parsers — JUnit XML (a file, or a
+directory of `*.xml`), a JSON assertion-results document, an xcresult summary —
+so no runner is named. A test **names a criterion** by carrying its id as a
+token in its name or its suite: `AC-3`, `#552/AC-3`, `NN#552/AC-3` or
+`zheref/nen#552/AC-3`, the verify-row key HR-11 uses. `AC-30`, `XAC-3`, `AC-3a`
+and `AC-3-001` are not `AC-3`. With `--issue`, a qualified token naming another
+issue (or another `owner/name`) is listed as **foreign** and maps to nothing; a
+CODE prefix is echoed, never resolved. Without `--issue`, a qualified token maps
+by its criterion number alone.
+
+| Mode | The report(s) read as | A criterion is met when |
+|---|---|---|
+| default (`after`) | `--test-report` is the run after the change | a test names it, none of its tests failed and at least one passed |
+| `--require-red` | `--test-report` is the checkpoint run before the change | a test names it and **every** test naming it failed (`red`); a pass or a skip is `not-red` |
+| `--before-report` (`before-after`) | `--before-report` before, `--test-report` after | it reads `red-first`: a test of it failed before and passes now. `green-only` (passes now, none of its passing tests failed before), `failing` (a test of it fails now) and `untested` (no test, or every test skipped) are unmet |
+
+A test is matched across the two runs by suite and name; one that did not run
+before reads `absent`. Every criterion appears with its test count, `0`
+included. A test naming an id the issue does not carry is **unrequested**, by
+name. A body with no criterion row is `not-verifiable` — nothing to map, never
+"all mapped" — and an unreadable body or report is `could-not-read` with the
+reason, **never an empty map**.
+
+**Usage**
+
+```text
+nen tests map --issue-body <file> --test-report <file>[,<file>...]
+              [--before-report <file>[,<file>...] | --require-red]
+              [--issue <owner/name>#<N> | <CODE>#<N> | #<N>]
+              [--requirements-from <catalogue.json>] [--repo <path>] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--issue-body <file>` | yes | The issue body whose criteria are mapped. | Resolved against `--repo`'s root. Unreadable or not UTF-8: `could-not-read`. |
+| `--test-report <files>` | yes | The run mapped against, comma-separated; merged. | Unreadable or an unknown format: `could-not-read`. |
+| `--before-report <files>` | no | The recorded run before the change. | Selects `before-after`. With `--require-red`, exit 2. |
+| `--require-red` | no | Read `--test-report` as the red checkpoint. | |
+| `--issue <ref>` | no | The issue the body is, to anchor qualified tokens. | Malformed: exit 2. |
+| `--requirements-from <file>` | no | The issue-sections catalogue. | Unreadable or malformed: exit 2. |
+
+**Output and exit codes** — `<verdict>: <met>/<n> criteria met (<mode>) · <m>
+mapped · <u> unmapped · <r> unrequested · <t> test(s) read`, then per criterion
+`<id> <status> · <count> test(s) · <checkpoint or outcome>` and its tests, then
+`UNREQUESTED`, `FOREIGN`, `DUPLICATE` and `UNRECOGNISED` lines. `--json`
+top-level keys, in order: `contract` (`nen.tests.map/v0.1`), `verdict` (`met` \|
+`unmet` \| `not-verifiable` \| `could-not-read`), `mode` (`after` \|
+`require-red` \| `before-after`), `issueBody`, `issue`, `testReports`,
+`beforeReports`, `criteria` (`{ id, number, text, line, status, count, outcome,
+checkpoint, met, tests: [{ name, suite, status, before }] }` each; `status`
+`mapped` \| `unmapped`; `outcome` `passing` \| `failing` \| `skipped` \|
+`untested`; `checkpoint` null in `after`, else the mode's word; `before` null
+without a before report), `unrequested` (`{ id, token, name, suite, status }`),
+`foreign` (`{ token, name, suite }`), `duplicates`, `unrecognised`, `counts`
+(`{ criteria, mapped, unmapped, met, unrequested, foreign, tests }`),
+`blocking` (one line per fact that sets exit 1), `reason`. Exit **0** when every
+criterion is met in the mode, nothing is unrequested and no criterion row is
+duplicated or unrecognised; **1** otherwise, and on `not-verifiable` or
+`could-not-read`; **2** a usage error (a missing flag, both `--before-report`
+and `--require-red`, a malformed `--issue` or catalogue).
+
+**Example**
+
+```bash
+nen tests map --issue-body issue.md --test-report green.xml --before-report red.xml
+```
+```text
+unmet: 1/2 criteria met (before-after) · 2 mapped · 0 unmapped · 0 unrequested · 2 test(s) read
+  AC-1 mapped · 1 test(s) · red-first
+    passed (before: failed)  s > AC-1 a
+  AC-2 mapped · 1 test(s) · green-only (unmet)
+    passed (before: passed)  s > AC-2 b
+```
+(exit 1; from `src/tests/command.test.ts`)
 
 ## Stack-aware developer verbs
 
