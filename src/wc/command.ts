@@ -5,8 +5,10 @@
 // and -- zheref/nen#241 -- `nen wc worktrees` and `nen wc swap` (./swap.ts),
 // so no skill hand-rolls a worktree swap with raw checkout and stash; and --
 // zheref/nen#299 -- `nen wc worktree` (./worktree.ts), one detached worktree at
-// a fixed path with the core-to-worktree copy.
+// a fixed path with the core-to-worktree copy; and -- zheref/nen#551 -- `nen
+// wc ahead` (./ahead.ts), the commits and diff stat beyond a named reviewed head.
 
+import { AHEAD_EXIT, readAhead, renderAhead } from "./ahead.js";
 import { runPrune } from "./prune.js";
 import { ancestryReader, computeOverlap, readEffortFiles, renderOverlap, withDeclared } from "./overlap.js";
 import { assertRepoRoot } from "../repo/root.js";
@@ -14,12 +16,14 @@ import {
   emit,
   requireRepoFlag,
   requireSubcommand,
+  refuseExtraPositionals,
   requireValue,
   VerbUsageError,
   type Command,
   type CommandContext,
 } from "../cli/command.js";
 import { readTextFile, splitList } from "../cli/inputs.js";
+import { GIT } from "../seam/exec.js";
 import { plainLine } from "../cli/plain.js";
 import { SchemaError } from "../schema/errors.js";
 import { loadWorkflow, WORKFLOW_FILE, type LoadedWorkflow } from "../schema/workflow.js";
@@ -46,7 +50,26 @@ import { copyPathRefusal, foldName, KEY_FILE, manageWorktree, MANIFEST_CONTRACT,
 
 const SQUASH_CONTRACT = "nen.wc.squash/v0.1";
 
-const USAGE = `nen wc overlap --efforts <a,b,...> --repo <path> [--base <ref>] [--always-overlaps <paths>] [--declared <file>] [--json]
+const USAGE = `nen wc ahead --repo <path> --of <reviewed-head> [--head <ref>] [--json]
+  How far a branch has moved beyond a NAMED reviewed head, read from the
+  clone with no fetch: --of resolved to its full commit id, --head (default
+  HEAD) likewise, then 'git merge-base --is-ancestor', 'git rev-list --count
+  <of>..<head>' and 'git diff --numstat <of> <head>'. Verdict: ahead <n>
+  (n > 0 commits beyond the reviewed head, with the diff stat) | even (the
+  reviewed head IS the head: nothing new to review) | diverged (the reviewed
+  head is not an ancestor -- a force-push, a rebase, a reset; never a count)
+  | unreadable (the clone does not hold one of the refs as a commit, or git
+  could not answer; never zero, never "nothing new"). An 'ahead' with
+  files 0 is commits whose net tree change is empty; whether that is
+  reviewable is the caller's judgement. Writes nothing.
+  --json: { verdict, of, reviewedHead, head, headSha, ahead, files,
+  insertions, deletions, reason }; reviewedHead/headSha are full ids or null
+  when unresolved; ahead/files/insertions/deletions are null unless ahead or
+  even; reason says why there is no count. Exit 0 ahead, 3 even, 1 diverged,
+  2 unreadable (the verdict still printed) or usage (--of missing, a ref
+  starting with '-', --repo not a git checkout, another verb's flag).
+
+nen wc overlap --efforts <a,b,...> --repo <path> [--base <ref>] [--always-overlaps <paths>] [--declared <file>] [--json]
   File disjointness of parallel efforts, computed: each effort's changed paths
   are 'git diff --name-only <base>...<effort>' (the merge-base diff), --base
   defaulting to origin/<nen/workflow.json branch.base>. nen/workflow.json's
@@ -985,23 +1008,67 @@ function doOverlap(context: CommandContext): number {
   return report.verdict === "disjoint" ? 0 : 1;
 }
 
+/**
+ * `nen wc ahead` (./ahead.ts, zheref/nen#551): the commits and diff stat beyond
+ * a named reviewed head. Every flag but --repo, --of and --head is refused by
+ * name; the verdict's own code is the exit (AHEAD_EXIT).
+ */
+function doAhead(context: CommandContext): number {
+  for (const flag of Object.keys(context.args.values)) {
+    if (!["of", "head", "repo"].includes(flag) && context.args.values[flag] !== undefined) {
+      throw new VerbUsageError(`--${flag} is not read by 'wc ahead'. A flag accepted and ignored is worse than one refused.`);
+    }
+  }
+  for (const flag of context.args.booleans) {
+    if (flag === "json" || flag === "help") continue;
+    throw new VerbUsageError(`--${flag} is not read by 'wc ahead', which writes nothing. A flag accepted and ignored is worse than one refused.`);
+  }
+  for (const [flag, list] of Object.entries(context.args.lists)) {
+    if (list.length > 0) throw new VerbUsageError(`--${flag} is not read by 'wc ahead'. A flag accepted and ignored is worse than one refused.`);
+  }
+  refuseExtraPositionals(context.args, 2);
+  const root = assertRepoRoot({ repoFlag: requireRepoFlag(context, "It names the clone whose commits are counted.") });
+  const of = context.args.values["of"];
+  if (of === undefined || of.trim() === "") throw new VerbUsageError("--of <reviewed-head> is required: the commit the last review read (a full or short id, or any ref the clone holds).");
+  const head = context.args.values["head"] ?? "HEAD";
+  if (head.trim() === "") throw new VerbUsageError("--head is empty; omit it to count up to HEAD.");
+  for (const [flag, ref] of [["--of", of], ["--head", head]] as const) {
+    if (ref.startsWith("-")) throw new VerbUsageError(`${flag} '${ref}' starts with '-', which git would read as an option; refused rather than escaped.`);
+  }
+  // NOT A REPOSITORY IS WIRING, never "unreadable ref": the refs were never asked.
+  const probe = context.seams.run(GIT, ["-C", root, "rev-parse", "--git-dir"]);
+  if (!probe.spawnFailed && probe.code !== 0) throw new VerbUsageError(`--repo '${root}' is not a git checkout; 'wc ahead' counts commits in a clone.`);
+  const report = readAhead(context.seams, root, of, head);
+  emit(context.io, context.json, report, renderAhead(report));
+  return AHEAD_EXIT[report.verdict];
+}
+
 export const wcCommand: Command = {
   exits: [
     { verb: "wc squash", code: 3, meaning: "squashed, and the read-back found a refused trailer on the fold" },
     { verb: "wc swap", code: 3, meaning: "a tree is dirty; nothing moved" },
     { verb: "wc catch-up", code: 3, meaning: "stopped on a conflict whose every path is declared mechanical; nothing resolved" },
+    { verb: "wc ahead", code: 2, meaning: "also: unreadable -- the clone does not hold --of or --head as a commit, or git could not answer; never zero" },
+    { verb: "wc ahead", code: 3, meaning: "even: the head is the reviewed head; nothing new to review" },
   ],
   name: "wc",
-  subcommands: ["classify", "squash", "catch-up", "publish", "worktrees", "swap", "worktree", "prune", "overlap"],
-  summary: "Classify the working copy, squash it, catch it up, publish it, list the worktrees, swap one into core, keep one at a fixed path, or compute whether efforts overlap.",
+  subcommands: ["classify", "squash", "catch-up", "publish", "worktrees", "swap", "worktree", "prune", "overlap", "ahead"],
+  summary: "Classify the working copy, squash it, catch it up, publish it, list the worktrees, swap one into core, keep one at a fixed path, compute whether efforts overlap, or count the commits beyond a reviewed head.",
   usage: USAGE,
   flags: {
-    values: ["base", "onto", "message-file", "strategy", "remote", "name", "plan", "efforts", "always-overlaps", "declared"],
+    values: ["base", "onto", "message-file", "strategy", "remote", "name", "plan", "efforts", "always-overlaps", "declared", "of", "head"],
     booleans: ["dry-run", "abort", "set-upstream", "take", "return", "status", "run"],
     lists: ["copy-from-core"],
   },
   run(context: CommandContext): number {
-    const subcommand = requireSubcommand("wc", context.args, ["classify", "squash", "catch-up", "publish", "worktrees", "swap", "worktree", "prune", "overlap"]);
+    const subcommand = requireSubcommand("wc", context.args, ["classify", "squash", "catch-up", "publish", "worktrees", "swap", "worktree", "prune", "overlap", "ahead"]);
+    if (subcommand === "ahead") return doAhead(context);
+    // --of / --head ARE AHEAD'S ALONE.
+    for (const flag of ["of", "head"]) {
+      if (context.args.values[flag] !== undefined) {
+        throw new VerbUsageError(`--${flag} is not read by 'wc ${subcommand}'; only 'wc ahead' takes it. A flag accepted and ignored is worse than one refused.`);
+      }
+    }
     // --efforts / --always-overlaps ARE OVERLAP'S ALONE.
     if (subcommand !== "overlap") {
       for (const flag of ["efforts", "always-overlaps", "declared"]) {

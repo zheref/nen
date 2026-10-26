@@ -1604,6 +1604,8 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       // --dry-run fetches nothing and writes nothing, so it alone is a read.
       worktree: DRY("fetches origin/<base>, adds, moves or recreates one worktree at <core>/.nen/worktrees/<name> and copies files from core into it, unless --dry-run is given"),
       overlap: RO("compares the efforts' git diff --name-only against a base; writes nothing"),
+      // zheref/nen#551: rev-parse, merge-base --is-ancestor, rev-list --count, diff --numstat; no fetch.
+      ahead: RO("counts the commits and diff stat beyond a named reviewed head over local git reads; fetches and writes nothing"),
     },
   },
 };

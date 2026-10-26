@@ -335,6 +335,7 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     expect(classifyCommand("nen pr ledger bogus --target o/r --pr 1").classification).not.toBe("read-only");
     expect(classifyCommand("nen run budget --id r1 --claim --max-minutes 5 --max-tokens 9").classification).toBe("read-only");
     expect(classifyCommand("nen wc overlap --efforts a,b --repo .").classification).toBe("read-only");
+    expect(classifyCommand("nen wc ahead --repo . --of abc1234").classification).toBe("read-only");
     expect(classifyCommand("nen stage check --exclusive --target o/r --issue 7").classification).toBe("read-only");
     expect(classifyCommand("nen loop slots --from-run r1 --target o/r --local-cap 2").classification).toBe("read-only");
     // The spec family (SDD piece N10): three reads; index writes only under --write, and not under --dry-run.
