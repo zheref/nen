@@ -147,6 +147,18 @@ describe("nen run record", () => {
     expect(readdirSync(elsewhere)).toEqual([]);
   });
 
+  it.skipIf(process.platform === "win32")("reads nothing through a record directory that is a link (N8 on #522)", async () => {
+    const state = mkdtempSync(join(tmpdir(), "nen-record-state-"));
+    const elsewhere = mkdtempSync(join(tmpdir(), "nen-record-elsewhere-"));
+    writeFileSync(join(elsewhere, `${ID}.json`), JSON.stringify(RECORD));
+    mkdirSync(join(state, "hatsu"));
+    symlinkSync(elsewhere, join(state, "hatsu", "specs"));
+    const result = await run(["record", "read", "--schema", "hatsu.spec.run/v0.1", "--id", ID], { XDG_STATE_HOME: state });
+    expect(result.code).toBe(1);
+    expect(result.json()).toMatchObject({ verdict: "could-not-read", record: null });
+    expect(String(result.json()["reason"])).toMatch(/not a real directory \(a link or a file\); nen reads no record through one/);
+  });
+
   it("accepts Hatsu's own fixture record shape", () => {
     expect(validateRecord(schema, ID, RECORD)).toEqual([]);
   });

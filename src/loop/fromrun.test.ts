@@ -2,7 +2,7 @@
 // document built from the manifest and live reads, no field caller-typed.
 
 import { describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
@@ -164,6 +164,19 @@ describe("nen loop slots --from-run (CLI)", () => {
     expect(result.err.join("\n")).toMatch(/read run manifest 'r1' in place at .*hatsu.runs.r1\.json; not moved to .* -- 'nen run verify --id r1 --target zheref\/nen' moves it/);
     const other = await capture(["loop", "slots", "--from-run", "r1", "--target", "o/other", "--local-cap", "1"], common, {});
     expect(other.code).toBe(2);
+  });
+
+  it.skipIf(process.platform === "win32")("refuses a runs directory that is a link, at exit 1, counting nothing through it (zheref/nen#522 N8)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-slots-run-"));
+    const common = join(root, ".git");
+    const elsewhere = mkdtempSync(join(tmpdir(), "nen-slots-elsewhere-"));
+    writeFileSync(join(elsewhere, "r1.json"), JSON.stringify({ ...manifest([row(480)]), repo: "zheref/nen" }));
+    mkdirSync(join(common, ".nen"), { recursive: true });
+    symlinkSync(elsewhere, join(common, ".nen", "runs"));
+    const result = await capture(["loop", "slots", "--from-run", "r1", "--target", "zheref/nen", "--local-cap", "1"], common, { 480: "OPEN" }, false);
+    expect(result.code).toBe(1);
+    expect(result.out).toEqual([]);
+    expect(result.err.join("\n")).toMatch(/\.nen.runs' is a symbolic link; nen keeps run manifests only in a real directory/);
   });
 
   it("refuses --efforts beside --from-run, --target without it, and a run nobody started", async () => {

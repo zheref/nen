@@ -9322,7 +9322,7 @@ intent: a write prints `mode: file 0600, directory 0700`, with `(narrowed: file 
 0755 -> 0700)` when it narrowed one, and `--json` carries `mode` as `{ verdict, file, directory,
 repaired, reason }` (`verdict` `set` \| `would-set` \| `not-set`; when the plan itself writes nothing --
 `existing`, `unchanged`, a conflict -- it is the legacy move's modes if this call moved (or, dry, would
-move) one, else `null`). A manifest path, a legacy manifest or a runs directory that is a **symbolic
+move) one, else `null`; when both the move and the plan write, the move's narrowing stays in `repaired`). A manifest path, a legacy manifest or a runs directory that is a **symbolic
 link** or otherwise not a regular file (directory) is refused at exit 1, naming it: nen never reads,
 moves, `chmod`s or writes through a link, since `chmod` follows one and would narrow a file outside the
 runs directory. **Where a mode cannot be set** -- a `win32` host, a `chmod` that
@@ -9733,7 +9733,8 @@ record's `schema`, `caller` and `runId` (equal to `--id`) before any field; a
 write is the **whole** document to a temp file created exclusively (`wx`) at
 `0600` in a `0700` directory (narrowed to `0700` when it was wider), then a
 rename. A record directory that is a link, not a directory, or owned by
-another user is refused, nothing written through it; a failed write removes
+another user is refused, nothing written through it (and `read` answers
+`could-not-read` for a linked or non-directory one, reading nothing through it); a failed write removes
 its temp file and is `could-not-read`, never a crash.
 
 **Usage**
