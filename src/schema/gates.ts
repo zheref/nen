@@ -236,41 +236,50 @@ export type RoundCheckProducer =
       /** The triggering events a run may have (`pull_request_target`, ...). */
       readonly events: readonly string[];
       /**
-       * The explicit opt-in that admits an event which runs the pull
-       * request's OWN revision of the workflow (`pull_request`, `push`, ...;
-       * Feitan F3 on #546). `false` unless the file writes `true`, and every
-       * evaluation that reads it warns.
+       * The explicit opt-in that admits an event outside
+       * DEFAULT_BRANCH_DEFINITION_EVENTS -- `pull_request_target` included
+       * (Feitan F3, F7, F9 on #546). `false` unless the file writes `true`;
+       * refused where it admits nothing, and every evaluation that reads it
+       * warns.
        */
       readonly trustsPullRequestRevision: boolean;
     };
 
 /**
- * The events on which GitHub runs the workflow file AS THE PULL REQUEST'S OWN
- * REVISION (or a caller-chosen ref) carries it -- so the declared path names
- * a file the pull request may have written. Refused in a `workflow` producer
- * unless `trusts_pull_request_revision: true` (Feitan F3 on #546).
+ * The ONLY events a `workflow` producer is admitted on without an opt-in
+ * (hanten round 2 on #546, Feitan F7 and F9): the ones on which GitHub runs
+ * the workflow file as the DEFAULT BRANCH defines it. On every other event the
+ * definition is a revision someone else chose -- the pull request's own
+ * (`pull_request`, `push`, `merge_group`, `pull_request_review*`), an
+ * actor-chosen ref (`workflow_dispatch`, `create`, `release`, `deployment*`),
+ * or, for `pull_request_target`, the BASE the pull request names, which any
+ * branch writer can point at a branch carrying a modified file. A run's
+ * `pull_requests[]` cannot repair that: GitHub fills it from the head, not the
+ * trigger, so a second pull request from the same head lists this one too. An
+ * ALLOWLIST, so an event GitHub adds later is refused until named here.
  */
-export const PULL_REQUEST_REVISION_EVENTS: readonly string[] = [
-  "pull_request",
-  "push",
-  "merge_group",
-  "pull_request_review",
-  "pull_request_review_comment",
-  "workflow_dispatch",
+export const DEFAULT_BRANCH_DEFINITION_EVENTS: readonly string[] = [
+  "workflow_run",
+  "issue_comment",
+  "schedule",
+  "repository_dispatch",
 ];
 
 /**
- * One line per reviewer whose `workflow` producer is in force through the
- * `trusts_pull_request_revision` opt-in -- what `nen schema check` and
- * `nen pr ready` warn on every read (Feitan F3 on #546).
+ * One line per reviewer whose `workflow` producer admits an event outside
+ * the allowlist through the `trusts_pull_request_revision` opt-in -- what
+ * `nen schema check` and `nen pr ready` warn on every read. The loader refuses
+ * the opt-in where no listed event needs it, so this never warns about
+ * nothing (Nobunaga N11).
  */
 export function producerOptInWarnings(identities: { readonly reviewers: readonly ReviewerIdentity[] }): string[] {
   return identities.reviewers.flatMap((reviewer): string[] => {
     const producer = reviewer.roundCheckProducer;
     if (producer?.kind !== "workflow" || !producer.trustsPullRequestRevision) return [];
-    const trusted = producer.events.filter((event): boolean => PULL_REQUEST_REVISION_EVENTS.includes(event));
+    const trusted = producer.events.filter((event): boolean => !DEFAULT_BRANCH_DEFINITION_EVENTS.includes(event));
+    if (trusted.length === 0) return [];
     return [
-      `round_check_producer of '${reviewer.name}' trusts the pull request's own revision (trusts_pull_request_revision: true, events ${trusted.join(", ")}): on those events the workflow file is whatever the pull request wrote, so its round check proves no reviewer (zheref/nen#546)`,
+      `round_check_producer of '${reviewer.name}' trusts a revision the default branch did not define (trusts_pull_request_revision: true, events ${trusted.join(", ")}): on those events the workflow file is the one the pull request, an actor or the named base carries -- on pull_request_target the base is whichever branch a writer names -- so any branch writer can produce this round; prefer an app producer (zheref/nen#546)`,
     ];
   });
 }
@@ -571,18 +580,21 @@ function readFlag(path: string, pointer: string, raw: unknown): boolean {
 //   "round_check_producer": { "workflow": {
 //       "path": ".github/workflows/review.yml",
 //       "repository": "owner/name",
-//       "events": ["pull_request_target"] } }
+//       "events": ["workflow_run"] } }
 //       a GitHub Actions run of that workflow file, in that repository,
-//       triggered by one of those events, that names THIS pull request onto
-//       its base, and whose JOBS include the check (../gates/producer.ts).
-//       `events` is REQUIRED, and the events on which GitHub runs the pull
-//       request's OWN revision of the file (PULL_REQUEST_REVISION_EVENTS:
-//       pull_request, push, merge_group, pull_request_review*,
-//       workflow_dispatch) are REFUSED unless the workflow states
-//       `"trusts_pull_request_revision": true` -- on them the path names a
-//       file the pull request may have written, so the constraint would read
-//       as protection and give none (Feitan F3). The opt-in warns on every
-//       `nen schema check` and every `pr ready`.
+//       triggered by one of those events, and whose JOBS include the check
+//       (../gates/producer.ts). `events` is REQUIRED and is an ALLOWLIST
+//       (hanten round 2, Feitan F7 and F9): only DEFAULT_BRANCH_DEFINITION_
+//       EVENTS (workflow_run, issue_comment, schedule, repository_dispatch)
+//       run the file as the default branch defines it. Every other event --
+//       pull_request_target, whose base any branch writer can name, the events
+//       that run the pull request's own revision, and those at an
+//       actor-chosen ref -- is REFUSED unless the workflow states
+//       `"trusts_pull_request_revision": true`, which warns on every
+//       `nen schema check` and every `pr ready`, and is itself refused where
+//       it admits nothing. The run's `pull_requests[]` is still checked
+//       against this pull request and base, as defence in depth only: GitHub
+//       fills it from the head, so it is not the trigger.
 //
 // EXACTLY ONE of `app` / `workflow`, and only beside a `round_check_pattern`
 // on a reviewer that is not `wake: "event"` (whose round is never its round
@@ -696,14 +708,14 @@ function readRoundCheckProducer(
       throw new SchemaError(
         path,
         `${pointer}.workflow.events[${index}]`,
-        `expected a GitHub Actions event name (lower case, e.g. 'pull_request_target'), got ${describeValue(event)}`,
+        `expected a GitHub Actions event name (lower case, e.g. 'workflow_run'), got ${describeValue(event)}`,
       );
     }
-    if (PULL_REQUEST_REVISION_EVENTS.includes(event) && !trustsPullRequestRevision) {
+    if (!DEFAULT_BRANCH_DEFINITION_EVENTS.includes(event) && !trustsPullRequestRevision) {
       throw new SchemaError(
         path,
         `${pointer}.workflow.events[${index}]`,
-        `is '${event}', on which GitHub runs the workflow file as the pull request's own revision (or a caller-chosen ref) carries it, so the declared path names a file the pull request may have written and proves no reviewer. Name an event that runs the base's definition (pull_request_target), or state "trusts_pull_request_revision": true beside events to accept that every pull request author can produce this round.`,
+        `is '${event}', which is not one of the events that run the default branch's definition of the workflow (${DEFAULT_BRANCH_DEFINITION_EVENTS.join(", ")}). On it GitHub runs a revision the pull request, an actor or the named base chose${event === "pull_request_target" ? " -- on pull_request_target the base is whichever branch a writer names, so any branch writer can produce this round" : ""}, so the declared path proves no reviewer. Prefer an app producer, or state "trusts_pull_request_revision": true beside events to accept that.`,
       );
     }
     return event;
@@ -713,6 +725,13 @@ function readRoundCheckProducer(
       path,
       `${pointer}.workflow.events`,
       "is empty. A workflow producer must name the events its trusted runs come from: on pull_request GitHub runs the workflow file as the pull request changed it, so a path alone does not say whose definition ran.",
+    );
+  }
+  if (trustsPullRequestRevision && events.every((event): boolean => DEFAULT_BRANCH_DEFINITION_EVENTS.includes(event))) {
+    throw new SchemaError(
+      path,
+      `${pointer}.workflow.trusts_pull_request_revision`,
+      `is true, but every listed event runs the default branch's definition, so the opt-in admits nothing. Remove it.`,
     );
   }
   const duplicate = events.find((event, index): boolean => events.indexOf(event) !== index);

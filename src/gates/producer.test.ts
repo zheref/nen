@@ -20,7 +20,7 @@ const WORKFLOW: RoundCheckProducer = {
   kind: "workflow",
   path: ".github/workflows/review.yml",
   repository: "zheref/hatsu",
-  events: ["pull_request_target"],
+  events: ["workflow_run"],
   trustsPullRequestRevision: false,
 };
 const PR = { number: 7, baseRef: "main" };
@@ -29,7 +29,7 @@ const RUN: WorkflowRunEvidence = {
   runId: 900,
   path: ".github/workflows/review.yml",
   repository: "zheref/hatsu",
-  event: "pull_request_target",
+  event: "workflow_run",
   pullRequests: [PR],
   jobIds: [41, 42],
 };
@@ -62,13 +62,14 @@ describe("matchProducer", () => {
     expect(matchProducer(WORKFLOW, ACTIONS, ctx({ path: ".github/workflows/Review.yml" })).verdict).toBe("mismatch");
     expect(matchProducer(WORKFLOW, ACTIONS, ctx({ event: "pull_request" }))).toEqual({
       verdict: "mismatch",
-      detail: "produced by zheref/hatsu/.github/workflows/review.yml on 'pull_request', not workflow zheref/hatsu/.github/workflows/review.yml on pull_request_target",
+      detail: "produced by zheref/hatsu/.github/workflows/review.yml on 'pull_request', not workflow zheref/hatsu/.github/workflows/review.yml on workflow_run",
     });
   });
 
   it("F1: the check must be one of the run's JOBS -- a check written into the trusted suite is not the run's own", () => {
     const foreign = matchProducer(WORKFLOW, { ...ACTIONS, checkRunId: 77 }, ctx());
-    expect(foreign.verdict).toBe("missing");
+    // Jobs read in full and the check is not one: a KNOWN other producer (round 2, N9).
+    expect(foreign.verdict).toBe("mismatch");
     expect(foreign.verdict !== "match" && foreign.detail).toContain("check run 77 is not a job of run 900");
     expect(matchProducer(WORKFLOW, ACTIONS, ctx({ jobIds: null })).verdict).toBe("missing");
     expect(matchProducer(WORKFLOW, { appSlug: "github-actions", checkSuiteId: 9 }, ctx()).verdict).toBe("missing");
@@ -85,12 +86,12 @@ describe("matchProducer", () => {
 
   it("describes each producer the way a verdict names it", () => {
     expect(describeProducer(APP)).toBe("app 'cursor' (id 1210556)");
-    expect(describeProducer(WORKFLOW)).toBe("workflow zheref/hatsu/.github/workflows/review.yml on pull_request_target");
+    expect(describeProducer(WORKFLOW)).toBe("workflow zheref/hatsu/.github/workflows/review.yml on workflow_run");
   });
 
   it("indexes workflow runs by suite, first entry winning", () => {
     const map = workflowRunsBySuite([RUN, { ...RUN, event: "push" }]);
-    expect(map.get(9)?.event).toBe("pull_request_target");
+    expect(map.get(9)?.event).toBe("workflow_run");
     expect(workflowRunsBySuite(undefined).size).toBe(0);
   });
 });

@@ -31,7 +31,16 @@
 // THIS pull request onto THIS base in its `pull_requests[]`, or a
 // `pull_request_target` run of a second pull request from the same head,
 // onto a scratch base carrying a modified workflow, would count. Either fact
-// unread is `missing`: unverified, owed.
+// unread is `missing`: unverified, owed. A check the run's jobs, read in full,
+// do not include is `mismatch`: a known other producer (round 2, N9).
+//
+// THE PULL-REQUEST CHECK IS DEFENCE IN DEPTH, NOT THE BINDING (round 2,
+// Feitan F7). GitHub fills a run's `pull_requests[]` from its head, not its
+// trigger, so a `pull_request_target` run of a second pull request from the
+// same head lists this one too. What binds a workflow producer is the EVENT
+// allowlist at load (../schema/gates.ts's DEFAULT_BRANCH_DEFINITION_EVENTS):
+// `pull_request_target` and every event outside it need an opt-in that warns
+// that any branch writer can produce the round.
 //
 // PURE: no network, no clock. The evidence arrives on the check (../github/
 // types.ts's `appSlug`, `appId`, `checkSuiteId`) and, for workflows, in the
@@ -200,9 +209,13 @@ export function matchProducer(
   if (checkRunId === null) {
     return { verdict: "missing", detail: `the check run's id was not read, so it cannot be shown to be a job of run ${run.runId ?? "?"}` };
   }
+  // The jobs were read IN FULL and the check is not one of them: that is a
+  // known other producer -- a check written into the suite -- so MISMATCH,
+  // which lets `producerScopedChecks` drop it before the latest-by-name
+  // reduction (hanten round 2, Nobunaga N9, Feitan F8).
   if (!run.jobIds.includes(checkRunId)) {
     return {
-      verdict: "missing",
+      verdict: "mismatch",
       detail: `check run ${checkRunId} is not a job of run ${run.runId ?? "?"} (${run.repository}/${run.path}): a check written into the suite is not the workflow's own`,
     };
   }

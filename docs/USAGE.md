@@ -2289,7 +2289,7 @@ check is the round:
 "round_check_producer": { "workflow": {
   "path": ".github/workflows/review.yml",
   "repository": "owner/name",
-  "events": ["pull_request_target"] } }
+  "events": ["workflow_run"] } }
 ```
 
 - **An `app` producer is the stronger choice.** It is compared with the App
@@ -2299,39 +2299,42 @@ check is the round:
   after a rename, and an id cannot. Live on this repository, `Cursor Bugbot` is
   created by the App `cursor`, id `1210556`. Only that App's installation can
   write a check under it.
-- **A `workflow` producer binds the run, not only the suite.** The App must be
-  `github-actions`. nen then reads the run behind the check suite
-  (`GET /repos/{owner}/{repo}/actions/runs?check_suite_id=`) and requires all
-  of these:
+- **A `workflow` producer is bound by its EVENT, then its run.** `events` is
+  an **allowlist**. Without an opt-in, only the events on which GitHub runs the
+  workflow file as the **default branch** defines it are admitted:
+  `workflow_run`, `issue_comment`, `schedule` and `repository_dispatch`. Every
+  other event is refused at load at
+  `reviewers[i].round_check_producer.workflow.events[j]`. That includes
+  `pull_request_target` (the base is whichever branch a writer names), the
+  events that run the pull request's own revision (`pull_request`, `push`,
+  `merge_group`, `pull_request_review`, `pull_request_review_comment`), those
+  at an actor-chosen ref (`workflow_dispatch`, `create`, `release`,
+  `deployment`, `deployment_status`) and any event not named here. It is
+  admitted only when the workflow also states
+  `"trusts_pull_request_revision": true`. That opt-in accepts that **any branch
+  writer can produce this round**, and while it is in force `nen schema check`
+  and every `nen pr ready` (`meta.warnings`, so `--explain` too) warn, naming
+  the event. The opt-in is refused where no listed event needs it. Then the App
+  must be `github-actions`, and nen reads the run behind the check suite
+  (`GET /repos/{owner}/{repo}/actions/runs?check_suite_id=`). It requires:
   - its `path` (exactly), `repository.full_name` (case-insensitively) and
     `event` (one of `events`) match;
-  - its `pull_requests[]` names **this** pull request: the same `number` **and**
-    the same base branch (`base.ref`). A `pull_request_target` run of a second
-    pull request from the same head onto a scratch base, which runs the scratch
-    base's copy of the file, does not count. A fork's run names no pull request,
-    so it fails closed;
   - the check's own id is one of that run's **jobs**
-    (`GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs?filter=all`, since a
-    job's id is its check run's id). A check that a token wrote into the same
-    suite is no job of the run, and does not count.
+    (`GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs?filter=all`; a job's
+    id is its check run's id). A check that a token wrote into the same suite is
+    no job of the run: with the jobs read in full that is a known other
+    producer (`round-check-producer-mismatch`), and with them unread it is
+    unverified;
+  - its `pull_requests[]` names this pull request onto its base. This is
+    defence in depth, **not** the binding: GitHub fills that list from the
+    run's head, not its trigger, so a run of a second pull request from the
+    same head lists this one too.
 
-  What remains: a writer who retargets **this** pull request onto a base they
-  control, lets the run happen and retargets back, produces a run that names
-  this pull request. The base's own branch protection is what stops that, so
-  prefer an `app` producer where one exists.
-- **Events that run the pull request's own revision are refused.** On
-  `pull_request`, `push`, `merge_group`, `pull_request_review`,
-  `pull_request_review_comment` and `workflow_dispatch`, GitHub runs the
-  workflow file as the pull request's revision (or a caller-chosen ref) carries
-  it. The path then names a file the pull request may have written, so the
-  constraint would look like protection and give none. Such an event is refused
-  at load at `reviewers[i].round_check_producer.workflow.events[j]` unless the
-  workflow also states `"trusts_pull_request_revision": true`. That opt-in says
-  every pull request author may produce the round. While it is in force,
-  `nen schema check` and every `nen pr ready` (`meta.warnings`, so `--explain`
-  too) warn. `pull_request_target` runs the base's definition and is the event
-  to name. A `workflow_run` run executes on the default branch, so its jobs
-  never land on the pull request's head and could never match.
+  What remains: a workflow producer on `pull_request_target` trusts every
+  branch writer. On the allowlisted events the run executes on the default
+  branch's commit, so its jobs do not land on this pull request's head. In
+  practice a check there can match only behind the opt-in. **Prefer an `app`
+  producer.**
 - **Three outcomes for a name-matching `SUCCESS`.** The declared producer's
   check is the round, under the existing revision and quorum rules. A
   different producer's check is **not** a round, and row 4 says so:
@@ -2348,13 +2351,19 @@ check is the round:
   head was not counted (state `unsuccessful`).
 - **Another producer's run cannot hide the reviewer's own.** Runs are reduced
   to the latest per name, and a check run known to come from another producer
-  is dropped **before** that reduction. So a later impostor of the same name
-  neither hides the reviewer's run still in flight nor replaces its
-  `SUCCESS`. What remains is the self-hold: a check whose producer is
-  merely **unread**, for example a later GitHub Actions run of the same name
-  whose run is not yet looked up, is kept, since it may be the reviewer's. If
-  it is the latest of its name, it can leave the reviewer owed. Only the pull
-  request's own author can cause that, and only on their own pull request.
+  is dropped **before** that reduction. Known means another App, another
+  workflow file or event, or (jobs read in full) no job of the declared run.
+  So a later impostor of the same name, a token-written check in the trusted
+  suite included, neither hides the reviewer's run still in flight nor
+  replaces its `SUCCESS`. For a `workflow` producer, nen reads the suite of
+  **every** name-matching GitHub Actions `SUCCESS` at head, newest first,
+  within the read budget, not only the latest per name. That way the reviewer's
+  own suite is read even behind a later same-name run. What remains is the
+  self-hold. A check whose producer is merely **unread** is kept, since it may
+  be the reviewer's: no App on the entry, or its suite left unread by a failed
+  read or the spent budget. If it is the latest of its name, it can leave the
+  reviewer owed. Only the pull request's own author can cause that, and only
+  on their own pull request.
 - **The same test everywhere a round check is read.** These all ask it: the
   head limb, the earlier-head limb under `bounded`, the in-flight rule, the
   quorum, `--explain`'s round counts, and settlement, which drives
@@ -2371,11 +2380,13 @@ check is the round:
   needs `actions:read`. Per name-matching `SUCCESS` check suite, at head or an
   earlier head, it makes one `actions/runs?check_suite_id=` read. When that run
   could match (file, repository, event and pull request), it adds one read per
-  page of the run's jobs. A suite already read is never read again. The budget
-  is **20 reads per evaluation**. A pull request that adds many jobs of the
-  round check's name can exhaust it, which holds only that pull request's own
-  round owed. Every failed, unreadable or budget-cut read is a `meta.warnings`
-  entry naming the round check and the suites left unread, and those checks
+  page of the run's jobs. A suite already attempted, read or failed, is
+  never read again in the same evaluation. The budget is **20 reads per
+  evaluation**, shared by the head and the earlier-head walk. A pull request
+  that adds many jobs of the round check's name can exhaust it, which holds
+  only that pull request's own round owed. Each failed or unreadable read is a
+  `meta.warnings` entry. A spent budget is **one** entry for the whole
+  evaluation, naming the round check and every suite left unread. Those checks
   stay unverified.
 - **Compatibility (AC-5).** A reviewer without `round_check_producer` is
   judged exactly as before, by name and `SUCCESS`, and the state blob carries no
@@ -2385,7 +2396,8 @@ check is the round:
   than reading the round by name. **Absent** is the only spelling of "no
   producer". A malformed producer is refused at load with its pointer. That
   covers an explicit `null` or a `null` `app`/`workflow`, both shapes or
-  neither, an `app` without `id`, an empty `events`, a refused event, or a
+  neither, an `app` without `id`, an empty `events`, an event outside the
+  allowlist without the opt-in, an opt-in that admits nothing, or a
   producer on a reviewer with no `round_check_pattern` or with
   `wake: "event"` (whose round is its review, never its check). For example:
   `reviewers[1].round_check_producer, must declare exactly one of 'app' or

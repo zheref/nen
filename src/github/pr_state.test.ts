@@ -20,6 +20,7 @@ import {
   readWorkflowRuns,
   headWorkflowSuitesWanted,
   workflowReadScope,
+  newWorkflowWalk,
   WORKFLOW_RUN_READS_MAX,
   type FetchStateOptions,
   type PrRef,
@@ -1339,7 +1340,7 @@ describe("round-check producer evidence (zheref/nen#546)", () => {
     });
   const APP = withProducer({ app: { slug: "cursor", id: 1210556 } });
   const WORKFLOW = withProducer({
-    workflow: { path: ".github/workflows/bugbot.yml", repository: "zheref/example", events: ["pull_request_target"] },
+    workflow: { path: ".github/workflows/bugbot.yml", repository: "zheref/example", events: ["workflow_run"] },
   });
   const PR = { number: 7, baseRef: "main" };
   const SCOPE = workflowReadScope(WORKFLOW, PR);
@@ -1350,7 +1351,7 @@ describe("round-check producer evidence (zheref/nen#546)", () => {
         id: suite * 100,
         check_suite_id: suite,
         path: ".github/workflows/bugbot.yml",
-        event: "pull_request_target",
+        event: "workflow_run",
         repository: { full_name: "zheref/example" },
         pull_requests: [{ number: 7, base: { ref: "main" } }],
         ...fields,
@@ -1374,7 +1375,7 @@ describe("round-check producer evidence (zheref/nen#546)", () => {
           runId: 3300,
           path: ".github/workflows/bugbot.yml",
           repository: "zheref/example",
-          event: "pull_request_target",
+          event: "workflow_run",
           pullRequests: [PR],
           jobIds: [3301],
         },
@@ -1461,6 +1462,48 @@ describe("round-check producer evidence (zheref/nen#546)", () => {
       expect(result.runs).toHaveLength(WORKFLOW_RUN_READS_MAX);
       expect(result.warnings).toEqual([
         `round-check producer: the read budget of ${WORKFLOW_RUN_READS_MAX} on zheref/example was spent before 2 check suite(s) of '^Cursor Bugbot$' were read (${WORKFLOW_RUN_READS_MAX + 1}, ${WORKFLOW_RUN_READS_MAX + 2}); they are unverified and their round checks are not counted`,
+      ]);
+    });
+  });
+
+  describe("the shared workflow walk (round 2, Nobunaga N13)", () => {
+    it("a failed read is never read again, and a spent budget is ONE warning for the walk", async () => {
+      const calls: number[] = [];
+      const source = sourceFor({
+        checkSuiteWorkflowRuns: async (_r, suite) => {
+          calls.push(suite);
+          if (suite === 1) throw new Error("boom");
+          return runPayload(suite, { path: ".github/workflows/other.yml" });
+        },
+      });
+      const walk = newWorkflowWalk();
+      const budget = { reads: 0 };
+      const first = await readWorkflowRuns(source, REPO, [1], SCOPE, new Map(), budget, walk);
+      expect(first.warnings[0]).toContain("failed (boom)");
+      await readWorkflowRuns(source, REPO, [1], SCOPE, new Map(), budget, walk);
+      expect(calls).toEqual([1]);
+      budget.reads = WORKFLOW_RUN_READS_MAX;
+      const a = await readWorkflowRuns(source, REPO, [5], SCOPE, new Map(), budget, walk);
+      const b = await readWorkflowRuns(source, REPO, [6, 5], SCOPE, new Map(), budget, walk);
+      expect([...a.warnings, ...b.warnings]).toEqual([]);
+      expect(walk.unread).toEqual([5, 6]);
+    });
+
+    it("the earlier-head walk emits one budget warning at its end, not one per candidate", async () => {
+      const commits = Array.from({ length: 4 }, (_v, index) => ({ sha: `c${index}` }));
+      const source = sourceFor({
+        pullRequestCommits: async () => [...commits, { sha: "head" }],
+        commitCheckRuns: async (_r, sha) =>
+          page([{ id: 1, name: "Cursor Bugbot", status: "completed", conclusion: "success", pull_requests: [listed(7)], app: { slug: "github-actions", id: 15368 }, check_suite: { id: Number(sha.slice(1)) + 40 } }]),
+      });
+      const result = await readEarlierRoundChecks(
+        source, REPO, 7, "head",
+        [{ reviewer: "bugbot", pattern: /^Cursor Bugbot$/i, producer: WORKFLOW.reviewer("bugbot")?.roundCheckProducer ?? null }],
+        20, new Map(), { reads: WORKFLOW_RUN_READS_MAX }, PR,
+      );
+      const budgetLines = result.warnings.filter((warning) => warning.includes("read budget"));
+      expect(budgetLines).toEqual([
+        `round-check producer: the read budget of ${WORKFLOW_RUN_READS_MAX} on zheref/example was spent before 4 check suite(s) of '^Cursor Bugbot$' were read (43, 42, 41, 40); they are unverified and their round checks are not counted`,
       ]);
     });
   });
@@ -1578,6 +1621,12 @@ describe("round-check producer evidence (zheref/nen#546)", () => {
       expect(earlierRoundCheckWanted(APP, "bounded", ["copilot", "bugbot"], checks, [])).toEqual([]);
     });
 
+    it("N10/F8: EVERY name-matching Actions SUCCESS suite is wanted, newest first -- [own 33 earlier, impostor 22 later] -> both", () => {
+      expect(
+        headWorkflowSuitesWanted(WORKFLOW, [head("github-actions", 33, "2026-10-26T00:00:00Z"), head("github-actions", 22, "2026-10-26T00:05:00Z")]),
+      ).toEqual([22, 33]);
+    });
+
     it("only a GitHub Actions SUCCESS of a workflow-constrained round check is looked up, and another App's later run cannot hide it", () => {
       expect(headWorkflowSuitesWanted(WORKFLOW, [head("github-actions", 33)])).toEqual([33]);
       expect(headWorkflowSuitesWanted(WORKFLOW, [head("cursor", 44)])).toEqual([]);
@@ -1618,7 +1667,7 @@ describe("round-check producer evidence (zheref/nen#546)", () => {
           run_id: 3300,
           path: ".github/workflows/bugbot.yml",
           repository: "zheref/example",
-          event: "pull_request_target",
+          event: "workflow_run",
           pull_requests: [{ number: 7, base_ref: "main" }],
           job_ids: [3301],
         },

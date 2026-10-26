@@ -2193,7 +2193,7 @@ describe("evaluateReady -- round_check_producer (zheref/nen#546)", () => {
     });
   const APP = constrained({ app: { slug: "cursor", id: 1210556 } });
   const WORKFLOW = constrained({
-    workflow: { path: ".github/workflows/bugbot.yml", repository: "zheref/nen", events: ["pull_request_target"] },
+    workflow: { path: ".github/workflows/bugbot.yml", repository: "zheref/nen", events: ["workflow_run"] },
   });
   const bugbotCheck = (slug: string, appId: number, suite: number): Record<string, unknown> => ({
     name: "Cursor Bugbot",
@@ -2243,7 +2243,7 @@ describe("evaluateReady -- round_check_producer (zheref/nen#546)", () => {
       run_id: 3300,
       path: ".github/workflows/bugbot.yml",
       repository: "zheref/nen",
-      event: "pull_request_target",
+      event: "workflow_run",
       pull_requests: [{ number: 7, base_ref: "main" }],
       job_ids: [3301],
     },
@@ -2259,14 +2259,14 @@ describe("evaluateReady -- round_check_producer (zheref/nen#546)", () => {
     expect(owedReason(unread)).toContain("the workflow run of check suite 33 was not read");
     const prRun = [{ ...RUNS[0], event: "pull_request" }];
     expect(owedReason(evaluateReady(WORKFLOW, wfState({ round_check_workflow_runs: prRun }), OPTIONS))).toContain(
-      "on 'pull_request', not workflow zheref/nen/.github/workflows/bugbot.yml on pull_request_target",
+      "on 'pull_request', not workflow zheref/nen/.github/workflows/bugbot.yml on workflow_run",
     );
   });
 
   it("F1 through the verdict: a check written into the trusted suite, no job of its run, is not ready", () => {
     const evaluation = evaluateReady(WORKFLOW, wfState({ checks: [greenCheck(), wfCheck(9999)] }), OPTIONS);
     expect(evaluation.ready).toBe(false);
-    expect(owedReason(evaluation)).toContain("round check producer unverified: 'Cursor Bugbot' at head check run 9999 is not a job of run 3300");
+    expect(owedReason(evaluation)).toContain("round check from the wrong producer: 'Cursor Bugbot' at head check run 9999 is not a job of run 3300");
   });
 
   it("F2 through the verdict: a run naming another pull request, or the judged pull request unknown, is not ready", () => {
@@ -2287,10 +2287,10 @@ describe("evaluateReady -- round_check_producer (zheref/nen#546)", () => {
 
   it("F3: a producer in force through trusts_pull_request_revision warns on every evaluation", () => {
     const optIn = constrained({
-      workflow: { path: ".github/workflows/bugbot.yml", repository: "zheref/nen", events: ["pull_request"], trusts_pull_request_revision: true },
+      workflow: { path: ".github/workflows/bugbot.yml", repository: "zheref/nen", events: ["pull_request_target"], trusts_pull_request_revision: true },
     });
     expect(evaluateReady(optIn, wfState(), OPTIONS).context.warnings).toContain(
-      "round_check_producer of 'bugbot' trusts the pull request's own revision (trusts_pull_request_revision: true, events pull_request): on those events the workflow file is whatever the pull request wrote, so its round check proves no reviewer (zheref/nen#546)",
+      "round_check_producer of 'bugbot' trusts a revision the default branch did not define (trusts_pull_request_revision: true, events pull_request_target): on those events the workflow file is the one the pull request, an actor or the named base carries -- on pull_request_target the base is whichever branch a writer names -- so any branch writer can produce this round; prefer an app producer (zheref/nen#546)",
     );
     expect(evaluateReady(WORKFLOW, wfState(), OPTIONS).context.warnings).toEqual([]);
   });

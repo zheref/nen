@@ -334,8 +334,15 @@ export async function readWorkflowRuns(
   scope: WorkflowReadScope,
   known: ReadonlyMap<number, WorkflowRunEvidence> = new Map(),
   budget: { reads: number } = { reads: 0 },
+  /**
+   * One evaluation's shared walk (hanten round 2, Nobunaga N13): every suite
+   * ATTEMPTED -- read, failed or not -- is never read again, and a suite the
+   * budget left unread is collected in `unread` for ONE warning at the end,
+   * which the walk's owner emits. Absent: this call warns for itself.
+   */
+  walk?: WorkflowWalk,
 ): Promise<{ readonly runs: readonly WorkflowRunEvidence[]; readonly warnings: readonly string[] }> {
-  const wanted = [...new Set(suiteIds)].filter((id): boolean => !known.has(id));
+  const wanted = [...new Set(suiteIds)].filter((id): boolean => !known.has(id) && !(walk?.attempted.has(id) ?? false));
   if (wanted.length === 0) return { runs: [], warnings: [] };
   const read = source.checkSuiteWorkflowRuns;
   const at = `${repo.owner}/${repo.repo}`;
@@ -352,10 +359,12 @@ export async function readWorkflowRuns(
   const unread: number[] = [];
   for (const suite of wanted) {
     if (budget.reads >= WORKFLOW_RUN_READS_MAX) {
-      unread.push(suite);
+      if (walk === undefined) unread.push(suite);
+      else if (!walk.unread.includes(suite)) walk.unread.push(suite);
       continue;
     }
     budget.reads += 1;
+    walk?.attempted.add(suite);
     let payload: unknown;
     try {
       payload = await read.call(source, repo, suite);
@@ -412,12 +421,23 @@ export async function readWorkflowRuns(
     if (jobs.warning !== null) warnings.push(`round-check producer: ${jobs.warning} (run ${run.runId} of check suite ${suite} on ${at}); its round check is unverified and not counted`);
     runs.push({ ...run, jobIds: jobs.ids });
   }
-  if (unread.length > 0) {
-    warnings.push(
-      `round-check producer: the read budget of ${WORKFLOW_RUN_READS_MAX} on ${at} was spent before ${unread.length} check suite(s) of ${scope.label} were read (${unread.join(", ")}); they are unverified and their round checks are not counted`,
-    );
-  }
+  if (unread.length > 0) warnings.push(budgetWarning(at, scope.label, unread));
   return { runs, warnings };
+}
+
+/** One evaluation's workflow-producer walk: suites attempted, suites the budget left unread. */
+export interface WorkflowWalk {
+  readonly attempted: Set<number>;
+  readonly unread: number[];
+}
+
+export function newWorkflowWalk(): WorkflowWalk {
+  return { attempted: new Set(), unread: [] };
+}
+
+/** The ONE budget warning of a walk: the round check(s) and every suite left unread. */
+export function budgetWarning(at: string, label: string, unread: readonly number[]): string {
+  return `round-check producer: the read budget of ${WORKFLOW_RUN_READS_MAX} on ${at} was spent before ${unread.length} check suite(s) of ${label} were read (${unread.join(", ")}); they are unverified and their round checks are not counted`;
 }
 
 /** A REST workflow run's `pull_requests[]`: each entry's number and base ref. */
@@ -484,9 +504,9 @@ export function workflowReadScope(identities: GateIdentities, pullRequest: RunPu
  * needs (zheref/nen#546): a name-matching, COMPLETED, definitive-SUCCESS
  * round check created by GitHub Actions. Nothing else could become a round,
  * so nothing else is looked up -- and a file that declares no workflow
- * producer looks up nothing at all. Read per reviewer on the PRODUCER-SCOPED
- * reduction (Nobunaga N2): another App's run of the same name is dropped
- * before the latest-by-name reduction, so it cannot hide an Actions run.
+ * producer looks up nothing at all. Every such run is gathered, not only the
+ * latest per name (round 2, N10): another run of the same name cannot leave
+ * the reviewer's own suite unread.
  */
 export function headWorkflowSuitesWanted(identities: GateIdentities, headChecks: readonly unknown[]): number[] {
   const constrained = identities.reviewers.filter(
@@ -495,19 +515,33 @@ export function headWorkflowSuitesWanted(identities: GateIdentities, headChecks:
   if (constrained.length === 0) return [];
   const parsed = parseCheckRollup(headChecks, "$.checks");
   if (!parsed.ok) return [];
-  const reduced = latestChecks(parsed.value);
+  // EVERY name-matching SUCCESS, never only the latest per name (hanten round
+  // 2, Nobunaga N10, Feitan F8): which run is the reviewer's is exactly what
+  // the read decides, so reducing first could leave the reviewer's own suite
+  // unread behind a later impostor. Newest first, so the budget reaches the
+  // most recent runs before older ones.
+  const candidates = parsed.value
+    .filter(
+      (entry): boolean =>
+        entry.kind === "check_run" &&
+        entry.name !== null &&
+        entry.status === "COMPLETED" &&
+        entry.conclusion === "SUCCESS" &&
+        (entry.appSlug ?? "").toLowerCase() === GITHUB_ACTIONS_APP_SLUG &&
+        typeof entry.checkSuiteId === "number" &&
+        constrained.some((reviewer): boolean => reviewer.roundCheckPattern!.test(entry.name as string)),
+    )
+    .sort((left, right): number => compareDesc(left.startedAt ?? "", right.startedAt ?? ""));
   const suites: number[] = [];
-  for (const reviewer of constrained) {
-    for (const entry of producerScopedChecks(reviewer, parsed.value, reduced, EMPTY_PRODUCER_CONTEXT)) {
-      if (entry.kind !== "check_run" || entry.name === null) continue;
-      if (entry.status !== "COMPLETED" || entry.conclusion !== "SUCCESS") continue;
-      if ((entry.appSlug ?? "").toLowerCase() !== GITHUB_ACTIONS_APP_SLUG) continue;
-      const suite = entry.checkSuiteId;
-      if (typeof suite !== "number") continue;
-      if (reviewer.roundCheckPattern!.test(entry.name) && !suites.includes(suite)) suites.push(suite);
-    }
+  for (const entry of candidates) {
+    const suite = (entry as { checkSuiteId: number }).checkSuiteId;
+    if (!suites.includes(suite)) suites.push(suite);
   }
   return suites;
+}
+
+function compareDesc(left: string, right: string): number {
+  return left < right ? 1 : left > right ? -1 : 0;
 }
 
 /**
@@ -1041,6 +1075,11 @@ export async function readEarlierRoundChecks(
   workflowBudget: { reads: number } = { reads: 0 },
   /** The pull request a workflow producer's run must name (Feitan F2). */
   pullRequest: RunPullRequest | null = null,
+  /**
+   * The evaluation's shared workflow walk (round 2, N13). Absent: this walk
+   * owns one and emits its single budget warning itself.
+   */
+  sharedWalk?: WorkflowWalk,
 ): Promise<{
   readonly checks: readonly EarlierHeadCheck[];
   readonly warnings: readonly string[];
@@ -1092,6 +1131,7 @@ export async function readEarlierRoundChecks(
   const found: EarlierHeadCheck[] = [];
   const workflowRuns = new Map(knownWorkflowRuns);
   const lookedUp: WorkflowRunEvidence[] = [];
+  const walk = sharedWalk ?? newWorkflowWalk();
   let commitReads = 0;
   for (const sha of shas) {
     if (remaining.length === 0) break;
@@ -1173,7 +1213,8 @@ export async function readEarlierRoundChecks(
           producer?.kind === "workflow" &&
           (candidateEvidence.appSlug ?? "").toLowerCase() === GITHUB_ACTIONS_APP_SLUG &&
           candidateEvidence.checkSuiteId !== undefined &&
-          !workflowRuns.has(candidateEvidence.checkSuiteId)
+          !workflowRuns.has(candidateEvidence.checkSuiteId) &&
+          !walk.attempted.has(candidateEvidence.checkSuiteId)
         ) {
           const looked = await readWorkflowRuns(
             source,
@@ -1182,6 +1223,7 @@ export async function readEarlierRoundChecks(
             { producers: [producer], pullRequest, label: `'${entry.pattern.source}'` },
             workflowRuns,
             workflowBudget,
+            walk,
           );
           warnings.push(...looked.warnings);
           for (const evidenceRun of looked.runs) {
@@ -1216,6 +1258,9 @@ export async function readEarlierRoundChecks(
       });
       remaining.splice(remaining.indexOf(entry), 1);
     }
+  }
+  if (sharedWalk === undefined && walk.unread.length > 0) {
+    warnings.push(budgetWarning(`${repo.owner}/${repo.repo}`, wanted.map((entry): string => `'${entry.pattern.source}'`).join(", "), walk.unread));
   }
   return { checks: found, warnings, commitReads, ...(lookedUp.length === 0 ? {} : { workflowRuns: lookedUp }) };
 }
@@ -1636,13 +1681,16 @@ export async function fetchPrState(
   // The pull request a workflow producer's run must name (Feitan F2).
   const judgedPullRequest: RunPullRequest | null =
     typeof node.baseRefName === "string" && node.baseRefName !== "" ? { number: prNumber, baseRef: node.baseRefName } : null;
+  const workflowWalk = newWorkflowWalk();
+  const workflowScope = workflowReadScope(identities, judgedPullRequest);
   const headWorkflow = await readWorkflowRuns(
     source,
     repo,
     headWorkflowSuitesWanted(identities, checkRollupNodes),
-    workflowReadScope(identities, judgedPullRequest),
+    workflowScope,
     new Map(),
     workflowBudget,
+    workflowWalk,
   );
   const headProducerCtx = producerContext(headWorkflow.runs, judgedPullRequest);
   const headWorkflowRuns = headProducerCtx.workflowRuns;
@@ -1671,12 +1719,16 @@ export async function fetchPrState(
     headWorkflowRuns,
     workflowBudget,
     judgedPullRequest,
+    workflowWalk,
   );
+  // ONE budget warning for the whole evaluation (N13).
+  const budgetWarnings =
+    workflowWalk.unread.length === 0 ? [] : [budgetWarning(`${repo.owner}/${repo.repo}`, workflowScope.label, workflowWalk.unread)];
   const workflowRuns = [...headWorkflow.runs, ...(earlier.workflowRuns ?? [])];
 
   return {
     ok: true,
-    warnings: [...threads.warnings, ...headWorkflow.warnings, ...earlier.warnings, ...requestWarnings],
+    warnings: [...threads.warnings, ...headWorkflow.warnings, ...earlier.warnings, ...budgetWarnings, ...requestWarnings],
     state: {
       mergeable,
       // CON-42/1's draft clause (zheref/nen#331): a draft is never ready.
