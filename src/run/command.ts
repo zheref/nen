@@ -35,6 +35,7 @@ import {
   planAppend,
   planPark,
   planStart,
+  combineModes,
   readRunManifest,
   renderModes,
   ROW_ID,
@@ -87,7 +88,7 @@ and that line, and calls nothing; --json: { ok, message, dryRun, command }.
 The manifest lives at '<git-common-dir>/${RUN_MANIFEST_DIR}/<run-id>.json' -- the git
 common dir, so every worktree of the project shares it and no effort cleanup
 removes it; one an earlier build wrote under the legacy spelling is
-moved there once, by whichever run verb reads it first. git is asked with an
+moved there once, by the first run verb that reads it without --dry-run. git is asked with an
 inherited GIT_DIR, GIT_COMMON_DIR and GIT_WORK_TREE dropped. nen records and
 reads; it decides nothing.
 
@@ -98,8 +99,8 @@ over, and a wider mode an earlier build left (0644 under 0755) is narrowed on
 the next write. The modes are READ BACK and printed as 'mode: file 0600,
 directory 0700' (with '(narrowed: file 0644 -> 0600, ...)' when a write
 narrowed one); --json carries 'mode': { verdict, file, directory, repaired,
-reason } -- the legacy move's when only the move wrote, null when nothing
-was written. A manifest, legacy manifest or runs directory that is a symbolic
+reason } -- the legacy move's narrowing included, null when neither the
+plan nor a legacy move writes. A manifest, legacy manifest or runs directory that is a symbolic
 link (or not a regular file) is refused at exit 1: nen never chmods or writes
 through a link. Where a mode cannot be set -- a win32
 host, a chmod that fails, a read-back that is not 0600/0700 -- the write
@@ -329,7 +330,7 @@ function locateManifest(context: CommandContext, root: string, id: string, dryRu
           ? `nen: moved run manifest '${id}' from ${located.migratedFrom} to ${located.path} (nen's common-dir root; this happens once).`
           : `nen: would move run manifest '${id}' from ${located.migratedFrom} to ${located.path} (dry run: nothing moved; read where it is).`,
       );
-      // The move's modes are also the verb's `mode` when the plan itself writes nothing (N5).
+      // The move's modes are part of the verb's `mode`: alone when the plan writes nothing (N5), combined when it writes too (N9).
       for (const line of renderModes(located.modes)) context.io.err(`nen: ${line}`);
     }
     return located;
@@ -374,9 +375,9 @@ function doStart(context: CommandContext): number {
   }
   const outcome = dryRun && result.outcome === "started" ? "dry-run" : result.outcome;
   const reason = result.outcome === "conflict" ? result.reason : null;
-  emit(context.io, context.json, { outcome, path, reason, manifest: result.manifest, mode: result.modes ?? located.modes }, [
+  emit(context.io, context.json, { outcome, path, reason, manifest: result.manifest, mode: combineModes(located.modes, result.modes) }, [
     reason === null ? `${outcome}: run ${id} -- ${path}` : `refused: ${reason}`,
-    ...renderModes(result.modes ?? located.modes),
+    ...renderModes(combineModes(located.modes, result.modes)),
   ]);
   return result.outcome === "conflict" ? 1 : 0;
 }
@@ -445,11 +446,11 @@ function doAppend(context: CommandContext): number {
   const previous = result.outcome === "updated" || result.outcome === "conflict" ? result.previous : null;
   const reason = result.outcome === "conflict" ? result.reason : null;
   const would = dryRun && writes ? ` (would be ${result.outcome})` : "";
-  emit(context.io, context.json, { outcome, path, reason, entry, previous, mode: result.modes ?? located.modes }, [
+  emit(context.io, context.json, { outcome, path, reason, entry, previous, mode: combineModes(located.modes, result.modes) }, [
     reason === null
       ? `${outcome}${would}: #${pr} ${issue ?? "(no issue)"} [${kind}] ${entry?.branch ?? ""} -> ${entry?.base ?? ""} @ ${(entry?.head ?? "").slice(0, 12)} in run ${id}`
       : `refused: ${reason}`,
-    ...renderModes(result.modes ?? located.modes),
+    ...renderModes(combineModes(located.modes, result.modes)),
   ]);
   return result.outcome === "conflict" ? 1 : 0;
 }
@@ -482,9 +483,9 @@ function doPark(context: CommandContext): number {
     return 1;
   }
   const outcome = dryRun && result.outcome === "parked" ? "dry-run" : result.outcome;
-  emit(context.io, context.json, { outcome, path, entry: result.entry, mode: result.modes ?? located.modes }, [
+  emit(context.io, context.json, { outcome, path, entry: result.entry, mode: combineModes(located.modes, result.modes) }, [
     `${outcome}: ${issue} parked on row ${row} in run ${id} (since ${result.entry.at})`,
-    ...renderModes(result.modes ?? located.modes),
+    ...renderModes(combineModes(located.modes, result.modes)),
   ]);
   return 0;
 }
@@ -599,12 +600,12 @@ function doImport(context: CommandContext): number {
     return 1;
   }
   const outcome = dryRun && result.outcome === "imported" ? "dry-run" : result.outcome;
-  emit(context.io, context.json, { outcome, from, path, reason: result.reason, prs: result.prs, parked: result.parked, manifest: result.manifest, mode: result.modes ?? located.modes }, [
+  emit(context.io, context.json, { outcome, from, path, reason: result.reason, prs: result.prs, parked: result.parked, manifest: result.manifest, mode: combineModes(located.modes, result.modes) }, [
     result.reason === null
       ? `${outcome}: run ${id} from ${from} -- ${result.prs.length} PR(s), ${result.parked.length} parked -- ${path}`
       : `refused: ${result.reason}`,
     ...result.prs.map((row): string => `  #${row.pr}: ${row.outcome}`),
-    ...renderModes(result.modes ?? located.modes),
+    ...renderModes(combineModes(located.modes, result.modes)),
   ]);
   return result.outcome === "conflict" ? 1 : 0;
 }

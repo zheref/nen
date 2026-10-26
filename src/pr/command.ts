@@ -461,12 +461,13 @@ converge:
   issue criteria' reads them; --catalogue <catalogue.json> (deprecated alias
   here: --requirements-from, which on body-check, next-blocker and merge
   names the body requirements) gives the issue-sections catalogue (its
-  acceptance prefix, id shape and section) and an optional 'coverage' block (blocking words, the none word, evidence
-  required or optional) -- with none, the defaults are AC rows anywhere in
-  the body, missing and contradicts blocking, unrequested on none rows, and
-  evidence required. Reports per criterion: covered-with-evidence,
-  covered-without-evidence, missing-row, malformed-row, duplicate-rows,
-  not-verifiable, and the row's word. Exits: 0 nothing blocks (a PR into
+  acceptance prefix, id shape and section) and an optional 'coverage'
+  block (blocking words, the none word, evidence required or optional) --
+  with none, the defaults are AC rows anywhere in the body, missing and
+  contradicts blocking, unrequested on none rows, and evidence required.
+  Reports per criterion: covered-with-evidence, covered-without-evidence,
+  missing-row, malformed-row, duplicate-rows, not-verifiable, and the
+  row's word. Exits: 0 nothing blocks (a PR into
   the default branch closing no issue is 0); 1 any blocking row -- a
   missing-row, malformed-row (a word outside the five, or two words, in one
   row) or duplicate-rows criterion, a blocking word (its row quoted), a
@@ -1102,7 +1103,7 @@ function criteriaForBody(context: CommandContext, cwd: string): { issue: Closing
     report = extractCriteria(readTextFile(path, cwd).replace(/\r\n?/g, "\n"), catalogue);
     label = number === 0 ? `--criteria-from ${path}` : `${slug}#${number}`;
   }
-  return { issue: { target: slug, number, report, label }, policy, catalogue };
+  return { issue: { target: slug, number, report, label, ...(ids !== undefined ? { listed: true } : {}) }, policy, catalogue };
 }
 
 /** The criteria half of a body-check: its lines, its `--json` field, and whether it blocks. */

@@ -270,7 +270,7 @@ describe("nen audit deps -- pnpm (the tree the npm-only row reported NOT SCANNED
 
   it("queries only registry-hosted entries; anything else is unqueried and never clean (AC-6)", async () => {
     await expectAudit(pnpmCase(pnpm("  ok@1.0.0:\n    resolution: {integrity: x}\n  evil@1.0.0:\n    resolution: {tarball: https://evil.invalid/evil-1.0.0.tgz}\n")), ["--query"], 1,
-      /1 packages\)\nunqueried: 1 pnpm-lock\.yaml entries come from git, file: or a host off registryHosts -- never clean\naudit: 0 finding\(s\) .*, 1 unqueried, across 1 packages\n$/);
+      /1 packages\)\nunqueried: 1 pnpm-lock\.yaml entries come from git, file:, a host off registryHosts, a resolution type other than directory, or a resolved URL that names another package or version -- never clean\naudit: 0 finding\(s\) .*, 1 unqueried, across 1 packages\n$/);
     await expectAudit(pnpmCase(pnpm("  lodash@4.17.15:\n    resolution: {integrity: x, tarball: https://registry.npmjs.org/lodash/-/lodash-4.17.15.tgz}\n")), ["--query"], 1, /1 packages\)\n[\s\S]*finding: GHSA-test-high/);
     await expectAudit(pnpmCase(pnpm("  ok@1.0.0:\n    resolution: {integrity: x}\n  lodash@4.17.15:\n    resolution: {tarball: http://registry.npmjs.org/lodash/-/lodash-4.17.15.tgz}\n")), [], 0, /unqueried: 1 /);
     await expectAudit(pnpmCase(pnpm("  ok@1.0.0:\n    resolution: {integrity: x}\n  dep@https://codeload.github.com/x/y/tar.gz/abc:\n    resolution: {commit: abc, repo: https://github.com/x/y, type: git}\n  'local@file:pkgs/local':\n    resolution: {directory: pkgs/local, type: directory}\n")), [], 0,
@@ -293,9 +293,11 @@ describe("nen audit deps -- hanten round 1 on NN#508 (Feitan probes A-F, red bef
 
   it("F1: a resolution that is missing, repeated or unreadable is not scanned, never local", async () => {
     await expectAudit(pnpmCase(pnpm("  lodash@4.17.15:\n    integrity: x\n")), [], 3, /entry "lodash@4\.17\.15" has no resolution \(truncated\)/);
-    await expectAudit(pnpmCase(pnpm("  lodash@4.17.15:\n    resolution: {integrity: x}\n    resolution: {directory: x, type: directory}\n")), [], 3, /has more than one resolution/);
-    await expectAudit(pnpmCase(pnpm("  lodash@4.17.15:\n    resolution: {integrity: x, type: directory\n")), [], 3, /has an unterminated flow map/);
-    await expectAudit(pnpmCase(pnpm("  lodash@4.17.15:\n    resolution: {integrity: x} type: directory\n")), [], 3, /has text after its resolution/);
+    await expectAudit(pnpmCase(pnpm("  lodash@4.17.15:\n    resolution: {integrity: x}\n    resolution: {directory: x, type: directory}\n")), [], 3, /does not parse as strict YAML \(DUPLICATE_KEY, line 7\)/);
+    await expectAudit(pnpmCase(pnpm("  lodash@4.17.15:\n    resolution: {integrity: x, type: directory\n")), [], 3, /does not parse as strict YAML/);
+    await expectAudit(pnpmCase(pnpm("  lodash@4.17.15:\n    resolution: {integrity: x} type: directory\n")), [], 3, /does not parse as strict YAML/);
+    await expectAudit(pnpmCase(pnpm("  lodash@4.17.15:\n    resolution: [integrity, x]\n")), [], 3, /has a resolution that is not a map/);
+    await expectAudit(pnpmCase(pnpm("  lodash@4.17.15:\n    resolution: {tarball: {a: b}}\n")), [], 3, /resolution value for "tarball" that is not a scalar/);
   });
 
   it("F1: a block-form resolution is read by its keys, comments stripped", async () => {
@@ -305,7 +307,7 @@ describe("nen audit deps -- hanten round 1 on NN#508 (Feitan probes A-F, red bef
 
   it("F2/C: an npm v3 entry claiming ok@1.0.0 while resolving lodash-4.17.15.tgz is unqueried, never clean", async () => {
     await expectAudit(tree({ "package.json": pkg("npm@10.9.0"), "package-lock.json": JSON.stringify({ lockfileVersion: 3, packages: { "": {}, "node_modules/lodash": { name: "ok", version: "1.0.0", resolved: "https://registry.npmjs.org/lodash/-/lodash-4.17.15.tgz" } } }) }), ["--query"], 1,
-      /0 packages\)\nunqueried: 1 package-lock\.json[^\n]*\naudit: 0 finding\(s\) [^\n]*, 1 unqueried, across 0 packages\n$/);
+      /0 packages\)\nunqueried: 1 package-lock\.json entries come from git, file:, a host off registryHosts, a resolution type other than directory, or a resolved URL that names another package or version -- never clean\naudit: 0 finding\(s\) [^\n]*, 1 unqueried, across 0 packages\n$/);
   });
 
   it("F2/D: a yarn classic version disagreeing with its resolved tarball is unqueried", async () => {
@@ -326,6 +328,80 @@ describe("nen audit deps -- hanten round 1 on NN#508 (Feitan probes A-F, red bef
   it("F2: a scoped tarball that agrees is queried; a registry URL that is not a tarball path is unqueried", async () => {
     await expectAudit(tree({ "package.json": pkg("npm@10.9.0"), "package-lock.json": JSON.stringify({ lockfileVersion: 3, packages: { "": {}, "node_modules/@scope/ok": { version: "2.0.0", resolved: "https://registry.npmjs.org/@scope/ok/-/ok-2.0.0.tgz" }, "node_modules/odd": { version: "1.0.0", resolved: "https://registry.npmjs.org/odd" } } }) }), [], 0,
       /1 packages\)\nunqueried: 1 package-lock\.json/);
+  });
+});
+
+describe("nen audit deps -- hanten round 2 on NN#508 (Feitan probes K-Q, red before the fix)", () => {
+  const LOD = "https://registry.npmjs.org/lodash/-/lodash-4.17.15.tgz";
+  const pnpmCase = (lock: string): string => tree({ "package.json": pkg("pnpm@9.15.9"), "pnpm-lock.yaml": lock });
+
+  it("F5/K: a backslash-escaped quote cannot smuggle 'type: directory' out of a quoted tarball", async () => {
+    await expectAudit(pnpmCase(pnpm(`  ok@1.0.0:\n    resolution: {integrity: x}\n  lodash@4.17.15:\n    resolution: {tarball: "${LOD}?a\\", type: directory, b: \\""}\n`)), ["--query"], 1,
+      /^resolved: [^\n]*2 packages\)\nfinding: GHSA-test-high HIGH "lodash@4\.17\.15"/);
+  });
+
+  it("F6/L: a mid-scalar apostrophe does not swallow the tarball key", async () => {
+    await expectAudit(pnpmCase(pnpm(`  ok@1.0.0:\n    resolution: {a: x'y, tarball: ${LOD}, b: w'v}\n`)), ["--query"], 1,
+      /0 packages\)\nunqueried: 1 pnpm-lock\.yaml[^\n]*\naudit: 0 finding\(s\) [^\n]*, 1 unqueried/);
+  });
+
+  it("F7/M: a multi-line plain scalar in a block resolution does not hide the keys after it", async () => {
+    await expectAudit(pnpmCase(pnpm(`  ok@1.0.0:\n    resolution:\n      a: x\n        y\n      tarball: ${LOD}\n`)), ["--query"], 1,
+      /0 packages\)\nunqueried: 1 pnpm-lock\.yaml[^\n]*\naudit: 0 finding\(s\) [^\n]*, 1 unqueried/);
+  });
+
+  it("F8/N: a repeated block-form key is not scanned, never last-wins", async () => {
+    await expectAudit(pnpmCase(pnpm(`  ok@1.0.0:\n    resolution:\n      tarball: ${LOD}\n      tarball: https://registry.npmjs.org/ok/-/ok-1.0.0.tgz\n`)), ["--query"], 3,
+      /^not scanned: pnpm-lock\.yaml does not parse as strict YAML \(DUPLICATE_KEY, line \d+\)\n$/);
+  });
+
+  it("P: anchors, aliases, explicit tags and merge keys are not scanned", async () => {
+    for (const resolution of ["resolution: *a", "resolution: &a {type: directory}", "resolution: !!map {integrity: x}", "resolution:\n      <<: *a"]) {
+      await expectAudit(pnpmCase(pnpm(`  lodash@4.17.15:\n    ${resolution}\n`)), [], 3, /not scanned: pnpm-lock\.yaml (does not parse as strict YAML|carries an? )/);
+    }
+    await expectAudit(pnpmCase(pnpm("  lodash@4.17.15:\n    resolution: {integrity: x}\n    extra: &x {a: 1}\n")), [], 3, /carries an anchor \(&x\)/);
+    await expectAudit(pnpmCase(pnpm("  lodash@4.17.15:\n    resolution: {integrity: x}\n    <<: {a: 1}\n")), [], 3, /carries a << merge key/);
+  });
+
+  it("the parser is bounded before it runs: a deep flow nest is not scanned, never a stack overflow", async () => {
+    await expectAudit(pnpmCase(pnpm(`  lodash@4.17.15:\n    resolution: {integrity: x}\n    deep: ${"[".repeat(5000)}${"]".repeat(5000)}\n`)), [], 3, /nests deeper than 1000 \(maxDepth\)/);
+  });
+
+  // Windows has no FIFO (mkfifo does not exist there), so the fixture cannot be built.
+  it.skipIf(process.platform === "win32")("Q: a FIFO at the lockfile name is refused, never hangs (POSIX only: Windows has no FIFO)", async () => {
+    const dir = tree({ "package.json": pkg("pnpm@9.15.9") });
+    (await import("node:child_process")).execFileSync("mkfifo", [join(dir, "pnpm-lock.yaml")]);
+    await expectAudit(dir, [], 3, /pnpm-lock\.yaml is not a regular file/);
+  });
+
+  it("N8: a registry mounted under a path prefix on registryHosts is queried by the segments before /-/", async () => {
+    const prefixed = contract((row): void => { row["registryHosts"] = ["registry.npmjs.org", "art.example"]; });
+    await expectAudit(tree({ "package.json": pkg("npm@10.9.0"), "package-lock.json": JSON.stringify({ lockfileVersion: 3, packages: { "": {},
+      "node_modules/lodash": { version: "4.17.15", resolved: "https://art.example/api/npm/npm-remote/lodash/-/lodash-4.17.15.tgz" },
+      "node_modules/@scope/ok": { version: "2.0.0", resolved: "https://art.example/api/npm/npm-remote/@scope/ok/-/ok-2.0.0.tgz" },
+      "node_modules/@scope/two": { version: "1.0.0", resolved: "https://art.example/api/npm/npm-remote/@scope%2ftwo/-/two-1.0.0.tgz" },
+      "node_modules/ok": { version: "1.0.0", resolved: "https://art.example/api/npm/npm-remote/lodash%2f..%2fok/-/ok-1.0.0.tgz" } } }) }), ["--query"], 1,
+      /3 packages\)\nunqueried: 1 package-lock\.json[^\n]*\nfinding: GHSA-test-high HIGH "lodash@4\.17\.15"/, prefixed);
+  });
+
+  it("Bugbot on NN-PR-#547: an unscoped claim resolving a SCOPED tarball of the same base name is unqueried, never clean", async () => {
+    for (const url of ["https://registry.npmjs.org/@other/lodash/-/lodash-4.17.15.tgz", "https://registry.npmjs.org/%40other/lodash/-/lodash-4.17.15.tgz", "https://registry.npmjs.org/@other%2flodash/-/lodash-4.17.15.tgz"]) {
+      await expectAudit(tree({ "package.json": pkg("npm@10.9.0"), "package-lock.json": JSON.stringify({ lockfileVersion: 3, packages: { "": {}, "node_modules/lodash": { version: "4.17.15", resolved: url } } }) }), ["--query"], 1,
+        /0 packages\)\nunqueried: 1 package-lock\.json[^\n]*\naudit: 0 finding\(s\) [^\n]*, 1 unqueried, across 0 packages\n$/);
+    }
+    await expectAudit(tree({ "package.json": pkg("npm@10.9.0"), "package-lock.json": JSON.stringify({ lockfileVersion: 3, packages: { "": {}, "node_modules/@scope/ok": { version: "2.0.0", resolved: "https://registry.npmjs.org/@outer/@scope/ok/-/ok-2.0.0.tgz" } } }) }), [], 0,
+      /0 packages\)\nunqueried: 1 package-lock\.json/);
+  });
+
+  it("O: an uppercase scheme, a dot-segment or a %2f traversal toward another name is unqueried", async () => {
+    for (const url of ["HTTPS://registry.npmjs.org/ok/-/ok-1.0.0.tgz/../../../lodash/-/lodash-4.17.15.tgz", "https://registry.npmjs.org/lodash%2f..%2f..%2fok/-/ok-1.0.0.tgz", "https://registry.npmjs.org/ok/-/ok-1.0.0.tgz/%2e%2e/%2e%2e/%2e%2e/lodash/-/lodash-4.17.15.tgz"]) {
+      await expectAudit(pnpmCase(pnpm(`  ok@1.0.0:\n    resolution: {tarball: '${url}'}\n`)), ["--query"], 1, /unqueried: 1/);
+    }
+  });
+
+  it("F9: a file is read through one bounded buffer: over maxLockfileBytes is refused", async () => {
+    const dir = tree({ "package.json": pkg("pnpm@9.15.9"), "pnpm-lock.yaml": PNPM9 });
+    await expectAudit(dir, [], 3, /pnpm-lock\.yaml is larger than 64 bytes \(maxLockfileBytes\)/, contract((row): void => { row["maxLockfileBytes"] = 64; }));
   });
 });
 

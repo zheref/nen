@@ -207,6 +207,23 @@ function refuseIrregularDir(dir: string): void {
 const noPosixModes = (platform: NodeJS.Platform): string | null =>
   platform === "win32" ? "this host (win32) has no POSIX file modes; the manifest takes its directory's access control list" : null;
 
+/**
+ * One `mode` for a call that may have written twice: the legacy move, then
+ * the plan's own write (Nobunaga N9 on #522). Either alone is itself; both
+ * keep the move's narrowing, which the second write can no longer see, and a
+ * `not-set` from either wins with both reasons -- a mode is never claimed for
+ * a call where one of its writes could not set it.
+ */
+export function combineModes(moved: ManifestModes | null, written: ManifestModes | null): ManifestModes | null {
+  if (moved === null) return written;
+  if (written === null) return moved;
+  const repaired = [...new Set([...moved.repaired, ...written.repaired])];
+  const reasons = [moved.reason, written.reason].filter((reason): reason is string => reason !== null && reason !== "");
+  const failed = moved.verdict === "not-set" || written.verdict === "not-set";
+  if (failed) return { verdict: "not-set", file: written.file, directory: written.directory, repaired, reason: [...new Set(reasons)].join("; ") || null };
+  return { ...written, repaired };
+}
+
 /** The one line a verb prints for `modes`, or none when nothing was written. */
 export function renderModes(modes: ManifestModes | null): string[] {
   if (modes === null) return [];
@@ -363,6 +380,8 @@ export function locateRunManifest(commonDir: string, id: string, options: { read
   // lstat, not exists: a dangling link at a legacy path is still something there, and refused (N1).
   const legacy = RUNS_LEGACY_SEGMENTS.map((segments): string => join(commonDir, ...segments, `${id}.json`)).filter((candidate): boolean => present(candidate));
   refuseIrregularManifest(path);
+  // A runs directory that is a link is refused for a reader too (N8): nen never reads through one.
+  refuseIrregularDir(dirname(path));
   if (legacy.length === 0) return { path, readPath: path, migratedFrom: null, moved: false, modes: null };
   if (present(path) || legacy.length > 1) {
     throw new RunManifestError(`run '${id}' has a manifest in more than one place (${[...(present(path) ? [path] : []), ...legacy].join(", ")}); nen will not choose which is the run. Keep one and move the others aside.`);
@@ -498,6 +517,7 @@ export function parseRunManifest(path: string, value: unknown): RunManifest {
 
 /** The manifest on disk, or null when there is none. Unreadable is a refusal, never null. */
 export function readRunManifest(path: string): RunManifest | null {
+  refuseIrregularDir(dirname(path));
   if (!present(path)) return null;
   refuseIrregularManifest(path);
   let value: unknown;

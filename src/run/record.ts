@@ -150,10 +150,22 @@ function locate(input: RecordInput): { path: string | null; dir: string | null; 
   return { dir, path: join(dir, `${input.id}.json`), reason: null };
 }
 
+/** True when something is at `path` and it is a link or not a directory (lstat); absent is false. */
+function notARealDirectory(path: string): boolean {
+  try {
+    const entry = lstatSync(path);
+    return entry.isSymbolicLink() || !entry.isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 export function readRecord(input: RecordInput): RecordReport {
   const make = (verdict: RecordVerdict, path: string | null, problems: readonly string[], record: unknown, reason: string | null): RecordReport => ({ contract: RUN_RECORD_CONTRACT, verdict, schema: input.schema.schema, id: input.id, path, problems, record, reason });
   const where = locate(input);
   if (where.path === null) return make("could-not-read", null, [], null, where.reason);
+  // As the write refuses it (Feitan F2), a record directory that is a link or not a directory is never read through (zheref/nen#522 N8).
+  if (where.dir !== null && notARealDirectory(where.dir)) return make("could-not-read", where.path, [], null, `${where.dir} is not a real directory (a link or a file); nen reads no record through one`);
   if (!existsSync(where.path)) return make("absent", where.path, [], null, `no record for ${input.id}; a run never started is not a run with nothing recorded`);
   let value: unknown;
   try {

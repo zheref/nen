@@ -640,6 +640,38 @@ describe("manifest modes and dry forms through the verbs (zheref/nen#522)", () =
     expect(existsSync(join(common, ".nen", "runs", "r1.json"))).toBe(false);
   });
 
+  it.runIf(POSIX)("a legacy 0644 manifest then a writing park keeps the move's narrowing in --json mode, and the dry form agrees (N9)", async () => {
+    const PARK = ["run", "park", "--id", "r1", "--issue", "NN#80", "--row", "direct-mismatch"];
+    const narrowing = ["file 0644 -> 0600"];
+    const { root, common } = repo();
+    chmodSync(legacy(common), 0o644);
+    const dry = await capture([...PARK, "--dry-run"], { common, repoFlag: root, json: true });
+    expect(JSON.parse(dry.out.join("\n")).mode).toEqual({ verdict: "would-set", file: "0600", directory: "0700", repaired: narrowing, reason: null });
+    const real = await capture(PARK, { common, repoFlag: root, json: true });
+    const doc = JSON.parse(real.out.join("\n"));
+    expect(doc.outcome).toBe("parked");
+    expect(doc.mode).toEqual({ verdict: "set", file: "0600", directory: "0700", repaired: narrowing, reason: null });
+    expect(bits(join(common, ".nen", "runs", "r1.json"))).toBe(0o600);
+  });
+
+  it.runIf(POSIX)("a reader refuses a runs directory that is a link, at exit 1 naming it, and reads nothing through it (N8)", async () => {
+    const { root, common } = repo();
+    const elsewhere = mkdtempSync(join(tmpdir(), "nen-run-elsewhere-"));
+    writeFileSync(join(elsewhere, "r1.json"), JSON.stringify(LEGACY));
+    mkdirSync(join(common, ".nen"), { recursive: true });
+    symlinkSync(elsewhere, join(common, ".nen", "runs"));
+    for (const argv of [
+      ["run", "budget", "--id", "r1", "--max-minutes", "60", "--max-tokens", "100", "--dry-run"],
+      ["run", "budget", "--id", "r1", "--max-minutes", "60", "--max-tokens", "100"],
+      ["run", "verify", "--id", "r1", "--target", "zheref/nen", "--dry-run"],
+    ]) {
+      const result = await capture(argv, { common, repoFlag: root });
+      expect(result.code, argv.join(" ")).toBe(1);
+      expect(result.out, argv.join(" ")).toEqual([]);
+      expect(result.err.join("\n")).toMatch(/\.nen.runs' is a symbolic link; nen keeps run manifests only in a real directory/);
+    }
+  });
+
   it("a win32 host: the write stands and the verb says the mode was not set, in text and --json (AC-3)", async () => {
     const { root, common } = repo();
     const text = await capture(START, { common, repoFlag: root, platform: "win32" });

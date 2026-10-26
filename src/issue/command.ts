@@ -752,9 +752,10 @@ usage:
       pattern's group after the prefix declares (an epic-scoped AC-12-001
       under '^- AC-([0-9]+-[0-9]{3}): ...'; zheref/nen#519), reported whole
       and ordered within its leading group (AC-12-001, AC-12-002, then
-      AC-13-001). A none section may say only noneText. Vague adjectives, and technology terms on acceptance rows, are advisories,
-      never a miss. With several kinds, no --kind and no common list it
-      refuses (exit 2): nen will not pick a kind. --ref reads the issue from
+      AC-13-001). A none section may say only noneText. Vague adjectives,
+      and technology terms on acceptance rows, are advisories, never a miss.
+      With several kinds, no --kind and no common list it refuses (exit 2):
+      nen will not pick a kind. --ref reads the issue from
       --target; its CODE is echoed, never resolved, and a number naming a pull
       request is refused (exit 2). Exits: 0 no miss, 1 a miss or an unreadable
       issue, 2 usage or a malformed catalogue. --json: '{ contract:
@@ -805,8 +806,9 @@ usage:
       its acceptance section only, as 'issue body-check' does; with none, AC
       rows anywhere in the body. A body with no AC row is reported not
       verifiable -- nothing to verify, never "all verified". 'nen pr
-      converge' compares these rows with a PR's verify rows. Exits: 0 whenever the body was read, 1 when the issue could
-      not be read or carried no body, 2 usage or a malformed catalogue.
+      converge' compares these rows with a PR's verify rows. Exits: 0
+      whenever the body was read, 1 when the issue could not be read or
+      carried no body, 2 usage or a malformed catalogue.
       --json: '{ contract: "nen.issue.criteria/v0.1", source, verifiable,
       criteria: [{ id, number, text, line }], duplicates: [{ id, lines }],
       unrecognised: [{ line, text }] }'.`;
