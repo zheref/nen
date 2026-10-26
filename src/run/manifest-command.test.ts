@@ -2,7 +2,7 @@
 // through the real `runFamily`, with git and gh scripted.
 
 import { describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
@@ -33,7 +33,7 @@ function repo(): { root: string; common: string } {
 
 async function capture(
   argv: readonly string[],
-  options: { common: string | null; prs?: Record<number, Live | "fail">; repoFlag?: string | null; json?: boolean; now?: string; env?: (env: Readonly<Record<string, string | undefined>> | undefined) => void },
+  options: { common: string | null; prs?: Record<number, Live | "fail">; repoFlag?: string | null; json?: boolean; now?: string; env?: (env: Readonly<Record<string, string | undefined>> | undefined) => void; platform?: NodeJS.Platform },
 ): Promise<{ code: number; out: string[]; err: string[]; calls: string[][] }> {
   const out: string[] = [];
   const err: string[] = [];
@@ -72,7 +72,7 @@ async function capture(
     runStreamed: (): never => {
       throw new Error("no watched form");
     },
-    platform: "linux",
+    platform: options.platform ?? "linux",
   };
   const code = await runFamily(runCommand, argv, options.repoFlag ?? null, options.json ?? false, io, seams);
   return { code, out, err, calls };
@@ -153,7 +153,7 @@ describe("nen run append", () => {
     const first = await capture(append("r1", 480, ["--effort", "opus/kurapika/x"]), { common, repoFlag: root, json: true, prs: OPEN_ALL });
     expect(first.code).toBe(0);
     const doc = JSON.parse(first.out.join("\n"));
-    expect(Object.keys(doc)).toEqual(["outcome", "path", "reason", "entry", "previous"]);
+    expect(Object.keys(doc)).toEqual(["outcome", "path", "reason", "entry", "previous", "mode"]);
     expect(doc.outcome).toBe("appended");
     expect(doc.entry).toMatchObject({ issue: "zheref/nen#80", base: "integration/x", branch: "branch-480", head: "abcdef1000000000000000000000000000000000" });
     expect((await capture(append("r1", 480), { common, repoFlag: root, prs: OPEN_ALL })).out[0]).toMatch(/^unchanged:/);
@@ -211,7 +211,8 @@ describe("nen run append", () => {
   it("refuses a flag another subcommand owns", async () => {
     const { root, common } = repo();
     expect((await capture([...append("r1", 480), "--target", "o/n"], { common, repoFlag: root })).code).toBe(2);
-    expect((await capture(["run", "verify", "--id", "r1", "--target", "o/n", "--dry-run"], { common, repoFlag: root })).code).toBe(2);
+    // --dry-run is verify's own since zheref/nen#522 (the legacy move's dry form); --claim stays budget's.
+    expect((await capture(["run", "verify", "--id", "r1", "--target", "o/n", "--claim"], { common, repoFlag: root })).code).toBe(2);
     expect((await capture(["run", "rerun-failed", "--target", "o/n", "--run-id", "4", "--id", "r1"], { common, repoFlag: root })).code).toBe(2);
     expect((await capture(["run", "append", "--id", "r1", "--pr", "480", "--kind", "integration", "--row", "x"], { common, repoFlag: root })).code).toBe(2);
   });
@@ -507,4 +508,95 @@ it("an import over rows nen holds in the code spelling dedupes them rather than 
   expect(result.code).toBe(0);
   const stored = JSON.parse(readFileSync(join(common, ".nen", "runs", `${id}.json`), "utf8"));
   expect(stored.parked).toEqual([{ issue: "zheref/nen#482", row: "direct-mismatch", at: "2026-10-22T00:30:00.000Z" }]);
+});
+
+describe("manifest modes and dry forms through the verbs (zheref/nen#522)", () => {
+  const POSIX = process.platform !== "win32";
+  const bits = (path: string): number => statSync(path).mode & 0o777;
+  const LEGACY = { contract: "nen.run/v0.1", id: "r1", repo: "zheref/nen", startedAt: "2026-10-22T00:00:00.000Z", idleAnswers: null, prs: [], parked: [] };
+  function legacy(common: string): string {
+    const path = join(common, "hatsu", "runs", "r1.json");
+    mkdirSync(join(common, "hatsu", "runs"), { recursive: true });
+    writeFileSync(path, JSON.stringify(LEGACY));
+    return path;
+  }
+
+  it.runIf(POSIX)("run start writes the manifest 0600 under 0700, prints the read-back line, and --json carries mode (AC-1)", async () => {
+    const { root, common } = repo();
+    const text = await capture(START, { common, repoFlag: root });
+    const path = join(common, ".nen", "runs", "r1.json");
+    expect(bits(path)).toBe(0o600);
+    expect(bits(join(common, ".nen", "runs"))).toBe(0o700);
+    expect(text.out).toEqual([`started: run r1 -- ${path}`, "mode: file 0600, directory 0700"]);
+    const again = await capture(["run", "start", "--id", "r2", "--target", "zheref/nen"], { common, repoFlag: root, json: true });
+    expect(JSON.parse(again.out.join("\n")).mode).toEqual({ verdict: "set", file: "0600", directory: "0700", repaired: [], reason: null });
+    const resumed = await capture(START, { common, repoFlag: root, json: true });
+    expect(JSON.parse(resumed.out.join("\n")).mode).toBeNull();
+  });
+
+  it("run start --dry-run creates no directory, no file and no mode, and says what it would set (AC-2)", async () => {
+    const { root, common } = repo();
+    const dry = await capture([...START, "--dry-run"], { common, repoFlag: root });
+    expect(dry.out[1]).toBe("mode: would set file 0600, directory 0700 -- dry run, nothing written");
+    expect(existsSync(join(common, ".nen"))).toBe(false);
+  });
+
+  it.runIf(POSIX)("append and park narrow a manifest an earlier build left wide, and say so (AC-1 repair)", async () => {
+    const { root, common } = repo();
+    await capture(START, { common, repoFlag: root });
+    const path = join(common, ".nen", "runs", "r1.json");
+    chmodSync(path, 0o644);
+    chmodSync(join(common, ".nen", "runs"), 0o755);
+    const parked = await capture(["run", "park", "--id", "r1", "--issue", "NN#80", "--row", "direct-mismatch"], { common, repoFlag: root });
+    expect(parked.out[1]).toBe("mode: file 0600, directory 0700 (narrowed: directory 0755 -> 0700, file 0644 -> 0600)");
+    expect(bits(path)).toBe(0o600);
+    chmodSync(path, 0o664);
+    const appended = await capture(append("r1", 480), { common, repoFlag: root, prs: OPEN_ALL, json: true });
+    expect(JSON.parse(appended.out.join("\n")).mode).toMatchObject({ verdict: "set", repaired: ["file 0664 -> 0600"] });
+    expect(bits(path)).toBe(0o600);
+  });
+
+  it("run verify --dry-run prints the legacy move and moves nothing; the bare form moves it (AC-2)", async () => {
+    const { root, common } = repo();
+    const old = legacy(common);
+    const dry = await capture(["run", "verify", "--id", "r1", "--target", "zheref/nen", "--dry-run"], { common, repoFlag: root });
+    expect(dry.code).toBe(0);
+    expect(dry.err.join("\n")).toMatch(/would move run manifest 'r1' from .*hatsu.runs.r1\.json to .*\.nen.runs.r1\.json \(dry run: nothing moved; read where it is\)/);
+    expect(dry.out[0]).toMatch(/^run r1 on zheref\/nen: 0 PR\(s\) recorded/);
+    expect(existsSync(old)).toBe(true);
+    expect(existsSync(join(common, ".nen"))).toBe(false);
+    const real = await capture(["run", "verify", "--id", "r1", "--target", "zheref/nen"], { common, repoFlag: root });
+    expect(real.err.join("\n")).toMatch(/moved run manifest 'r1'/);
+    expect(existsSync(old)).toBe(false);
+    if (POSIX) {
+      expect(bits(join(common, ".nen", "runs", "r1.json"))).toBe(0o600);
+      expect(real.err.join("\n")).toMatch(/mode: file 0600, directory 0700/);
+    }
+  });
+
+  it("run budget --dry-run and every writing verb's --dry-run leave a legacy manifest where it is (AC-2)", async () => {
+    const { root, common } = repo();
+    const old = legacy(common);
+    const budget = await capture(["run", "budget", "--id", "r1", "--max-minutes", "60", "--max-tokens", "100", "--dry-run"], { common, repoFlag: root });
+    expect(budget.code).not.toBe(2);
+    expect(budget.err.join("\n")).toMatch(/would move run manifest 'r1'/);
+    const start = await capture([...START, "--dry-run"], { common, repoFlag: root });
+    expect(start.out[0]).toMatch(/^existing:/);
+    const park = await capture(["run", "park", "--id", "r1", "--issue", "NN#80", "--row", "direct-mismatch", "--dry-run"], { common, repoFlag: root });
+    expect(park.out[0]).toMatch(/^dry-run:/);
+    expect(park.err.join("\n")).toMatch(/would move run manifest 'r1'/);
+    expect(existsSync(old)).toBe(true);
+    expect(JSON.parse(readFileSync(old, "utf8")).parked).toEqual([]);
+    expect(existsSync(join(common, ".nen"))).toBe(false);
+  });
+
+  it("a win32 host: the write stands and the verb says the mode was not set, in text and --json (AC-3)", async () => {
+    const { root, common } = repo();
+    const text = await capture(START, { common, repoFlag: root, platform: "win32" });
+    expect(text.code).toBe(0);
+    expect(text.out[1]).toMatch(/^mode: not set \(this host \(win32\) has no POSIX file modes/);
+    const json = await capture(["run", "start", "--id", "r2", "--target", "zheref/nen"], { common, repoFlag: root, platform: "win32", json: true });
+    expect(JSON.parse(json.out.join("\n")).mode).toMatchObject({ verdict: "not-set", file: null, directory: null });
+    expect(existsSync(join(common, ".nen", "runs", "r2.json"))).toBe(true);
+  });
 });

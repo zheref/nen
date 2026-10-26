@@ -277,10 +277,16 @@ async function slotsFromRun(context: CommandContext, root: string, id: string, c
   }
   let manifest;
   try {
-    const path = locateRunManifest(gitCommonDir(context.seams, root), id).path;
-    manifest = readRunManifest(path);
+    // A COUNTER NEVER MOVES A FILE (zheref/nen#522 AC-2): a manifest still at a
+    // legacy path is read where it is and the move left to a 'nen run' verb,
+    // which prints it under --dry-run and makes it, at 0600, without.
+    const located = locateRunManifest(gitCommonDir(context.seams, root), id, { dryRun: true });
+    if (located.migratedFrom !== null) {
+      context.io.err(`nen: read run manifest '${id}' in place at ${located.migratedFrom}; not moved to ${located.path} -- 'nen run verify --id ${id}' moves it (--dry-run prints the move).`);
+    }
+    manifest = readRunManifest(located.readPath);
     if (manifest === null) {
-      context.io.err(`nen: no run '${id}' at ${path} -- nothing to count from. A run nobody started is not a run with every slot free.`);
+      context.io.err(`nen: no run '${id}' at ${located.path} -- nothing to count from. A run nobody started is not a run with every slot free.`);
       return 1;
     }
   } catch (error) {

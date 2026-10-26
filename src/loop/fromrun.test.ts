@@ -144,7 +144,7 @@ describe("nen loop slots --from-run (CLI)", () => {
     const root = mkdtempSync(join(tmpdir(), "nen-slots-run-"));
     const common = join(root, ".git");
     mkdirSync(join(common, "hatsu", "runs"), { recursive: true });
-    // Seeded at the spelling an earlier build used: the read moves it to <common>/.nen/runs/ once.
+    // Seeded at the spelling an earlier build used: a counter reads it in place and never moves it (zheref/nen#522 AC-2).
     writeFileSync(join(common, "hatsu", "runs", "r1.json"), JSON.stringify({ ...manifest(prs), repo: "zheref/nen" }));
     return common;
   }
@@ -158,8 +158,10 @@ describe("nen loop slots --from-run (CLI)", () => {
     expect(doc.localSlotFrees.rule).toBe("ready+prompted");
     expect(doc.fromRun).toMatchObject({ run: "r1", notEfforts: [482], closedUnmerged: [481], unread: [] });
     expect(doc.done).toEqual(["NN#80 #480"]);
-    expect(existsSync(join(common, ".nen", "runs", "r1.json"))).toBe(true);
-    expect(existsSync(join(common, "hatsu", "runs", "r1.json"))).toBe(false);
+    expect(existsSync(join(common, ".nen", "runs", "r1.json"))).toBe(false);
+    expect(existsSync(join(common, ".nen", "runs"))).toBe(false);
+    expect(existsSync(join(common, "hatsu", "runs", "r1.json"))).toBe(true);
+    expect(result.err.join("\n")).toMatch(/read run manifest 'r1' in place at .*hatsu.runs.r1\.json; not moved/);
     const other = await capture(["loop", "slots", "--from-run", "r1", "--target", "o/other", "--local-cap", "1"], common, {});
     expect(other.code).toBe(2);
   });
