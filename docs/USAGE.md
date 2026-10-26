@@ -11,8 +11,8 @@ binary](#getting-the-binary)), or as `bun src/index.ts` from a checkout of this
 repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
-what each version changed: 47 command
-families, 171 verbs, every flag checked against that binary.
+what each version changed: 48 command
+families, 172 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -257,7 +257,7 @@ including every refusal reason. The raw NUL-delimited stream
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **102 shapes** and **106 ids** (`nen.runner.plan`
+binary carries**, writing or reading — **103 shapes** and **107 ids** (`nen.runner.plan`
 and `nen.wc.worktree.copies` each have two versions, `nen.stop.mark` three, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -292,6 +292,7 @@ command family and is not always one (`contract`, `decisions`, `refusal` and `wo
 file formats).
 
 <!-- contract-ids:begin -->
+- **`audit`** — `nen.audit.deps/v0.1`
 - **`canon`** — `nen.canon.checkout/v0.1` · `nen.canon.clause-check/v0.1` · `nen.canon.lint/v0.1` · `nen.canon.mirror.check/v0.1` · `nen.canon.mirror.generate/v0.1` · `nen.canon.pin.write/v0.1` · `nen.canon.pin/v0.1`
 - **`classify`** — `nen.classify.apply/v0.1` · `nen.classify.install/v0.1` · `nen.classify.labels/v0.1` · `nen.classify.status/v0.1`
 - **`commit`** — `nen.commit.check/v0.1` · `nen.commit.write/v0.1`
@@ -448,6 +449,8 @@ The complete list:
 | [`pr converge`](#nen-pr-converge) | `3` | `--composite` only: a read did not finish, or was at another head than `--require-head`; no verdict, stdout empty — could not look, told apart from not ready (`1`) ([#483](https://github.com/zheref/nen/issues/483) AS-3) |
 | `review ledger` | `3` / `4` | refused: the branch is the trunk or not a branch, no ledger opened / lost: no ledger here, but one was opened under this key before -- recover it, never a fresh init |
 | [`loop iterate`](#nen-loop-iterate) | `2` | its own meaning of 2, beside usage: the loop's count cannot be established -- a lost ledger, a ledger in two homes, an unreadable ledger, or a git that cannot name the common dir; never retried as a typo |
+| [`audit deps`](#nen-audit-deps) | `2` | its own meaning of 2, beside usage: wiring -- an unreadable or invalid contract or row, an ecosystem with no reader, or an internal error; never a verdict about the tree ([#508](https://github.com/zheref/nen/issues/508)) |
+| [`audit deps`](#nen-audit-deps) | `3` | not scanned: the lockfile or the advisory service could not be read -- a symlink, a truncated or unrecognised lockfile, a bound exceeded, a malformed, failing, oversized, timed-out, redirected or unreachable OSV answer; never clean ([#508](https://github.com/zheref/nen/issues/508)) |
 | [`canon lint`](#nen-canon-lint) | `2` | its own meaning of 2, beside usage: wiring -- an unreadable or invalid contract, baseline or file, a symlink leaving the root, a failed git read, a `nen/workflow.json` that does not load |
 | [`canon clause check`](#nen-canon-clause-check) | `2` | its own meaning of 2, beside usage: a tooling failure -- an unreadable file or base, no definitions at all, a leaf pattern matching nothing, a failed git read |
 | [`bootstrap`](#nen-bootstrap) | `3`–`7` | not on the three-code scheme at all: it relays the bootstrap script's own published codes unchanged ([Getting the binary](#getting-the-binary)), and those numbers mean the script's things |
@@ -994,7 +997,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 171 verbs, grouped as the README groups them. **Reads** is what a
+All 172 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -1083,6 +1086,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`report`](#family-report) | [`nen report render`](#nen-report-render) | fill a template with a data document and write the result: {{token}}, {{{token}}}, {{#each}}, {{#if}} and nothing else, refusing an unknown token by name; --variant injects a declared variant's section flags and --graph injects a validated architecture-delta graph | caller-named --template + --data (+ --graph) files, nen/workflow.json's reports.sections under --variant; writes --out, inside --repo, unless --dry-run | yes |
 | [`report`](#family-report) | [`nen report mermaid`](#nen-report-mermaid) | print the mermaid text for a graph document and nothing else | a caller-named --graph file; writes nothing; no git/gh | no |
 | [`review`](#family-review) | [`nen review scopes`](#nen-review-scopes) | which review scopes a branch diff raises, off the repository's own review.scopes block, plus the changed paths no scope claims | nen/workflow.json's review block, git diff --name-only; writes nothing; no gh | yes |
+| [`audit`](#family-audit) | [`nen audit deps`](#nen-audit-deps) | a directory's dependency pins read from its lockfile or Package.resolved (never by running its package manager) and, with --query, asked about at the declaring contract's OSV querybatch endpoint; four exits: clean, findings, wiring, not scanned | the --contract row (an absolute JSON file), package.json and the lockfile directly under --repo (pnpm, yarn, npm) or Package.resolved (root, .xcodeproj, .xcworkspace), OSV over https (with --query); never git, gh or the package manager | yes |
 | [`surface`](#family-surface) | [`nen surface mirror generate`](#nen-surface-mirror-generate) | render every &lt;name&gt;/SKILL.md under a skills directory into another agent surface's own layout (codex, cursor, antigravity): the body verbatim but for its relative links, re-aimed for the depth each copy lands at, the frontmatter reduced to the keys that surface documents, invocation mentions respelled, personas written where the surface keeps them — plus, per flag, the surface's hook manifest (`--hooks`), rules file (`--rules`), permission pack (`--permissions`) and model aliases (`--models`), and a `--stamp` in the marker | caller-named --source + --agents directories and pack files; writes --out; no git/gh | yes |
 | [`surface`](#family-surface) | [`nen surface mirror check`](#nen-surface-mirror-check) | regenerate that mirror in memory and diff it against the committed --out: missing / extra / stale (generated for another surface, with `--stamp` for another version, or by a build before relative links were re-aimed) / hand-edited — or, with [`--installed`](#nen-surface-mirror-check---installed) in place of --out, against an INSTALLED copy on this host (a plugin cache directory, a consumer's .codex/, .cursor/, .agents/) under its own contract, so a warm-up copies only on drift; `--surface claude-code` compares a plugin tree verbatim — and, with [`--plugin <name>`](#nen-surface-mirror-check---plugin), judges a Claude Code plugin cache or skills-directory install in the plugin's own layout against an independent source, six verdicts on six exits | caller-named --source + --agents + --out or --installed; with --plugin: --source's trees, the copy, `<config>/plugins/*.json` and `<config>/skills/<name>`, plus read-only `git rev-parse`/`symbolic-ref` probes of the stand-in and served checkouts; writes nothing at all; no gh | yes |
 | [`runner`](#family-runner) | [`nen runner inventory`](#nen-runner-inventory) | every self-hosted runner a repository has, each name parsed as `<machine>-<consumer>R<slot>` or runner 0, grouped by the pools `--repo`'s `runners` block declares (online, free, and the runners still without the pool's own label) plus the unpooled, and the runner package GitHub offers with its SHA-256 | github (gh api GET runners, every page, and runners/downloads); nen/workflow.json with --repo or --pool | yes |
@@ -17166,6 +17170,202 @@ only, in the declaration's order**, never the diff's) and `unclaimed[]`.
 ```bash
 nen review scopes --base origin/main --repo ../hatsu --json
 ```
+
+## Dependency audit
+
+A repository's dependency pins, read from its lockfile and asked about
+against the advisory service the caller's declaring contract names. Nothing
+in the audited tree runs: no package manager, no hook, no program it supplies.
+
+<a id="family-audit"></a>
+
+**`nen audit`**
+
+One verb. `deps` owns what had no owner before
+[#508](https://github.com/zheref/nen/issues/508): the Node half of the
+dependency audit was an interim Hatsu script carrying its own hostile-input
+defences, and the Swift half was a procedure in a contract file's `$comment`,
+carried out by hand. The parsers, the OSV client and the exit-code contract
+live here; the policy (where to send the query, which ecosystem, which
+severities count) stays the caller's.
+
+### `nen audit deps`
+
+Reads the directory at `--repo` the way its package manager would resolve it,
+without running that manager, and with `--query` posts every exact pin to the
+OSV `querybatch` endpoint the contract row names, then reads each returned
+advisory id at the row's `vulnEndpoint` for its severity.
+
+**The destination comes from the declaring contract, never from the tree.**
+`--contract` is an **absolute** path to a JSON file carrying a
+`dependencyAudit` object; `--row` names the row to apply. Hatsu's
+`contracts/scans.json` is one such file, and its `node` row is read unchanged
+(`src/audit/fixtures/hatsu-scans.json` holds a verbatim copy, and the test
+suite proves it is accepted). A relative `--contract` is refused at exit 2: a
+path resolved against the audited tree would let the tree choose where its
+own audit is sent. The tree's `.npmrc`, `.yarnrc.yml`, `pnpm-workspace.yaml`
+and `package.json` redirect and suppression keys are printed as
+`audit-config:` evidence and never honoured.
+
+**The row's `ecosystem` selects the reader.**
+
+| `ecosystem` | Reads | Formats |
+|---|---|---|
+| `npm` | the lockfile the row's `managers` name, selected by `package.json`'s `packageManager` (its name before the last `@`; the version is never used, nothing runs) or, only where that field is absent, by the one lockfile present | `pnpm-lock.yaml` at `lockfileVersion` 5, 6 and 9; `yarn.lock` berry and classic, told apart by the row's `lockfileMarkers` (a classic `<alias>@npm:<real>@<range>` header is the real package); `package-lock.json` / `npm-shrinkwrap.json` at `lockfileVersion` 1, 2 and 3 |
+| `SwiftURL` | every `Package.resolved` at the root, in `<name>.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/` and in `<name>.xcworkspace/xcshareddata/swiftpm/`, pins unioned | format 1 (`object.pins`), 2 and 3 (`pins`); a pin is queried under OSV's SwiftURL name, the git location as `host/path` with no scheme and no `.git` (`github.com/apple/swift-nio-http2`) |
+
+Any other ecosystem has no reader and is exit 2.
+
+**Row keys.** Required: `stacks`, `endpoint` and `vulnEndpoint` (https; http
+only on loopback, for a fixture; no credentials in the URL; `vulnEndpoint` is
+the base an advisory id is appended to, so its path **must end in `/`** and it
+carries no query or fragment -- without the slash the id would replace the
+last path segment and be sent to a path the contract never named), `ecosystem`,
+`severityLevels`, `severityFloor` (drawn from the levels), `timeoutSeconds`;
+on an `npm` row also `registryHosts` and `managers` (`{lockfiles, format,
+lockfileMarkers}`, `format` one of `pnpm-lock`, `yarn-lock`, `npm-lock`).
+Optional on an `npm` row: `unsupportedLockfiles` (lockfile -> manager, named
+in the not-scanned reason) and `auditConfigKeys` (file -> keys printed as
+evidence; a `*` prefix matches any key ending in the rest). Bounds, defaulted
+when absent: `maxResponseBytes` 33554432, `maxEntries` 500000, `maxDepth`
+1000 (npm v1 nesting), `maxLockfileBytes` 268435456. The prose keys `run`,
+`runSemantics`, `resolution` and `failure`, and every `$` key, are accepted
+and not read. Any other key is exit 2, so a misspelt bound is never silently
+ignored. **The Swift row Hatsu carries today** names only `endpoint` and
+`ecosystem`, so it is refused at exit 2 naming the first missing key until
+the row gains `vulnEndpoint`, `severityLevels`, `severityFloor` and
+`timeoutSeconds`. That is Hatsu's change to make; the values are its policy.
+
+**Hostile input is refused or reported, never read as clean.**
+
+- A `package.json`, lockfile or `Package.resolved` that is a **symbolic
+  link**, or sits under a linked `.xcodeproj` or `.xcworkspace`, is never
+  followed: not scanned, named. So is a file over `maxLockfileBytes`, a file
+  that is not a regular file, and a lockfile with more than `maxEntries`
+  entries or npm v1 nesting deeper than `maxDepth`.
+- A lockfile is **parsed strictly**. A line the parser does not read (a pnpm
+  explicit `?` key, an unindented line, a yarn line that is not a header), a
+  file that does not end with a newline, an entry with no body, resolution or
+  version, an unknown `lockfileVersion` or Package.resolved `version`, and a
+  registry-shaped entry whose name or version does not parse are each not
+  scanned, named. Flow-style, commented and quoted pnpm keys are read, and so
+  is a BOM.
+- An entry resolved from **anywhere but the public registry** is
+  **unqueried**, and unqueried is never clean: git, `file:`, a tarball on a
+  host off `registryHosts` or over http, a Swift pin on a branch or a bare
+  revision, a Swift `registry` pin. Workspace, link, directory and
+  `localSourceControl` entries are the tree's own code and count as local.
+- **The artefact decides, not the entry's own label.** `pnpm-lock.yaml` is
+  parsed as **strict YAML** by a YAML parser, the way pnpm reads it, and a
+  pnpm entry is local or unqueried only by the keys of its own parsed
+  `resolution` map (`directory`, `type`, `repo`, `commit`, `tarball`) -- never
+  by a word elsewhere in its body, such as a dependency named `is-directory`,
+  or a comment. A document that does not parse, a **repeated key**, an
+  **alias**, an **anchor**, an **explicit tag** or a `<<` **merge key**
+  anywhere, and a resolution that is missing, not a map, or holds a value
+  that is not a scalar (one of those five keys holding anything but a
+  non-empty string) are not scanned, never local. The parser is bounded
+  before it runs: besides `maxLockfileBytes`, the text's flow-bracket depth
+  and its indentation depth (in two-space levels) are each held to
+  `maxDepth`, counted over the raw text so the count can only over-refuse,
+  and nothing it does is ever expanded through an alias. Where a registry
+  entry carries a `resolved` or `tarball` URL, its path must name exactly the
+  pair the entry claims: the one segment before `/-/` (two for
+  `@scope/pkg`, or one spelled `@scope%2fpkg`) is the name, and the file is
+  `<base>-<version>.tgz`. Segments are split before they are decoded, and
+  whatever path comes before the name is the registry's mount point, so a
+  registry served under a prefix (`https://art.example/api/npm/npm-remote/`)
+  on `registryHosts` is read correctly. A disagreement, or a registry URL
+  that is not a tarball path, is unqueried. An npm `link: true` entry whose
+  `resolved` is a URL is read like any other entry, not as local.
+- An OSV answer that is **malformed** (results of the wrong length or type, a
+  `vulns` that is not an array, an id that is not an advisory id, a
+  `next_page_token` that is not a string), not JSON, over `maxResponseBytes`,
+  a non-2xx status, a redirect (named as one, never followed and never
+  retried), past `timeoutSeconds`, or unreachable is **not scanned**, never
+  clean. Only a reset or refused connection is retried, once. An id
+  whose severity is missing or outside `severityLevels` is **UNRATED**, and
+  UNRATED counts as a finding.
+- It executes nothing and reads no environment variable of its own.
+  Certificate verification is forced on for every request, whatever
+  `NODE_TLS_REJECT_UNAUTHORIZED` says. That guarantee is the shipped Bun
+  runtime's, which honours the per-request `tls` option; the test suite runs
+  under Node, whose `fetch` ignores that option, so the suite does not
+  exercise it. Two host settings still reach the
+  query, and they are its only environment inputs: the runtime's `fetch`
+  honours `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`, and
+  `NODE_EXTRA_CA_CERTS`, the one trust-store input it honours, can add a
+  certificate authority. Over https a proxy carries the tunnel and cannot read
+  or forge the answer; blocking it is not scanned.
+- What it reads, exactly: the `--contract` file; under `--repo`, for an `npm`
+  row, `package.json`, the one lockfile it selects, and each of the row's
+  `auditConfigKeys` files present (only to report keys), and the presence
+  (never the content) of the row's other lockfiles; for a `SwiftURL` row,
+  every `Package.resolved` the reader finds at the root and in each
+  `.xcodeproj` / `.xcworkspace` bundle. It writes nothing.
+
+In [izanami's table](#nen-parse-izanami) this verb is `write-flag-gated` on
+`--query`: the resolving form reads only the files listed above and writes
+nothing, and
+`--query` sends the tree's dependency list off the machine to the host the
+contract names, so it is never certified for an unattended watch.
+
+**Usage**
+
+```text
+nen audit deps --repo <path> --contract <file> --row <name> [--stack <id>] [--query] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--repo <path>` | **yes** | the directory to audit: a lane's cwd, or the checkout root | a path that is not a directory is exit 2; its files are read directly in it |
+| `--contract <file>` | **yes** | the declaring contract: a JSON file with a `dependencyAudit` object | **absolute** only; unreadable or not JSON is exit 2 |
+| `--row <name>` | **yes** | the `dependencyAudit` row to apply (`node`, `swift`) | an absent row, or one that fails the key rules above, is exit 2 |
+| `--stack <id>` | no | the lane's stack | a stack the row's `stacks` does not list is **not scanned** (exit 3), named; a malformed id is exit 2 |
+| `--query` | no | ask OSV | without it the verb resolves the tree and stops at exit 0 or 3 |
+| `--json` | no | the document | — |
+
+**Output and exit codes** — human lines: `resolved: osv <ecosystem> for
+<manager> (<how it was selected>, <files>, <n> packages)` first, then
+`audit-config:` evidence lines, `local:` and `unqueried:` counts (the
+`unqueried:` line names its causes: git, `file:`, a host off `registryHosts`,
+a resolution type other than directory, or a resolved URL that names another
+package or version), and with
+`--query` one `finding:` (at or above the floor, or UNRATED) or
+`below-floor:` line per advisory id with every pin it was returned for, and
+one closing `audit: <n> finding(s) at or above <floor> or unrated, <u>
+unqueried, across <p> packages` line; or a closing `not scanned: <reason>`.
+Tree-derived strings are JSON-quoted. `--json` prints one document, top-level
+keys in this order: `contract` (`nen.audit.deps/v0.1`), `verdict`
+(`resolved`, `clean`, `findings` or `not-scanned`), `exit`, `row`,
+`ecosystem`, `stack`, `queried`, `manager`, `files`, `source`, `packages`,
+`pins` (`[{ name, version }]`), `local`, `unqueried`, `evidence`
+(`[{ file, key, kind }]`, kind `other-lockfile`, `key` or `unreadable`),
+`findings` (`[{ id, severity, atFloor, pins: ["name@version"] }]`, by id),
+`findingCount` (at or above the floor) and `notScanned` (the reason, or
+`null`).
+
+| Code | Meaning |
+|---|---|
+| `0` | resolved (no `--query`); or queried, with nothing at or above the floor and nothing unqueried |
+| `1` | `--query`: a finding at or above the floor, an UNRATED id, or any unqueried entry -- evidence, never clean |
+| `2` | wiring: an argument, the contract or its row, or an internal error; stderr only, nothing on stdout -- never a verdict about the tree |
+| `3` | not scanned: the tree or OSV could not be read, with the reason on the closing line |
+
+**Example**
+
+```bash
+nen audit deps --repo . --contract "$hatsu_root/contracts/scans.json" --row node --stack nextjs --query
+```
+```text
+resolved: osv npm for pnpm (packageManager "pnpm@9.15.9", pnpm-lock.yaml, 2 packages)
+finding: GHSA-test-high HIGH "lodash@4.17.15"
+below-floor: GHSA-test-moderate MODERATE "lodash@4.17.15"
+audit: 1 finding(s) at or above HIGH/CRITICAL or unrated, 0 unqueried, across 2 packages
+```
+(the test suite's loopback stub; exit 1)
 
 ## Surfaces
 
