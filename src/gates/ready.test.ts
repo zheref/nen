@@ -2237,17 +2237,62 @@ describe("evaluateReady -- round_check_producer (zheref/nen#546)", () => {
     expect(owedReason(evaluation)).toContain("bugbot (round check producer unverified: 'Cursor Bugbot' at head no producing App was read");
   });
 
-  it("WORKFLOW producer: the blob's round_check_workflow_runs decides it, and an unlisted suite is unverified", () => {
-    const runs = [{ check_suite_id: 33, path: ".github/workflows/bugbot.yml", repository: "zheref/nen", event: "pull_request_target" }];
-    const checks = [greenCheck(), bugbotCheck("github-actions", 15368, 33)];
-    expect(evaluateReady(WORKFLOW, state({ checks, round_check_workflow_runs: runs }), OPTIONS).ready).toBe(true);
-    const unread = evaluateReady(WORKFLOW, state({ checks }), OPTIONS);
+  const RUNS = [
+    {
+      check_suite_id: 33,
+      run_id: 3300,
+      path: ".github/workflows/bugbot.yml",
+      repository: "zheref/nen",
+      event: "pull_request_target",
+      pull_requests: [{ number: 7, base_ref: "main" }],
+      job_ids: [3301],
+    },
+  ];
+  const wfCheck = (databaseId = 3301): Record<string, unknown> => ({ ...bugbotCheck("github-actions", 15368, 33), databaseId });
+  const wfState = (overrides: Record<string, unknown> = {}): Record<string, unknown> =>
+    state({ checks: [greenCheck(), wfCheck()], pr_number: 7, base_ref: "main", round_check_workflow_runs: RUNS, ...overrides });
+
+  it("WORKFLOW producer: the blob's run, pull request and job decide it, and an unlisted suite is unverified", () => {
+    expect(evaluateReady(WORKFLOW, wfState(), OPTIONS).ready).toBe(true);
+    const unread = evaluateReady(WORKFLOW, wfState({ round_check_workflow_runs: [] }), OPTIONS);
     expect(unread.ready).toBe(false);
     expect(owedReason(unread)).toContain("the workflow run of check suite 33 was not read");
-    const prRun = [{ ...runs[0], event: "pull_request" }];
-    expect(owedReason(evaluateReady(WORKFLOW, state({ checks, round_check_workflow_runs: prRun }), OPTIONS))).toContain(
+    const prRun = [{ ...RUNS[0], event: "pull_request" }];
+    expect(owedReason(evaluateReady(WORKFLOW, wfState({ round_check_workflow_runs: prRun }), OPTIONS))).toContain(
       "on 'pull_request', not workflow zheref/nen/.github/workflows/bugbot.yml on pull_request_target",
     );
+  });
+
+  it("F1 through the verdict: a check written into the trusted suite, no job of its run, is not ready", () => {
+    const evaluation = evaluateReady(WORKFLOW, wfState({ checks: [greenCheck(), wfCheck(9999)] }), OPTIONS);
+    expect(evaluation.ready).toBe(false);
+    expect(owedReason(evaluation)).toContain("round check producer unverified: 'Cursor Bugbot' at head check run 9999 is not a job of run 3300");
+  });
+
+  it("F2 through the verdict: a run naming another pull request, or the judged pull request unknown, is not ready", () => {
+    const scratch = [{ ...RUNS[0], pull_requests: [{ number: 8, base_ref: "scratch" }] }];
+    expect(owedReason(evaluateReady(WORKFLOW, wfState({ round_check_workflow_runs: scratch }), OPTIONS))).toContain(
+      "does not name pull request #7 onto 'main'",
+    );
+    expect(evaluateReady(WORKFLOW, wfState({ pr_number: undefined }), OPTIONS).ready).toBe(false);
+    expect(evaluateReady(WORKFLOW, wfState({ base_ref: "release" }), OPTIONS).ready).toBe(false);
+  });
+
+  it("N1: settlement's roundsAtHead counts a matching workflow producer and leaves out an unread suite", () => {
+    expect(evaluateReady(WORKFLOW, wfState(), OPTIONS).context.settlement.roundsAtHead).toEqual([
+      { reviewer: "bugbot", via: "round-check" },
+    ]);
+    expect(evaluateReady(WORKFLOW, wfState({ round_check_workflow_runs: [] }), OPTIONS).context.settlement.roundsAtHead).toEqual([]);
+  });
+
+  it("F3: a producer in force through trusts_pull_request_revision warns on every evaluation", () => {
+    const optIn = constrained({
+      workflow: { path: ".github/workflows/bugbot.yml", repository: "zheref/nen", events: ["pull_request"], trusts_pull_request_revision: true },
+    });
+    expect(evaluateReady(optIn, wfState(), OPTIONS).context.warnings).toContain(
+      "round_check_producer of 'bugbot' trusts the pull request's own revision (trusts_pull_request_revision: true, events pull_request): on those events the workflow file is whatever the pull request wrote, so its round check proves no reviewer (zheref/nen#546)",
+    );
+    expect(evaluateReady(WORKFLOW, wfState(), OPTIONS).context.warnings).toEqual([]);
   });
 
   it("EARLIER HEAD: the blob carries producer evidence per earlier run, and only the declared producer's counts", () => {
@@ -2270,13 +2315,17 @@ describe("evaluateReady -- round_check_producer (zheref/nen#546)", () => {
     expect(
       roundCheckWorkflowRuns({
         round_check_workflow_runs: [
-          { check_suite_id: 1, path: ".github/workflows/a.yml", repository: "o/r", event: "push" },
+          { check_suite_id: 1, run_id: 10, path: ".github/workflows/a.yml", repository: "o/r", event: "push", pull_requests: [{ number: 7, base_ref: "main" }, { number: "8" }], job_ids: [11] },
+          { check_suite_id: 4, path: ".github/workflows/a.yml", repository: "o/r", event: "push", job_ids: [1, "2"] },
           { check_suite_id: "1", path: ".github/workflows/a.yml", repository: "o/r", event: "push" },
           { check_suite_id: 2, path: "", repository: "o/r", event: "push" },
           { check_suite_id: 3, path: ".github/workflows/a.yml", repository: "o/r" },
           null,
         ],
       }),
-    ).toEqual([{ checkSuiteId: 1, path: ".github/workflows/a.yml", repository: "o/r", event: "push" }]);
+    ).toEqual([
+      { checkSuiteId: 1, runId: 10, path: ".github/workflows/a.yml", repository: "o/r", event: "push", pullRequests: [{ number: 7, baseRef: "main" }], jobIds: [11] },
+      { checkSuiteId: 4, runId: null, path: ".github/workflows/a.yml", repository: "o/r", event: "push", pullRequests: [], jobIds: null },
+    ]);
   });
 });

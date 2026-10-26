@@ -94,6 +94,7 @@ import {
   defaultReviewers,
   latestChecks,
   normalizeReviewers,
+  producerScopedChecks,
   roundCheckState,
   type EarlierHeadCheck,
   type RoundPolicy,
@@ -101,9 +102,14 @@ import {
 import { parseCheckRollup } from "./parse.js";
 import type { GateIdentities, ReviewerIdentity, RoundCheckProducer } from "../schema/gates.js";
 import {
+  EMPTY_PRODUCER_CONTEXT,
   GITHUB_ACTIONS_APP_SLUG,
   matchProducer,
-  workflowRunsBySuite,
+  producerContext,
+  runNamesPullRequest,
+  workflowRunMatches,
+  type ProducerContext,
+  type RunPullRequest,
   type WorkflowRunEvidence,
 } from "../gates/producer.js";
 import {
@@ -175,6 +181,16 @@ export interface PrStateSource {
    * UNVERIFIED -- owed with that reason, never counted by name.
    */
   checkSuiteWorkflowRuns?(repo: PrRef, checkSuiteId: number): Promise<unknown>;
+  /**
+   * One page of ONE workflow run's jobs, the RAW REST payload of
+   * `actions/runs/{run_id}/jobs?filter=all` -- `{ total_count, jobs: [{ id
+   * }] }` (hanten round 1 on #546, Feitan F1). A job's id IS its check run's
+   * id, so this is how a check is shown to be the run's own rather than one a
+   * token wrote into the same suite. Read only for a run whose file,
+   * repository, event and pull request already match. OPTIONAL: without it
+   * every workflow-producer round is unverified.
+   */
+  workflowRunJobs?(repo: PrRef, runId: number, page: number): Promise<unknown>;
   /**
    * One file's UTF-8 text at one commit (REST `contents/{path}?ref=`), or
    * `null` when the file does not exist there (404). Any other failure THROWS.
@@ -277,27 +293,45 @@ export const EARLIER_COMMIT_READS_DEFAULT = 20;
 export const PULL_REQUEST_COMMITS_CAP = 250;
 
 /**
- * How many check suites one evaluation may look up workflow runs for
- * (zheref/nen#546). Only a name-matching, definitive-SUCCESS round check of a
- * reviewer that declares a `workflow` producer is ever looked up, so this is
- * a runaway backstop, not a working limit: hitting it leaves the remaining
- * suites UNVERIFIED -- owed -- with a warning, never counted.
+ * How many GitHub reads one evaluation may spend on workflow-producer evidence
+ * (zheref/nen#546): one per check suite's run lookup, one per page of a run's
+ * jobs. Only a name-matching, definitive-SUCCESS round check of a reviewer
+ * that declares a `workflow` producer is ever looked up, a suite already read
+ * is never read again, and a run whose file, repository, event or pull request
+ * cannot match has no jobs read. Hitting the budget leaves the remaining
+ * suites UNVERIFIED -- owed -- with a warning naming the round check and how
+ * many suites went unread, never counted. A pull request that adds many jobs
+ * of the round check's name can spend it, holding only its OWN round owed.
  */
-export const WORKFLOW_RUN_READS_MAX = 10;
+export const WORKFLOW_RUN_READS_MAX = 20;
+
+/** The most pages of one run's jobs read (100 jobs a page). */
+const WORKFLOW_RUN_JOB_PAGES_MAX = 5;
+
+/** What a workflow-producer read serves: the declared producers, the PR, a label. */
+export interface WorkflowReadScope {
+  readonly producers: readonly RoundCheckProducer[];
+  readonly pullRequest: RunPullRequest | null;
+  /** The round check(s) the read is for, as warnings name them. */
+  readonly label: string;
+}
 
 /**
  * Look up the GitHub Actions run behind each check suite, for the
- * `workflow`-producer comparison (zheref/nen#546). FAILS CLOSED: a source that
- * cannot read runs, a thrown or unreadable read, a suite with no run naming
- * it, or two runs disagreeing about the same suite each leave that suite
- * WITHOUT evidence, with a warning saying which and why -- and a suite without
- * evidence is unverified, so its round stays owed. Nothing here can make a
- * check match a producer it does not.
+ * `workflow`-producer comparison (zheref/nen#546), and -- when the run's
+ * file, repository, event and pull request match a declared producer -- its
+ * jobs. FAILS CLOSED: a source that cannot read runs, a thrown or unreadable
+ * read, a suite with no run naming it, two runs disagreeing about the same
+ * suite, or a jobs read that fails or is cut short each leave the evidence
+ * incomplete, with a warning saying which and why -- and incomplete evidence
+ * is unverified, so the round stays owed. Nothing here can make a check match
+ * a producer it does not.
  */
 export async function readWorkflowRuns(
   source: PrStateSource,
   repo: PrRef,
   suiteIds: readonly number[],
+  scope: WorkflowReadScope,
   known: ReadonlyMap<number, WorkflowRunEvidence> = new Map(),
   budget: { reads: number } = { reads: 0 },
 ): Promise<{ readonly runs: readonly WorkflowRunEvidence[]; readonly warnings: readonly string[] }> {
@@ -309,17 +343,16 @@ export async function readWorkflowRuns(
     return {
       runs: [],
       warnings: [
-        `round-check producer: this GitHub source cannot read workflow runs, so check suite(s) ${wanted.join(", ")} on ${at} are unverified and their round checks are not counted`,
+        `round-check producer: this GitHub source cannot read workflow runs, so check suite(s) ${wanted.join(", ")} of ${scope.label} on ${at} are unverified and their round checks are not counted`,
       ],
     };
   }
   const runs: WorkflowRunEvidence[] = [];
   const warnings: string[] = [];
+  const unread: number[] = [];
   for (const suite of wanted) {
     if (budget.reads >= WORKFLOW_RUN_READS_MAX) {
-      warnings.push(
-        `round-check producer: stopped after ${WORKFLOW_RUN_READS_MAX} workflow-run reads on ${at}; check suite ${suite} is unverified and its round check is not counted`,
-      );
+      unread.push(suite);
       continue;
     }
     budget.reads += 1;
@@ -337,25 +370,113 @@ export async function readWorkflowRuns(
     if (Array.isArray(list)) {
       for (const run of list) {
         const id = digPath(run, "check_suite_id");
+        const runId = digPath(run, "id");
         const path = digPath(run, "path");
         const event = digPath(run, "event");
         const repository = digPath(run, "repository", "full_name");
         if (id !== suite) continue;
         if (typeof path !== "string" || path === "" || typeof event !== "string" || event === "") continue;
         if (typeof repository !== "string" || repository === "") continue;
-        candidates.push({ checkSuiteId: suite, path, repository, event });
+        candidates.push({
+          checkSuiteId: suite,
+          runId: typeof runId === "number" && Number.isSafeInteger(runId) && runId > 0 ? runId : null,
+          path,
+          repository,
+          event,
+          pullRequests: workflowRunPullRequests(run),
+          jobIds: null,
+        });
       }
     }
-    const distinct = new Set(candidates.map((run): string => `${run.repository}\u0000${run.path}\u0000${run.event}`));
+    const distinct = new Set(candidates.map((run): string => `${run.runId}\u0000${run.repository}\u0000${run.path}\u0000${run.event}`));
     if (candidates.length === 0 || distinct.size !== 1) {
       warnings.push(
         `round-check producer: check suite ${suite} on ${at} ${candidates.length === 0 ? "names no readable workflow run" : "names workflow runs that disagree"}; it is unverified and its round check is not counted`,
       );
       continue;
     }
-    runs.push(candidates[0]!);
+    const run = candidates[0]!;
+    // Spend no read on a run that cannot be the producer (F5, N8): its jobs
+    // matter only when its file, repository, event and pull request match.
+    const couldMatch =
+      run.runId !== null &&
+      runNamesPullRequest(run, scope.pullRequest) &&
+      scope.producers.some(
+        (producer): boolean => producer.kind === "workflow" && workflowRunMatches(producer, run).verdict === "match",
+      );
+    if (!couldMatch) {
+      runs.push(run);
+      continue;
+    }
+    const jobs = await readRunJobs(source, repo, run.runId!, budget);
+    if (jobs.warning !== null) warnings.push(`round-check producer: ${jobs.warning} (run ${run.runId} of check suite ${suite} on ${at}); its round check is unverified and not counted`);
+    runs.push({ ...run, jobIds: jobs.ids });
+  }
+  if (unread.length > 0) {
+    warnings.push(
+      `round-check producer: the read budget of ${WORKFLOW_RUN_READS_MAX} on ${at} was spent before ${unread.length} check suite(s) of ${scope.label} were read (${unread.join(", ")}); they are unverified and their round checks are not counted`,
+    );
   }
   return { runs, warnings };
+}
+
+/** A REST workflow run's `pull_requests[]`: each entry's number and base ref. */
+function workflowRunPullRequests(run: unknown): RunPullRequest[] {
+  const list = digPath(run, "pull_requests");
+  if (!Array.isArray(list)) return [];
+  const pulls: RunPullRequest[] = [];
+  for (const pull of list) {
+    const number = digPath(pull, "number");
+    const baseRef = digPath(pull, "base", "ref");
+    if (typeof number === "number" && Number.isSafeInteger(number) && number > 0 && typeof baseRef === "string" && baseRef !== "") {
+      pulls.push({ number, baseRef });
+    }
+  }
+  return pulls;
+}
+
+/** Every job id of one run, or `null` with the reason it could not be read whole. */
+async function readRunJobs(
+  source: PrStateSource,
+  repo: PrRef,
+  runId: number,
+  budget: { reads: number },
+): Promise<{ readonly ids: readonly number[] | null; readonly warning: string | null }> {
+  const readJobs = source.workflowRunJobs;
+  if (readJobs === undefined) return { ids: null, warning: "this GitHub source cannot read a run's jobs" };
+  const ids: number[] = [];
+  for (let page = 1; page <= WORKFLOW_RUN_JOB_PAGES_MAX; page += 1) {
+    if (budget.reads >= WORKFLOW_RUN_READS_MAX) return { ids: null, warning: `the read budget of ${WORKFLOW_RUN_READS_MAX} was spent before the run's jobs were read whole` };
+    budget.reads += 1;
+    let payload: unknown;
+    try {
+      payload = await readJobs.call(source, repo, runId, page);
+    } catch (error) {
+      return { ids: null, warning: `reading the run's jobs failed (${error instanceof Error ? error.message : String(error)})` };
+    }
+    const jobs = digPath(payload, "jobs");
+    const total = digPath(payload, "total_count");
+    if (!Array.isArray(jobs) || typeof total !== "number") return { ids: null, warning: "the run's jobs came back unreadable" };
+    for (const job of jobs) {
+      const id = digPath(job, "id");
+      if (typeof id !== "number" || !Number.isSafeInteger(id) || id < 1) return { ids: null, warning: "a job of the run carries no readable id" };
+      ids.push(id);
+    }
+    if (ids.length >= total || jobs.length === 0) return { ids, warning: null };
+  }
+  return { ids: null, warning: `the run has more jobs than ${WORKFLOW_RUN_JOB_PAGES_MAX} pages carry` };
+}
+
+/** The declared `workflow` producers, and the round checks they constrain, for a read's scope. */
+export function workflowReadScope(identities: GateIdentities, pullRequest: RunPullRequest | null): WorkflowReadScope {
+  const constrained = identities.reviewers.filter(
+    (reviewer): boolean => reviewer.roundCheckPattern !== null && reviewer.roundCheckProducer?.kind === "workflow",
+  );
+  return {
+    producers: constrained.map((reviewer): RoundCheckProducer => reviewer.roundCheckProducer!),
+    pullRequest,
+    label: constrained.map((reviewer): string => `'${reviewer.roundCheckPattern!.source}'`).join(", ") || "no round check",
+  };
 }
 
 /**
@@ -363,7 +484,9 @@ export async function readWorkflowRuns(
  * needs (zheref/nen#546): a name-matching, COMPLETED, definitive-SUCCESS
  * round check created by GitHub Actions. Nothing else could become a round,
  * so nothing else is looked up -- and a file that declares no workflow
- * producer looks up nothing at all.
+ * producer looks up nothing at all. Read per reviewer on the PRODUCER-SCOPED
+ * reduction (Nobunaga N2): another App's run of the same name is dropped
+ * before the latest-by-name reduction, so it cannot hide an Actions run.
  */
 export function headWorkflowSuitesWanted(identities: GateIdentities, headChecks: readonly unknown[]): number[] {
   const constrained = identities.reviewers.filter(
@@ -372,16 +495,16 @@ export function headWorkflowSuitesWanted(identities: GateIdentities, headChecks:
   if (constrained.length === 0) return [];
   const parsed = parseCheckRollup(headChecks, "$.checks");
   if (!parsed.ok) return [];
+  const reduced = latestChecks(parsed.value);
   const suites: number[] = [];
-  for (const entry of latestChecks(parsed.value)) {
-    if (entry.kind !== "check_run" || entry.name === null) continue;
-    if (entry.status !== "COMPLETED" || entry.conclusion !== "SUCCESS") continue;
-    if ((entry.appSlug ?? "").toLowerCase() !== GITHUB_ACTIONS_APP_SLUG) continue;
-    const suite = entry.checkSuiteId;
-    if (typeof suite !== "number") continue;
-    const name = entry.name;
-    if (constrained.some((reviewer): boolean => reviewer.roundCheckPattern!.test(name)) && !suites.includes(suite)) {
-      suites.push(suite);
+  for (const reviewer of constrained) {
+    for (const entry of producerScopedChecks(reviewer, parsed.value, reduced, EMPTY_PRODUCER_CONTEXT)) {
+      if (entry.kind !== "check_run" || entry.name === null) continue;
+      if (entry.status !== "COMPLETED" || entry.conclusion !== "SUCCESS") continue;
+      if ((entry.appSlug ?? "").toLowerCase() !== GITHUB_ACTIONS_APP_SLUG) continue;
+      const suite = entry.checkSuiteId;
+      if (typeof suite !== "number") continue;
+      if (reviewer.roundCheckPattern!.test(entry.name) && !suites.includes(suite)) suites.push(suite);
     }
   }
   return suites;
@@ -916,6 +1039,8 @@ export async function readEarlierRoundChecks(
   maxCommitReads: number,
   knownWorkflowRuns: ReadonlyMap<number, WorkflowRunEvidence> = new Map(),
   workflowBudget: { reads: number } = { reads: 0 },
+  /** The pull request a workflow producer's run must name (Feitan F2). */
+  pullRequest: RunPullRequest | null = null,
 ): Promise<{
   readonly checks: readonly EarlierHeadCheck[];
   readonly warnings: readonly string[];
@@ -1030,12 +1155,15 @@ export async function readEarlierRoundChecks(
       // stand in for it either. No producer declared: the first attributed
       // run, exactly as before.
       let run: unknown;
-      let evidence: Pick<EarlierHeadCheck, "appSlug" | "appId" | "checkSuiteId"> = {};
+      let evidence: Pick<EarlierHeadCheck, "appSlug" | "appId" | "checkSuiteId" | "checkRunId"> = {};
       for (const candidate of attributed) {
         const appSlug = digPath(candidate, "app", "slug");
         const appId = digPath(candidate, "app", "id");
         const suite = digPath(candidate, "check_suite", "id");
+        const checkRunId = digPath(candidate, "id");
         const candidateEvidence = {
+          // The REST check run's own id: a workflow run's job id (Feitan F1).
+          ...(typeof checkRunId === "number" && Number.isSafeInteger(checkRunId) && checkRunId > 0 ? { checkRunId } : {}),
           ...(typeof appSlug === "string" && appSlug !== "" ? { appSlug } : {}),
           ...(typeof appId === "number" && Number.isSafeInteger(appId) && appId > 0 ? { appId } : {}),
           ...(typeof suite === "number" && Number.isSafeInteger(suite) && suite > 0 ? { checkSuiteId: suite } : {}),
@@ -1047,14 +1175,21 @@ export async function readEarlierRoundChecks(
           candidateEvidence.checkSuiteId !== undefined &&
           !workflowRuns.has(candidateEvidence.checkSuiteId)
         ) {
-          const looked = await readWorkflowRuns(source, repo, [candidateEvidence.checkSuiteId], workflowRuns, workflowBudget);
+          const looked = await readWorkflowRuns(
+            source,
+            repo,
+            [candidateEvidence.checkSuiteId],
+            { producers: [producer], pullRequest, label: `'${entry.pattern.source}'` },
+            workflowRuns,
+            workflowBudget,
+          );
           warnings.push(...looked.warnings);
           for (const evidenceRun of looked.runs) {
             workflowRuns.set(evidenceRun.checkSuiteId, evidenceRun);
             lookedUp.push(evidenceRun);
           }
         }
-        const verdict = matchProducer(producer, candidateEvidence, workflowRuns);
+        const verdict = matchProducer(producer, candidateEvidence, { workflowRuns, pullRequest });
         if (verdict.verdict === "match") {
           run = candidate;
           evidence = candidateEvidence;
@@ -1163,7 +1298,7 @@ export function earlierRoundCheckWanted(
   configured: readonly string[],
   headChecks: readonly unknown[],
   reviews: readonly unknown[],
-  workflowRuns: ReadonlyMap<number, WorkflowRunEvidence> = new Map(),
+  producerCtx: ProducerContext = EMPTY_PRODUCER_CONTEXT,
 ): EarlierRoundCheckWanted[] {
   if (policy !== "bounded") return [];
   const parsed = parseCheckRollup(headChecks, "$.checks");
@@ -1183,7 +1318,12 @@ export function earlierRoundCheckWanted(
     });
   const completedAtHead = (reviewer: ReviewerIdentity): boolean =>
     reviewer.roundCheckPattern !== null &&
-    roundCheckState(latest, reviewer.roundCheckPattern, reviewer.roundCheckProducer ?? null, workflowRuns).state === "completed";
+    roundCheckState(
+      producerScopedChecks(reviewer, parsed.value, latest, producerCtx),
+      reviewer.roundCheckPattern,
+      reviewer.roundCheckProducer ?? null,
+      producerCtx,
+    ).state === "completed";
   const knownRounds = members.filter((name): boolean => {
     const reviewer = identities.reviewer(name);
     return (
@@ -1203,7 +1343,14 @@ export function earlierRoundCheckWanted(
     if (!isConfigured && quorumAlreadyMet) continue;
     // Producer-aware (zheref/nen#546): an impersonating SUCCESS at head is
     // not `completed`, so it cannot suppress the read of the real one.
-    const atHead = roundCheckState(latest, pattern, reviewer.roundCheckProducer ?? null, workflowRuns).state;
+    // Producer-SCOPED reduction too (Nobunaga N2): a later impostor of the
+    // same name cannot hide the reviewer's own run in flight.
+    const atHead = roundCheckState(
+      producerScopedChecks(reviewer, parsed.value, latest, producerCtx),
+      pattern,
+      reviewer.roundCheckProducer ?? null,
+      producerCtx,
+    ).state;
     if (atHead === "completed" || atHead === "pending") continue;
     if (posted(reviewer)) continue;
     wanted.push({ reviewer: reviewer.name, pattern, producer: reviewer.roundCheckProducer ?? null });
@@ -1486,21 +1633,26 @@ export async function fetchPrState(
   const workflowDeclared = identities.reviewers.some(
     (reviewer): boolean => reviewer.roundCheckProducer?.kind === "workflow",
   );
+  // The pull request a workflow producer's run must name (Feitan F2).
+  const judgedPullRequest: RunPullRequest | null =
+    typeof node.baseRefName === "string" && node.baseRefName !== "" ? { number: prNumber, baseRef: node.baseRefName } : null;
   const headWorkflow = await readWorkflowRuns(
     source,
     repo,
     headWorkflowSuitesWanted(identities, checkRollupNodes),
+    workflowReadScope(identities, judgedPullRequest),
     new Map(),
     workflowBudget,
   );
-  const headWorkflowRuns = workflowRunsBySuite(headWorkflow.runs);
+  const headProducerCtx = producerContext(headWorkflow.runs, judgedPullRequest);
+  const headWorkflowRuns = headProducerCtx.workflowRuns;
   const boundedWanted = earlierRoundCheckWanted(
     identities,
     "bounded",
     normalizeReviewers(reviewers),
     checkRollupNodes,
     reviews,
-    headWorkflowRuns,
+    headProducerCtx,
   );
   const earlierWanted =
     options.policy === "bounded"
@@ -1518,6 +1670,7 @@ export async function fetchPrState(
     options.maxEarlierCommitReads ?? EARLIER_COMMIT_READS_DEFAULT,
     headWorkflowRuns,
     workflowBudget,
+    judgedPullRequest,
   );
   const workflowRuns = [...headWorkflow.runs, ...(earlier.workflowRuns ?? [])];
 
@@ -1549,11 +1702,16 @@ export async function fetchPrState(
       // declares a workflow producer, so every other blob is unchanged.
       ...(workflowDeclared
         ? {
+            // The pull request a run must name (Feitan F2): read with base_ref.
+            pr_number: prNumber,
             round_check_workflow_runs: workflowRuns.map((run): Record<string, unknown> => ({
               check_suite_id: run.checkSuiteId,
+              run_id: run.runId,
               path: run.path,
               repository: run.repository,
               event: run.event,
+              pull_requests: run.pullRequests.map((pull): Record<string, unknown> => ({ number: pull.number, base_ref: pull.baseRef })),
+              job_ids: run.jobIds,
             })),
           }
         : {}),
@@ -1594,6 +1752,7 @@ function serializeEarlierCheck(check: EarlierHeadCheck): Record<string, unknown>
     ...(check.appSlug === undefined || check.appSlug === null ? {} : { app_slug: check.appSlug }),
     ...(check.appId === undefined || check.appId === null ? {} : { app_id: check.appId }),
     ...(check.checkSuiteId === undefined || check.checkSuiteId === null ? {} : { check_suite_id: check.checkSuiteId }),
+    ...(check.checkRunId === undefined || check.checkRunId === null ? {} : { check_run_id: check.checkRunId }),
   };
 }
 

@@ -298,6 +298,23 @@ export class GitHubClient {
     return response.data;
   }
 
+  // ONE page of a workflow run's jobs, every attempt (`filter=all`), as the
+  // RAW payload `{ total_count, jobs }` (hanten round 1 on #546, Feitan F1):
+  // a job's id is its check run's id, which is how a round check is shown to
+  // be the run's own. Read only for a run that already matches a declared
+  // `workflow` producer and this pull request; the caller pages and budgets.
+  async workflowRunJobs(repo: RepoRef, runId: number, page: number): Promise<unknown> {
+    const response = await this.octokit.request("GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs", {
+      owner: repo.owner,
+      repo: repo.repo,
+      run_id: runId,
+      filter: "all",
+      per_page: 100,
+      page,
+    });
+    return response.data;
+  }
+
   // ONE file's text at ONE commit, REST `contents/{path}?ref={sha}` -- the
   // same route ../release/unitcheck.ts's `fetchJsonAtRef` takes through `gh`
   // for `nen/workflow.json` (Feitan FEI-3), on this client's own token. Read by

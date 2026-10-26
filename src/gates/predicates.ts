@@ -109,9 +109,12 @@ import { exactLoginPattern } from "../schema/pattern.js";
 // zheref/nen#546: who PRODUCED a round check, compared against the reviewer's
 // declared `round_check_producer`. Pure, like everything here.
 import {
+  EMPTY_PRODUCER_CONTEXT,
   matchProducer,
-  workflowRunsBySuite,
+  producerContext,
+  type ProducerContext,
   type ProducerEvidence,
+  type RunPullRequest,
   type WorkflowRunEvidence,
 } from "./producer.js";
 
@@ -1122,6 +1125,12 @@ export interface RoundInputs {
    * workflow producer, which keeps its round owed, never counts it.
    */
   readonly workflowRuns?: readonly WorkflowRunEvidence[];
+  /**
+   * The pull request being judged -- its number and base branch -- which a
+   * `workflow` producer's run must name (hanten round 1 on #546, Feitan F2).
+   * OPTIONAL: unknown leaves every workflow-producer round unverified.
+   */
+  readonly pullRequest?: RunPullRequest | null;
 }
 
 /**
@@ -1144,6 +1153,8 @@ export interface EarlierHeadCheck {
   readonly appSlug?: string | null;
   readonly appId?: number | null;
   readonly checkSuiteId?: number | null;
+  /** The REST check run's own `id` -- a job id for a workflow run (F1). */
+  readonly checkRunId?: number | null;
 }
 
 // The four reasons are the four branches that already exist in
@@ -1258,7 +1269,7 @@ export function pendingRounds(
   // NOT here, and that omission was itself the bug (Cursor Bugbot + Sasuke,
   // bankai-core#577).
   const checks = latestChecks(inputs.checks);
-  const workflowRuns = workflowRunsBySuite(inputs.workflowRuns);
+  const producerCtx = producerContext(inputs.workflowRuns, inputs.pullRequest);
   const owed: OwedRound[] = [];
 
   for (const name of names) {
@@ -1304,12 +1315,13 @@ export function pendingRounds(
       identity,
       loginPattern,
       inputs.reviews,
-      checks,
+      producerScopedChecks(identity, inputs.checks, checks, producerCtx),
       inputs.earlierChecks ?? [],
       headSha,
       policy,
       deliveryPr,
-      workflowRuns,
+      producerCtx,
+      inputs.checks,
     );
     if (!outcome.had) {
       owed.push({
@@ -1351,12 +1363,13 @@ export function roundsAtHead(
   deliveryPr = false,
 ): RoundAtHead[] {
   const checks = latestChecks(inputs.checks);
+  const producerCtx = producerContext(inputs.workflowRuns, inputs.pullRequest);
   const found: RoundAtHead[] = [];
   for (const name of normalizeReviewerNames(reviewers)) {
     const identity: ReviewerIdentity | undefined = identities.reviewer(name);
     const loginPattern = identity?.loginPattern ?? exactLoginPattern(name);
     if (inputs.reviewRequests.some((request): boolean => requestMatches(request, loginPattern))) continue;
-    const outcome = reviewerRound(identity, loginPattern, inputs.reviews, checks, [], headSha, "strict", deliveryPr, workflowRunsBySuite(inputs.workflowRuns));
+    const outcome = reviewerRound(identity, loginPattern, inputs.reviews, producerScopedChecks(identity, inputs.checks, checks, producerCtx), [], headSha, "strict", deliveryPr, producerCtx, inputs.checks);
     if (outcome.had) found.push({ reviewer: name, via: outcome.via });
   }
   return found;
@@ -1387,7 +1400,7 @@ export function reviewerRoundFacts(
   deliveryPr = false,
 ): ReviewerRoundFacts[] {
   const checks = latestChecks(inputs.checks);
-  const workflowRuns = workflowRunsBySuite(inputs.workflowRuns);
+  const producerCtx = producerContext(inputs.workflowRuns, inputs.pullRequest);
   return normalizeReviewerNames(reviewers).map((name): ReviewerRoundFacts => {
     const identity: ReviewerIdentity | undefined = identities.reviewer(name);
     const loginPattern = identity?.loginPattern ?? exactLoginPattern(name);
@@ -1395,12 +1408,13 @@ export function reviewerRoundFacts(
       identity,
       loginPattern,
       inputs.reviews,
-      checks,
+      producerScopedChecks(identity, inputs.checks, checks, producerCtx),
       inputs.earlierChecks ?? [],
       headSha,
       policy,
       deliveryPr,
-      workflowRuns,
+      producerCtx,
+      inputs.checks,
     );
     return {
       reviewer: name,
@@ -1462,7 +1476,13 @@ function reviewerRound(
   headSha: string,
   policy: RoundPolicy,
   deliveryPr: boolean,
-  workflowRuns: ReadonlyMap<number, WorkflowRunEvidence>,
+  producerCtx: ProducerContext,
+  /**
+   * The UN-reduced rollup, read only to EXPLAIN a round check whose producer
+   * is another one: `checks` is producer-scoped (N2), so such a run is no
+   * longer in it, and AC-1 still owes the reader the mismatch.
+   */
+  rawChecks: readonly RollupEntry[] = [],
 ): RoundOutcome {
   const event = eventRoundDecision(identity, reviews, checks, headSha, policy, deliveryPr);
   if (event !== null) return event.outcome;
@@ -1590,11 +1610,11 @@ function reviewerRound(
   if (identity?.roundCheckPattern != null) {
     const pattern = identity.roundCheckPattern;
     const producer = identity.roundCheckProducer ?? null;
-    const atHead = producedSuccessCheck(checks, pattern, producer, workflowRuns);
+    const atHead = producedSuccessCheck(checks, pattern, producer, producerCtx);
     if (atHead.found) {
       return { had: true, via: "round-check" };
     }
-    const refusals = [...atHead.refusals];
+    const refusals = [...atHead.refusals, ...foreignProducerSuccesses(rawChecks, pattern, producer, producerCtx)];
     // BOUNDED, EARLIER-HEAD LIMB FOR A ROUND CHECK (maintainer ruling
     // 2026-09-29, option B). Not a new policy: it is zheref/nen#214's
     // `bounded` reading, applied to the reviewer whose CHECK IS ITS ROUND.
@@ -1615,12 +1635,15 @@ function reviewerRound(
     // latestChecks()' own reason -- "work is happening now and the gate must
     // wait for it" -- so an enrolled reviewer whose check is still running is
     // still owed, exactly as before.
-    if (policy === "bounded" && !hasInFlightCheck(checks, pattern, producer, workflowRuns)) {
-      const earlier = earlierRoundCheck(earlierChecks, pattern, headSha, producer, workflowRuns);
+    const inFlight = hasInFlightCheck(checks, pattern, producer, producerCtx);
+    if (policy === "bounded" && !inFlight) {
+      const earlier = earlierRoundCheck(earlierChecks, pattern, headSha, producer, producerCtx);
       if (earlier.found !== null) return { had: true, via: "round-check-earlier-head", earlier: earlier.found };
       refusals.push(...earlier.refusals);
     }
-    if (refusals.length > 0) {
+    // The reviewer's own run still in flight is the reason it is owed: it is
+    // mid-review, whatever a run of another producer concluded (N2).
+    if (refusals.length > 0 && !inFlight) {
       return {
         had: false,
         reason: refusals.some((refusal): boolean => refusal.verdict === "missing")
@@ -1642,11 +1665,73 @@ interface ProducerRefusal {
   readonly where: string;
 }
 
+/**
+ * The name-matching definitive SUCCESS runs at head whose producer is KNOWN
+ * to be another one -- the runs `producerScopedChecks` drops before the
+ * reduction (N2) -- as refusals, so the verdict still names them (AC-1). One
+ * per distinct explanation.
+ */
+function foreignProducerSuccesses(
+  rawChecks: readonly RollupEntry[],
+  pattern: RegExp,
+  producer: ReviewerIdentity["roundCheckProducer"],
+  producerCtx: ProducerContext,
+): ProducerRefusal[] {
+  if (producer === null || producer === undefined) return [];
+  const refusals: ProducerRefusal[] = [];
+  for (const entry of rawChecks) {
+    const name = rollupEntryCheckName(entry);
+    if (name === null || !pattern.test(name)) continue;
+    if (lifecycleStatus(entry) !== "COMPLETED" || rollupEntryStatus(entry) !== "SUCCESS") continue;
+    const verdict = matchProducer(producer, rollupProducerEvidence(entry), producerCtx);
+    if (verdict.verdict !== "mismatch") continue;
+    const where = `'${name}' at head`;
+    if (!refusals.some((refusal): boolean => refusal.where === where && refusal.detail === verdict.detail)) {
+      refusals.push({ verdict: "mismatch", detail: verdict.detail, where });
+    }
+  }
+  return refusals;
+}
+
 /** A rollup entry's producer evidence; a legacy status context carries none. */
 function rollupProducerEvidence(entry: RollupEntry): ProducerEvidence {
   return entry.kind === "check_run"
-    ? { appSlug: entry.appSlug ?? null, appId: entry.appId ?? null, checkSuiteId: entry.checkSuiteId ?? null }
+    ? {
+        appSlug: entry.appSlug ?? null,
+        appId: entry.appId ?? null,
+        checkSuiteId: entry.checkSuiteId ?? null,
+        checkRunId: entry.databaseId ?? null,
+      }
     : {};
+}
+
+/**
+ * The rollup ONE reviewer's round is judged on (hanten round 1 on #546,
+ * Nobunaga N2). `latestChecks` keeps one run per NAME, so asking the producer
+ * only after that reduction let a later impostor of the same name REPLACE the
+ * reviewer's own run -- hiding a run still in flight (and letting the
+ * earlier-head limb count while the reviewer was working), or hiding the
+ * reviewer's own SUCCESS. For a reviewer with a declared producer, every run
+ * of its round check whose producer is KNOWN to be another one is dropped
+ * BEFORE the reduction; a run whose producer is merely unread stays, since it
+ * may be the reviewer's. With no producer declared this is `reduced`,
+ * unchanged.
+ */
+export function producerScopedChecks(
+  identity: ReviewerIdentity | undefined,
+  rawChecks: readonly RollupEntry[],
+  reduced: readonly RollupEntry[],
+  producerCtx: ProducerContext,
+): readonly RollupEntry[] {
+  const producer = identity?.roundCheckProducer ?? null;
+  const pattern = identity?.roundCheckPattern ?? null;
+  if (producer === null || pattern === null) return reduced;
+  return latestChecks(
+    rawChecks.filter((entry): boolean => {
+      const name = rollupEntryCheckName(entry);
+      return name === null || !pattern.test(name) || matchProducer(producer, rollupProducerEvidence(entry), producerCtx).verdict !== "mismatch";
+    }),
+  );
 }
 
 // hasDefinitiveSuccessCheck() for a ROUND check, with the producer asked too.
@@ -1656,14 +1741,14 @@ function producedSuccessCheck(
   checks: readonly RollupEntry[],
   pattern: RegExp,
   producer: ReviewerIdentity["roundCheckProducer"],
-  workflowRuns: ReadonlyMap<number, WorkflowRunEvidence>,
+  producerCtx: ProducerContext,
 ): { readonly found: boolean; readonly refusals: readonly ProducerRefusal[] } {
   const refusals: ProducerRefusal[] = [];
   for (const entry of checks) {
     const name = rollupEntryCheckName(entry);
     if (name === null || !pattern.test(name)) continue;
     if (lifecycleStatus(entry) !== "COMPLETED" || rollupEntryStatus(entry) !== "SUCCESS") continue;
-    const verdict = matchProducer(producer, rollupProducerEvidence(entry), workflowRuns);
+    const verdict = matchProducer(producer, rollupProducerEvidence(entry), producerCtx);
     if (verdict.verdict === "match") return { found: true, refusals: [] };
     refusals.push({ verdict: verdict.verdict, detail: verdict.detail, where: `'${name}' at head` });
   }
@@ -1681,7 +1766,7 @@ function hasInFlightCheck(
   checks: readonly RollupEntry[],
   pattern: RegExp,
   producer: ReviewerIdentity["roundCheckProducer"] = null,
-  workflowRuns: ReadonlyMap<number, WorkflowRunEvidence> = new Map(),
+  producerCtx: ProducerContext = EMPTY_PRODUCER_CONTEXT,
 ): boolean {
   return checks.some((entry): boolean => {
     const name = rollupEntryCheckName(entry);
@@ -1689,7 +1774,7 @@ function hasInFlightCheck(
       name !== null &&
       pattern.test(name) &&
       lifecycleStatus(entry) !== "COMPLETED" &&
-      matchProducer(producer, rollupProducerEvidence(entry), workflowRuns).verdict !== "mismatch"
+      matchProducer(producer, rollupProducerEvidence(entry), producerCtx).verdict !== "mismatch"
     );
   });
 }
@@ -1707,7 +1792,7 @@ function earlierRoundCheck(
   pattern: RegExp,
   headSha: string,
   producer: ReviewerIdentity["roundCheckProducer"] = null,
-  workflowRuns: ReadonlyMap<number, WorkflowRunEvidence> = new Map(),
+  producerCtx: ProducerContext = EMPTY_PRODUCER_CONTEXT,
 ): { readonly found: EarlierHeadCheck | null; readonly refusals: readonly ProducerRefusal[] } {
   const refusals: ProducerRefusal[] = [];
   for (const check of earlierChecks) {
@@ -1722,8 +1807,13 @@ function earlierRoundCheck(
     }
     const verdict = matchProducer(
       producer,
-      { appSlug: check.appSlug ?? null, appId: check.appId ?? null, checkSuiteId: check.checkSuiteId ?? null },
-      workflowRuns,
+      {
+        appSlug: check.appSlug ?? null,
+        appId: check.appId ?? null,
+        checkSuiteId: check.checkSuiteId ?? null,
+        checkRunId: check.checkRunId ?? null,
+      },
+      producerCtx,
     );
     if (verdict.verdict === "match") return { found: check, refusals: [] };
     refusals.push({ verdict: verdict.verdict, detail: verdict.detail, where: `'${check.name}' at earlier head ${check.sha.slice(0, 7)}` });
@@ -1895,7 +1985,7 @@ export function roundCheckState(
   checks: readonly RollupEntry[],
   pattern: RegExp,
   producer: ReviewerIdentity["roundCheckProducer"] = null,
-  workflowRuns: ReadonlyMap<number, WorkflowRunEvidence> = new Map(),
+  producerCtx: ProducerContext = EMPTY_PRODUCER_CONTEXT,
 ): {
   readonly name: string | null;
   readonly state: RoundCheckState;
@@ -1908,7 +1998,7 @@ export function roundCheckState(
   for (const entry of checks) {
     const name = rollupEntryCheckName(entry);
     if (name === null || !pattern.test(name)) continue;
-    const verdict = matchProducer(producer, rollupProducerEvidence(entry), workflowRuns);
+    const verdict = matchProducer(producer, rollupProducerEvidence(entry), producerCtx);
     if (lifecycleStatus(entry) !== "COMPLETED") {
       if (verdict.verdict !== "mismatch") pending ??= name;
       continue;
@@ -1950,7 +2040,7 @@ export function roundQuorum(
   // The same reduction `pendingRounds` applies before its loop, for the same
   // reason (bankai-core#577): a superseded run must not decide a round.
   const checks = latestChecks(inputs.checks);
-  const workflowRuns = workflowRunsBySuite(inputs.workflowRuns);
+  const producerCtx = producerContext(inputs.workflowRuns, inputs.pullRequest);
 
   const members = quorum.anyOf.map((name): QuorumMember => {
     // The loader refuses a member that is not a declared reviewer, so this is
@@ -1963,12 +2053,13 @@ export function roundQuorum(
       identity,
       loginPattern,
       inputs.reviews,
-      checks,
+      producerScopedChecks(identity, inputs.checks, checks, producerCtx),
       inputs.earlierChecks ?? [],
       headSha,
       policy,
       deliveryPr,
-      workflowRuns,
+      producerCtx,
+      inputs.checks,
     );
     const currentHead =
       policy !== "bounded" || (deliveryPr && identity?.deliveryHolisticPass === true);
@@ -1988,12 +2079,32 @@ export function roundQuorum(
           sha: earlier.sha,
         };
       } else {
-        const atHead = roundCheckState(checks, roundCheckPattern, identity?.roundCheckProducer ?? null, workflowRuns);
+        const atHead = roundCheckState(
+          producerScopedChecks(identity, inputs.checks, checks, producerCtx),
+          roundCheckPattern,
+          identity?.roundCheckProducer ?? null,
+          producerCtx,
+        );
+        // AC-1 on the quorum's own words: a head run dropped as another
+        // producer's (N2) is still named, as a SUCCESS not counted.
+        const foreign =
+          atHead.state === "absent"
+            ? foreignProducerSuccesses(inputs.checks, roundCheckPattern, identity?.roundCheckProducer ?? null, producerCtx)[0]
+            : undefined;
+        const shown =
+          foreign === undefined
+            ? atHead
+            : {
+                name: foreign.where.replace(/^'(.*)' at head$/, "$1"),
+                state: "unsuccessful" as const,
+                conclusion: "SUCCESS",
+                producer: foreign.detail,
+              };
         roundCheck = {
           pattern: roundCheckPattern.source,
-          ...atHead,
-          from: atHead.name === null ? null : "head",
-          sha: atHead.name === null ? null : headSha,
+          ...shown,
+          from: shown.name === null ? null : "head",
+          sha: shown.name === null ? null : headSha,
         };
       }
     }

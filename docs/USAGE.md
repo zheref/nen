@@ -1878,7 +1878,8 @@ including under `bounded`, and stays owed even when other members meet the
 quorum. Event members of `round_quorum.any_of` bind without a `base_reviewers`
 entry. A terminal run without a formal review, or no run, may be excused only
 by a met quorum. `rounds-owed.owedRounds[]` retains `reviewer`, `reason`,
-`coveredByQuorum`, and optional `kind`, adding `state` for event lanes; excused
+`coveredByQuorum`, and optional `kind`, adding `state` for event lanes and
+`producer` for the two `round-check-producer-*` reasons (#546); excused
 entries retain that state. Quorum members also expose `eventRun` with `state`
 and `startedAt`; `roundCheck` retains its check-is-the-round meaning.
 
@@ -2039,7 +2040,7 @@ gate, and said nothing.
 | `round_policy.minRounds`, `round_policy.maxRounds` | 0.21.0 |
 | `round_quorum` (`any_of`, `minimum`) | 0.17.0 |
 | `checks.excluded[]` (`name`, `match`, `reason`, `ruled`, `until`, `until.condition`) | 0.20.0 |
-| `reviewers[].round_check_producer` (`app` (`slug`, `id`) or `workflow` (`path`, `repository`, `events`)) | 0.29.0 |
+| `reviewers[].round_check_producer` (`app` (`slug`, `id`) or `workflow` (`path`, `repository`, `events`, `trusts_pull_request_revision`)) | 0.29.0 |
 
 **Optional reviewer `kind` ([#403](https://github.com/zheref/nen/issues/403)).**
 A reviewer may state `"kind": "bot"` or `"kind": "human"`; every other present
@@ -2291,73 +2292,120 @@ check is the round:
   "events": ["pull_request_target"] } }
 ```
 
-- **The producer is GitHub's record, never the name or a details URL.** An
-  `app` producer is compared with the App that created the check suite
-  (`checkSuite.app.slug` and, when `id` is stated, its `databaseId`; REST
-  `app.slug`/`app.id` for an earlier-head run). A `workflow` producer requires
-  the App to be `github-actions`, then reads the run behind the check suite
-  (`GET /repos/{owner}/{repo}/actions/runs?check_suite_id=`) and compares its
-  `path` (exactly), `repository.full_name` (case-insensitively) and `event` (one
-  of `events`). Live on this repository, `Cursor Bugbot` is created by the App
-  `cursor`, id `1210556`.
-- **Name the event, because the path alone is not authorship.** On
-  `pull_request` (and the other events that run the pull request's own
-  revision) GitHub runs the workflow file as the pull request changed it. Such
-  a run has the declared path and repository but was written by the pull
-  request. A producer that should mean "the base's reviewer" names an event
-  that runs the base's definition, such as `pull_request_target` or
-  `workflow_run`. That is why `events` is required. nen does not refuse
-  `pull_request` in it; naming that event is a statement that every author who
-  can open a pull request is trusted to produce the round.
+- **An `app` producer is the stronger choice.** It is compared with the App
+  that created the check suite: `checkSuite.app.slug` **and** its
+  `databaseId` (REST `app.slug`/`app.id` for an earlier-head run). `id` is
+  **required**, because a slug follows the App's name and can be claimed again
+  after a rename, and an id cannot. Live on this repository, `Cursor Bugbot` is
+  created by the App `cursor`, id `1210556`. Only that App's installation can
+  write a check under it.
+- **A `workflow` producer binds the run, not only the suite.** The App must be
+  `github-actions`. nen then reads the run behind the check suite
+  (`GET /repos/{owner}/{repo}/actions/runs?check_suite_id=`) and requires all
+  of these:
+  - its `path` (exactly), `repository.full_name` (case-insensitively) and
+    `event` (one of `events`) match;
+  - its `pull_requests[]` names **this** pull request: the same `number` **and**
+    the same base branch (`base.ref`). A `pull_request_target` run of a second
+    pull request from the same head onto a scratch base, which runs the scratch
+    base's copy of the file, does not count. A fork's run names no pull request,
+    so it fails closed;
+  - the check's own id is one of that run's **jobs**
+    (`GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs?filter=all`, since a
+    job's id is its check run's id). A check that a token wrote into the same
+    suite is no job of the run, and does not count.
+
+  What remains: a writer who retargets **this** pull request onto a base they
+  control, lets the run happen and retargets back, produces a run that names
+  this pull request. The base's own branch protection is what stops that, so
+  prefer an `app` producer where one exists.
+- **Events that run the pull request's own revision are refused.** On
+  `pull_request`, `push`, `merge_group`, `pull_request_review`,
+  `pull_request_review_comment` and `workflow_dispatch`, GitHub runs the
+  workflow file as the pull request's revision (or a caller-chosen ref) carries
+  it. The path then names a file the pull request may have written, so the
+  constraint would look like protection and give none. Such an event is refused
+  at load at `reviewers[i].round_check_producer.workflow.events[j]` unless the
+  workflow also states `"trusts_pull_request_revision": true`. That opt-in says
+  every pull request author may produce the round. While it is in force,
+  `nen schema check` and every `nen pr ready` (`meta.warnings`, so `--explain`
+  too) warn. `pull_request_target` runs the base's definition and is the event
+  to name. A `workflow_run` run executes on the default branch, so its jobs
+  never land on the pull request's head and could never match.
 - **Three outcomes for a name-matching `SUCCESS`.** The declared producer's
   check is the round, under the existing revision and quorum rules. A
   different producer's check is **not** a round, and row 4 says so:
   `bugbot (round check from the wrong producer: 'Cursor Bugbot' at head
   produced by app 'github-actions', not app 'cursor' (id 1210556) — a check's
-  name is not its identity)`. A check whose producer evidence was not read
-  (no App on the entry, a workflow run that could not be looked up, a legacy
-  status context) is **not** a round either: `bugbot (round check producer
-  unverified: …)`. The round stays owed; a name never stands in for missing
-  evidence. In `--json`, `owedRounds[]` carries the reason
-  `round-check-producer-mismatch` or `round-check-producer-unverified` with a
-  `producer` string, and a `round_quorum` member's `roundCheck` carries
-  `producer` when a `SUCCESS` at head was not counted (state `unsuccessful`).
-- **The same test everywhere a round check is read.** The head limb, the
-  earlier-head limb under `bounded` (a newer impersonating run is passed over
-  with a warning and the walk keeps looking, so it can neither hide nor stand
-  in for the reviewer's own run), the in-flight rule (a run in flight from the
-  declared producer, or whose producer is unread, still holds the reviewer
-  owed; one known to be another producer's does not), the quorum, `--explain`'s
-  round counts and `nen watch until --until review-posted` all ask it. `strict`
-  is unchanged: no earlier run counts. `nen pr next-blocker` reads `gh pr
-  view`, which carries no App, so a constrained round reads unverified there:
-  stricter than `pr ready`, never looser.
-- **Calls and grants.** An `app` producer costs nothing: the App is read with
-  the rollup (`checks:read`). A `workflow` producer costs one
-  `actions/runs?check_suite_id=` read per name-matching `SUCCESS` check suite,
-  at head or at an earlier head, at most 10 per evaluation, and needs
-  `actions:read`. A failed, unreadable or budget-cut read is a `meta.warnings`
-  entry and leaves the check unverified.
+  name is not its identity)`. A check whose producer evidence was not read is
+  **not** a round either: no App on the entry, a run, pull request or jobs
+  that could not be read, the judged pull request unknown, or a legacy status
+  context. It reads `bugbot (round check producer unverified: …)`. The round
+  stays owed; a name never stands in for missing evidence. In `--json`,
+  `owedRounds[]` carries the reason `round-check-producer-mismatch` or
+  `round-check-producer-unverified` with a `producer` string, and a
+  `round_quorum` member's `roundCheck` carries `producer` when a `SUCCESS` at
+  head was not counted (state `unsuccessful`).
+- **Another producer's run cannot hide the reviewer's own.** Runs are reduced
+  to the latest per name, and a check run known to come from another producer
+  is dropped **before** that reduction. So a later impostor of the same name
+  neither hides the reviewer's run still in flight nor replaces its
+  `SUCCESS`. What remains is the self-hold: a check whose producer is
+  merely **unread**, for example a later GitHub Actions run of the same name
+  whose run is not yet looked up, is kept, since it may be the reviewer's. If
+  it is the latest of its name, it can leave the reviewer owed. Only the pull
+  request's own author can cause that, and only on their own pull request.
+- **The same test everywhere a round check is read.** These all ask it: the
+  head limb, the earlier-head limb under `bounded`, the in-flight rule, the
+  quorum, `--explain`'s round counts, and settlement, which drives
+  `nen watch until --until review-posted`. Under `bounded`, a newer
+  impersonating run is passed over with a warning and the walk keeps looking.
+  The in-flight rule holds the reviewer owed while a run in flight is the
+  declared producer's, or its producer is unread; a run known to be another
+  producer's does not hold it. `strict` is unchanged: no earlier run counts.
+  `nen pr next-blocker` reads `gh pr view`, which carries no App, so a
+  constrained round reads unverified there. That is stricter than
+  `pr ready`, never looser.
+- **Calls and grants.** An `app` producer costs nothing: the App and the check
+  run's id are read with the rollup (`checks:read`). A `workflow` producer
+  needs `actions:read`. Per name-matching `SUCCESS` check suite, at head or an
+  earlier head, it makes one `actions/runs?check_suite_id=` read. When that run
+  could match (file, repository, event and pull request), it adds one read per
+  page of the run's jobs. A suite already read is never read again. The budget
+  is **20 reads per evaluation**. A pull request that adds many jobs of the
+  round check's name can exhaust it, which holds only that pull request's own
+  round owed. Every failed, unreadable or budget-cut read is a `meta.warnings`
+  entry naming the round check and the suites left unread, and those checks
+  stay unverified.
 - **Compatibility (AC-5).** A reviewer without `round_check_producer` is
   judged exactly as before, by name and `SUCCESS`, and the state blob carries no
-  new key (`round_check_workflow_runs` appears only when a `workflow` producer
-  is declared). A nen release before the one that tables the key refuses a file
-  carrying it, naming the key (see the table above), rather than reading the
-  round by name. A malformed producer is refused at load with its pointer, for
-  example `reviewers[1].round_check_producer, must declare exactly one of 'app'
-  or 'workflow', got both`, or `reviewers[1].round_check_producer.workflow.events,
-  is empty`. A producer on a reviewer with no `round_check_pattern` is refused,
-  since it would constrain nothing.
-- **Adoption.** (1) Find the producer of the check you already trust:
-  `gh api repos/<owner>/<repo>/commits/<sha>/check-runs --jq '.check_runs[] |
-  {name, app: .app.slug, id: .app.id, suite: .check_suite.id}'`, and for an
-  Actions check `gh api "repos/<owner>/<repo>/actions/runs?check_suite_id=<suite>"
-  --jq '.workflow_runs[] | {path, event, repo: .repository.full_name}'`.
-  (2) Add `round_check_producer` to that reviewer in the **base branch's**
-  `nen/gates.json`, through a reviewed pull request, after the consumer has
-  repinned to a nen that reads it. (3) Run `nen schema check --repo .` and
-  `nen pr ready <pr> --explain` on an open pull request and read row 4. nen's
-  own `nen/gates.json` does not declare one; adoption is each consumer's.
+  new key. `round_check_workflow_runs` and `pr_number` appear only when a
+  `workflow` producer is declared. A nen release before the one that tables the
+  key refuses a file carrying it, naming the key (see the table above), rather
+  than reading the round by name. **Absent** is the only spelling of "no
+  producer". A malformed producer is refused at load with its pointer. That
+  covers an explicit `null` or a `null` `app`/`workflow`, both shapes or
+  neither, an `app` without `id`, an empty `events`, a refused event, or a
+  producer on a reviewer with no `round_check_pattern` or with
+  `wake: "event"` (whose round is its review, never its check). For example:
+  `reviewers[1].round_check_producer, must declare exactly one of 'app' or
+  'workflow', got both`.
+- **Adoption.**
+  1. Find the producer of the check you already trust:
+     `gh api repos/<owner>/<repo>/commits/<sha>/check-runs --jq '.check_runs[] |
+     {name, id, app: .app.slug, app_id: .app.id, suite: .check_suite.id}'`.
+     For an Actions check, also run
+     `gh api "repos/<owner>/<repo>/actions/runs?check_suite_id=<suite>"
+     --jq '.workflow_runs[] | {id, path, event, repo: .repository.full_name,
+     prs: [.pull_requests[] | {number, base: .base.ref}]}'`.
+  2. After the consumer has repinned to a nen that reads the key, add
+     `round_check_producer` to that reviewer in the **base branch's**
+     `nen/gates.json`, through a reviewed pull request.
+  3. Run `nen schema check --repo .` and `nen pr ready <pr> --explain` on an
+     open pull request, and read row 4 and the warnings.
+
+  nen's own `nen/gates.json` does not declare a producer; adoption is each
+  consumer's.
 
 **Provenance — which binary decided it.** Every report says which `nen`
 produced it: `meta.generator` carries `program`, `version` and `executable`
@@ -2423,11 +2471,14 @@ No review round is fabricated and the declared minimum is never rewritten.
 These fields are compatible additions to `nen.pr.ready/v0.1`.
 
 The `rounds-owed` conjunct's optional `owedRounds` is an ordered array of
-`{ reviewer, reason, coveredByQuorum, kind?, waivedByAiPolicy? }`. It carries every obligation
+`{ reviewer, reason, coveredByQuorum, kind?, state?, producer?, waivedByAiPolicy? }`. It carries every obligation
 computed by the existing round rules, including quorum-excused obligations.
 `reason` is the round obligation: `review-requested-not-yet-posted`,
-`no-round-at-head`, `delivery-holistic-pass-never-posted`, or
-`delivery-no-definitive-success-review-check`. It is not an invented round
+`no-round-at-head`, `delivery-holistic-pass-never-posted`,
+`delivery-no-definitive-success-review-check`,
+`round-check-producer-mismatch` or `round-check-producer-unverified` (the last
+two from a declared `round_check_producer`, #546). `producer` is present only
+for those two and says whose check it was, or which evidence was not read. It is not an invented round
 ordinal; contextual numeric counts remain in `meta.roundCounts`. The row's
 existing prose `reason` and exit meanings are retained; a bot policy waiver
 can clear its round obligation. `waivedByAiPolicy` is `optional` or `off` only

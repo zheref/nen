@@ -365,10 +365,10 @@ import {
   parseReviews,
   type ParseError,
 } from "../github/parse.js";
-import { untilText, type GateIdentities } from "../schema/gates.js";
+import { producerOptInWarnings, untilText, type GateIdentities } from "../schema/gates.js";
 import { exactLoginPattern } from "../schema/pattern.js";
 import type { RollupEntry } from "../github/types.js";
-import type { WorkflowRunEvidence } from "./producer.js";
+import type { RunPullRequest, WorkflowRunEvidence } from "./producer.js";
 
 // ── tiny jq equivalents ──────────────────────────────────────────────────────
 //
@@ -1064,6 +1064,7 @@ export function earlierRoundChecks(state: Record<string, unknown>): EarlierHeadC
     const appSlug = record["app_slug"];
     const appId = record["app_id"];
     const suiteId = record["check_suite_id"];
+    const checkRunId = record["check_run_id"];
     checks.push({
       sha,
       name,
@@ -1072,6 +1073,7 @@ export function earlierRoundChecks(state: Record<string, unknown>): EarlierHeadC
       ...(typeof appSlug === "string" && appSlug !== "" ? { appSlug } : {}),
       ...(positiveId(appId) ? { appId } : {}),
       ...(positiveId(suiteId) ? { checkSuiteId: suiteId } : {}),
+      ...(positiveId(checkRunId) ? { checkRunId } : {}),
     });
   }
   return checks;
@@ -1096,14 +1098,40 @@ export function roundCheckWorkflowRuns(state: Record<string, unknown>): Workflow
     if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
     const record = entry as Record<string, unknown>;
     const suite = record["check_suite_id"];
+    const runId = record["run_id"];
     const path = record["path"];
     const repository = record["repository"];
     const event = record["event"];
     if (!positiveId(suite) || typeof path !== "string" || path === "") continue;
     if (typeof repository !== "string" || repository === "" || typeof event !== "string" || event === "") continue;
-    runs.push({ checkSuiteId: suite, path, repository, event });
+    // Feitan F2 and F1 on #546: the pull requests the run names, and its job
+    // ids. A malformed list reads as none -- unverified, never a match.
+    const rawPulls = record["pull_requests"];
+    const pullRequests = Array.isArray(rawPulls)
+      ? rawPulls.flatMap((pull): RunPullRequest[] => {
+          if (typeof pull !== "object" || pull === null) return [];
+          const number = (pull as Record<string, unknown>)["number"];
+          const baseRef = (pull as Record<string, unknown>)["base_ref"];
+          return positiveId(number) && typeof baseRef === "string" && baseRef !== "" ? [{ number, baseRef }] : [];
+        })
+      : [];
+    const rawJobs = record["job_ids"];
+    const jobIds = Array.isArray(rawJobs) && rawJobs.every(positiveId) ? (rawJobs as number[]) : null;
+    runs.push({ checkSuiteId: suite, runId: positiveId(runId) ? runId : null, path, repository, event, pullRequests, jobIds });
   }
   return runs;
+}
+
+/**
+ * The pull request being judged, for a `workflow` producer's run binding
+ * (Feitan F2 on #546): `pr_number` (written by ../github/pr_state.ts when a
+ * workflow producer is declared) and `base_ref`. `null` when either is
+ * unreadable, which leaves every workflow-producer round unverified.
+ */
+export function judgedPullRequest(state: Record<string, unknown>): RunPullRequest | null {
+  const number = state["pr_number"];
+  const baseRef = state["base_ref"];
+  return positiveId(number) && typeof baseRef === "string" && baseRef !== "" ? { number, baseRef } : null;
 }
 
 /** The ONE mapping of a ParseError to a verdict -- obligation (A), discharged. */
@@ -1608,6 +1636,7 @@ export function evaluateReady(
         earlierChecks: earlierRoundChecks(state),
         // zheref/nen#546: workflow-run evidence for declared workflow producers.
         workflowRuns: roundCheckWorkflowRuns(state),
+        pullRequest: judgedPullRequest(state),
       };
       const owed = pendingRounds(identities, roundInputs, head, reviewers, policy, delivery);
       // `round_quorum` (maintainer rulings 2026-09-29 and 2026-10-04) --
@@ -1802,7 +1831,9 @@ export function evaluateReady(
       // Fired only where it actually cleared rows: with no head read, the
       // CON-32(b) rows are unknown and the carve-out cleared nothing.
       dependabotCarveOut: carveOut && headKnown,
-      warnings: excludeCheckWarnings,
+      // Feitan F3 on #546: a workflow producer in force through the
+      // trusts_pull_request_revision opt-in warns on every evaluation.
+      warnings: [...excludeCheckWarnings, ...producerOptInWarnings(identities)],
       declaredExclusions: declared.outcomes,
       settlement: settlementOf(),
       ...(roundCounts === undefined ? {} : { roundCounts }),
@@ -1828,7 +1859,16 @@ export function evaluateReady(
       headKnown && parsedReviews.ok && requests.ok && parsedChecks.ok
         ? roundsAtHead(
             identities,
-            { reviewRequests: requests.value, checks: parsedChecks.value, reviews: parsedReviews.value },
+            {
+              reviewRequests: requests.value,
+              checks: parsedChecks.value,
+              reviews: parsedReviews.value,
+              // Nobunaga N1 on #546: the same producer evidence the verdict
+              // reads, or a workflow producer's round never settles here and
+              // `watch until --until review-posted` never wakes for it.
+              workflowRuns: roundCheckWorkflowRuns(state),
+              pullRequest: judgedPullRequest(state),
+            },
             head,
             reviewers,
             delivery,

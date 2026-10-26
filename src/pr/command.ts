@@ -337,12 +337,16 @@ ready:
   base/default-tip intersection supplies checks.excluded (read: gates-flag).
   'watch until --pr' and 'pr merge' run this same read.
   ROUND-CHECK PRODUCER (zheref/nen#546): a check's NAME is not its identity.
-  A reviewer's round_check_producer -- {app:{slug,id?}} or {workflow:{path,
+  A reviewer's round_check_producer -- {app:{slug,id}} or {workflow:{path,
   repository,events}} -- counts a round_check_pattern SUCCESS only from that
-  App (checkSuite.app), or from that workflow file's run in that repository
-  on one of those events (actions/runs?check_suite_id=, actions:read). At
-  head, at an earlier head and in flight alike: another producer's check is
-  owed as round-check-producer-mismatch, unread evidence as
+  App (checkSuite.app slug AND id), or from a run of that workflow file in
+  that repository on one of those events that names THIS PR onto its base
+  and has the check among its jobs (actions/runs, .../jobs; actions:read,
+  20 reads an evaluation). Events that run the PR's own revision are refused
+  unless trusts_pull_request_revision: true, which warns. At head, at an
+  earlier head and in flight alike, another producer's run is dropped before
+  the latest-by-name reduction; its SUCCESS is owed as
+  round-check-producer-mismatch, unread evidence as
   round-check-producer-unverified, each with a producer detail. Without the
   key a round check reads by name and SUCCESS, exactly as before.
   checks.excluded requires the SAME complete declaration at BOTH the base

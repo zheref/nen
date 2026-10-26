@@ -221,8 +221,11 @@ export type RoundCheckProducer =
       readonly kind: "app";
       /** The GitHub App's slug, lower case, e.g. `cursor`. */
       readonly slug: string;
-      /** The App's numeric id, when the file pins it too; `null` when not. */
-      readonly id: number | null;
+      /**
+       * The App's numeric id -- REQUIRED (Feitan F4 on #546): a slug follows
+       * the App's name and may be claimed again after a rename; an id does not.
+       */
+      readonly id: number;
     }
   | {
       readonly kind: "workflow";
@@ -232,7 +235,45 @@ export type RoundCheckProducer =
       readonly repository: string;
       /** The triggering events a run may have (`pull_request_target`, ...). */
       readonly events: readonly string[];
+      /**
+       * The explicit opt-in that admits an event which runs the pull
+       * request's OWN revision of the workflow (`pull_request`, `push`, ...;
+       * Feitan F3 on #546). `false` unless the file writes `true`, and every
+       * evaluation that reads it warns.
+       */
+      readonly trustsPullRequestRevision: boolean;
     };
+
+/**
+ * The events on which GitHub runs the workflow file AS THE PULL REQUEST'S OWN
+ * REVISION (or a caller-chosen ref) carries it -- so the declared path names
+ * a file the pull request may have written. Refused in a `workflow` producer
+ * unless `trusts_pull_request_revision: true` (Feitan F3 on #546).
+ */
+export const PULL_REQUEST_REVISION_EVENTS: readonly string[] = [
+  "pull_request",
+  "push",
+  "merge_group",
+  "pull_request_review",
+  "pull_request_review_comment",
+  "workflow_dispatch",
+];
+
+/**
+ * One line per reviewer whose `workflow` producer is in force through the
+ * `trusts_pull_request_revision` opt-in -- what `nen schema check` and
+ * `nen pr ready` warn on every read (Feitan F3 on #546).
+ */
+export function producerOptInWarnings(identities: { readonly reviewers: readonly ReviewerIdentity[] }): string[] {
+  return identities.reviewers.flatMap((reviewer): string[] => {
+    const producer = reviewer.roundCheckProducer;
+    if (producer?.kind !== "workflow" || !producer.trustsPullRequestRevision) return [];
+    const trusted = producer.events.filter((event): boolean => PULL_REQUEST_REVISION_EVENTS.includes(event));
+    return [
+      `round_check_producer of '${reviewer.name}' trusts the pull request's own revision (trusts_pull_request_revision: true, events ${trusted.join(", ")}): on those events the workflow file is whatever the pull request wrote, so its round check proves no reviewer (zheref/nen#546)`,
+    ];
+  });
+}
 
 export interface DeliveryIdentity {
   /** The author a delivery pull request must be opened by. */
@@ -524,26 +565,34 @@ function readFlag(path: string, pointer: string, raw: unknown): boolean {
 // the check -- never from the name, and never from an unvalidated details URL:
 //
 //   "round_check_producer": { "app": { "slug": "cursor", "id": 1210556 } }
-//       the GitHub App that created the check suite. `id` is optional and,
-//       when stated, must match too (a slug follows a rename; an id does not).
+//       the GitHub App that created the check suite. `id` is REQUIRED and
+//       must match too: a slug follows a rename and may be claimed again; an
+//       id does not (hanten round 1, Feitan F4).
 //   "round_check_producer": { "workflow": {
 //       "path": ".github/workflows/review.yml",
 //       "repository": "owner/name",
 //       "events": ["pull_request_target"] } }
 //       a GitHub Actions run of that workflow file, in that repository,
-//       triggered by one of those events. The App must then be
-//       `github-actions`. `events` is REQUIRED: on `pull_request` (and the
-//       events that run the pull request's own revision) GitHub executes the
-//       workflow file AS THE PULL REQUEST CHANGED IT, so the path names the
-//       file but not who wrote it. Naming the event is how a file says which
-//       definition it trusts; see docs/USAGE.md's trust-boundary note.
+//       triggered by one of those events, that names THIS pull request onto
+//       its base, and whose JOBS include the check (../gates/producer.ts).
+//       `events` is REQUIRED, and the events on which GitHub runs the pull
+//       request's OWN revision of the file (PULL_REQUEST_REVISION_EVENTS:
+//       pull_request, push, merge_group, pull_request_review*,
+//       workflow_dispatch) are REFUSED unless the workflow states
+//       `"trusts_pull_request_revision": true` -- on them the path names a
+//       file the pull request may have written, so the constraint would read
+//       as protection and give none (Feitan F3). The opt-in warns on every
+//       `nen schema check` and every `pr ready`.
 //
-// EXACTLY ONE of `app` / `workflow`, and only beside a `round_check_pattern`:
-// a producer with no round check constrains nothing, and two producers would
-// leave "either" or "both" unstated. Every malformed shape is refused at load
-// with its pointer -- a constraint that silently matched nothing would hold
-// every pull request shut, and one that silently matched everything would be
-// the name-only gate wearing a constraint.
+// EXACTLY ONE of `app` / `workflow`, and only beside a `round_check_pattern`
+// on a reviewer that is not `wake: "event"` (whose round is never its round
+// check, Nobunaga N7): a producer with nothing to constrain is refused, and two
+// producers would leave "either" or "both" unstated. An explicit `null` -- the
+// key or either sibling -- is refused too (F6): ABSENT is the only spelling of
+// the pre-#546 reading. Every malformed shape is refused at load with its
+// pointer -- a constraint that silently matched nothing would hold every pull
+// request shut, and one that silently matched everything would be the
+// name-only gate wearing a constraint.
 //
 // ABSENT IS THE PRE-#546 READING, unchanged: a file without the key is judged
 // by name and definitive SUCCESS exactly as before (compatibility, AC-5). A
@@ -557,11 +606,19 @@ const EVENT_NAME = /^[a-z][a-z_]{0,63}$/;
 function readRoundCheckProducer(
   path: string,
   pointer: string,
-  raw: unknown,
-  roundCheckPattern: unknown,
+  reviewer: Record<string, unknown>,
 ): RoundCheckProducer | null {
-  if (raw === undefined || raw === null) return null;
+  // ABSENT is the only spelling of the pre-#546 reading (Feitan F6): an
+  // explicit `null` is refused, so a file cannot appear to state a producer
+  // and be judged by name.
+  if (!Object.prototype.hasOwnProperty.call(reviewer, "round_check_producer")) return null;
+  const raw = reviewer["round_check_producer"];
+  if (raw === undefined) return null;
+  if (raw === null) {
+    throw new SchemaError(path, pointer, "is null. Omit the key for a reviewer judged by name; state an 'app' or a 'workflow' to bind its round check.");
+  }
   const record = requireRecord(path, pointer, raw);
+  const roundCheckPattern = reviewer["round_check_pattern"];
   if (roundCheckPattern === undefined || roundCheckPattern === null) {
     throw new SchemaError(
       path,
@@ -569,7 +626,21 @@ function readRoundCheckProducer(
       "is declared on a reviewer with no round_check_pattern. A producer constrains the round check; with no round check it would constrain nothing.",
     );
   }
-  const declared = ["app", "workflow"].filter((key): boolean => record[key] !== undefined && record[key] !== null);
+  // An event-lane reviewer's round is decided before the round-check limb is
+  // reached, so a producer there would be read by nothing (Nobunaga N7).
+  if (reviewer["wake"] === "event") {
+    throw new SchemaError(
+      path,
+      pointer,
+      "is declared on a wake: 'event' reviewer, whose round is its posted review and never its round check, so the producer would constrain nothing.",
+    );
+  }
+  for (const key of ["app", "workflow"]) {
+    if (Object.prototype.hasOwnProperty.call(record, key) && record[key] === null) {
+      throw new SchemaError(path, `${pointer}.${key}`, "is null. Omit the key, or state the producer.");
+    }
+  }
+  const declared = ["app", "workflow"].filter((key): boolean => record[key] !== undefined);
   if (declared.length !== 1) {
     throw new SchemaError(
       path,
@@ -588,10 +659,14 @@ function readRoundCheckProducer(
       );
     }
     const rawId = app["id"];
-    if (rawId !== undefined && rawId !== null && (typeof rawId !== "number" || !Number.isSafeInteger(rawId) || rawId < 1)) {
-      throw new SchemaError(path, `${pointer}.app.id`, `expected a positive integer GitHub App id, got ${describeValue(rawId)}`);
+    if (typeof rawId !== "number" || !Number.isSafeInteger(rawId) || rawId < 1) {
+      throw new SchemaError(
+        path,
+        `${pointer}.app.id`,
+        `expected a positive integer GitHub App id, got ${describeValue(rawId)}. The id is required: a slug follows the App's name and can be claimed again after a rename, an id cannot.`,
+      );
     }
-    return { kind: "app", slug, id: typeof rawId === "number" ? rawId : null };
+    return { kind: "app", slug, id: rawId };
   }
   const workflow = requireRecord(path, `${pointer}.workflow`, record["workflow"]);
   const workflowPath = requireString(path, `${pointer}.workflow.path`, workflow["path"]);
@@ -610,6 +685,11 @@ function readRoundCheckProducer(
       `expected 'owner/name', got ${describeValue(repository)}`,
     );
   }
+  const rawOptIn = workflow["trusts_pull_request_revision"];
+  if (rawOptIn !== undefined && typeof rawOptIn !== "boolean") {
+    throw new SchemaError(path, `${pointer}.workflow.trusts_pull_request_revision`, `expected a boolean, got ${describeValue(rawOptIn)}`);
+  }
+  const trustsPullRequestRevision = rawOptIn === true;
   const events = requireArray(path, `${pointer}.workflow.events`, workflow["events"]).map((item, index): string => {
     const event = requireString(path, `${pointer}.workflow.events[${index}]`, item);
     if (!EVENT_NAME.test(event)) {
@@ -617,6 +697,13 @@ function readRoundCheckProducer(
         path,
         `${pointer}.workflow.events[${index}]`,
         `expected a GitHub Actions event name (lower case, e.g. 'pull_request_target'), got ${describeValue(event)}`,
+      );
+    }
+    if (PULL_REQUEST_REVISION_EVENTS.includes(event) && !trustsPullRequestRevision) {
+      throw new SchemaError(
+        path,
+        `${pointer}.workflow.events[${index}]`,
+        `is '${event}', on which GitHub runs the workflow file as the pull request's own revision (or a caller-chosen ref) carries it, so the declared path names a file the pull request may have written and proves no reviewer. Name an event that runs the base's definition (pull_request_target), or state "trusts_pull_request_revision": true beside events to accept that every pull request author can produce this round.`,
       );
     }
     return event;
@@ -632,7 +719,7 @@ function readRoundCheckProducer(
   if (duplicate !== undefined) {
     throw new SchemaError(path, `${pointer}.workflow.events`, `names '${duplicate}' twice`);
   }
-  return { kind: "workflow", path: workflowPath, repository, events };
+  return { kind: "workflow", path: workflowPath, repository, events, trustsPullRequestRevision };
 }
 
 // ── THE KNOWN-KEY TABLE, AND WHY AN UNKNOWN KEY IS REFUSED (zheref/nen#310) ──
@@ -750,6 +837,7 @@ export const GATES_KNOWN_KEYS: GatesKeyLevel = {
               path: { introducedIn: NEXT_RELEASE },
               repository: { introducedIn: NEXT_RELEASE },
               events: { introducedIn: NEXT_RELEASE },
+              trusts_pull_request_revision: { introducedIn: NEXT_RELEASE },
             },
           },
         },
@@ -1062,8 +1150,7 @@ export function parseGateIdentities(path: string, value: unknown): GateIdentitie
       roundCheckProducer: readRoundCheckProducer(
         path,
         `${pointer}.round_check_producer`,
-        record["round_check_producer"],
-        record["round_check_pattern"],
+        record,
       ),
       enrolmentCheckPattern: readPattern(
         path,
