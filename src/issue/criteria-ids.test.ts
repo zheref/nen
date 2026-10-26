@@ -209,11 +209,13 @@ describe("hanten round 1 on #519", () => {
       expect(() => catalogueWith(bad)).toThrow(/rows\.acceptance\.pattern/);
     }
     expect(catalogueWith("^- AC-([0-9]{1,9}(?:-[0-9]{1,9})*): .+$").criteriaIdTail).toBe("[0-9]{1,9}(?:-[0-9]{1,9})*");
-    const started = Date.now();
-    const cell = `AC-${"1".repeat(36)}x`;
-    expect(cell).toHaveLength(40);
-    const rows = readVerifyRows(`| ${cell} | satisfied | e |\n`, { prefix: "AC", tail: "[0-9]+" });
-    expect(Date.now() - started).toBeLessThan(50);
+    // Timed under the WIDEST admitted shape, on a cell built to backtrack it (N10).
+    const widest = catalogueWith("^- AC-([0-9]{1,9}(?:-[0-9]{1,9})*): .+$");
+    const cell = `AC-${"1-".repeat(30)}x`;
+    expect(cell).toHaveLength(64);
+    const started = performance.now();
+    const rows = readVerifyRows(`| ${cell} | satisfied | e |\n`, { prefix: "AC", tail: widest.criteriaIdTail });
+    expect(performance.now() - started).toBeLessThan(50);
     expect(rows[0]?.criterion).toBeNull();
     const long = readVerifyRows(`| AC-${"1-".repeat(40)}1 | satisfied | e |\n`);
     expect(long[0]?.problem).toMatch(/at most 64 characters/);
@@ -265,5 +267,67 @@ describe("hanten round 1 on #519", () => {
     const unthreaded = criteriaConjunct({ ...input, catalogue: null });
     expect(unthreaded.ok).toBe(false);
     expect(unthreaded.blocking).toEqual(["o/n#7/CR-1: missing-row (no verify row names CR-1)"]);
+  });
+
+  it("F5 and N9: two digit runs that meet with no dash between them are refused", () => {
+    for (const bad of ["^- AC-([0-9]+-?[0-9]+): .+$", "^- AC-([0-9]+[0-9]+): .+$", "^- AC-([0-9]+[0-9]{3}): .+$", "^- AC-([0-9]+(?:-[0-9]+)?[0-9]+): .+$", "^- AC-([0-9]+(?:[0-9]-)?): .+$"]) {
+      expect(() => catalogueWith(bad)).toThrow(/rows\.acceptance\.pattern.*two digit runs meet/);
+    }
+    expect(catalogueWith("^- AC-([0-9]+-[0-9]{3}): .+$").criteriaIdTail).toBe("[0-9]+-[0-9]{3}");
+  });
+
+  it("F5: an issue row whose id runs past the cap is unrecognised in bounded time, so converge blocks", () => {
+    const row = `- AC-${"1".repeat(64000)}x: a`;
+    for (const catalogue of [HATSU_CATALOGUE(), EPIC_CATALOGUE(), null]) {
+      const started = performance.now();
+      const report = extractCriteria(`## Acceptance criteria\n\n${row}\n`, catalogue);
+      expect(performance.now() - started).toBeLessThan(100);
+      expect(report.criteria).toEqual([]);
+      expect(report.unrecognised.map((entry) => entry.line)).toEqual([3]);
+    }
+    const blocked = converge([issue(`## Acceptance criteria\n\n- AC-1: a\n${row}\n`)], "| AC-1 | satisfied | e |\n");
+    expect(blocked.blocking).toEqual(["zheref/nen#519: unrecognised criterion row at line 4"]);
+    // A 64-character id is still read; a 65-character one is not.
+    expect(extractCriteria(`- AC-${"1-".repeat(31)}12: a\n`).criteria).toHaveLength(1);
+    expect(extractCriteria(`- AC-${"1-".repeat(32)}1: a\n`).unrecognised).toHaveLength(1);
+  });
+
+  it("N12: an id group matching the empty id is refused with one message", () => {
+    let message = "";
+    try {
+      catalogueWith("^- AC-([0-9]*): .+$");
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toMatch(/matches an empty id/);
+    expect(message).not.toMatch(/does not compile/);
+    expect(message.match(/declares no usable criterion id shape/g)).toHaveLength(1);
+  });
+
+  it("N13: a quantified group ending with a dash is admitted, and reads an optional epic", () => {
+    const optional = catalogueWith("^- AC-((?:[0-9]+-)?[0-9]{3}): .+$");
+    expect(optional.criteriaIdTail).toBe("(?:[0-9]+-)?[0-9]{3}");
+    const report = extractCriteria("## Acceptance criteria\n\n- AC-12-001: a\n- AC-002: b\n", optional);
+    expect(report.criteria.map((row) => row.id)).toEqual(["AC-12-001", "AC-2"]);
+    expect(() => catalogueWith("^- AC-((?:[0-9]+-[0-9])+): .+$")).toThrow(/starts with a literal '-'.*or ends with one/);
+  });
+
+  it("N14: a --criteria list stating one id twice blocks, naming list positions", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-519-dup-"));
+    writeFileSync(join(dir, "req.json"), JSON.stringify([{ name: "verify", pattern: "^## How to verify$" }]));
+    writeFileSync(join(dir, "body.md"), "## How to verify\n\n| Criterion | Coverage | Evidence |\n|---|---|---|\n| AC-1 | satisfied | a.test.ts |\n");
+    const result = await run(prCommand, ["pr", "body-check", "--body-from", "body.md", "--requirements-from", "req.json", "--criteria", "AC-1,AC-01"], [], { repoFlag: dir });
+    expect(result.code).toBe(1);
+    expect(result.out).toContain("BLOCKING --criteria: duplicate criterion id AC-1 at positions 1, 2");
+  });
+
+  it("the cap counts the id, never a long owner/name qualifier", () => {
+    const owner = "o".repeat(39);
+    const name = "n".repeat(100);
+    const cell = `${owner}/${name}#519/AC-12-001`;
+    const rows = readVerifyRows(`| ${cell} | satisfied | e |\n`);
+    expect(rows[0]?.criterion).toEqual({ kind: "qualified", prefix: `${owner}/${name}`, issue: 519, id: "AC-12-001" });
+    const report = converge([issue(EPIC_BODY, 519, `${owner}/${name}`)], `| ${cell} | satisfied | e |\n| ${owner}/${name}#519/AC-12-002 | satisfied | e |\n`);
+    expect(report.blocking).toEqual([]);
   });
 });
