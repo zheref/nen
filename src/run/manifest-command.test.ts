@@ -2,7 +2,7 @@
 // through the real `runFamily`, with git and gh scripted.
 
 import { describe, expect, it } from "vitest";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { runFamily, type Io } from "../index.js";
@@ -670,6 +670,20 @@ describe("manifest modes and dry forms through the verbs (zheref/nen#522)", () =
       expect(result.out, argv.join(" ")).toEqual([]);
       expect(result.err.join("\n")).toMatch(/\.nen.runs' is a symbolic link; nen keeps run manifests only in a real directory/);
     }
+  });
+
+  it.runIf(POSIX)("a .nen that is a link is refused by every verb, naming .nen; the target keeps its mode and nothing is written there (Bugbot on NN-PR-#549)", async () => {
+    const { root, common } = repo();
+    const elsewhere = mkdtempSync(join(tmpdir(), "nen-run-ancestor-"));
+    chmodSync(elsewhere, 0o755);
+    symlinkSync(elsewhere, join(common, ".nen"));
+    for (const argv of [START, ["run", "verify", "--id", "r1", "--target", "zheref/nen", "--dry-run"], ["run", "park", "--id", "r1", "--issue", "NN#80", "--row", "direct-mismatch"]]) {
+      const result = await capture(argv, { common, repoFlag: root });
+      expect(result.code, argv.join(" ")).toBe(1);
+      expect(result.err.join("\n"), argv.join(" ")).toContain(`'${join(common, ".nen")}' is a symbolic link; nen keeps run manifests only in a real directory`);
+    }
+    expect(bits(elsewhere)).toBe(0o755);
+    expect(readdirSync(elsewhere)).toEqual([]);
   });
 
   it("a win32 host: the write stands and the verb says the mode was not set, in text and --json (AC-3)", async () => {
