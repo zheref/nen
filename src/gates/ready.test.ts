@@ -36,7 +36,7 @@ const IDENTITIES = loadGateIdentities(BANKAI_REPO);
 const HEAD = "deadbeef";
 const NOW = "2025-06-01T12:00:00Z";
 
-function greenCheck(name = "ci / build"): Record<string, unknown> {
+function greenCheck(name = "ci / build"): { name: string; status: string; conclusion: string } {
   return { name, status: "COMPLETED", conclusion: "SUCCESS" };
 }
 
@@ -363,7 +363,7 @@ describe("evaluateReady -- every row is evaluated; the verdict stays the conjunc
     expect(evaluation.failing).toEqual(["checks-green", "unresolved-threads"]);
     // `firstFailing` and the LINE are exactly what they were: the first failure.
     expect(evaluation.firstFailing).toBe("checks-green");
-    expect(evaluation.line).toBe("not-ready: required checks reported but are not all green (CON-32a)");
+    expect(evaluation.line).toBe("not-ready: required checks reported but are not all green (CON-32a) — failing: windows / test");
     const threads = evaluation.conjuncts.find((c): boolean => c.id === "unresolved-threads");
     expect(threads?.status).toBe("failed");
     expect(threads?.reason).toBe("not-ready: 2 unresolved review thread(s) (CON-32d)");
@@ -479,13 +479,13 @@ describe("evaluateReady -- CON-32(a), transcribed reason strings", () => {
     expect(evaluation.line).not.toMatch(/bankai-core/i);
   });
 
-  it("a RED check (not empty, not cancelled) is the generic CON-32(a) message", () => {
+  it("a RED check (not empty, not cancelled) names the failed check (#532)", () => {
     const evaluation = evaluateReady(
       IDENTITIES,
       readyState({ checks: [{ name: "ci / build", status: "COMPLETED", conclusion: "FAILURE" }] }),
       OPTIONS,
     );
-    expect(evaluation.line).toBe("not-ready: required checks reported but are not all green (CON-32a)");
+    expect(evaluation.line).toBe("not-ready: required checks reported but are not all green (CON-32a) — failing: ci / build");
   });
 
   it("a PENDING run whose conclusion gh wrote as \"\" is judged, and never ready (zheref/nen#304)", () => {
@@ -616,7 +616,7 @@ describe("evaluateReady -- --exclude-check (zheref/hatsu#81)", () => {
       { ...OPTIONS, excludeCheckNames: ["readiness"] },
     );
     expect(evaluation.ready).toBe(false);
-    expect(evaluation.line).toBe("not-ready: required checks reported but are not all green (CON-32a)");
+    expect(evaluation.line).toBe("not-ready: required checks reported but are not all green (CON-32a) — failing: ci / build");
   });
 
   it("a comma-joined multi-name exclusion drops every named check", () => {
@@ -2175,5 +2175,49 @@ describe("event delivery readiness (F440-1)", () => {
     expect(evaluation.context.deliveryPr).toBe(false);
     expect(evaluation.ready).toBe(true);
     expect(evaluation.conjuncts.find((row) => row.id === "rounds-owed")?.roundQuorum?.members[2]).toMatchObject({ round: "review", reading: "any-head", eventRun: { state: "posted" } });
+  });
+});
+
+
+describe("readiness verdict did not report (#532)", () => {
+  const placeholder = {
+    ...greenCheck("readiness / verdict"),
+    title: "readiness undetermined — the verdict step did not report",
+  };
+  const checks = [
+    placeholder,
+    { ...greenCheck("readiness / pull_request_review / 1"), conclusion: "FAILURE" },
+    { ...greenCheck("readiness / pull_request_review / 2"), conclusion: "FAILURE" },
+  ];
+  it("replays the placeholder and failed runs three times with zero ready results (SC-1)", () => {
+    const results = Array.from({ length: 3 }, () => evaluateReady(IDENTITIES, readyState({ checks }), OPTIONS));
+    expect(results.filter((result) => result.ready)).toHaveLength(0);
+    for (const result of results) {
+      const row = result.conjuncts.find((entry) => entry.id === "checks-green");
+      expect(row?.status).toBe("unevaluated");
+      expect(row?.missing).toContain(placeholder.title);
+      for (const check of checks) expect(row?.missing).toContain(check.name);
+    }
+  });
+  it("names cancelled no-verdict siblings distinctly beside a placeholder and failure (AC-3)", () => {
+    const cancelled = { ...greenCheck("readiness / cancelled"), conclusion: "CANCELLED" };
+    const failure = { ...greenCheck("readiness / failed"), conclusion: "FAILURE" };
+    const result = evaluateReady(IDENTITIES, readyState({ checks: [placeholder, cancelled, failure] }), OPTIONS);
+    expect(result.ready).toBe(false);
+    const row = result.conjuncts.find((entry) => entry.id === "checks-green");
+    expect(row?.status).toBe("unevaluated");
+    expect(row?.missing).toContain(placeholder.name);
+    expect(row?.missing).toContain("cancelled (no verdict): readiness / cancelled");
+    expect(row?.missing).toContain("failing: readiness / failed");
+  });
+  it("a successful placeholder alone is unknown, never green", () => {
+    const result = evaluateReady(IDENTITIES, readyState({ checks: [placeholder] }), OPTIONS);
+    expect(result.ready).toBe(false);
+    expect(result.conjuncts.find((row) => row.id === "checks-green")?.status).toBe("unevaluated");
+    expect(result.line).toContain("readiness undetermined");
+  });
+  it("names failed checks even when no placeholder reported", () => {
+    const result = evaluateReady(IDENTITIES, readyState({ checks: checks.slice(1) }), OPTIONS);
+    for (const check of checks.slice(1)) expect(result.line).toContain(check.name);
   });
 });

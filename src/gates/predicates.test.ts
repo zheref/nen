@@ -3106,3 +3106,22 @@ it("#440: a fresh event run at the same head supersedes that head's earlier post
   };
   expect(roundQuorum(identities, inputs, "headsha", "bounded")?.members[0]).toMatchObject({ round: null, eventRun: { state: "in-flight" } });
 });
+
+
+describe("readiness placeholder admission (#532)", () => {
+  const title = "readiness undetermined — the verdict step did not report";
+  it.each(["SUCCESS", "NEUTRAL", "SKIPPED"] as const)("never admits a %s placeholder beside a real success", (conclusion) => {
+    const placeholder = checkRun({ name: "readiness", title, conclusion });
+    expect(checkAdmissible(placeholder)).toBe(false);
+    expect(checksAllGreen([checkRun({ name: "build", conclusion: "SUCCESS" }), placeholder])).toBe(false);
+  });
+  it("recognises the observed message carried as a check name in an older blob", () => {
+    expect(checksAllGreen([checkRun({ name: title, conclusion: "SUCCESS" })])).toBe(false);
+  });
+  it("lets a later genuine verdict supersede an earlier placeholder of the same name", () => {
+    expect(checksAllGreen([
+      checkRun({ name: "readiness", title, conclusion: "SUCCESS", startedAt: "2026-10-25T01:00:00Z" }),
+      checkRun({ name: "readiness", title: "ready", conclusion: "SUCCESS", startedAt: "2026-10-25T02:00:00Z" }),
+    ])).toBe(true);
+  });
+});

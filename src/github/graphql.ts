@@ -153,7 +153,7 @@ export const PULL_REQUEST_QUERY = `
                 contexts(first:100) {
                   nodes {
                     __typename
-                    ... on CheckRun { name status conclusion startedAt completedAt detailsUrl databaseId checkSuite { app { slug } } }
+                    ... on CheckRun { name title status conclusion startedAt completedAt detailsUrl databaseId checkSuite { app { slug } } }
                     ... on StatusContext { context state targetUrl }
                   }
                   pageInfo { hasNextPage endCursor }
@@ -201,7 +201,7 @@ export const CHECK_ROLLUP_PAGE_QUERY = `
                 contexts(first:100, after:$cursor) {
                   nodes {
                     __typename
-                    ... on CheckRun { name status conclusion startedAt completedAt detailsUrl databaseId checkSuite { app { slug } } }
+                    ... on CheckRun { name title status conclusion startedAt completedAt detailsUrl databaseId checkSuite { app { slug } } }
                     ... on StatusContext { context state targetUrl }
                   }
                   pageInfo { hasNextPage endCursor }
