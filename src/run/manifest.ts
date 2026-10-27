@@ -125,7 +125,7 @@ export function readClaims(manifest: RunManifest): ClaimsRead {
     const branch = row["branch"] ?? null;
     if (branch !== null && (typeof branch !== "string" || !BRANCH_NAME.test(branch))) return { ok: false, reason: `claims[${index}].branch is ${JSON.stringify(branch)}` };
     const at = row["at"];
-    if (typeof at !== "string" || Number.isNaN(Date.parse(at))) return { ok: false, reason: `claims[${index}].at is not an ISO-8601 instant` };
+    if (!isIsoInstant(at)) return { ok: false, reason: `claims[${index}].at is not an ISO-8601 instant` };
     claims.push({ issue, branch: branch as string | null, at });
   }
   return { ok: true, recorded: true, claims };
@@ -136,6 +136,16 @@ export class RunManifestError extends Error {}
 /** The run id, or null when it is not one path segment (the loop ledger's own alphabet). */
 export function runIdSegment(id: string): string | null {
   return loopIdSegment(id);
+}
+
+/**
+ * An ISO-8601 instant as nen writes one (`Date#toISOString`) or a caller
+ * spells one: date, `T`, hours and minutes, optional seconds and fraction, and
+ * a zone. Checked BEFORE `Date.parse`, which reads `"1"` as 2001-01-01.
+ */
+const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:\d{2})$/;
+export function isIsoInstant(value: unknown): value is string {
+  return typeof value === "string" && ISO_INSTANT.test(value) && !Number.isNaN(Date.parse(value));
 }
 
 /** `<CODE>#<N>` or `<owner/name>#<N>`; anything else is not an issue reference. */
@@ -287,7 +297,7 @@ export function parseRunManifest(path: string, value: unknown): RunManifest {
     const row = entry as Record<string, unknown>;
     if (typeof row["issue"] !== "string" || !ISSUE_REF.test(row["issue"])) fail(path, `parked[${index}].issue is ${JSON.stringify(row["issue"])}`);
     if (typeof row["row"] !== "string" || !ROW_ID.test(row["row"])) fail(path, `parked[${index}].row is ${JSON.stringify(row["row"])}`);
-    if (typeof row["at"] !== "string" || Number.isNaN(Date.parse(row["at"]))) fail(path, `parked[${index}].at is not an ISO-8601 instant`);
+    if (!isIsoInstant(row["at"])) fail(path, `parked[${index}].at is not an ISO-8601 instant`);
     return { issue: row["issue"], row: row["row"], at: row["at"] };
   });
   const manifest: RunManifest = { contract: RUN_CONTRACT, id: id as string, repo, startedAt: startedAt as string, idleAnswers, prs: parsed, parked };

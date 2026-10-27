@@ -24,6 +24,8 @@ import { claimIteration, loopIdSegment, parseLedger, type LoopLedger } from "./l
 import { effortsFromRun, markerForBranch, readinessInProcess, type FromRunReport } from "./fromrun.js";
 import { gitCommonDir, locateRunManifest, readRunManifest, runIdSegment } from "../run/manifest.js";
 import { readLivePr } from "../run/verify.js";
+import { loadRepoRegistry } from "../schema/repos.js";
+import { codeFor } from "../repo/resolve.js";
 import { parseTarget, type Target } from "../github/target.js";
 import type { Effort } from "./slots.js";
 import { LOOP_COMMON_DIR, LOOP_LEDGER_DIR, legacyDirs, present, resolveLoopHome } from "./home.js";
@@ -282,6 +284,20 @@ function countAndReport(
   return report.ci.binding || report.local.binding ? 1 : 0;
 }
 
+/**
+ * The product code --repo's nen/repos.json assigns `slug`, or null. Only used
+ * to match a `<CODE>#<N>` claim to an `<owner/name>#<N>` row (./fromrun.ts
+ * `sameIssue`); a registry that is absent or will not load leaves the two
+ * forms unmatched -- two efforts, the conservative count -- never a refusal.
+ */
+function repoCodeFor(root: string, slug: string): string | null {
+  try {
+    return codeFor(loadRepoRegistry(root), slug);
+  } catch {
+    return null;
+  }
+}
+
 /** `loop slots --from-run`: the efforts document built from the manifest and live reads (./fromrun.ts). */
 async function slotsFromRun(context: CommandContext, root: string, id: string, caps: { ci: number; local: number }): Promise<number> {
   if (runIdSegment(id) === null) throw new VerbUsageError(`--from-run '${id}' is not a run id ([A-Za-z0-9._-], no '..').`);
@@ -311,6 +327,7 @@ async function slotsFromRun(context: CommandContext, root: string, id: string, c
     readPr: (pr) => readLivePr(context.seams, target, pr),
     readiness: (pr) => readinessInProcess(target.slug, pr, root),
     marker: (branch) => markerForBranch(context.seams, root, branch),
+    repoCode: repoCodeFor(root, manifest.repo),
   });
   return countAndReport(context, root, built.efforts, caps, built);
 }

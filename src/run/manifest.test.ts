@@ -167,6 +167,7 @@ describe("parseRunManifest / readRunManifest", () => {
       { ...good, repo: "nope" },
       { ...good, parked: "none" },
       { ...good, parked: [{ issue: "NN#1", row: "Bad Row", at: NOW }] },
+      { ...good, parked: [{ issue: "NN#1", row: "r", at: "1" }] },
     ];
     for (const value of bad) expect(() => parseRunManifest("m.json", value)).toThrow(/is not a nen.run\/v0.1 manifest/);
   });
@@ -181,6 +182,8 @@ describe("parseRunManifest / readRunManifest", () => {
     expect(readClaims(parseRunManifest("m.json", { ...good, claims: [{ issue: "NN#1", at: NOW }] }))).toEqual({ ok: true, recorded: true, claims: [{ issue: "NN#1", branch: null, at: NOW }] });
     expect(readClaims(parseRunManifest("m.json", good))).toEqual({ ok: true, recorded: false, claims: [] });
     expect(readClaims(parseRunManifest("m.json", { ...good, claims: "torn" })).ok).toBe(false);
+    // Date.parse reads "1" as 2001-01-01; the shape check refuses it first.
+    expect(readClaims(parseRunManifest("m.json", { ...good, claims: [{ issue: "NN#1", at: "1" }] }))).toEqual({ ok: false, reason: "claims[0].at is not an ISO-8601 instant" });
   });
 
   it("reads a missing file as no run, and an unreadable one as a refusal", () => {
