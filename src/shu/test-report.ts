@@ -210,7 +210,7 @@ function parseArtifacts(
     `project.verbs.${lane}.${SOURCE_VERB}.artifacts`,
   );
   try {
-    const read = readTestReport(absolute, artifact);
+    const read = readTestReport(absolute, artifact, { root: repoRoot });
     return {
       // The format is re-stated from what actually PARSED the report, which is
       // not always the one the name suggested: the content decides.

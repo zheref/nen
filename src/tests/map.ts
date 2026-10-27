@@ -161,16 +161,20 @@ export function tokensIn(text: string, prefix = "AC"): Token[] {
   return out;
 }
 
-/** An issue reference in a test's text: `#<N>`, `<CODE>#<N>` or `<owner/name>#<N>`. */
+/**
+ * An issue reference in a test's text: `<CODE>#<N>` or `<owner/name>#<N>`. A
+ * bare `#<N>` is text ("item #1", "row #3"), never a reference (review 2,
+ * item 7): read as one, it made every bare token in such a title foreign.
+ */
 export interface IssueRef {
   readonly qualifier: string | null;
   readonly issue: number;
 }
 
-/** Every issue reference in `text`, including those inside qualified tokens. */
+/** Every qualified issue reference in `text`, including those inside qualified tokens. */
 export function issueRefsIn(text: string): IssueRef[] {
-  const pattern = new RegExp(`(?<![A-Za-z0-9_./#-])(${QUALIFIER})?#(\\d{1,9})(?!\\d)`, "g");
-  return [...text.matchAll(pattern)].map((match): IssueRef => ({ qualifier: match[1] ?? null, issue: Number(match[2]) }));
+  const pattern = new RegExp(`(?<![A-Za-z0-9_./#-])(${QUALIFIER})#(\\d{1,9})(?!\\d)`, "g");
+  return [...text.matchAll(pattern)].map((match): IssueRef => ({ qualifier: match[1] as string, issue: Number(match[2]) }));
 }
 
 /** Does a reference name the anchored issue? A CODE prefix is echoed, never resolved. */
@@ -183,9 +187,10 @@ function refNamesAnchor(ref: IssueRef, anchor: IssueAnchor): boolean {
 /**
  * Does a token name the anchored issue? Without an anchor, always. A qualified
  * token names it when its own `#<N>` (and `owner/name`, when stated) does. A
- * BARE token names it unless the test's name or suite carries issue
- * references and none of them is the anchor (review N1): a bare `AC-1` in a
- * suite titled for zheref/nen#509 is that issue's criterion, not this one's.
+ * BARE token names it unless the test's name or suite carries qualified issue
+ * references (`<CODE>#<N>`, `<owner/name>#<N>`) and none of them is the anchor
+ * (review N1): a bare `AC-1` in a suite titled for zheref/nen#509 is that
+ * issue's criterion, not this one's. A bare `#<N>` is not a reference.
  */
 function namesAnchor(token: Token, anchor: IssueAnchor | null, refs: readonly IssueRef[]): boolean {
   if (anchor === null) return true;

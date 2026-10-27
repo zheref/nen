@@ -42,8 +42,10 @@ suite: AC-3, #552/AC-3, NN#552/AC-3 or zheref/nen#552/AC-3; 'AC-1/AC-2'
 is two tokens. AC-30, XAC-3, AC-3a and AC-3-001 are not AC-3. With --issue,
 a qualified token naming another issue (or another owner/name) is foreign
 and maps to nothing, and so is a BARE token in a test whose name or suite
-carries issue references none of which is --issue (a bare AC-1 under a
-suite titled for #509 is #509's). A CODE prefix is echoed, never resolved.
+carries qualified issue references (<CODE>#<N>, <owner/name>#<N>) none of
+which is --issue (a bare AC-1 under a suite titled for zheref/nen#509 is
+#509's). A bare #<N> ('item #1') is text, not a reference. This reading
+fails closed: a criterion whose only tests are foreign is unmapped, exit 1. A CODE prefix is echoed, never resolved.
 Without --issue every token maps by its criterion number alone.
 
 Three modes, and ONE red bar for both red readings: a criterion was red when
@@ -156,7 +158,7 @@ function readReports(root: string, files: readonly string[]): { tests: TestCase[
   const tests: TestCase[] = [];
   for (const file of files) {
     try {
-      const { parsed } = readTestReport(resolveAgainstRepo(root, file), file);
+      const { parsed } = readTestReport(resolveAgainstRepo(root, file), file, { root });
       if (parsed.counts.total > parsed.tests.length) {
         return { reason: `${file} states ${parsed.counts.total} test(s) and lists ${parsed.tests.length}: it does not name every test, so no criterion can be mapped from it per test. Hand a report that lists every test (JUnit, assertion-results, or an xcresult export with its test nodes).` };
       }

@@ -10,7 +10,8 @@
 // table of what each file is for.
 
 import { describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { testReport, TEST_REPORTS } from "../fixtures/paths.js";
@@ -427,7 +428,7 @@ describe("the read is bounded (zheref/nen#556 review F2)", () => {
       const path = join(dir, "big.xml");
       writeFileSync(path, "");
       truncateSync(path, MAX_REPORT_BYTES + 1);
-      expect(refusal((): unknown => readTestReport(path, "big.xml"))).toContain(`over the ${MAX_REPORT_BYTES}-byte limit`);
+      expect(refusal((): unknown => readTestReport(path, "big.xml"))).toContain(`more than the ${MAX_REPORT_BYTES}-byte limit`);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -435,5 +436,49 @@ describe("the read is bounded (zheref/nen#556 review F2)", () => {
 
   it("refuses JUnit nested past the scanner's depth as a TestReportError", () => {
     expect(refusal((): unknown => JUNIT.parse(`<testsuites>${"<testsuite>".repeat(300)}`, "deep.xml"))).toContain("nest deeper than 256 levels");
+  });
+});
+
+describe("the read is a regular file inside the tree (zheref/nen#556 review F4)", () => {
+  const junit = '<testsuite><testcase name="a"/></testsuite>\n';
+
+  it("follows a symlink only when the caller's root contains it", () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-report-link-"));
+    const outside = mkdtempSync(join(tmpdir(), "nen-report-out-"));
+    try {
+      writeFileSync(join(root, "real.xml"), junit);
+      writeFileSync(join(outside, "far.xml"), junit);
+      symlinkSync(join(root, "real.xml"), join(root, "in.xml"));
+      symlinkSync(join(outside, "far.xml"), join(root, "out.xml"));
+      expect(readTestReport(join(root, "in.xml"), "in.xml", { root }).parsed.tests).toHaveLength(1);
+      expect(refusal((): unknown => readTestReport(join(root, "out.xml"), "out.xml", { root }))).toContain("outside the repository");
+      expect(refusal((): unknown => readTestReport(join(root, "in.xml"), "in.xml"))).toContain("is a symlink");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a FIFO rather than reading it without end", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-report-fifo-"));
+    try {
+      const fifo = join(dir, "pipe.xml");
+      execFileSync("mkfifo", [fifo]);
+      expect(refusal((): unknown => readTestReport(fifo, "pipe.xml", { root: dir }))).toContain("not a regular file or a directory");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("caps a directory artifact by its files' total, not each file", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-report-total-"));
+    try {
+      // Two files, each under the cap, together over it: the second is refused.
+      const half = Math.floor(MAX_REPORT_BYTES / 2) + 1;
+      for (const name of ["a.xml", "b.xml"]) writeFileSync(join(dir, name), `<testsuite><testcase name="${name}"/></testsuite>${" ".repeat(half)}`);
+      expect(refusal((): unknown => readTestReport(dir, "results"))).toContain("a directory's files together");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

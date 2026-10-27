@@ -48,11 +48,10 @@ describe("tokensIn", () => {
     expect(tokensIn("src/AC-4").map((token) => token.number)).toEqual([4]);
   });
 
-  it("reads every issue reference, qualified tokens included", () => {
-    expect(issueRefsIn("one effort-id grammar (zheref/nen#509) > AC-1 and NN#7/AC-2 and #12").map((ref) => [ref.qualifier, ref.issue])).toEqual([
+  it("reads every qualified issue reference, and a bare #<N> as text", () => {
+    expect(issueRefsIn("one effort-id grammar (zheref/nen#509) > AC-1 and NN#7/AC-2 and item #12 and #3/AC-4").map((ref) => [ref.qualifier, ref.issue])).toEqual([
       ["zheref/nen", 509],
       ["NN", 7],
-      [null, 12],
     ]);
   });
 });
@@ -106,10 +105,11 @@ describe("mapTests", () => {
       t("tests map (zheref/nen#552) > AC-2 holds", "passed", "src/tests/map.test.ts"),
       t("AC-3 with no reference at all"),
       t("AC-1 for #509 and NN#552"),
+      t("AC-2 holds for item #1"),
     ];
     const report = mapTests(input(tests, { issue: { prefix: "zheref/nen", number: 552 }, issueLabel: "zheref/nen#552" }));
     expect(report.foreign.map((test) => [test.token, test.name])).toEqual([["AC-1", tests[0]?.name]]);
-    expect(report.criteria.map((row) => row.count)).toEqual([1, 1, 1]);
+    expect(report.criteria.map((row) => row.count)).toEqual([1, 2, 1]);
     expect(mapTests(input(tests)).criteria[0]?.count).toBe(2);
   });
 

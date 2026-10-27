@@ -12934,8 +12934,11 @@ token in its name or its suite: `AC-3`, `#552/AC-3`, `NN#552/AC-3` or
 tokens. `AC-30`, `XAC-3`, `AC-3a` and `AC-3-001` are not `AC-3`. With
 `--issue`, a qualified token naming another issue (or another `owner/name`) is
 listed as **foreign** and maps to nothing, and so is a **bare** token in a test
-whose name or suite carries issue references none of which is `--issue` — a
-bare `AC-1` under a suite titled for `zheref/nen#509` is that issue's. A CODE
+whose name or suite carries qualified issue references (`<CODE>#<N>`,
+`<owner/name>#<N>`) none of which is `--issue` — a bare `AC-1` under a suite
+titled for `zheref/nen#509` is that issue's. A bare `#<N>` (`item #1`) is text,
+never a reference. The reading fails closed: a criterion whose only tests are
+foreign is unmapped, exit 1. A CODE
 prefix is echoed, never resolved. Without `--issue`, every token maps by its
 criterion number alone.
 
@@ -12964,7 +12967,11 @@ name. A body with no criterion row is `not-verifiable` — nothing to map, never
 "all mapped" — and an unreadable body or report is `could-not-read` with the
 reason, **never an empty map**. So is a report whose stated total exceeds the
 tests it lists (an xcresult summary naming only its failures): the map is per
-test, and a report that does not name every test cannot certify one red.
+test, and a report that does not name every test cannot certify one red. A
+report is read only from a regular file — a FIFO, a device or a socket is
+refused, and a symlink is followed only when it resolves inside `--repo`'s root
+— and at most 64 MiB of it (a directory artifact's files together), the bound
+every [`shu test-report`](#nen-shu-test-report) read shares.
 
 **Usage**
 
