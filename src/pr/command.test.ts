@@ -3418,14 +3418,16 @@ describe("nen pr edit-title -- replaces a pull request's title from a file, then
     "pr", "edit-title", "--target", "zheref/nen", "--pr", "12", "--title-file", tempFile("title.txt", contents), ...extra,
   ];
   const callLines = (seams: ScriptedSeams): string[] => seams.calls.map((call): string => [call.command, ...call.args].join(" "));
+  const wrote = (seams: ScriptedSeams): boolean => callLines(seams).some((line): boolean => line.startsWith("gh pr edit"));
 
-  it("AC-1: certifies, writes through gh pr edit --title, reads the title back identical, exit 0", async () => {
-    const seams = new ScriptedSeams([titled("old (0.141.0)"), titled("feat: new (0.147.0)"), WRITE("feat: new (0.147.0)")]);
+  it("AC-1: certifies, re-reads, writes through gh pr edit --title, reads the title back identical, exit 0", async () => {
+    const seams = new ScriptedSeams([titled("old (0.141.0)"), titled("old (0.141.0)"), titled("feat: new (0.147.0)"), WRITE("feat: new (0.147.0)")]);
     const result = await capture(argvFor("feat: new (0.147.0)\n"), null, seams);
     expect(result.code).toBe(0);
-    expect(result.out).toEqual(["replaced zheref/nen#12's title, read back identical: feat: new (0.147.0)"]);
-    // The guard default (a private target) is one visibility read; the rest is certify, write, read back.
-    expect(callLines(seams).filter((line): boolean => !line.startsWith("gh api repos/zheref/nen ") && line !== "gh api repos/zheref/nen")).toEqual([
+    expect(result.out).toEqual([`replaced zheref/nen#12's title, read back identical: "feat: new (0.147.0)"`]);
+    // The guard default (a private target) is one visibility read; the rest is certify, re-read, write, read back.
+    expect(callLines(seams).filter((line): boolean => line !== "gh api repos/zheref/nen")).toEqual([
+      PULLS_12,
       PULLS_12,
       "gh pr edit 12 --repo zheref/nen --title feat: new (0.147.0)",
       PULLS_12,
@@ -3433,15 +3435,14 @@ describe("nen pr edit-title -- replaces a pull request's title from a file, then
   });
 
   it("AC-1: a title GitHub stored differently is exit 1 naming both strings, never a success", async () => {
-    // Scripted order: certify answers "old", the read-back answers what GitHub stored.
-    const stored = new ScriptedSeams([titled("old"), titled("new"), WRITE("new  ")]);
-    const result = await capture(argvFor("new  \n"), null, stored);
+    const seams = new ScriptedSeams([titled("old"), titled("old"), titled("New"), WRITE("new")]);
+    const result = await capture(argvFor("new\n"), null, seams);
     expect(result.code).toBe(1);
-    expect(result.err.join("\n")).toContain(`zheref/nen#12's title reads back as "new", not the file's "new  "`);
+    expect(result.err.join("\n")).toContain(`zheref/nen#12's title reads back as "New", not the file's "new"`);
   });
 
   it("AC-1: --json carries the contract, previous and new title, written and readBack", async () => {
-    const seams = new ScriptedSeams([titled("old"), titled("fresh"), WRITE("fresh")]);
+    const seams = new ScriptedSeams([titled("old"), titled("old"), titled("fresh"), WRITE("fresh")]);
     const result = await capture(argvFor("fresh\n", "--json"), null, seams);
     expect(result.code).toBe(0);
     expect(JSON.parse(result.out.join("\n"))).toEqual({
@@ -3458,21 +3459,30 @@ describe("nen pr edit-title -- replaces a pull request's title from a file, then
   });
 
   it("AC-1: --json on a mismatch says readBack mismatch with what was stored, exit 1", async () => {
-    const seams = new ScriptedSeams([titled("old"), titled("x".repeat(256)), WRITE("x".repeat(300))]);
-    const result = await capture(argvFor("x".repeat(300), "--json"), null, seams);
+    const seams = new ScriptedSeams([titled("old"), titled("old"), titled("fresh, normalised"), WRITE("fresh")]);
+    const result = await capture(argvFor("fresh", "--json"), null, seams);
     expect(result.code).toBe(1);
     const report = JSON.parse(result.out.join("\n")) as { readBack: string; stored: string; written: boolean };
-    expect(report.readBack).toBe("mismatch");
-    expect(report.written).toBe(true);
-    expect(report.stored).toBe("x".repeat(256));
+    expect(report).toMatchObject({ readBack: "mismatch", written: true, stored: "fresh, normalised" });
   });
 
-  it("AC-1: a read-back that fails is exit 1, never reported as replaced", async () => {
-    const seams = new ScriptedSeams([titled("old"), { match: PULLS_12, result: { code: 1, stderr: "HTTP 502" } }, WRITE("fresh")]);
+  it("AC-1: a read-back that fails is exit 1, never reported as replaced; --json still says written: true", async () => {
+    const script = (): ScriptedSeams => new ScriptedSeams([titled("old"), titled("old"), { match: PULLS_12, result: { code: 1, stderr: "HTTP 502" } }, WRITE("fresh")]);
+    const human = await capture(argvFor("fresh"), null, script());
+    expect(human.code).toBe(1);
+    expect(human.err.join("\n")).toMatch(/could not read back zheref\/nen#12.*the title WAS written/);
+    expect(human.out).toEqual([]);
+    const json = await capture(argvFor("fresh", "--json"), null, script());
+    expect(json.code).toBe(1);
+    expect(JSON.parse(json.out.join("\n"))).toMatchObject({ written: true, readBack: "failed", error: expect.stringMatching(/HTTP 502/) });
+  });
+
+  it("a title that changed between the certifying read and the write is exit 1, nothing written", async () => {
+    const seams = new ScriptedSeams([titled("old"), titled("someone else's"), WRITE("fresh")]);
     const result = await capture(argvFor("fresh"), null, seams);
     expect(result.code).toBe(1);
-    expect(result.err.join("\n")).toMatch(/could not read back zheref\/nen#12/);
-    expect(result.out).toEqual([]);
+    expect(result.err.join("\n")).toMatch(/changed since it was certified \("old" -> "someone else's"\); nothing written/);
+    expect(wrote(seams)).toBe(false);
   });
 
   it("AC-2: a number that names an issue (pulls/<n> 404) is refused at exit 2 before any write", async () => {
@@ -3493,6 +3503,27 @@ describe("nen pr edit-title -- replaces a pull request's title from a file, then
     }
   });
 
+  it("refuses, at exit 2 with zero calls, a control character, surrounding whitespace and a title over 256 characters", async () => {
+    const cases: readonly (readonly [string, RegExp])[] = [
+      ["a\u0000b", /control character \(U\+0000\) at character 2/],
+      ["tab\there", /control character \(U\+0009\)/],
+      ["del\u007F", /control character \(U\+007F\)/],
+      [" leading", /begins or ends with whitespace/],
+      ["trailing \n", /begins or ends with whitespace/],
+      ["x".repeat(257), /257-character title, over the 256/],
+    ];
+    for (const [contents, message] of cases) {
+      const seams = new ScriptedSeams([]);
+      const result = await capture(argvFor(contents), null, seams);
+      expect(result.code, JSON.stringify(contents)).toBe(2);
+      expect(result.err.join("\n")).toMatch(message);
+      expect(seams.calls.length).toBe(0);
+    }
+    // 256 characters, counted as characters rather than UTF-16 units, is sent.
+    const seams = new ScriptedSeams([titled("old"), titled("old"), titled("é".repeat(256)), WRITE("é".repeat(256))]);
+    expect((await capture(argvFor("é".repeat(256)), null, seams)).code).toBe(0);
+  });
+
   it("AC-2: an empty or whitespace-only title, no --title-file and a loose --pr are refused at exit 2 with zero calls", async () => {
     for (const argv of [
       argvFor("\n"),
@@ -3508,24 +3539,39 @@ describe("nen pr edit-title -- replaces a pull request's title from a file, then
   });
 
   it("drops a leading BOM and one CRLF, nothing else", async () => {
-    const seams = new ScriptedSeams([titled("old"), titled(" spaced"), WRITE(" spaced")]);
-    const result = await capture(argvFor("﻿ spaced\r\n"), null, seams);
+    const seams = new ScriptedSeams([titled("old"), titled("old"), titled("plain"), WRITE("plain")]);
+    const result = await capture(argvFor("﻿plain\r\n"), null, seams);
     expect(result.code).toBe(0);
-    expect(callLines(seams)).toContain("gh pr edit 12 --repo zheref/nen --title  spaced");
+    expect(callLines(seams)).toContain("gh pr edit 12 --repo zheref/nen --title plain");
   });
 
-  it("AC-3: --dry-run certifies, prints the argv and both titles, and writes nothing", async () => {
+  it("an unreadable --title-file names what this verb does with it, not 'files'", async () => {
+    const result = await capture(["pr", "edit-title", "--target", "zheref/nen", "--pr", "12", "--title-file", join(tmpdir(), "nen-no-such-title.txt")], null, new ScriptedSeams([]));
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("the title this verb sets on the pull request");
+  });
+
+  it("AC-3: --dry-run certifies, prints the single-quoted argv and both titles, and writes nothing", async () => {
     const seams = new ScriptedSeams([titled("old title")]);
-    const result = await capture(argvFor("new title\n", "--dry-run"), null, seams);
+    const result = await capture(argvFor("new $(title) `x`\n", "--dry-run"), null, seams);
     expect(result.code).toBe(0);
     expect(result.out).toEqual([
-      'would run: gh pr edit 12 --repo zheref/nen --title "new title"',
+      "would run: gh pr edit 12 --repo zheref/nen --title 'new $(title) `x`'",
       "target: zheref/nen",
       "number: 12",
-      "current title: old title",
-      "new title: new title",
+      'current title: "old title"',
+      'new title: "new $(title) `x`"',
     ]);
-    expect(callLines(seams).some((line): boolean => line.startsWith("gh pr edit"))).toBe(false);
+    expect(wrote(seams)).toBe(false);
+  });
+
+  it("SEC-15: GitHub's current title is printed escaped, never raw", async () => {
+    const seams = new ScriptedSeams([titled("evil\u001b]0;pwned\u0007\u009b2K\u202Etitle")]);
+    const result = await capture(argvFor("new title", "--dry-run"), null, seams);
+    expect(result.code).toBe(0);
+    const out = result.out.join("\n");
+    expect(out).toContain('current title: "evil\\u001b]0;pwned\\u0007\\u009b2K\\u202etitle"');
+    for (const line of result.out) expect(line).not.toMatch(/[\u0000-\u001F\u007F-\u009F\u202E]/);
   });
 
   it("AC-3: --dry-run --json says written false and readBack null", async () => {

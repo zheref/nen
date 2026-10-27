@@ -3387,27 +3387,38 @@ nen pr edit-title --target <owner/name> --pr <n> --title-file <path> [--dry-run]
 |---|---|---|---|
 | `--target <owner/name>` | yes | The GitHub repository. | |
 | `--pr <n>` | yes | The pull request to retitle. | The strict reader [`pr edit-body`](#nen-pr-edit-body) uses: `1e3` or `0x0c` are refused (exit 2), because this verb WRITES. |
-| `--title-file <path>` | yes | The new title, read verbatim with a leading byte-order mark and **one** trailing newline (`\n` or `\r\n`) dropped, nothing else trimmed — the rule [`issue file`](#nen-issue-file)'s `--title-file` follows, because a written title is read back and compared. | Resolves against the process's directory, as `edit-body`'s `--body-file` does. Refused at exit **2**, before any call: missing, unreadable, not valid UTF-8, a title that still holds a line break, or one that is empty or only whitespace. There is no inline `--title`. |
+| `--title-file <path>` | yes | The new title, read verbatim with a leading byte-order mark and **one** trailing newline (`\n` or `\r\n`) dropped, nothing else trimmed — the rule [`issue file`](#nen-issue-file)'s `--title-file` follows, because a written title is read back and compared. | Resolves against the process's directory, as `edit-body`'s `--body-file` does. Refused at exit **2**, before any call: missing, unreadable, not valid UTF-8, a title that still holds a line break or any other control character (U+0000–U+001F, U+007F), one that begins or ends with whitespace (GitHub may store it trimmed, so the write would land and read back different), one over 256 characters, or one that is empty or only whitespace. There is no inline `--title`. |
 | `--dry-run` | no | Certify, run the guard, then print the argv, the target, the number, the current title and the new one instead of writing. | **Still reads GitHub** to certify. |
 | `--skip-private-name-check`, `--private-names-ignore-file`, `--allow-all-ignored` | no | The [private-name guard](#the-private-name-guard)'s flags, exactly as on [`pr edit-body`](#nen-pr-edit-body). | The field checked is `title`, after the certifying read. |
 
 **The read-back.** After `gh pr edit` exits 0 the verb reads `pulls/<n>`
-again and compares the stored title with the file's, exactly. GitHub trims
-surrounding whitespace and caps a title's length, so a title it stored
-differently is exit **1** naming both strings — never reported as replaced.
-A read-back that cannot run is exit 1 too.
+again and compares the stored title with the file's, exactly. A title GitHub
+stored differently is exit **1** naming both strings — never reported as
+replaced. A read-back that cannot run is exit 1 too, and under `--json` the
+report still says `written: true` (`readBack: "failed"`, with `error`).
+
+**No etag pin: last writer wins.** GitHub's pull request edit takes no
+`If-Match`, so a concurrent retitle can be overwritten. The verb narrows the
+window: it re-reads the title right before the write and stops (exit 1,
+nothing written, `stored` naming the moved title) if it changed since the
+certifying read. A race after the write fails safe, as a false exit 1 from
+the read-back, never a false success. `previous` is the title as certified.
+
+Titles GitHub returns are anyone-with-write's text, so the human lines print
+every title quoted, with control and invisible characters as `\uXXXX`;
+`--json` carries the bytes.
 
 **Output and exit codes** — human line on a real write: `replaced
 <target>#<pr>'s title, read back identical: <title>`; `--dry-run` prints
-`would run: gh pr edit <n> --repo <target> --title "<title>"` followed by
+`would run: gh pr edit <n> --repo <target> --title '<title>'` (single-quoted, so a pasted line expands nothing) followed by
 `target:`/`number:`/`current title:`/`new title:`. `--json`: `{ contract:
 "nen.pr.edit-title/v0.1", target, number, previous, title, written,
 readBack, dryRun, privateNameCheck }`, `readBack` `"identical"`,
-`"mismatch"` (with `stored`, the title GitHub answered) or `null` when
-nothing was written; a guard refusal's report drops `title`. Exit 0 on success (dry or real); exit 2 on a refused
+`"mismatch"` (with `stored`, the title GitHub answered), `"failed"` (with
+`error`) or `null` when nothing was written; a guard refusal's report drops `title`. Exit 0 on success (dry or real); exit 2 on a refused
 input or a number that does not certify as a pull request; exit 1 when `gh
-pr edit` fails, the read-back fails or differs, or the private-name guard
-could not run; exit **4** when the guard finds a private repository named in
+pr edit` fails, the title moved since certification, the read-back fails
+or differs, or the private-name guard could not run; exit **4** when the guard finds a private repository named in
 a title bound for a PUBLIC target, nothing written.
 
 **Example**
@@ -3417,11 +3428,11 @@ printf '%s\n' 'feat(pr): edit a title from a file, read back' > title.txt
 nen pr edit-title --target zheref/nen --pr 141 --title-file title.txt --dry-run
 ```
 ```text
-would run: gh pr edit 141 --repo zheref/nen --title "feat(pr): edit a title from a file, read back"
+would run: gh pr edit 141 --repo zheref/nen --title 'feat(pr): edit a title from a file, read back'
 target: zheref/nen
 number: 141
-current title: <the title GitHub holds now>
-new title: feat(pr): edit a title from a file, read back
+current title: "<the title GitHub holds now>"
+new title: "feat(pr): edit a title from a file, read back"
 ```
 
 ### `nen pr mark-ready`

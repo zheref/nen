@@ -103,7 +103,7 @@ import {
   type UnrecordedBot,
 } from "./bots.js";
 import { certifyPullRequest, editBodyArgv, writePullRequestBody } from "./editbody.js";
-import { EDIT_TITLE_CONTRACT, editTitleArgv, readPullRequestTitle, writePullRequestTitle } from "./edittitle.js";
+import { EDIT_TITLE_CONTRACT, editTitleArgv, readPullRequestTitle, refuseTitleShape, terminalQuoted, writePullRequestTitle } from "./edittitle.js";
 import { readTitleFile } from "../issue/title.js";
 import { blockingExit, blocksWrite, type CheckedText, type IgnoreList, type PrivateNameCheck } from "../issue/privacy.js";
 import { guardPrivateNames, PRIVATE_NAME_FLAGS, readIgnoreFlag } from "../issue/privacyguard.js";
@@ -112,6 +112,7 @@ import { GITHUB_COMMENT_LIMIT, PR_LEDGER_CONTRACT } from "./ledger.js";
 import { LOGIN as OPEN_LOGIN, ME as OPEN_ME, OPEN_CONTRACT, openPullRequest } from "./open.js";
 import { sectionsCommand } from "./sections_command.js";
 import { plainLine } from "../cli/plain.js";
+import { renderArgv, shellSingleQuote } from "../shu/render.js";
 import { exitCodeFor, markReady, SHA_PREFIX as MARK_READY_SHA_PREFIX, type MarkReadyReport } from "./markready.js";
 import {
   EXIT_FOR,
@@ -618,19 +619,26 @@ edit-title:
   file is read verbatim: a leading byte-order mark and ONE trailing newline
   ('\n' or '\r\n') are dropped, nothing else is trimmed. Refused at exit 2
   BEFORE ANY CALL: no --title-file, an unreadable or non-UTF-8 one, a title
-  that still holds a line break, an empty or whitespace-only title, a
-  non-numeric/non-positive --pr. The number is then CERTIFIED as a pull
-  request ('pulls/<n>' answers 200; 404/410 is exit 2, worded so it never
-  claims the number IS an issue), the private-name guard checks the title
-  (PRIVATE-NAME FLAGS above), and the write runs. The read-back asks
-  'pulls/<n>' again and compares exactly: a title GitHub stored differently
-  (it trims and caps titles) is exit 1 naming both, never a success.
-  --dry-run still performs the certifying read and the guard, then prints
-  the argv, the target, the number, the current title and the new one, and
-  writes nothing. --json: '{ contract: "${EDIT_TITLE_CONTRACT}", target,
-  number, previous, title, written, readBack, dryRun, privateNameCheck }',
-  readBack "identical", "mismatch" (with 'stored'), or null when nothing was
-  written. Exit 4: the guard refused, nothing written, and the report drops
+  that still holds a line break or any other control character (U+0000-
+  U+001F, U+007F), one that begins or ends with whitespace, one over 256
+  characters, an empty or whitespace-only title, a non-numeric/non-positive
+  --pr. The number is then CERTIFIED as a pull request ('pulls/<n>' answers
+  200; 404/410 is exit 2, worded so it never claims the number IS an
+  issue), the private-name guard checks the title (PRIVATE-NAME FLAGS
+  above), the title is re-read (exit 1, nothing written, if it moved since
+  the certifying read) and the write runs. There is no etag pin: a retitle
+  landing between that re-read and the write is overwritten,
+  last-writer-wins. The read-back asks 'pulls/<n>' again and compares
+  exactly: a title GitHub stored differently, or a read-back that fails, is
+  exit 1, never a success. Titles GitHub returns are printed escaped
+  (quoted, control and invisible characters as \\uXXXX). --dry-run still
+  performs the certifying read and the guard, then prints the argv
+  (single-quoted), the target, the number, the current title and the new
+  one, and writes nothing. --json: '{ contract: "${EDIT_TITLE_CONTRACT}",
+  target, number, previous, title, written, readBack, dryRun,
+  privateNameCheck }', readBack "identical", "mismatch" (with 'stored'),
+  "failed" (with 'error'; written is true), or null when nothing was
+  written ('stored' then names a title that moved since certification). Exit 4: the guard refused, nothing written, and the report drops
   'title'.
 
 mark-ready:
@@ -2484,16 +2492,16 @@ function editTitle(context: CommandContext): number {
   const pr = requirePrStrict(context, "edit-title");
   const ignore = readIgnoreFlag(context);
   // Resolved against the process's directory, as edit-body's --body-file is.
-  const title = readTitleFile(context, process.cwd());
+  const title = readTitleFile(context, process.cwd(), "--title-file names the title this verb sets on the pull request, read verbatim so no shell ever expands it.");
   if (title === undefined) {
     throw new VerbUsageError(
       "edit-title takes --title-file <path>: a title typed on the command line is shell source, and this verb REPLACES the pull request's title.",
     );
   }
-  if (title.trim() === "") {
-    throw new VerbUsageError(
-      `--title-file '${context.args.values["title-file"] ?? ""}' holds no title (it is empty, or only whitespace). A pull request is never retitled to nothing.`,
-    );
+  // Every refusal of the title itself, before any call (zheref/nen#523 round 1).
+  const shapeRefusal = refuseTitleShape(title);
+  if (shapeRefusal !== null) {
+    throw new VerbUsageError(`--title-file '${context.args.values["title-file"] ?? ""}' ${shapeRefusal}`);
   }
 
   const previous = readPullRequestTitle(context.seams, target, pr, "certify");
@@ -2504,7 +2512,8 @@ function editTitle(context: CommandContext): number {
   const privateNameCheck = guardPrivateNames(context, target, [{ field: "title", text: title }], ignore, "nen pr edit-title");
   // A guard refusal's report never carries the refused text (USAGE, the
   // private-name guard), so `refused` drops the title.
-  const report = (fields: { written: boolean; readBack: "identical" | "mismatch" | null; stored?: string; refused?: true }): string =>
+  type ReadBack = "identical" | "mismatch" | "failed" | null;
+  const report = (fields: { written: boolean; readBack: ReadBack; stored?: string; error?: string; refused?: true }): string =>
     JSON.stringify(
       {
         contract: EDIT_TITLE_CONTRACT,
@@ -2515,6 +2524,7 @@ function editTitle(context: CommandContext): number {
         written: fields.written,
         readBack: fields.readBack,
         ...(fields.stored === undefined ? {} : { stored: fields.stored }),
+        ...(fields.error === undefined ? {} : { error: fields.error }),
         dryRun,
         privateNameCheck,
       },
@@ -2532,20 +2542,42 @@ function editTitle(context: CommandContext): number {
       context.io.out(report({ written: false, readBack: null }));
       return 0;
     }
-    context.io.out(`would run: gh ${argv.slice(0, -1).join(" ")} ${JSON.stringify(title)}`);
+    // Single-quoted, the family's argv renderer: a pasted line expands nothing.
+    context.io.out(`would run: ${renderArgv({ exe: "gh", argv: argv.slice(0, -1) })} ${shellSingleQuote(title)}`);
     context.io.out(`target: ${target.slug}`);
     context.io.out(`number: ${pr}`);
-    context.io.out(`current title: ${previous}`);
-    context.io.out(`new title: ${title}`);
+    // GitHub's title is anyone-with-write's text: escaped, never raw (SEC-15).
+    context.io.out(`current title: ${terminalQuoted(previous)}`);
+    context.io.out(`new title: ${terminalQuoted(title)}`);
     return 0;
   }
 
+  // RE-READ RIGHT BEFORE THE WRITE. GitHub's PR edit takes no etag, so this
+  // only narrows the window a concurrent retitle can be overwritten in; the
+  // write itself is last-writer-wins (USAGE).
+  const current = readPullRequestTitle(context.seams, target, pr, "re-read");
+  if (current !== previous) {
+    if (context.json) context.io.out(report({ written: false, readBack: null, stored: current }));
+    context.io.err(
+      `nen pr edit-title: ${target.slug}#${pr}'s title changed since it was certified (${terminalQuoted(previous)} -> ${terminalQuoted(current)}); nothing written. Run again on the new title.`,
+    );
+    return 1;
+  }
   writePullRequestTitle(context.seams, target, pr, title);
-  const stored = readPullRequestTitle(context.seams, target, pr, "read back");
+  let stored: string;
+  try {
+    stored = readPullRequestTitle(context.seams, target, pr, "read back");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // The write happened: a --json consumer must still see written: true.
+    if (context.json) context.io.out(report({ written: true, readBack: "failed", error: message }));
+    context.io.err(`nen pr edit-title: ${plainLine(message)} -- the title WAS written; the read-back did not finish.`);
+    return 1;
+  }
   if (stored !== title) {
     if (context.json) context.io.out(report({ written: true, readBack: "mismatch", stored }));
     context.io.err(
-      `nen pr edit-title: ${target.slug}#${pr}'s title reads back as ${JSON.stringify(stored)}, not the file's ${JSON.stringify(title)} -- GitHub stored a different title.`,
+      `nen pr edit-title: ${target.slug}#${pr}'s title reads back as ${terminalQuoted(stored)}, not the file's ${terminalQuoted(title)} -- GitHub stored a different title.`,
     );
     return 1;
   }
@@ -2553,7 +2585,7 @@ function editTitle(context: CommandContext): number {
     context.io.out(report({ written: true, readBack: "identical" }));
     return 0;
   }
-  context.io.out(`replaced ${target.slug}#${pr}'s title, read back identical: ${title}`);
+  context.io.out(`replaced ${target.slug}#${pr}'s title, read back identical: ${terminalQuoted(title)}`);
   return 0;
 }
 
