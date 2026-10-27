@@ -1,0 +1,1 @@
+- **report** — regression coverage proves that `report data` computes readiness through the real in-process gate when the head has no readiness check, preserves both ready and not-ready verdicts, and uses the check as the sole authority when one answers. No report behavior changes (zheref/nen#220).
