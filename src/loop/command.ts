@@ -44,7 +44,9 @@ usage:
 The efforts file is a JSON array of
   {"id": "...", "plane": "ci"|"local", "prOpen": bool, "ready": bool, "prompted": bool,
    "merged": bool, "stacked": bool}
-('merged' and 'stacked' are optional, absent reads false).
+('merged' and 'stacked' are optional, absent reads false). A local effort with
+no PR and 'merged: true' is a local integration (no sub-PR) and frees under
+every rule; with no PR and not merged it holds.
 
 A CI slot frees when the PR OPENS -- something else drives it from there. When
 a LOCAL slot frees is --repo's nen/workflow.json 'idle.localSlotFrees' under a
@@ -68,8 +70,13 @@ merged from the PR's live state, ready from 'nen pr ready' in process, prompted
 from a valid stop marker (.nen/last-stop.json) in the worktree checked out on
 the PR's head branch, stacked when the PR's base is another recorded delivery PR's head
 branch. A PR closed without a merge frees its slot. Anything that could not be
-read keeps its effort HELD and is listed under 'unread'. --from-run and
---efforts are refused together: during a run no field is caller-typed.
+read keeps its effort HELD and is listed under 'unread'. A CLAIMED effort
+(the manifest's 'claims[]') whose issue has no delivery PR yet holds a local
+slot too; one the run parked at or after its latest claim frees it. A manifest
+with no 'claims' key counts its PRs only and says 'claims: not recorded'; claim
+rows that will not read are exit 1 with no local slot reported free -- could
+not look, never nothing claimed. --from-run and --efforts are refused
+together: during a run no field is caller-typed.
 
 --local-cap is REQUIRED. It used to default to 7, and that default was removed
 (issue #52): a concurrency guard must be chosen, not inherited -- every real
@@ -244,7 +251,13 @@ function countAndReport(
 ): number {
   const localRule = readLocalRule(context, root);
   if (localRule === null) return 1;
-  const counted = computeSlots(efforts, caps, localRule.rule, localRule.key);
+  const computed = computeSlots(efforts, caps, localRule.rule, localRule.key);
+  // CLAIM ROWS THAT WILL NOT READ FREE NO SLOT (zheref/nen#521). How many
+  // efforts the run claimed is unknown, so no local slot can be reported free:
+  // the plane reads `free: 0`, binding, and the exit is 1 -- could not look,
+  // never "nothing claimed".
+  const claimsUnread = fromRun?.claimsUnread ?? null;
+  const counted = claimsUnread === null ? computed : { ...computed, local: { ...computed.local, free: 0, binding: true } };
   const localSlotFrees = { rule: localRule.rule, source: localRule.source };
   const report = fromRun === null ? { ...counted, localSlotFrees } : { ...counted, localSlotFrees, fromRun };
   if (context.json) {
@@ -257,11 +270,15 @@ function countAndReport(
       if (fromRun.notEfforts.length > 0) context.io.out(`not efforts (integration/release): ${fromRun.notEfforts.map((n): string => `#${n}`).join(", ")}`);
       if (fromRun.closedUnmerged.length > 0) context.io.out(`closed unmerged: ${fromRun.closedUnmerged.map((n): string => `#${n}`).join(", ")}`);
       for (const row of fromRun.unread) context.io.out(`unread #${row.pr}: ${row.reason} -- held`);
+      if (fromRun.parkedClaims.length > 0) context.io.out(`parked claims (no slot): ${fromRun.parkedClaims.join(", ")}`);
+      if (fromRun.claims === "not-recorded") context.io.out("claims: not recorded in the manifest -- only its PRs are counted");
+      if (claimsUnread !== null) context.io.out(`claims unread: ${claimsUnread} -- could not look; no local slot is reported free`);
     }
     print(context, report.ci);
     print(context, report.local);
     if (report.done.length > 0) context.io.out(`freed: ${report.done.join(", ")}`);
   }
+  if (claimsUnread !== null) context.io.err(`nen: run ${fromRun?.run ?? "?"}'s claim rows could not be read (${claimsUnread}); no local slot is reported free.`);
   return report.ci.binding || report.local.binding ? 1 : 0;
 }
 

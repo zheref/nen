@@ -6128,8 +6128,25 @@ marker (`.nen/last-stop.json`, [`stop`](#nen-stop)) in the worktree checked out 
 head branch. A merged PR is reported ready and prompted, so it frees under every rule; a PR closed
 without a merge is no longer an effort and is listed as `closedUnmerged`. Anything that could not be
 read -- the PR, an `unevaluated` readiness, a marker that will not parse -- keeps its effort **held** and
-is listed under `unread` with the reason: the conservative count, never "nothing found". `--from-run`
-and `--efforts` are refused together.
+is listed under `unread` with the reason: the conservative count, never "nothing found".
+
+**Claimed efforts** (zheref/nen#521): every row of the manifest's `claims[]` whose issue no delivery PR
+row names (by issue, or by the claim's `branch`) is an effort of its own -- local, no PR, `pr: null`,
+id `<issue> (claimed)` -- and **holds a slot** (`authored locally, no PR yet`), because a run claims an
+effort before it opens anything. The latest claim per issue decides: a `parked[]` row for that issue
+at or after it **frees** the slot and the issue is listed under `parkedClaims`; a claim whose issue has a
+delivery PR is that PR's effort, counted once. `fromRun.claims` says which case held: `read`,
+`not-recorded` (the manifest has no `claims` key -- only its PRs are counted, and the human rendering
+says so) or `unread`. Claim rows that will not read (not an array, a row with a bad `issue`, `branch` or
+`at`) are `claimsUnread` with the reason: the verb **could not look**, so the local plane reports
+`free: 0` and `binding: true`, a parked claim frees nothing, a `nen:` line on stderr names it and the
+exit is 1. How a run records a claim is not this verb's. `--from-run` and `--efforts` are refused
+together.
+
+**A local effort with no PR and `merged: true`** (in an `--efforts` file) is a local integration -- an
+effort that opens no sub-PR and is done once its branch is merged into the run's integration branch
+(Hatsu HR-353) -- and **frees under every rule**, with no Ready or prompt fabricated for it. With no PR
+and not merged it holds, as before.
 
 **Usage**
 
@@ -6156,12 +6173,13 @@ rule in force and where it came from (`<path>: idle.localSlotFrees`, `<path>: mo
 why indented beneath, plus a `"freed: <id>, ..."` line when any effort finished by its plane's rule.
 `--json` prints `{ ci, local, done, localSlotFrees: { rule, source } }`, each plane carrying `{ plane,
 cap, occupied, free, holding, binding }`; under `--from-run` the document adds `fromRun: { run, efforts,
-notEfforts, closedUnmerged, unread }` (each effort the computed row plus `pr`, `issue` and a `facts`
-line), and the human rendering adds a `from run <id>: <n> effort(s)` block with each effort's facts and
-every unread reason ahead of the plane lines. Exit 0 when neither budget is fully occupied; exit 1 when
+notEfforts, closedUnmerged, unread, claims, parkedClaims, claimsUnread }` (each effort the computed row
+plus `pr` -- null for a claimed effort with no PR --, `issue` and a `facts` line), and the human
+rendering adds a `from run <id>: <n> effort(s)` block with each effort's facts, every unread reason, the
+parked claims, and a `claims: not recorded ...` or `claims unread: ...` line ahead of the plane lines. Exit 0 when neither budget is fully occupied; exit 1 when
 either plane is fully occupied (`binding: true`) — the caller can stop starting work without
 re-reading the report — or when `nen/workflow.json` is present and will not load, or the run's
-manifest is missing or will not read; exit 2 when neither `--efforts` nor `--from-run` is given, both
+manifest is missing or will not read, or its claim rows will not read; exit 2 when neither `--efforts` nor `--from-run` is given, both
 are, `--local-cap` is missing, or a cap is not an integer.
 
 **Example**
@@ -9367,7 +9385,10 @@ point the manifest at another repository.
 `owner/name` every PR lives in; per PR, `head` is the head **commit** and `branch` the head **branch**
 (Hatsu's `hatsu.futon.run/v0.2` keeps the branch under `head`), `issue` the `<CODE>#<N>` string (its
 number is what follows `#`) or null for an integration or release PR; `parked[]` `{ issue, row, at }` is
-HR-5's park state. The two manifests are separate records until Hatsu's effort recorder moves onto
+HR-5's park state. An optional `claims[]` `{ issue, branch, at }` (`branch` a branch name or null) is the
+run's **claimed** efforts, read by [`loop slots --from-run`](#nen-loop-slots) (zheref/nen#521). No verb
+here writes it yet: every rewrite (`append`, `park`) carries the stored value **verbatim**, readable or
+not, and only the reader judges it. The two manifests are separate records until Hatsu's effort recorder moves onto
 these verbs; which one Hatsu's `then` gate reads is Hatsu's to say (today, its own).
 
 **Usage**
