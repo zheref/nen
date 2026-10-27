@@ -3417,8 +3417,15 @@ readBack, dryRun, privateNameCheck }`, `readBack` `"identical"`,
 `"mismatch"` (with `stored`, the title GitHub answered), `"failed"` (with
 `error`) or `null` when nothing was written; a guard refusal's report drops `title`. Exit 0 on success (dry or real); exit 2 on a refused
 input or a number that does not certify as a pull request; exit 1 when `gh
-pr edit` fails, the title moved since certification, the read-back fails
-or differs, or the private-name guard could not run; exit **4** when the guard finds a private repository named in
+pr edit` fails, the read-back fails or differs, or the private-name guard
+could not run. Exit 1 has two `stored` cases, told apart by `written`:
+**before the write**, the title moved since certification — `written:
+false`, `readBack: null`, and `stored` is the **moved title** the re-read
+found, nothing written; **after the write**, a mismatch — `written: true`,
+`readBack: "mismatch"`, and `stored` is **what GitHub stored** in place of
+the file's title. A pre-write re-read that **fails** (rather than finding a
+moved title) is exit 1 with nothing written and **no `--json` report**, only
+the error on stderr; exit **4** when the guard finds a private repository named in
 a title bound for a PUBLIC target, nothing written.
 
 **Example**
