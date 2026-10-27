@@ -152,9 +152,13 @@ export const parseCommand: Command = {
       // `--idle` and `--dry-run` typed as their own argv words reach here as
       // boolean flags, not as text; each is put back in front of the scope,
       // where the grammar reads it, so a quoted line and an unquoted one parse
-      // the same (and a flag typed both ways is refused as given twice).
+      // the same. Each argv copy is put back, so a flag typed twice -- as two
+      // words, or once as a word and once in the line -- is refused as given
+      // twice rather than collapsed into one.
       if (skill === "futon") {
-        const words = (["idle", "dry-run"] as const).filter((flag): boolean => context.args.booleans.has(flag)).map((flag): string => `--${flag} `);
+        const words = (["idle", "dry-run"] as const).flatMap((flag): string[] =>
+          context.args.booleans.has(flag) ? new Array<string>(context.args.booleanCounts?.get(flag) ?? 1).fill(`--${flag} `) : [],
+        );
         return futon(context, `${words.join("")}${rest.join(" ")}`);
       }
       if (skill === "izanagi") return izanagi(context, rest.join(" "));

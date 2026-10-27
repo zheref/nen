@@ -16197,8 +16197,8 @@ refused with one kept, never read as part of the label (zheref/nen#491). On any 
 token before any `then`, or its own argv word; nen reports it (`dry run: yes`, `--json` `dryRun: true`,
 otherwise `false`) and never acts on it -- what a dry futon run does is the calling skill's rule. Both
 flags may be typed together, in either order and at either end (`--dry-run nen@bug --idle`,
-`nen@bug --idle --dry-run`), and both are read. After `then`, or typed twice, it is refused at exit 2
-with the corrected line, which writes each typed flag once, `--idle` before `--dry-run`, after the
+`nen@bug --idle --dry-run`), and both are read. After `then`, or typed twice -- in the line, as two
+argv words, or once each way (true of `--idle` too) -- it is refused at exit 2 with the corrected line, which writes each typed flag once, `--idle` before `--dry-run`, after the
 scope. On `parse futon` it is part of the grammar, never a preview: `parse` writes nothing. On any other
 skill it is exit 2.
 **Kazaana carries the same flag through the generic grammar**, as a literal-only optional clause:

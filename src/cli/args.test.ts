@@ -163,3 +163,13 @@ describe("a declared list flag repeats, in order; an undeclared one still does n
     expect(() => parseArgs(["--bogus"], LISTED)).toThrow(/--trailer <value> \(repeatable\)/);
   });
 });
+
+describe("parseArgs -- a repeated boolean is collapsed and counted (zheref/nen#520)", () => {
+  it("keeps one entry in booleans and the number of copies in booleanCounts", () => {
+    const parsed = parseArgs(["--dry-run", "a", "--dry-run", "--json"], { booleans: ["dry-run", "json"] });
+    expect([...parsed.booleans].sort()).toEqual(["dry-run", "json"]);
+    expect(parsed.booleanCounts?.get("dry-run")).toBe(2);
+    expect(parsed.booleanCounts?.get("json")).toBe(1);
+    expect(parsed.booleanCounts?.get("idle")).toBeUndefined();
+  });
+});

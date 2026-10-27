@@ -160,6 +160,11 @@ describe("nen parse futon -- CLI wiring (verbs/4-remainders, merged into this fa
     const twice = await capture(["parse", "futon", "KP@bug --dry-run", "--dry-run", "--self", "zheref/bankai-core"]);
     expect(twice.code).toBe(2);
     expect(twice.err.join("\n")).toMatch(/try: KP@bug --dry-run$/m);
+    for (const flag of ["--dry-run", "--idle"]) {
+      const words = await capture(["parse", "futon", flag, "KP@bug", flag, "--self", "zheref/bankai-core"]);
+      expect(words.code, flag).toBe(2);
+      expect(words.err.join("\n"), flag).toMatch(new RegExp(`'${flag}' is given twice`));
+    }
     expect((await capture(["parse", "izanagi", "a until b up to 2", "--dry-run"])).code).toBe(2);
   });
 
