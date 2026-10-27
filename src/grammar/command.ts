@@ -40,7 +40,7 @@ import { classifyInvocation, parseIzanamiInvocation } from "../parse/izanami.js"
 const SKILL_GRAMMARS = new Set(["futon", "izanagi", "izanami"]);
 
 const USAGE = `nen parse <skill> --grammar <template> --line <invocation>
-nen parse futon --repo <path> "<repo>@<severity>[+]|<repo>@<label> [--idle] [then <tag|tag+fanout|skill[@target][+skill...]|prose>]" [--self <owner/name>]
+nen parse futon --repo <path> "<repo>@<severity>[+]|<repo>@<label> [--idle] [--dry-run] [then <tag|tag+fanout|skill[@target][+skill...]|prose>]" [--self <owner/name>]
 nen parse izanagi "<task> until <condition> up to <N>"
 nen parse izanami "<task> until <condition>"
 
@@ -129,11 +129,14 @@ export const parseCommand: Command = {
   name: "parse",
   summary: "Parse a skill invocation against its published grammar (or futon/izanagi/izanami's own).",
   usage: USAGE,
-  flags: { values: ["grammar", "line", "self"], booleans: ["idle"] },
+  flags: { values: ["grammar", "line", "self"], booleans: ["idle", "dry-run"] },
   run(context: CommandContext): number {
     const skill = context.args.positionals[1];
     if (context.args.booleans.has("idle") && skill !== "futon") {
       throw new VerbUsageError("--idle belongs to 'parse futon' alone: it is a flag of futon's grammar (HR-5).");
+    }
+    if (context.args.booleans.has("dry-run") && skill !== "futon") {
+      throw new VerbUsageError("--dry-run belongs to 'parse futon' alone: it is a flag of futon's grammar (zheref/nen#520), never a preview of 'parse', which writes nothing.");
     }
     if (skill === undefined) {
       throw new VerbUsageError(
@@ -146,10 +149,14 @@ export const parseCommand: Command = {
       // newline-joined) as their own invocation string, not --line -- exactly
       // as they did before this merge (verbs/4-remainders' own parse/verb.ts).
       const rest = context.args.positionals.slice(2);
-      // `--idle` typed as its own argv word reaches here as a boolean flag,
-      // not as text; it is put back in front of the scope, where the grammar
-      // reads it, so a quoted line and an unquoted one parse the same.
-      if (skill === "futon") return futon(context, context.args.booleans.has("idle") ? `--idle ${rest.join(" ")}` : rest.join(" "));
+      // `--idle` and `--dry-run` typed as their own argv words reach here as
+      // boolean flags, not as text; each is put back in front of the scope,
+      // where the grammar reads it, so a quoted line and an unquoted one parse
+      // the same (and a flag typed both ways is refused as given twice).
+      if (skill === "futon") {
+        const words = (["idle", "dry-run"] as const).filter((flag): boolean => context.args.booleans.has(flag)).map((flag): string => `--${flag} `);
+        return futon(context, `${words.join("")}${rest.join(" ")}`);
+      }
       if (skill === "izanagi") return izanagi(context, rest.join(" "));
       return izanami(context, rest.join("\n"));
     }
@@ -372,6 +379,7 @@ function futon(context: CommandContext, raw: string): number {
     terminal: parsed.value.terminal,
     then: gatedThen,
     idle: parsed.value.idle,
+    dryRun: parsed.value.dryRun,
   };
   if (context.json) {
     context.io.out(JSON.stringify(result, null, 2));
@@ -384,6 +392,7 @@ function futon(context: CommandContext, raw: string): number {
     context.io.out(`label: ${result.label ?? ""} (exact match, no expansion)`);
   }
   if (result.idle) context.io.out("idle: yes (--idle: an idle batch under the repository's typed idle profile, HR-5)");
+  if (result.dryRun) context.io.out("dry run: yes (--dry-run: the calling skill decides what a dry futon run does)");
   const renderedThen = result.then;
   if (renderedThen === null) context.io.out("terminal: (none -- build-only)");
   else if (renderedThen.kind === "terminal") context.io.out(`terminal: ${renderedThen.terminal}`);

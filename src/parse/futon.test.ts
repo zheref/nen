@@ -15,6 +15,7 @@ describe("parseFutonInvocation -- resolve or refuse, never guess", () => {
         terminal: null,
         then: null,
         idle: false,
+        dryRun: false,
       });
     }
   });
@@ -59,7 +60,7 @@ describe("parseFutonInvocation -- resolve or refuse, never guess", () => {
     const result = parseFutonInvocation("bc@bug then tag");
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.value).toEqual({ repoToken: "bc", band: null, label: "bug", terminal: "tag", then: { kind: "terminal", terminal: "tag" }, idle: false });
+      expect(result.value).toEqual({ repoToken: "bc", band: null, label: "bug", terminal: "tag", then: { kind: "terminal", terminal: "tag" }, idle: false, dryRun: false });
     }
   });
 
@@ -502,6 +503,92 @@ describe("parseFutonInvocation -- the optional --idle flag (HR-5)", () => {
       ["nen@bug --idle --idle", "nen@bug --idle"],
       ["--idle --idle nen@bug", "nen@bug --idle"],
       ["nen@bug --idle --idle then getsuga", "nen@bug --idle then getsuga"],
+    ] as const) {
+      const result = parseFutonInvocation(line);
+      expect(result.ok, line).toBe(false);
+      if (!result.ok) expect(result.error.correctedLine, line).toBe(corrected);
+    }
+  });
+});
+
+describe("parseFutonInvocation -- the optional --dry-run flag (zheref/nen#520)", () => {
+  it("AC-1: reads --dry-run as the last or the first token of the scope and keeps the selector without it", () => {
+    for (const line of ["nen@bug --dry-run", "--dry-run nen@bug", "nen@bug --dry-run then getsuga", "--dry-run nen@bug then getsuga"]) {
+      const result = parseFutonInvocation(line);
+      expect(result.ok, line).toBe(true);
+      if (result.ok) {
+        expect(result.value.dryRun, line).toBe(true);
+        expect(result.value.idle, line).toBe(false);
+        expect(result.value.label, line).toBe("bug");
+      }
+    }
+    const banded = parseFutonInvocation("nen@high+ --dry-run then tag");
+    expect(banded.ok).toBe(true);
+    if (banded.ok) {
+      expect(banded.value.band?.severities).toEqual(["critical", "high"]);
+      expect(banded.value.terminal).toBe("tag");
+    }
+    const plain = parseFutonInvocation("nen@bug then getsuga");
+    expect(plain.ok && plain.value.dryRun).toBe(false);
+  });
+
+  it("never reads a quoted label that contains the text as the flag", () => {
+    const result = parseFutonInvocation('nen@"x --dry-run"');
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.dryRun).toBe(false);
+      expect(result.value.label).toBe("x --dry-run");
+    }
+  });
+
+  it("AC-2: refuses --dry-run after then, with the line moved before it", () => {
+    const result = parseFutonInvocation("nen@bug then getsuga --dry-run");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toMatch(/'--dry-run' after 'then'.*put it before 'then'/);
+      expect(result.error.correctedLine).toBe("nen@bug --dry-run then getsuga");
+    }
+  });
+
+  it("AC-2: refuses --dry-run given twice, at both ends or at the same end, with one kept", () => {
+    for (const [line, corrected] of [
+      ["--dry-run nen@bug --dry-run", "nen@bug --dry-run"],
+      ["nen@bug --dry-run --dry-run", "nen@bug --dry-run"],
+      ["--dry-run --dry-run nen@bug then getsuga", "nen@bug --dry-run then getsuga"],
+      ["nen@bug --dry-run then getsuga --dry-run", "nen@bug --dry-run then getsuga"],
+    ] as const) {
+      const result = parseFutonInvocation(line);
+      expect(result.ok, line).toBe(false);
+      if (!result.ok) {
+        expect(result.error.message, line).toMatch(/--dry-run/);
+        expect(result.error.correctedLine, line).toBe(corrected);
+      }
+    }
+  });
+
+  it("AC-3: reads --idle and --dry-run together, in either order and at either end", () => {
+    for (const line of [
+      "nen@bug --idle --dry-run",
+      "nen@bug --dry-run --idle",
+      "--idle --dry-run nen@bug",
+      "--dry-run --idle nen@bug",
+      "--idle nen@bug --dry-run",
+      "--dry-run nen@bug --idle then getsuga",
+    ]) {
+      const result = parseFutonInvocation(line);
+      expect(result.ok, line).toBe(true);
+      if (result.ok) {
+        expect(result.value.idle, line).toBe(true);
+        expect(result.value.dryRun, line).toBe(true);
+        expect(result.value.label, line).toBe("bug");
+      }
+    }
+  });
+
+  it("AC-3: a refusal of one flag keeps the other in the corrected line", () => {
+    for (const [line, corrected] of [
+      ["nen@bug --idle --dry-run --idle", "nen@bug --idle --dry-run"],
+      ["--dry-run nen@bug then getsuga --idle", "nen@bug --idle --dry-run then getsuga"],
     ] as const) {
       const result = parseFutonInvocation(line);
       expect(result.ok, line).toBe(false);

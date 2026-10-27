@@ -147,6 +147,22 @@ describe("nen parse futon -- CLI wiring (verbs/4-remainders, merged into this fa
     expect((await capture(["parse", "izanagi", "a until b up to 2", "--idle"])).code).toBe(2);
   });
 
+  it("reports --dry-run (zheref/nen#520) whether it is typed inside the line or as its own argv word, beside --idle, and refuses it on another skill", async () => {
+    const inline = await capture(["parse", "futon", "KP@bug --dry-run", "--self", "zheref/bankai-core"], [], { json: true });
+    expect(inline.code).toBe(0);
+    expect(JSON.parse(inline.out.join("\n"))).toMatchObject({ label: "bug", idle: false, dryRun: true });
+    const word = await capture(["parse", "futon", "KP@bug", "--dry-run", "--idle", "--self", "zheref/bankai-core"], [], { json: true });
+    expect(word.code).toBe(0);
+    expect(JSON.parse(word.out.join("\n"))).toMatchObject({ label: "bug", idle: true, dryRun: true });
+    const plain = await capture(["parse", "futon", "KP@bug", "--dry-run", "--self", "zheref/bankai-core"]);
+    expect(plain.code).toBe(0);
+    expect(plain.out).toContain("dry run: yes (--dry-run: the calling skill decides what a dry futon run does)");
+    const twice = await capture(["parse", "futon", "KP@bug --dry-run", "--dry-run", "--self", "zheref/bankai-core"]);
+    expect(twice.code).toBe(2);
+    expect(twice.err.join("\n")).toMatch(/try: KP@bug --dry-run$/m);
+    expect((await capture(["parse", "izanagi", "a until b up to 2", "--dry-run"])).code).toBe(2);
+  });
+
   it("emits a label selector with band null", async () => {
     const result = await capture(["parse", "futon", "KP@bug", "--self", "zheref/bankai-core"], [], { json: true });
     expect(result.code).toBe(0);
