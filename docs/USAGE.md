@@ -493,7 +493,8 @@ verb does by default:
 | [`pr retarget`](#nen-pr-retarget), [`run rerun-failed`](#nen-run-rerun-failed) | no | `--dry-run` | print the one `gh` call as `would run:` and spawn **nothing** — not even a read, so the preview needs no token (Hatsu SDD plan N6). izanami still classifies both **mutating** in every spelling, fail-closed |
 | [`pr cascade-main`](#nen-pr-cascade-main) | no | `--dry-run` | prints `git fetch`, `git merge --no-edit` and (unless `--no-push`) `git push` as `would run:` and spawns **nothing**, so whether the merge would conflict is not known. `--no-push` alone is not a preview: it still merges. izanami keeps the verb **mutating** in every spelling, the dry form included |
 | [`spec index`](#nen-spec-index) | yes | `--write` | then `--dry-run` with it. Without `--write` nothing is written and the verb reports whether `<root>/INDEX.md` is current; `--write --dry-run` reports the regeneration and writes nothing. izanami's table classifies `--write` **mutating** and the other forms **read-only** |
-| [`run start`](#nen-run-start), [`run append`](#nen-run-append), [`run park`](#nen-run-park), [`run import`](#nen-run-import) | no | `--dry-run` | write the run manifest under the git common dir; the dry form reads it (and asks git for the common dir; `append` also reads the PR) and reports the outcome it would write, writing nothing. izanami's table classifies the bare forms **mutating** and the dry forms **read-only**; `run verify`, `run budget`, [`wc overlap`](#nen-wc-overlap), [`stage check`](#nen-stage-check) and `loop slots --from-run` are **read-only** |
+| [`run start`](#nen-run-start), [`run append`](#nen-run-append), [`run park`](#nen-run-park), [`run import`](#nen-run-import) | no | `--dry-run` | write the run manifest under the git common dir (at `0600` in a `0700` directory); the dry form reads it (and asks git for the common dir; `append` also reads the PR) and reports the outcome and the modes it would write, writing nothing -- no file, no directory, no mode change, no move of a legacy-path manifest. izanami's table classifies the bare forms **mutating** and the dry forms **read-only** |
+| [`run verify`](#nen-run-verify), [`run budget`](#nen-run-budget) | no | `--dry-run` | read the run manifest, and write only the **one-time move** of a manifest still at the legacy `<git-common-dir>/hatsu/runs/<id>.json` ([#522](https://github.com/zheref/nen/issues/522)); the dry form prints that move on stderr and reads the file in place, moving nothing. izanami's table classifies the bare forms **mutating** and the dry forms **read-only**; [`wc overlap`](#nen-wc-overlap), [`stage check`](#nen-stage-check) and `loop slots --from-run` (which reads a legacy manifest in place and never moves it) are **read-only** |
 | [`pr edit-body`](#nen-pr-edit-body) | no | `--dry-run` | **still reads GitHub** to certify the number reads as a pull request, and runs the [private-name guard](#the-private-name-guard) ([#363](https://github.com/zheref/nen/issues/363)), before printing the byte count and first/last line |
 | [`pr ledger`](#nen-pr-ledger) | no | `--dry-run` | `post` **still reads GitHub** (the PR head, the login, every comment) and the durable ledgers, checks the findings and runs the private-name guard, then prints the `gh api` call and the body and posts nothing. `read` writes nothing unless `--restore`, which writes only a phase ledger that does not exist yet |
 | [`pr mark-ready`](#nen-pr-mark-ready) | no | `--dry-run` | **still reads GitHub** — the one GraphQL read that certifies the number, its state and its head — so every refusal (not a PR, closed/merged, head mismatch, already ready) answers exactly as the real run would; prints the `markPullRequestReadyForReview` argv and sends nothing |
@@ -1105,8 +1106,8 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`run`](#family-run) | [`nen run append`](#nen-run-append) | record one PR the run opened, whatever its base, read live (base, branch, head); a PR created before the run started is refused; idempotent on the same facts, updated on a moved head or base, refused on another issue, kind or effort | git (rev-parse --git-common-dir), the manifest, github (gh pr view); writes it unless --dry-run | yes |
 | [`run`](#family-run) | [`nen run park`](#nen-run-park) | record an effort parked on an unanswered ask-once row (HR-5's park state), once | git (rev-parse --git-common-dir), the manifest; writes it unless --dry-run | yes |
 | [`run`](#family-run) | [`nen run import`](#nen-run-import) | read Hatsu's futon run manifest (`hatsu.futon.run/v0.2`) into this one, every PR read live, so one manifest owns the run; idempotent, the Hatsu file never written; a conflict or an unread PR refuses the whole import | git (rev-parse --git-common-dir), `<git-common-dir>/hatsu/futon/run-<id>.json` or --from, github (gh pr view); writes the manifest unless --dry-run | yes |
-| [`run`](#family-run) | [`nen run verify`](#nen-run-verify) | read every PR the run recorded live and report open, merged and closed-unmerged with the unmerged list; an unread PR is exit 1 and counted nowhere | the manifest, github (gh pr view) | yes |
-| [`run`](#family-run) | [`nen run budget`](#nen-run-budget) | wall-clock minutes since the run's start and the efforts' recorded tokens against a ceiling (flags, or `idle.budget`); an unread token sum is `unevaluated`; `--claim` refuses at exit 1 once reached or unevaluated | the manifest, `<git-common-dir>/.nen/usage/<effort>.json`, nen/workflow.json (idle.budget, only for a ceiling not flagged) | yes |
+| [`run`](#family-run) | [`nen run verify`](#nen-run-verify) | read every PR the run recorded live and report open, merged and closed-unmerged with the unmerged list; an unread PR is exit 1 and counted nowhere | the manifest, github (gh pr view); moves a legacy-path manifest once unless --dry-run | yes |
+| [`run`](#family-run) | [`nen run budget`](#nen-run-budget) | wall-clock minutes since the run's start and the efforts' recorded tokens against a ceiling (flags, or `idle.budget`); an unread token sum is `unevaluated`; `--claim` refuses at exit 1 once reached or unevaluated | the manifest, `<git-common-dir>/.nen/usage/<effort>.json`, nen/workflow.json (idle.budget, only for a ceiling not flagged); moves a legacy-path manifest once unless --dry-run | yes |
 | [`run`](#family-run) | [`nen run record`](#nen-run-record) | a caller's resumable run record (`hatsu.spec.run/v0.1`) validated against a schema shipped as data — the run id matched whole before any path is built, schema, caller and runId before the fields — and read or written whole at 0600 in a 0700 XDG state directory | ${XDG_STATE_HOME:-$HOME/.local/state}/<schema dir>/; the --from file; WRITES the record under `write` unless --dry-run | yes |
 | [`issue`](#family-issue) | [`nen issue search`](#nen-issue-search) | duplicate-search the backlog before filing: four gh passes (open subject, recently-closed subject, files+rule-ids, lane) reported with what each was for | gh (issue list x4) | yes |
 | [`issue`](#family-issue) | [`nen issue open-pr-check`](#nen-issue-open-pr-check) | which candidate issues carry an OPEN pull request that closing would orphan | gh (pr list) | yes |
@@ -6143,7 +6144,9 @@ head branch. A merged PR is reported ready and prompted, so it frees under every
 without a merge is no longer an effort and is listed as `closedUnmerged`. Anything that could not be
 read -- the PR, an `unevaluated` readiness, a marker that will not parse -- keeps its effort **held** and
 is listed under `unread` with the reason: the conservative count, never "nothing found". `--from-run`
-and `--efforts` are refused together.
+and `--efforts` are refused together. A counter never moves a file: a manifest still at the legacy
+`<git-common-dir>/hatsu/runs/<id>.json` is read **in place** and the move is named on stderr, with the
+[`run verify`](#nen-run-verify) line that makes it ([#522](https://github.com/zheref/nen/issues/522)).
 
 **Usage**
 
@@ -9310,7 +9313,7 @@ memory. [`record`](#nen-run-record) keeps a third thing, a caller's resumable
 run record under its XDG state directory (zheref/nen#493). Every flag is
 refused on the subcommands that do not read it.
 
-**The manifest** lives at `<git-common-dir>/hatsu/runs/<run-id>.json` -- the
+**The manifest** lives at `<git-common-dir>/.nen/runs/<run-id>.json` -- the
 git **common** dir, so every worktree of the project reads and writes the same
 file, no effort cleanup removes it, and no `git add` can stage it. A checkout
 git cannot name a common dir for is exit 1, never a fall back to the work tree.
@@ -9322,6 +9325,35 @@ refused, never rewritten over and never read as an empty run. Writes go
 through the shared ledger lock and a temp file and a rename. The run id is one
 path segment (`[A-Za-z0-9._-]`, at most 100 characters, no `..`), refused
 rather than sanitised.
+
+**Modes** ([zheref/nen#522](https://github.com/zheref/nen/issues/522)). The manifest names branches,
+pull requests and idle answers, so every write -- `start`, `append`, `park`, `import` and the one-time
+legacy move -- lands it at **`0600` in a `0700` directory**: the directory is created at `0700`, the
+document is written to a temp file created exclusively at `0600` (and `chmod`-ed to it, since the
+umask can only remove bits), then renamed over. A wider mode an earlier build left -- `0644` under
+`0755` -- is narrowed on the next write and said so. The modes are **read back**, never asserted from
+intent: a write prints `mode: file 0600, directory 0700`, with `(narrowed: file 0644 -> 0600, directory
+0755 -> 0700)` when it narrowed one, and `--json` carries `mode` as `{ verdict, file, directory,
+repaired, reason }` (`verdict` `set` \| `would-set` \| `not-set`; when the plan itself writes nothing --
+`existing`, `unchanged`, a conflict -- it is the legacy move's modes if this call moved (or, dry, would
+move) one, else `null`; when both the move and the plan write, the move's narrowing stays in `repaired`). A manifest path, a legacy manifest or a runs directory -- or any component of it below the git
+common dir, such as `.nen` -- that is a **symbolic link** or otherwise not a regular file (directory) is
+refused at exit 1, naming it: nen never reads,
+moves, `chmod`s or writes through a link, since `chmod` follows one and would narrow a file outside the
+runs directory. **Where a mode cannot be set** -- a `win32` host, a `chmod` that
+fails, a read-back that is not `0600`/`0700` -- the write still stands (the run's record matters more
+than its mode) and the verb says `mode: not set (<reason>)`, verdict `not-set`; it never claims the
+mode.
+
+**Dry forms.** Every verb that can write the manifest takes `--dry-run`, and a dry run writes nothing --
+no file, no directory, no mode change, no move. `start`, `append`, `park` and `import` print `mode:
+would set file 0600, directory 0700` (with `(would narrow: ...)`) for the write they would make. The
+one-time move of a manifest at the legacy `<git-common-dir>/hatsu/runs/<id>.json` is a write too: any
+run verb that reads the manifest makes it, and under `--dry-run` -- which [`run verify`](#nen-run-verify)
+and [`run budget`](#nen-run-budget) take for exactly this -- it prints `would move run manifest '<id>'
+from <legacy> to <path> (dry run: nothing moved; read where it is)` on stderr and reads the file in
+place. [`loop slots --from-run`](#nen-loop-slots) never moves a manifest: it reads a legacy one in place
+and names the move on stderr.
 
 ### `nen run rerun-failed`
 
@@ -9367,7 +9399,8 @@ re-ran the failed job(s) of zheref/KroApple's run 42
 
 Writes a new run's manifest (`<git common dir>/.nen/runs/<id>.json` -- nen's one root for its own
 records under the common dir, beside `.nen/loop/` and `.nen/stops/`; a manifest an earlier build wrote
-at `<git common dir>/hatsu/runs/` is moved there once, reported on stderr) with the run's repository,
+at `<git common dir>/hatsu/runs/` is moved there once, reported on stderr, and under `--dry-run` only
+printed) at `0600` in a `0700` directory (see **Modes** above) with the run's repository,
 `prs: []` and `parked: []`. A re-start with the **same** idle answers is the resume -- `existing`, exit
 0 -- so a re-invoked batch can call it again without knowing how far its first session got; with
 **other** answers, or another `--target`, it is refused at exit 1: HR-5 records the batch resolution at
@@ -9398,12 +9431,12 @@ nen run start --id <run-id> --target <owner/name> --repo <path> [--idle-answers 
 | `--target <owner/name>` | yes | The repository every PR of the run lives in, recorded as `repo`. | A malformed slug exits 2. [`run append`](#nen-run-append) reads each PR there; [`run verify`](#nen-run-verify) refuses another. |
 | `--repo <path>` | yes | Any checkout of the project; the manifest goes to its git common dir. | Listed unbracketed: omitted, exits 2 by name. |
 | `--idle-answers <json>` | no | A JSON object, ask-once row id to `default` \| `hold` \| `refuse`. | Not JSON, not an object, a bad row id or value: exit 2. Omitted records `null`; `{}` and omitted compare equal on a re-start. |
-| `--dry-run` | no | Report what would be written; write nothing. | Outcome `dry-run`. |
+| `--dry-run` | no | Report what would be written; write nothing -- no file, directory, mode change or legacy move. | Outcome `dry-run`, then `mode: would set file 0600, directory 0700`. |
 
 **Output and exit codes** -- prints `<outcome>: run <id> -- <path>` (`started`, `existing`, `dry-run`)
-or `refused: <reason>`. `--json` top-level keys: `outcome`, `path`, `reason` (null unless refused),
+or `refused: <reason>`, then the `mode:` line when it wrote (or would write). `--json` top-level keys: `outcome`, `path`, `reason` (null unless refused),
 `manifest` (the document, as written or as found: `{ contract, id, repo, startedAt, idleAnswers, prs,
-parked }`). Exit 0 started, existing or dry run; exit 1 on other answers or another repository for an
+parked }`), `mode` (`{ verdict, file, directory, repaired, reason }`, null when nothing was written). Exit 0 started, existing or dry run; exit 1 on other answers or another repository for an
 existing run, a manifest that will not read (or one found at two spellings), or no git common dir; exit
 2 on a malformed flag.
 
@@ -9414,6 +9447,7 @@ nen run start --id sdd-2026-10-22 --target zheref/nen --repo . --idle-answers '{
 ```
 ```text
 started: run sdd-2026-10-22 -- /work/nen/.git/.nen/runs/sdd-2026-10-22.json
+mode: file 0600, directory 0700
 ```
 (shape from `src/run/manifest-command.test.ts`; the path shortened)
 
@@ -9451,13 +9485,13 @@ nen run append --id <run-id> --pr <N> --kind delivery|integration|release
 | `--head <sha>` | no | The head commit the caller expects. | 7 to 40 hex digits, a prefix of the live head or exit 1. |
 | `--effort <id>` | no | The effort id the usage ledger is keyed by (the branch, by Hatsu's canon). | The `usage record` alphabet; [`run budget`](#nen-run-budget) reads these. |
 | `--repo <path>` | no | Any checkout of the project. | Default the current directory. |
-| `--dry-run` | no | Report the outcome; write nothing. | Still reads the PR. `dry-run (would be appended\|updated)`. |
+| `--dry-run` | no | Report the outcome; write nothing -- no file, mode change or legacy move. | Still reads the PR. `dry-run (would be appended\|updated)`. |
 
 **Output and exit codes** -- prints `<outcome>[ (would be <outcome>)]: #<pr> <issue> [<kind>] <branch>
--> <base> @ <head>` or `refused: <reason>`. `--json` top-level keys: `outcome` (`appended` \| `updated`
+-> <base> @ <head>` or `refused: <reason>`, then the `mode:` line when it wrote (or would write). `--json` top-level keys: `outcome` (`appended` \| `updated`
 \| `unchanged` \| `dry-run` \| `conflict`), `path`, `reason`, `entry` (the row as recorded: `{ issue,
 pr, base, branch, kind, head, effort, recordedAt }`, null on a conflict), `previous` (the row it replaced
-or clashed with, else null). Exit 0 appended, updated, unchanged or dry run; exit 1 on a conflict, a run
+or clashed with, else null), `mode` (as `run start`'s). Exit 0 appended, updated, unchanged or dry run; exit 1 on a conflict, a run
 nobody started, a PR that could not be read, created before the run started, or disagreeing with
 `--base`/`--head`, or a manifest that will not read; exit 2 on a malformed flag.
 
@@ -9491,11 +9525,12 @@ nen run park --id <run-id> --issue <ref> --row <decisions-row-id> [--repo <path>
 | `--issue <ref>` | yes | The issue whose effort is parked. | `<CODE>#<N>` or `<owner/name>#<N>`; otherwise exit 2. **Recorded as `<owner/name>#<N>`** (one spelling per manifest): a code is resolved through `--repo`'s `nen/repos.json`; one that does not resolve to one `owner/name` is exit 2. |
 | `--row <id>` | yes | The ask-once row it is parked on. | `[a-z0-9-]+`, as `nen/decisions.json` spells a row; otherwise exit 2. |
 | `--repo <path>` | no | Any checkout of the project. | Default the current directory. |
-| `--dry-run` | no | Report the outcome; write nothing. | Outcome `dry-run`. |
+| `--dry-run` | no | Report the outcome; write nothing -- no file, mode change or legacy move. | Outcome `dry-run`. |
 
-**Output and exit codes** -- prints `<outcome>: <issue> parked on row <row> in run <id> (since <at>)`.
-`--json`: `{ outcome, path, entry }` (`outcome` `parked` \| `unchanged` \| `dry-run`, `entry` `{ issue,
-row, at }`). Exit 0 parked, unchanged or dry run; exit 1 on a run nobody started or a manifest that will
+**Output and exit codes** -- prints `<outcome>: <issue> parked on row <row> in run <id> (since <at>)`,
+then the `mode:` line when it wrote (or would write).
+`--json`: `{ outcome, path, entry, mode }` (`outcome` `parked` \| `unchanged` \| `dry-run`, `entry` `{ issue,
+row, at }`, `mode` as `run start`'s). Exit 0 parked, unchanged or dry run; exit 1 on a run nobody started or a manifest that will
 not read; exit 2 on a malformed flag.
 
 **Example**
@@ -9541,11 +9576,11 @@ nen run import --id <run-id> [--from <file>] [--repo <path>] [--dry-run] [--json
 | `--id <run-id>` | yes | The run: Hatsu's 32-hex run id. | As `run start`; the source's own `id` must equal it (exit 1 otherwise). |
 | `--from <file>` | no | Read this file instead of `<git-common-dir>/hatsu/futon/run-<id>.json`. | Relative to `--repo`. |
 | `--repo <path>` | no | Any checkout of the project. | Default the current directory. |
-| `--dry-run` | no | Read and plan; write nothing. | Outcome `dry-run`; the PRs are still read live. |
+| `--dry-run` | no | Read and plan; write nothing -- no file, mode change or legacy move. | Outcome `dry-run`; the PRs are still read live. |
 
 **Output and exit codes** -- prints `<outcome>: run <id> from <source> -- <n> PR(s), <m> parked -- <path>`
-and one `#<N>: <appended|updated|unchanged>` line per PR. `--json`: `{ outcome, from, path, reason, prs[{ pr,
-outcome }], parked[{ issue, outcome }], manifest }` (`outcome` `imported` \| `unchanged` \| `dry-run` \|
+and one `#<N>: <appended|updated|unchanged>` line per PR, then the `mode:` line when it wrote (or would write). `--json`: `{ outcome, from, path, reason, prs[{ pr,
+outcome }], parked[{ issue, outcome }], manifest, mode }` (`outcome` `imported` \| `unchanged` \| `dry-run` \|
 `conflict`). Exit 0 imported, unchanged or dry run; exit 1 on a conflict, an unread PR, or a missing or
 malformed source; exit 2 on a malformed flag.
 
@@ -9576,7 +9611,7 @@ there.
 **Usage**
 
 ```text
-nen run verify --id <run-id> --target <owner/name> [--repo <path>] [--json]
+nen run verify --id <run-id> --target <owner/name> [--repo <path>] [--dry-run] [--json]
 ```
 
 **Arguments**
@@ -9586,6 +9621,7 @@ nen run verify --id <run-id> --target <owner/name> [--repo <path>] [--json]
 | `--id <run-id>` | yes | The run. | As `run start`. |
 | `--target <owner/name>` | yes | The repository the recorded PRs live in. | A malformed slug, or one that is not the run's `repo`, exits 2 before any read. |
 | `--repo <path>` | no | Any checkout of the project. | Default the current directory. |
+| `--dry-run` | no | Move nothing: a manifest still at the legacy path is read where it is, and the move it would make printed on stderr. | The only write this verb can make is that one-time move (see **Dry forms** above); the report is the same. |
 
 **Output and exit codes** -- prints `run <id> on <target>: <n> PR(s) recorded -- <o> open, <m> merged,
 <c> closed unmerged, <u> unread`, one line per PR (with `(base now ..., recorded ...)` and `(head moved
@@ -9625,13 +9661,14 @@ silent ones zero them). **Tokens** are read from the usage ledgers ([`usage`](#n
 fails closed**: when any entry was recorded `--not-reported`, a recorded delivery PR names no effort, a
 delivery PR's effort or an effort named by `--effort` has no usage ledger, or a ledger will not read, the
 sum is **unread** -- `tokens` null, the verdict `unevaluated`, a claim refused, exit 1. An absent spend is
-never a zero spend; every effort with no ledger is listed under `noLedger`. Nothing is written.
+never a zero spend; every effort with no ledger is listed under `noLedger`. Nothing is written but the
+one-time legacy move, which `--dry-run` prints and skips.
 
 **Usage**
 
 ```text
 nen run budget --id <run-id> [--claim] [--max-minutes <n>] [--max-tokens <n>]
-               [--effort <id,...>] [--repo <path>] [--json]
+               [--effort <id,...>] [--repo <path>] [--dry-run] [--json]
 ```
 
 **Arguments**
@@ -9644,6 +9681,7 @@ nen run budget --id <run-id> [--claim] [--max-minutes <n>] [--max-tokens <n>]
 | `--max-tokens <n>` | see notes | The tokens ceiling. | Default `idle.budget.tokens`, as above. A positive integer. |
 | `--effort <id,...>` | no | Extra efforts to count, comma-separated. | For efforts that have spent and not yet opened a PR. |
 | `--repo <path>` | no | The checkout whose repository's usage ledgers and `nen/workflow.json` are read. | Default the current directory. |
+| `--dry-run` | no | Move nothing: a manifest still at the legacy path is read where it is, and the move printed on stderr. | As `run verify`'s. |
 
 **Output and exit codes** -- prints `run <id>: <m> min since start of <max> (<source>), <t> tokens of
 <max> (<source>)` (or `tokens unread of <max>`), then `  remaining: <m> min, <t> tokens`, `  effortMinutes: <n> (...)`, one line per effort,
@@ -9710,7 +9748,9 @@ record's `schema`, `caller` and `runId` (equal to `--id`) before any field; a
 write is the **whole** document to a temp file created exclusively (`wx`) at
 `0600` in a `0700` directory (narrowed to `0700` when it was wider), then a
 rename. A record directory that is a link, not a directory, or owned by
-another user is refused, nothing written through it; a failed write removes
+another user is refused, nothing written through it (and `read` answers
+`could-not-read` for a linked or non-directory one, reading nothing through it; every component of
+the schema's directory below the state home is checked, `hatsu` as well as `hatsu/specs`); a failed write removes
 its temp file and is `could-not-read`, never a crash.
 
 **Usage**
