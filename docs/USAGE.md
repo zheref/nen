@@ -12970,7 +12970,10 @@ tests it lists (an xcresult summary naming only its failures): the map is per
 test, and a report that does not name every test cannot certify one red. A
 report is read only from a regular file — a FIFO, a device or a socket is
 refused, and a symlink is followed only when it resolves inside `--repo`'s root
-— and at most 64 MiB of it (a directory artifact's files together), the bound
+— and at most 64 MiB of it. A **relative** path flag is held to `--repo`'s tree
+through every component: one that climbs out (`../x`) or runs through a
+symlinked directory leading out is refused at exit 2; an absolute path is the
+caller's own (a directory artifact's files together), the bound
 every [`shu test-report`](#nen-shu-test-report) read shares.
 
 **Usage**

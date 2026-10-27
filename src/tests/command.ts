@@ -12,7 +12,9 @@ import { isUtf8 } from "node:buffer";
 import { readFileSync } from "node:fs";
 import { emit, refuseExtraPositionals, requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import { commaList } from "../cli/comma.js";
+import { isAbsolute } from "node:path";
 import { resolveAgainstRepo } from "../cli/inputs.js";
+import { containedPath, realContainment } from "../repo/contain.js";
 import { plainLine } from "../cli/plain.js";
 import { extractCriteria } from "../issue/criteria.js";
 import { DEFAULT_CRITERIA_PREFIX, IssueShapeError, parseCatalogue, type IssueSectionsCatalogue } from "../issue/shape.js";
@@ -78,6 +80,10 @@ row is not-verifiable; an unreadable body or report is could-not-read with
 the reason, never an empty map, and so is a report that states more tests
 than it lists (an xcresult summary naming only its failures).
 
+A relative path flag is held to --repo's tree through every component: a
+'../' climb or a symlinked parent leading out is refused (exit 2). An
+absolute path is the caller's own.
+
 Exits: 0 every criterion met in the mode, nothing unrequested, no duplicate
 or unrecognised criterion row; 1 otherwise, and on not-verifiable or
 could-not-read; 2 usage (a missing flag, both --before-report and
@@ -133,6 +139,25 @@ function catalogueOf(root: string, from: string | undefined): IssueSectionsCatal
   }
 }
 
+/**
+ * A path flag resolved against --repo's root. An ABSOLUTE path is the caller's
+ * own and is taken as written. A RELATIVE one is held to the tree, every
+ * component of it (zheref/nen#556 review F5), the same test `shu test-report`'s
+ * `insideRepo` applies: one that climbs out (`../x`) or whose parent is a
+ * symlink leading out (`outdir -> /elsewhere`) is refused at exit 2, never
+ * followed.
+ */
+function ownPath(root: string, value: string, flag: string): string {
+  if (isAbsolute(value)) return value;
+  const absolute = containedPath(root, value);
+  if (absolute === null) throw new VerbUsageError(`${flag} '${value}' resolves outside the repository at ${root}; a relative path is read inside --repo's tree (give an absolute path to name a file elsewhere).`);
+  const containment = realContainment(root, absolute);
+  if (!containment.contained) {
+    throw new VerbUsageError(`${flag} '${value}' really resolves to '${containment.real}', outside the repository at ${root}: '${containment.link ?? absolute}' is a symlink pointing at '${containment.target ?? containment.real}'. It is refused rather than followed.`);
+  }
+  return absolute;
+}
+
 /** The body as text, or the reason it could not be read. */
 function readBody(path: string, display: string): { body: string } | { reason: string } {
   let bytes: Buffer;
@@ -154,11 +179,11 @@ function readBody(path: string, display: string): { body: string } | { reason: s
  * failed read red while its other tests, unnamed, may have passed. The map is
  * per test, so such a report is could-not-read with the gap, never a map.
  */
-function readReports(root: string, files: readonly string[]): { tests: TestCase[] } | { reason: string } {
+function readReports(root: string, files: readonly string[], flag: string): { tests: TestCase[] } | { reason: string } {
   const tests: TestCase[] = [];
   for (const file of files) {
     try {
-      const { parsed } = readTestReport(resolveAgainstRepo(root, file), file, { root });
+      const { parsed } = readTestReport(ownPath(root, file, flag), file, { root });
       if (parsed.counts.total > parsed.tests.length) {
         return { reason: `${file} states ${parsed.counts.total} test(s) and lists ${parsed.tests.length}: it does not name every test, so no criterion can be mapped from it per test. Hand a report that lists every test (JUnit, assertion-results, or an xcresult export with its test nodes).` };
       }
@@ -195,11 +220,11 @@ function runMap(context: CommandContext): number {
     emit(context.io, context.json, report, renderMap(report).map(plainLine));
     return report.verdict === "met" ? 0 : 1;
   };
-  const body = readBody(resolveAgainstRepo(root, issueBody), issueBody);
+  const body = readBody(ownPath(root, issueBody, "--issue-body"), issueBody);
   if ("reason" in body) return finish(unreadableMap(names, body.reason));
-  const after = readReports(root, testReports);
+  const after = readReports(root, testReports, "--test-report");
   if ("reason" in after) return finish(unreadableMap(names, after.reason));
-  const before = beforeReports === null ? null : readReports(root, beforeReports);
+  const before = beforeReports === null ? null : readReports(root, beforeReports, "--before-report");
   if (before !== null && "reason" in before) return finish(unreadableMap(names, before.reason));
   return finish(
     mapTests({

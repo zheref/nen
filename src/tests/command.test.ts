@@ -1,7 +1,7 @@
 // src/tests/command.test.ts -- `nen tests map` end to end over files on disk
 // (zheref/nen#552): the exits, the modes, the --json shape, could-not-read.
 import { afterAll, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
@@ -145,6 +145,26 @@ describe("nen tests map", () => {
     const result = await map(none, ["--issue-body", "issue.md", "--test-report", "report.json"]);
     expect(result.code).toBe(1);
     expect(result.out).toContain("not-verifiable");
+  });
+
+  it("holds a relative report path to the tree through every component (zheref/nen#552/AC-4)", async () => {
+    const elsewhere = mkdtempSync(join(tmpdir(), "nen-tests-map-out-"));
+    try {
+      writeFileSync(join(elsewhere, "x.xml"), junit([["AC-1", "passed"], ["AC-2", "passed"]]));
+      const root = repo({ "issue.md": BODY });
+      mkdirSync(join(root, "real"));
+      writeFileSync(join(root, "real", "x.xml"), junit([["AC-1", "passed"], ["AC-2", "passed"]]));
+      symlinkSync(elsewhere, join(root, "outdir"), "dir");
+      symlinkSync(join(root, "real"), join(root, "indir"), "dir");
+      const out = await map(root, ["--issue-body", "issue.md", "--test-report", "outdir/x.xml"]);
+      expect(out.code).toBe(2);
+      expect(out.err).toContain("is a symlink pointing at");
+      expect((await map(root, ["--issue-body", "issue.md", "--test-report", "../x.xml"])).code).toBe(2);
+      expect((await map(root, ["--issue-body", "issue.md", "--test-report", "indir/x.xml"])).code).toBe(0);
+      expect((await map(root, ["--issue-body", "issue.md", "--test-report", join(elsewhere, "x.xml")])).code).toBe(0);
+    } finally {
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
   });
 
   it("refuses usage at exit 2: a missing flag, both modes, a malformed --issue or catalogue", async () => {
