@@ -1,6 +1,6 @@
 // Invokable before `bun install`: runtime imports reach builtins and the local
 // argument/format/seam code only. Never import CLI registry or package SDKs here.
-import { runtimeSupervisorInvocation, type SupervisorInvocation } from "./execute.js";
+import { runtimeSupervisorInvocation, type EntryRuntime, type SupervisorInvocation } from "./execute.js";
 import { UsageError } from "../cli/args.js";
 import { VerbUsageError } from "../cli/command.js";
 import { defaultSeams } from "../seam/exec.js";
@@ -10,7 +10,20 @@ export function standalone(argv: readonly string[], invocation?: SupervisorInvoc
   if (args.booleans.has("help")) { console.log(hostCommand.usage); return 0; }
   return hostAction({ args, repoFlag: null, json: args.booleans.has("json"), seams: defaultSeams(invocation), io: { out: console.log, err: console.error } });
 }
+/** Main-mode error boundary, including runtime discovery; standalone still throws. */
+export function standaloneMain(argv: readonly string[], runtime: () => EntryRuntime): number {
+  try {
+    const invocation = runtimeSupervisorInvocation(runtime(), ["_exec"]);
+    return standalone(argv, invocation);
+  } catch (error) {
+    console.error(`nen host: ${error instanceof Error ? error.message : String(error)}`);
+    return error instanceof UsageError || error instanceof VerbUsageError ? 2 : 1;
+  }
+}
 if (import.meta.main) {
-  try { process.exitCode = standalone(process.argv.slice(2), runtimeSupervisorInvocation({ executable: process.execPath, standalone: typeof Bun === "undefined" ? undefined : Bun.isStandaloneExecutable, entrypoint: typeof Bun === "undefined" ? "" : Bun.main }, ["_exec"])); }
-  catch (error) { console.error(`nen host: ${error instanceof Error ? error.message : String(error)}`); process.exitCode = error instanceof UsageError || error instanceof VerbUsageError ? 2 : 1; }
+  process.exitCode = standaloneMain(process.argv.slice(2), (): EntryRuntime => ({
+    executable: process.execPath,
+    standalone: typeof Bun === "undefined" ? undefined : Bun.isStandaloneExecutable,
+    entrypoint: typeof Bun === "undefined" ? "" : Bun.main,
+  }));
 }

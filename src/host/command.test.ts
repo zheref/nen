@@ -6,7 +6,8 @@ import { run } from "../index.js";
 import { ScriptedSeams } from "../seam/scripted.js";
 import { UsageError } from "../cli/args.js";
 import { VerbUsageError } from "../cli/command.js";
-import { standalone } from "./entry.js";
+import { standalone, standaloneMain } from "./entry.js";
+import type { EntryRuntime } from "./execute.js";
 import { HostRefusal, initStore, reserve, slots } from "./store.js";
 const roots: string[] = [];
 afterEach((): void => {
@@ -54,6 +55,62 @@ describe("standalone host entry adapter", (): void => {
     const root = mkdtempSync(join(tmpdir(), "nen-host-standalone-")); roots.push(root);
     return initStore(join(root, "budget"));
   }
+  const runtime = (): EntryRuntime => ({ executable: join(tmpdir(), "bun"), standalone: false, entrypoint: join(tmpdir(), "host-entry.ts") });
+  it("main-mode help returns success without changing the process exit code", (): void => {
+    const before = process.exitCode;
+    const out = vi.spyOn(console, "log").mockImplementation((): void => {});
+    const err = vi.spyOn(console, "error").mockImplementation((): void => {});
+    expect(standaloneMain(["--help"], runtime)).toBe(0);
+    expect(out).toHaveBeenCalledWith(expect.stringContaining("nen host init"));
+    expect(err).not.toHaveBeenCalled(); expect(process.exitCode).toBe(before);
+  });
+  it("main mode delegates JSON status to the real standalone action", (): void => {
+    const store = fixture(); const out = vi.spyOn(console, "log").mockImplementation((): void => {});
+    const err = vi.spyOn(console, "error").mockImplementation((): void => {});
+    expect(standaloneMain(["status", "--store", store.root, "--json"], runtime)).toBe(0);
+    expect(JSON.parse(String(out.mock.calls[0]?.[0]))).toMatchObject({ contract: "nen.host.status/v0.1", root: store.root, owners: [] });
+    expect(err).not.toHaveBeenCalled(); expect(slots(store)).toEqual([]);
+  });
+  it("main mode maps real parser and action usage errors to exit two with the host prefix", (): void => {
+    const out = vi.spyOn(console, "log").mockImplementation((): void => {});
+    const err = vi.spyOn(console, "error").mockImplementation((): void => {});
+    for (const argv of [["status", "--unknown"], ["invented"]]) {
+      err.mockClear();
+      expect(standaloneMain(argv, runtime)).toBe(2);
+      expect(err).toHaveBeenCalledTimes(1);
+      expect(err.mock.calls[0]?.[0]).toMatch(/^nen host: (?:unknown option|unknown 'host' subcommand)/);
+    }
+    expect(out).not.toHaveBeenCalled();
+  });
+  it("main mode maps an actual missing-store refusal to exit one", (): void => {
+    const out = vi.spyOn(console, "log").mockImplementation((): void => {});
+    const err = vi.spyOn(console, "error").mockImplementation((): void => {});
+    expect(standaloneMain(["status"], runtime)).toBe(1);
+    expect(err).toHaveBeenCalledWith(expect.stringMatching(/^nen host: .*missing/));
+    expect(out).not.toHaveBeenCalled();
+  });
+  it("keeps runtime descriptor construction and invocation refusal inside the main error boundary", (): void => {
+    const out = vi.spyOn(console, "log").mockImplementation((): void => {});
+    const err = vi.spyOn(console, "error").mockImplementation((): void => {});
+    expect(standaloneMain(["--help"], (): EntryRuntime => { throw new Error("runtime descriptor unavailable"); })).toBe(1);
+    expect(err).toHaveBeenLastCalledWith("nen host: runtime descriptor unavailable");
+    expect(standaloneMain(["--help"], (): EntryRuntime => ({ ...runtime(), standalone: undefined }))).toBe(1);
+    expect(err).toHaveBeenLastCalledWith(expect.stringMatching(/^nen host: current runtime/));
+    expect(standaloneMain(["--help"], (): EntryRuntime => ({ ...runtime(), entrypoint: "relative.ts" }))).toBe(1);
+    expect(err).toHaveBeenLastCalledWith(expect.stringMatching(/^nen host: source supervisor entrypoint must be absolute/));
+    expect(out).not.toHaveBeenCalled();
+  });
+  it("reports an unexpected output-channel failure without escaping the main boundary", (): void => {
+    vi.spyOn(console, "log").mockImplementation((): never => { throw new Error("output channel unavailable"); });
+    const err = vi.spyOn(console, "error").mockImplementation((): void => {});
+    expect(standaloneMain(["--help"], runtime)).toBe(1);
+    expect(err).toHaveBeenCalledWith("nen host: output channel unavailable");
+  });
+  it("normalizes a non-Error runtime failure through the original error path", (): void => {
+    const err = vi.spyOn(console, "error").mockImplementation((): void => {});
+    expect(standaloneMain(["--help"], (): EntryRuntime => { throw "runtime failure"; })).toBe(1);
+    expect(err).toHaveBeenCalledWith("nen host: runtime failure");
+  });
   it("prints help without opening or provisioning the configured missing store", (): void => {
     const root = mkdtempSync(join(tmpdir(), "nen-host-help-")); roots.push(root); const missing = join(root, "absent");
     vi.stubEnv("NEN_HOST_STORE", missing);
