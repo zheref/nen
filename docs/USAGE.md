@@ -4277,7 +4277,10 @@ own residue); catches it up with its base (`catch-up`) and publishes it
 (`publish`); lists every checkout of the project (`worktrees`) and swaps
 one worktree's committed tree into the core checkout and back (`swap`); and
 keeps one detached worktree at a fixed path at the trunk's fetched tip, with
-the maintainer's gitignored files copied in from core (`worktree`).
+the maintainer's gitignored files copied in from core (`worktree`); removes
+what an explicit cleanup plan names (`prune`); computes whether parallel
+efforts touch disjoint files (`overlap`, read-only); and counts the commits
+and diff stat beyond a named reviewed head (`ahead`, read-only).
 
 
 `--json`: the full `VerifyResult` — `{ ok, error, missing[], duplicated[], altered[], extra[], filesInOriginal, filesInBranches }`, where each entry of the four arrays carries `{ path, header }` and `duplicated` adds `branches[]`, `altered` adds `branch` and `diff`.
@@ -5324,12 +5327,25 @@ worse than one refused. `--of` and `--head` are likewise refused by every other 
 | `ahead <n>` | `0` | `--of` is an ancestor of `--head` and `n > 0` commits lie beyond it | `ahead`, `files`, `insertions`, `deletions` |
 | `even` | `3` | `--head` **is** `--of`: nothing new to review | all `0` |
 | `diverged` | `1` | `--of` is not an ancestor of `--head` -- a force-push, a rebase, a reset behind it | all `null`: **never a count** |
-| `unreadable` | `2` | the clone does not hold `--of` or `--head` as a commit, or git could not answer | all `null`: **never zero, never "nothing new"** |
+| `unreadable` | `2` | the clone does not hold `--of` or `--head` as a commit, the short id is ambiguous, a shallow clone answers "not an ancestor", or git could not answer | all `null`: **never zero, never "nothing new"** |
 
-So `nen wc ahead --repo . --of <sha> && <re-request>` fires only on real change. Exit `2` is also usage
-(above), with nothing on stdout; an `unreadable` verdict is always printed. An `ahead` with `files: 0` is
-commits whose net tree change is empty (a change and its revert); whether that is reviewable is the
-caller's judgement, not this verb's. A binary file counts as a file with no lines.
+**Only `even` means "nothing new".** `diverged` (exit `1`) and `unreadable` (exit `2`) are not: a rebased
+branch with new content is real change, and a ref the clone could not read says nothing either way, so a
+caller gives each its own branch rather than folding them into "no request" -- what it does with each is
+its judgement, not this verb's. Exit `2` is also usage (above), with nothing on stdout; an `unreadable`
+verdict is always printed. An `ahead` with `files: 0` is commits whose net tree change is empty (a change
+and its revert); whether that is reviewable is the caller's judgement, not this verb's. A binary file
+counts as a file with no lines.
+
+**Offline, whatever the clone.** Every git call runs with `GIT_NO_LAZY_FETCH=1` (the precedent
+[`schema check`](#nen-schema-check)'s canon-mirror row sets), so a **partial clone** answers from what it
+holds and never fetches a missing object from its promisor remote: a `--head` it does not hold is
+`unreadable`, and one missing the blobs the line counts need keeps its `ahead` count and its `files` count
+(`git diff --name-only` reads trees only) with `insertions` and `deletions` `null` and `reason` saying why.
+A **shallow clone** whose cut history answers "not an ancestor" is `unreadable` naming the shallow clone,
+never `diverged`: it cannot tell a rewrite from a history it does not hold. An **ambiguous short id** is
+`unreadable` with git's own ambiguity named in `reason`, so a caller gives more of the id rather than
+fetching.
 
 The text form prints `verdict: ahead <n>` / `verdict: even (…)` / `verdict: diverged (<reason>)` /
 `verdict: unreadable (<reason>; never read as nothing new)`, then `reviewed head: <sha> (--of <as
@@ -5337,8 +5353,9 @@ typed>)`, `head: <sha> (--head <as typed>)` (`(unresolved)` in place of a ref th
 for `ahead` and `even`, `diff: <files> file(s), +<insertions> -<deletions>`. `--json` top-level keys:
 `verdict` (`ahead` \| `even` \| `diverged` \| `unreadable`), `of` and `head` (as typed), `reviewedHead`
 and `headSha` (full ids, `null` when unresolved), `ahead`, `files`, `insertions`, `deletions` (numbers for
-`ahead` and `even`, `null` otherwise), and `reason` (why there is no count, `null` otherwise). Writes
-nothing.
+`ahead` and `even`, `null` otherwise; `insertions`/`deletions` also `null` on an `ahead` whose line
+counts a partial clone could not read), and `reason` (why there is no count, or why an `ahead`'s line
+counts are `null`; `null` otherwise). Writes nothing.
 
 **Example**
 

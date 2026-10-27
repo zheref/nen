@@ -8,7 +8,7 @@
 // a fixed path with the core-to-worktree copy; and -- zheref/nen#551 -- `nen
 // wc ahead` (./ahead.ts), the commits and diff stat beyond a named reviewed head.
 
-import { AHEAD_EXIT, readAhead, renderAhead } from "./ahead.js";
+import { AHEAD_EXIT, readAhead, refuseOptionRef, renderAhead } from "./ahead.js";
 import { runPrune } from "./prune.js";
 import { ancestryReader, computeOverlap, readEffortFiles, renderOverlap, withDeclared } from "./overlap.js";
 import { assertRepoRoot } from "../repo/root.js";
@@ -24,6 +24,7 @@ import {
 } from "../cli/command.js";
 import { readTextFile, splitList } from "../cli/inputs.js";
 import { GIT } from "../seam/exec.js";
+import { GIT_ENV } from "../schema/canonmirror.js";
 import { plainLine } from "../cli/plain.js";
 import { SchemaError } from "../schema/errors.js";
 import { loadWorkflow, WORKFLOW_FILE, type LoadedWorkflow } from "../schema/workflow.js";
@@ -59,13 +60,20 @@ const USAGE = `nen wc ahead --repo <path> --of <reviewed-head> [--head <ref>] [-
   reviewed head IS the head: nothing new to review) | diverged (the reviewed
   head is not an ancestor -- a force-push, a rebase, a reset; never a count)
   | unreadable (the clone does not hold one of the refs as a commit, or git
-  could not answer; never zero, never "nothing new"). An 'ahead' with
-  files 0 is commits whose net tree change is empty; whether that is
-  reviewable is the caller's judgement. Writes nothing.
+  could not answer, an ambiguous short id, or a SHALLOW clone saying "not an
+  ancestor"; never zero, never "nothing new"). Every git call runs with
+  GIT_NO_LAZY_FETCH=1, so a partial clone never fetches a missing object; one
+  missing the blobs the line counts need keeps its count and file count, with
+  insertions/deletions null and reason saying why. Only 'even' means nothing
+  new: diverged and unreadable need their own branch in the caller (a
+  rebased branch with new content is real change). An 'ahead' with files 0
+  is commits whose net tree change is empty; whether that is reviewable is
+  the caller's judgement. Writes nothing.
   --json: { verdict, of, reviewedHead, head, headSha, ahead, files,
   insertions, deletions, reason }; reviewedHead/headSha are full ids or null
   when unresolved; ahead/files/insertions/deletions are null unless ahead or
-  even; reason says why there is no count. Exit 0 ahead, 3 even, 1 diverged,
+  even; reason says why there is no count, or why an ahead's line counts
+  are null. Exit 0 ahead, 3 even, 1 diverged,
   2 unreadable (the verdict still printed) or usage (--of missing, a ref
   starting with '-', --repo not a git checkout, another verb's flag).
 
@@ -1032,11 +1040,10 @@ function doAhead(context: CommandContext): number {
   if (of === undefined || of.trim() === "") throw new VerbUsageError("--of <reviewed-head> is required: the commit the last review read (a full or short id, or any ref the clone holds).");
   const head = context.args.values["head"] ?? "HEAD";
   if (head.trim() === "") throw new VerbUsageError("--head is empty; omit it to count up to HEAD.");
-  for (const [flag, ref] of [["--of", of], ["--head", head]] as const) {
-    if (ref.startsWith("-")) throw new VerbUsageError(`${flag} '${ref}' starts with '-', which git would read as an option; refused rather than escaped.`);
-  }
+  refuseOptionRef("--of", of);
+  refuseOptionRef("--head", head);
   // NOT A REPOSITORY IS WIRING, never "unreadable ref": the refs were never asked.
-  const probe = context.seams.run(GIT, ["-C", root, "rev-parse", "--git-dir"]);
+  const probe = context.seams.run(GIT, ["-C", root, "rev-parse", "--git-dir"], { env: GIT_ENV });
   if (!probe.spawnFailed && probe.code !== 0) throw new VerbUsageError(`--repo '${root}' is not a git checkout; 'wc ahead' counts commits in a clone.`);
   const report = readAhead(context.seams, root, of, head);
   emit(context.io, context.json, report, renderAhead(report));

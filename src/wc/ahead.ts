@@ -17,21 +17,34 @@
 //   ahead     -- the reviewed head is an ancestor and N > 0 commits lie beyond
 //                it; the count, the head's full id and the diff stat. Exit 0.
 //   even      -- the reviewed head IS the branch's head: nothing new to review.
-//                Exit 3, so `nen wc ahead ... && <re-request>` never fires on
-//                zero reviewable change.
+//                Exit 3: the one verdict that means "nothing new". Exit 1
+//                and exit 2 are NOT "nothing new" -- a rebased branch with
+//                new content is real change -- and need their own branch in
+//                the caller; what to do with each is the caller's to decide.
 //   diverged  -- the reviewed head is not an ancestor of the branch (a
-//                force-push, a rebase, a reset behind it). NEVER a count: every
-//                count field is null. Exit 1.
-//   unreadable -- the clone does not hold one of the two refs as a commit, or
-//                git could not answer. Never zero, never "nothing new". Exit 2,
+//                force-push, a rebase, a reset behind it), in a clone that is
+//                not shallow. NEVER a count: every count field is null. Exit 1.
+//   unreadable -- the clone does not hold one of the two refs as a commit, the
+//                short id is ambiguous, a SHALLOW clone says "not an ancestor"
+//                (its cut history cannot tell that from a rewrite), or git
+//                could not answer. Never zero, never "nothing new". Exit 2,
 //                with the verdict still printed (and emitted under --json).
 //
 // READ-ONLY, AND NO FETCH (AS-1). rev-parse, merge-base --is-ancestor,
 // rev-list --count and diff --numstat; nothing is written and no remote is
-// reached, exactly as `wc overlap` reads merge-base diffs locally. A reviewed
-// head the clone does not hold is `unreadable` -- fetching it is the caller's.
+// reached, exactly as `wc overlap` reads merge-base diffs locally. EVERY git
+// call runs under GIT_ENV (GIT_NO_LAZY_FETCH=1, ../schema/canonmirror.ts's
+// precedent): a partial clone answers from what it holds and never fetches a
+// missing object from its promisor remote -- without it, rev-parse fetched a
+// --head the clone did not hold and answered `ahead` (hanten round 1, Feitan).
+// A reviewed head the clone does not hold is `unreadable` -- fetching it is the
+// caller's. A partial clone missing the blobs the line counts need still gets
+// the count and the file count (`diff --name-only` reads trees only), with
+// `insertions`/`deletions` null and `reason` saying why.
 
-import { GIT, outputLines, type Seams } from "../seam/exec.js";
+import { VerbUsageError } from "../cli/command.js";
+import { GIT_ENV } from "../schema/canonmirror.js";
+import { GIT, outputLines, type CommandResult, type Seams } from "../seam/exec.js";
 
 export type AheadVerdict = "ahead" | "even" | "diverged" | "unreadable";
 
@@ -52,7 +65,7 @@ export interface AheadReport {
   readonly files: number | null;
   readonly insertions: number | null;
   readonly deletions: number | null;
-  /** Why there is no count: the `diverged` or `unreadable` reason; null otherwise. */
+  /** Why there is no count (`diverged`, `unreadable`), or why an `ahead`'s line counts are null; null otherwise. */
   readonly reason: string | null;
 }
 
@@ -64,15 +77,31 @@ interface Resolved {
   readonly reason: string | null;
 }
 
-const gitReason = (stderr: string, fallback: string): string => outputLines(stderr).join(" ") || fallback;
+const gitReason = (stderr: string, fallback: string): string => outputLines(stderr).filter((line): boolean => !line.startsWith("hint:")).join(" ") || fallback;
+
+/** Every git call this verb makes: `-C <root>`, offline under GIT_ENV, whatever the clone's promisor says. */
+const git = (seams: Seams, root: string, args: readonly string[]): CommandResult => seams.run(GIT, ["-C", root, ...args], { env: GIT_ENV });
+
+/**
+ * A ref git would read as an option (SEC-7). Refused HERE, in the exported
+ * reader, so a second caller is guarded too -- and rev-parse is also given
+ * `--end-of-options` before the ref.
+ */
+export function refuseOptionRef(flag: string, ref: string): void {
+  if (ref.startsWith("-")) throw new VerbUsageError(`${flag} '${ref}' starts with '-', which git would read as an option; refused rather than escaped.`);
+}
 
 /** One ref to a full commit id, or the reason it does not resolve. Never a fetch. */
 function resolveCommit(seams: Seams, root: string, ref: string, flag: string): Resolved {
-  const result = seams.run(GIT, ["-C", root, "rev-parse", "--verify", "--quiet", `${ref}^{commit}`]);
+  // NO --quiet: git's own `error:` line is how an AMBIGUOUS short id is told
+  // apart from one the clone does not hold (hanten round 1, Nobunaga).
+  const result = git(seams, root, ["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`]);
   if (result.spawnFailed) return { sha: null, reason: "git could not be started" };
   const sha = result.stdout.trim();
   if (result.code !== 0 || !/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(sha)) {
-    return { sha: null, reason: `the clone does not hold ${flag} '${ref}' as a commit (no fetch is made)${result.stderr.trim() === "" ? "" : `: ${gitReason(result.stderr, "")}`}` };
+    const errors = outputLines(result.stderr).filter((line): boolean => line.startsWith("error:")).join(" ");
+    if (/is ambiguous/.test(errors)) return { sha: null, reason: `${flag} '${ref}' is an ambiguous short id in this clone -- give more of the id (${errors})` };
+    return { sha: null, reason: `the clone does not hold ${flag} '${ref}' as a commit (no fetch is made)${errors === "" ? "" : `: ${errors}`}` };
   }
   return { sha, reason: null };
 }
@@ -95,6 +124,8 @@ export function parseNumstat(stdout: string): { files: number; insertions: numbe
 }
 
 export function readAhead(seams: Seams, root: string, of: string, head: string): AheadReport {
+  refuseOptionRef("--of", of);
+  refuseOptionRef("--head", head);
   const none = { ahead: null, files: null, insertions: null, deletions: null };
   const reviewed = resolveCommit(seams, root, of, "--of");
   const tip = resolveCommit(seams, root, head, "--head");
@@ -103,12 +134,30 @@ export function readAhead(seams: Seams, root: string, of: string, head: string):
     return { verdict: "unreadable", of, reviewedHead: reviewed.sha, head, headSha: tip.sha, ...none, reason };
   }
   const known = { reviewedHead: reviewed.sha, headSha: tip.sha };
-  const ancestry = seams.run(GIT, ["-C", root, "merge-base", "--is-ancestor", reviewed.sha, tip.sha]);
+  const ancestry = git(seams, root, ["merge-base", "--is-ancestor", reviewed.sha, tip.sha]);
   if (ancestry.spawnFailed || (ancestry.code !== 0 && ancestry.code !== 1)) {
     const reason = ancestry.spawnFailed ? "git could not be started" : `git could not say whether --of is an ancestor of --head: ${gitReason(ancestry.stderr, `merge-base exit ${ancestry.code}`)}`;
     return { verdict: "unreadable", of, reviewedHead: known.reviewedHead, head, headSha: known.headSha, ...none, reason };
   }
   if (ancestry.code === 1) {
+    // A SHALLOW CLONE'S "NO" IS NOT A REWRITE: its history is cut at the
+    // depth it was fetched to, so the reviewed head can be a real ancestor
+    // the clone cannot walk to (hanten round 1, Nobunaga). Unreadable, named.
+    const shallow = git(seams, root, ["rev-parse", "--is-shallow-repository"]);
+    if (shallow.spawnFailed || shallow.code !== 0) {
+      return { verdict: "unreadable", of, reviewedHead: known.reviewedHead, head, headSha: known.headSha, ...none, reason: `git could not say whether this clone is shallow: ${shallow.spawnFailed ? "git could not be started" : gitReason(shallow.stderr, `rev-parse exit ${shallow.code}`)}` };
+    }
+    if (shallow.stdout.trim() === "true") {
+      return {
+        verdict: "unreadable",
+        of,
+        reviewedHead: known.reviewedHead,
+        head,
+        headSha: known.headSha,
+        ...none,
+        reason: `this clone is shallow, so git cannot tell whether ${reviewed.sha} is an ancestor of ${tip.sha} beyond its depth; deepen or unshallow it (no fetch is made)`,
+      };
+    }
     return {
       verdict: "diverged",
       of,
@@ -123,17 +172,37 @@ export function readAhead(seams: Seams, root: string, of: string, head: string):
     return { verdict: "even", of, reviewedHead: known.reviewedHead, head, headSha: known.headSha, ahead: 0, files: 0, insertions: 0, deletions: 0, reason: null };
   }
   const unread = (reason: string): AheadReport => ({ verdict: "unreadable", of, reviewedHead: known.reviewedHead, head, headSha: known.headSha, ...none, reason });
-  const count = seams.run(GIT, ["-C", root, "rev-list", "--count", `${reviewed.sha}..${tip.sha}`]);
+  const count = git(seams, root, ["rev-list", "--count", `${reviewed.sha}..${tip.sha}`]);
   if (count.spawnFailed) return unread("git could not be started");
   const ahead = Number(count.stdout.trim());
   if (count.code !== 0 || !/^\d+$/.test(count.stdout.trim())) return unread(`git rev-list --count failed: ${gitReason(count.stderr, `exit ${count.code}`)}`);
   // An ancestor that is not the head always has at least one commit beyond it;
   // a zero here is git disagreeing with itself, never "even".
   if (ahead === 0) return unread(`git rev-list counted 0 commits between two different commits ${reviewed.sha} and ${tip.sha}`);
-  const diff = seams.run(GIT, ["-C", root, "diff", "--numstat", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", reviewed.sha, tip.sha, "--"]);
+  const diff = git(seams, root, ["diff", "--numstat", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", reviewed.sha, tip.sha, "--"]);
   if (diff.spawnFailed) return unread("git could not be started");
   const stat = diff.code === 0 ? parseNumstat(diff.stdout) : null;
-  if (stat === null) return unread(`git diff --numstat failed: ${gitReason(diff.stderr, `exit ${diff.code}`)}`);
+  if (stat === null) {
+    // THE LINE COUNTS NEED BLOBS; THE FILE COUNT NEEDS ONLY TREES. A partial
+    // clone missing a blob (no lazy fetch) keeps its count and its file count,
+    // and says why its line counts are null -- never a zero.
+    const names = git(seams, root, ["diff", "--name-only", "-z", "--no-renames", reviewed.sha, tip.sha, "--"]);
+    if (names.spawnFailed) return unread("git could not be started");
+    if (names.code !== 0) return unread(`git diff failed: ${gitReason(diff.stderr, `exit ${diff.code}`)}`);
+    const files = names.stdout.split("\0").filter((path): boolean => path !== "").length;
+    return {
+      verdict: "ahead",
+      of,
+      reviewedHead: known.reviewedHead,
+      head,
+      headSha: known.headSha,
+      ahead,
+      files,
+      insertions: null,
+      deletions: null,
+      reason: `line counts not read -- git diff --numstat failed (a partial clone missing blobs; no fetch is made): ${gitReason(diff.stderr, `exit ${diff.code}`)}`,
+    };
+  }
   return { verdict: "ahead", of, reviewedHead: known.reviewedHead, head, headSha: known.headSha, ahead, ...stat, reason: null };
 }
 
@@ -145,6 +214,8 @@ export function renderAhead(report: AheadReport): readonly string[] {
   else lines.push(`verdict: unreadable (${report.reason ?? ""}; never read as nothing new)`);
   lines.push(`reviewed head: ${report.reviewedHead ?? "(unresolved)"} (--of ${report.of})`);
   lines.push(`head: ${report.headSha ?? "(unresolved)"} (--head ${report.head})`);
-  if (report.files !== null) lines.push(`diff: ${report.files} file(s), +${report.insertions ?? 0} -${report.deletions ?? 0}`);
+  if (report.files !== null) {
+    lines.push(report.insertions === null || report.deletions === null ? `diff: ${report.files} file(s), line counts not read (${report.reason ?? ""})` : `diff: ${report.files} file(s), +${report.insertions} -${report.deletions}`);
+  }
   return lines;
 }

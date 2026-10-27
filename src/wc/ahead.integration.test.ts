@@ -8,9 +8,9 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
-import { defaultSeams, type Seams } from "../seam/exec.js";
+import { defaultSeams, type CommandResult, type Seams } from "../seam/exec.js";
 import { wcCommand } from "./command.js";
-import { parseNumstat, type AheadReport } from "./ahead.js";
+import { parseNumstat, readAhead, type AheadReport } from "./ahead.js";
 import { scrubbedGitEnv } from "./worktree.js";
 
 const roots: string[] = [];
@@ -141,6 +141,80 @@ describe("wc ahead -- commits beyond a named reviewed head, real repositories", 
     expect(await runFamily(wcCommand, ["wc", "ahead", "extra", "--repo", w.repo, "--of", "main"], w.repo, false, io, defaultSeams())).toBe(2);
     expect(await runFamily(wcCommand, ["wc", "classify", "--repo", w.repo, "--of", "main"], w.repo, false, io, defaultSeams())).toBe(2);
     expect(err.join("\n")).toContain("only 'wc ahead' takes it");
+  });
+});
+
+/** A served origin and a clone of it made with `cloneArgs`, over file:// so filters and depth apply. */
+function served(cloneArgs: readonly string[]): { root: string; origin: string; clone: string; reviewed: string; tip: string } {
+  const root = mkdtempSync(join(tmpdir(), "nen-ahead-served-")); roots.push(root);
+  const origin = join(root, "origin"); const clone = join(root, "clone");
+  git(root, "init", "--initial-branch=main", origin);
+  for (const [key, value] of [["user.email", "fixture@example.invalid"], ["user.name", "fixture"], ["commit.gpgsign", "false"], ["core.hooksPath", "/dev/null"], ["uploadpack.allowFilter", "true"], ["uploadpack.allowAnySHA1InWant", "true"]]) git(origin, "config", key as string, value as string);
+  commit(origin, "seed.txt", "seed\n", "seed");
+  const reviewed = commit(origin, "a.txt", "one\n", "reviewed");
+  const tip = commit(origin, "a.txt", "one\ntwo\n", "beyond");
+  git(root, "clone", "-q", ...cloneArgs, `file://${origin}`, clone);
+  return { root, origin, clone, reviewed, tip };
+}
+const objectCount = (repo: string): string => git(repo, "count-objects", "-v");
+const holds = (repo: string, sha: string): boolean => spawnSync("git", ["-C", repo, "cat-file", "-e", sha], { env: { ...env, GIT_NO_LAZY_FETCH: "1" } }).status === 0;
+
+describe("wc ahead -- offline in partial and shallow clones (hanten round 1)", () => {
+  it("a partial clone never fetches: a --head it does not hold is unreadable at exit 2, and the object stays absent (Feitan F1, AC-3)", async () => {
+    const w = served(["--filter=blob:none", "--no-checkout"]);
+    const later = commit(w.origin, "b.txt", "later\n", "after the clone");
+    const before = objectCount(w.clone);
+    const result = await run(w.clone, ["--of", w.reviewed, "--head", later]);
+    expect(result.code).toBe(2);
+    expect(result.report).toMatchObject({ verdict: "unreadable", reviewedHead: w.reviewed, headSha: null, ahead: null });
+    expect(holds(w.clone, later)).toBe(false);
+    expect(objectCount(w.clone)).toBe(before);
+  });
+
+  it("a partial clone missing the blobs keeps its count and file count, with the line counts null and the reason named -- no blob fetched (Feitan F1)", async () => {
+    const w = served(["--filter=blob:none", "--no-checkout"]);
+    const before = objectCount(w.clone);
+    const result = await run(w.clone, ["--of", w.reviewed, "--head", "origin/main"]);
+    expect(result.code).toBe(0);
+    expect(result.report).toMatchObject({ verdict: "ahead", headSha: w.tip, ahead: 1, files: 1, insertions: null, deletions: null });
+    expect(result.report?.reason).toContain("line counts not read");
+    expect(objectCount(w.clone)).toBe(before);
+    const text = await run(w.clone, ["--of", w.reviewed, "--head", "origin/main"], false);
+    expect(text.out[3]).toMatch(/^diff: 1 file\(s\), line counts not read \(/);
+  });
+
+  it("a shallow clone's 'not an ancestor' is unreadable naming the shallow clone, never diverged (Nobunaga M1, AC-2)", async () => {
+    const w = served(["--depth", "1"]);
+    git(w.clone, "fetch", "-q", "--depth", "1", "origin", w.reviewed);
+    expect(holds(w.clone, w.reviewed)).toBe(true);
+    const result = await run(w.clone, ["--of", w.reviewed]);
+    expect(result.code).toBe(2);
+    expect(result.report).toMatchObject({ verdict: "unreadable", reviewedHead: w.reviewed, headSha: w.tip, ahead: null });
+    expect(result.report?.reason).toContain("this clone is shallow");
+  });
+});
+
+describe("readAhead -- the exported reader's own guards", () => {
+  const never: Seams = { ...defaultSeams(), run: (): CommandResult => { throw new Error("git must not be spawned"); } };
+  it("refuses a dash-led --of or --head itself, before any git call, so a second caller is guarded too (Feitan F2, SEC-7)", () => {
+    expect(() => readAhead(never, "/nowhere", "--output=x", "HEAD")).toThrow(/--of '--output=x' starts with '-'/);
+    expect(() => readAhead(never, "/nowhere", "abc", "-x")).toThrow(/--head '-x' starts with '-'/);
+  });
+
+  it("passes --end-of-options and GIT_NO_LAZY_FETCH on every git call, and names an ambiguous short id (Nobunaga L1)", () => {
+    const calls: { args: readonly string[]; env: unknown }[] = [];
+    const seams: Seams = {
+      ...defaultSeams(),
+      run: (_command, args, options): CommandResult => {
+        calls.push({ args, env: options?.env });
+        return { code: 128, stdout: "", stderr: "error: short object ID 0206 is ambiguous\nhint: The candidates are:\nhint:   0206aa commit\nfatal: Needed a single revision\n", spawnFailed: false };
+      },
+    };
+    const report = readAhead(seams, "/repo", "0206", "HEAD");
+    expect(report.verdict).toBe("unreadable");
+    expect(report.reason).toBe("--of '0206' is an ambiguous short id in this clone -- give more of the id (error: short object ID 0206 is ambiguous); --head 'HEAD' is an ambiguous short id in this clone -- give more of the id (error: short object ID 0206 is ambiguous)");
+    expect(calls[0]?.args).toEqual(["-C", "/repo", "rev-parse", "--verify", "--end-of-options", "0206^{commit}"]);
+    expect(calls.every((call) => (call.env as Record<string, string> | undefined)?.["GIT_NO_LAZY_FETCH"] === "1")).toBe(true);
   });
 });
 
