@@ -82,8 +82,8 @@
       "host-admission": {
         "test": {
           "exe": "bunx",
-          "argv": ["vitest", "run", "--maxWorkers=1", "--minWorkers=1", "src/host/store.test.ts", "src/host/process.test.ts", "src/host/execute.test.ts", "src/host/guard.test.ts", "src/host/command.test.ts", "src/host/admission.integration.test.ts", "src/host/ci.test.ts", "src/host/shu.test.ts", "src/pipeline.test.ts", "src/ci/runner-policy.test.ts", "src/cli/surface.test.ts", "src/cli/usage-contracts.test.ts", "src/cli/json-shape.test.ts", "src/taxonomy-purity.test.ts"],
-          "why": "NN536 focused synthetic admission proof: a temp host store, two tiny competing processes at capacity one, nested inherited ownership, corrupt/unreadable state and descendant quiescence. Includes source/pre-install entry adapters, live CI wiring, canonical docs inventories and the unchanged taxonomy-purity guard. One Vitest worker; no coverage or stress reproduction."
+          "argv": ["vitest", "run", "--maxWorkers=1", "--minWorkers=1", "src/host/store.test.ts", "src/host/process.test.ts", "src/host/execute.test.ts", "src/host/guard.test.ts", "src/host/command.test.ts", "src/host/admission.integration.test.ts", "src/host/ci.test.ts", "src/host/shu.test.ts", "src/pipeline.test.ts", "src/ci/runner-policy.test.ts", "src/cli/surface.test.ts", "src/cli/usage-contracts.test.ts", "src/cli/json-shape.test.ts", "src/taxonomy-purity.test.ts", "src/parse/izanami.test.ts"],
+          "why": "NN536 focused synthetic admission proof: a temp host store, two tiny competing processes at capacity one, nested inherited ownership, corrupt/unreadable state and descendant quiescence. Includes source/pre-install entry adapters, live CI wiring, canonical docs inventories, the unchanged taxonomy-purity guard and exhaustive read-only parser host policy. One Vitest worker; no coverage or stress reproduction."
         }
       },
       "device-records": {
