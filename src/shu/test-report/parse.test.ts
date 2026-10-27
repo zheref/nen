@@ -459,7 +459,10 @@ describe("the read is a regular file inside the tree (zheref/nen#556 review F4)"
     }
   });
 
-  it("refuses a FIFO rather than reading it without end", () => {
+  // POSIX ONLY: Windows has no mkfifo, so the path would never exist and the
+  // read would answer "no test report" instead -- the repository's idiom for
+  // a POSIX-only case (src/index.test.ts, src/classify/apply.test.ts).
+  it.skipIf(process.platform === "win32")("refuses a FIFO rather than reading it without end (POSIX only: Windows has no mkfifo)", () => {
     const dir = mkdtempSync(join(tmpdir(), "nen-report-fifo-"));
     try {
       const fifo = join(dir, "pipe.xml");
