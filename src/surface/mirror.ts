@@ -1399,7 +1399,8 @@ export function checkSurfaceMirror(
     }
     const existing = readFileSync(path, "utf8");
     if (row.verbatim || file.markerless === true) {
-      (existing === file.content ? ok : handEdited).push(file.path);
+      const sameMode = file.mode === undefined || modeOf(path) === hostMode(file.mode);
+      (existing === file.content && sameMode ? ok : handEdited).push(file.path);
       continue;
     }
     const marker = readMarker(existing);
