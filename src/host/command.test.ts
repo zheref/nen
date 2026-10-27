@@ -1,11 +1,18 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run } from "../index.js";
 import { ScriptedSeams } from "../seam/scripted.js";
+import { UsageError } from "../cli/args.js";
+import { VerbUsageError } from "../cli/command.js";
+import { standalone } from "./entry.js";
+import { HostRefusal, initStore, reserve, slots } from "./store.js";
 const roots: string[] = [];
-afterEach((): void => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+afterEach((): void => {
+  vi.restoreAllMocks(); vi.unstubAllEnvs();
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
 async function capture(argv: readonly string[], env: Readonly<Record<string, string | undefined>> = {}): Promise<{ code: number; out: string; err: string }> {
   const out: string[] = []; const err: string[] = [];
   const code = await run(["host", ...argv], { out: (text): void => { out.push(text); }, err: (text): void => { err.push(text); } }, new ScriptedSeams([], { env }));
@@ -34,5 +41,62 @@ describe("host CLI contract", (): void => {
   it("describes shared provisioning, nested validation, refusal and containment limits", async (): Promise<void> => {
     const result = await capture(["--help"]); expect(result.code).toBe(0);
     for (const text of ["NEN_HOST_STORE", "capacity 1", "wait 0ms", "coordinator", "Windows", "escaping"]) expect(result.out).toContain(text);
+  });
+});
+
+// These invoke the real dependency-free adapter in this instrumented process.
+// They neither pretend to be import.meta.main nor launch a subprocess.
+describe("standalone host entry adapter", (): void => {
+  beforeEach((): void => {
+    vi.stubEnv("NEN_HOST_STORE", undefined); vi.stubEnv("NEN_HOST_CLAIM", undefined); vi.stubEnv("NEN_HOST_SLOT", undefined);
+  });
+  function fixture(): ReturnType<typeof initStore> {
+    const root = mkdtempSync(join(tmpdir(), "nen-host-standalone-")); roots.push(root);
+    return initStore(join(root, "budget"));
+  }
+  it("prints help without opening or provisioning the configured missing store", (): void => {
+    const root = mkdtempSync(join(tmpdir(), "nen-host-help-")); roots.push(root); const missing = join(root, "absent");
+    vi.stubEnv("NEN_HOST_STORE", missing);
+    const out = vi.spyOn(console, "log").mockImplementation((): void => {});
+    const err = vi.spyOn(console, "error").mockImplementation((): void => {});
+    expect(standalone(["--help"])).toBe(0);
+    expect(out).toHaveBeenCalledTimes(1);
+    expect(out.mock.calls[0]?.[0]).toContain("nen host run");
+    expect(err).not.toHaveBeenCalled(); expect(existsSync(missing)).toBe(false);
+    expect(readdirSync(root)).toEqual([]);
+  });
+  it("returns JSON status of its owned store without mutating configuration or occupied claims", (): void => {
+    const store = fixture(); const reservation = reserve(store, "standalone status owner", { pid: 100, pgid: 100, started: "synthetic fixture" });
+    vi.stubEnv("NEN_HOST_STORE", store.root);
+    const configPath = join(store.root, "config.json"); const claimPath = join(store.root, "slots", "1.json");
+    const before = { config: readFileSync(configPath, "utf8"), claim: readFileSync(claimPath, "utf8"), files: readdirSync(store.root) };
+    const out = vi.spyOn(console, "log").mockImplementation((): void => {});
+    const err = vi.spyOn(console, "error").mockImplementation((): void => {});
+    const invocation = { exe: join(store.root, "unused-runtime"), argv: ["host", "_exec"] };
+    expect(standalone(["status", "--json"], invocation)).toBe(0);
+    expect(out).toHaveBeenCalledTimes(1);
+    const report = JSON.parse(String(out.mock.calls[0]?.[0]));
+    expect(report.contract).toBe("nen.host.status/v0.1"); expect(report.config).toEqual(store.config);
+    expect(report.owners).toEqual([{ slot: 1, claim: reservation.claim, problem: null }]);
+    expect(readFileSync(configPath, "utf8")).toBe(before.config); expect(readFileSync(claimPath, "utf8")).toBe(before.claim);
+    expect(readdirSync(store.root)).toEqual(before.files); expect(err).not.toHaveBeenCalled();
+  });
+  it("exposes real parser and action refusals to the entry caller without printing a successful result", (): void => {
+    const out = vi.spyOn(console, "log").mockImplementation((): void => {});
+    for (const argv of [["status", "--unknown"], ["status", "--store"]]) {
+      expect((): number => standalone(argv)).toThrow(UsageError);
+    }
+    for (const argv of [[], ["invented"], ["status", "--capacity", "2"], ["run", "before-separator"], ["status", "--", "payload"]]) {
+      expect((): number => standalone(argv)).toThrow(VerbUsageError);
+    }
+    expect(out).not.toHaveBeenCalled();
+  });
+  it("refuses an absent supervisor adapter before capacity acquisition or payload execution", (): void => {
+    const store = fixture(); const out = vi.spyOn(console, "log").mockImplementation((): void => {});
+    expect((): number => standalone(["run", "--store", store.root, "--", "must-never-be-launched"]))
+      .toThrow(HostRefusal);
+    expect((): number => standalone(["run", "--store", store.root, "--", "must-never-be-launched"]))
+      .toThrow(/entry adapter.*no capacity was acquired/);
+    expect(slots(store)).toEqual([]); expect(out).not.toHaveBeenCalled();
   });
 });
