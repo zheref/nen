@@ -20,10 +20,14 @@ export function standaloneMain(argv: readonly string[], runtime: () => EntryRunt
     return error instanceof UsageError || error instanceof VerbUsageError ? 2 : 1;
   }
 }
-if (import.meta.main) {
-  process.exitCode = standaloneMain(process.argv.slice(2), (): EntryRuntime => ({
+/** Read the actual current runtime lazily; callers choose no supervisor path. */
+export function currentEntryRuntime(): EntryRuntime {
+  return {
     executable: process.execPath,
     standalone: typeof Bun === "undefined" ? undefined : Bun.isStandaloneExecutable,
     entrypoint: typeof Bun === "undefined" ? "" : Bun.main,
-  }));
+  };
+}
+if (import.meta.main) {
+  process.exitCode = standaloneMain(process.argv.slice(2), currentEntryRuntime);
 }

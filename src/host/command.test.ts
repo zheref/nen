@@ -6,12 +6,12 @@ import { run } from "../index.js";
 import { ScriptedSeams } from "../seam/scripted.js";
 import { UsageError } from "../cli/args.js";
 import { VerbUsageError } from "../cli/command.js";
-import { standalone, standaloneMain } from "./entry.js";
+import { currentEntryRuntime, standalone, standaloneMain } from "./entry.js";
 import type { EntryRuntime } from "./execute.js";
 import { HostRefusal, initStore, reserve, slots } from "./store.js";
 const roots: string[] = [];
 afterEach((): void => {
-  vi.restoreAllMocks(); vi.unstubAllEnvs();
+  vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 async function capture(argv: readonly string[], env: Readonly<Record<string, string | undefined>> = {}): Promise<{ code: number; out: string; err: string }> {
@@ -56,6 +56,43 @@ describe("standalone host entry adapter", (): void => {
     return initStore(join(root, "budget"));
   }
   const runtime = (): EntryRuntime => ({ executable: join(tmpdir(), "bun"), standalone: false, entrypoint: join(tmpdir(), "host-entry.ts") });
+  it("reads the actual host executable and available runtime fields without inference", (): void => {
+    const actual = currentEntryRuntime();
+    expect(actual.executable).toBe(process.execPath);
+    if (typeof Bun === "undefined") {
+      expect(actual).toMatchObject({ standalone: undefined, entrypoint: "" });
+    } else {
+      expect(actual).toMatchObject({ standalone: Bun.isStandaloneExecutable, entrypoint: Bun.main });
+    }
+  });
+  it("keeps the Node/no-Bun fallback explicit and refuses it inside the main boundary", (): void => {
+    // Explicit unit stub; this is not a claim to execute a Bun main module.
+    vi.stubGlobal("Bun", undefined);
+    expect(currentEntryRuntime()).toEqual({ executable: process.execPath, standalone: undefined, entrypoint: "" });
+    const err = vi.spyOn(console, "error").mockImplementation((): void => {});
+    expect(standaloneMain(["--help"], currentEntryRuntime)).toBe(1);
+    expect(err).toHaveBeenCalledWith(expect.stringMatching(/^nen host: current runtime/));
+  });
+  it.each([false, true])("reads explicitly unit-stubbed Bun fields (standalone=%s)", (standaloneMode): void => {
+    const entrypoint = join(tmpdir(), "unit-only-entry.ts");
+    vi.stubGlobal("Bun", { isStandaloneExecutable: standaloneMode, main: entrypoint });
+    expect(currentEntryRuntime()).toEqual({ executable: process.execPath, standalone: standaloneMode, entrypoint });
+    const out = vi.spyOn(console, "log").mockImplementation((): void => {});
+    expect(standaloneMain(["--help"], currentEntryRuntime)).toBe(0);
+    expect(out).toHaveBeenCalledWith(expect.stringContaining("nen host run"));
+  });
+  it.each(["isStandaloneExecutable", "main"])("catches an actual reader's unit-stubbed %s getter failure lazily", (field): void => {
+    const getter = vi.fn((): never => { throw new Error(`${field} unavailable`); });
+    const bunStub = { isStandaloneExecutable: false, main: join(tmpdir(), "unit-entry.ts") };
+    Object.defineProperty(bunStub, field, { get: getter });
+    vi.stubGlobal("Bun", bunStub);
+    const read = currentEntryRuntime;
+    const err = vi.spyOn(console, "error").mockImplementation((): void => {});
+    expect(getter).not.toHaveBeenCalled();
+    expect(standaloneMain(["--help"], read)).toBe(1);
+    expect(getter).toHaveBeenCalledTimes(1);
+    expect(err).toHaveBeenCalledWith(`nen host: ${field} unavailable`);
+  });
   it("main-mode help returns success without changing the process exit code", (): void => {
     const before = process.exitCode;
     const out = vi.spyOn(console, "log").mockImplementation((): void => {});
