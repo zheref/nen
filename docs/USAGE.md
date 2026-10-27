@@ -12962,7 +12962,9 @@ read `untested` ([#559](https://github.com/zheref/nen/issues/559)): use
 included. A test naming an id the issue does not carry is **unrequested**, by
 name. A body with no criterion row is `not-verifiable` — nothing to map, never
 "all mapped" — and an unreadable body or report is `could-not-read` with the
-reason, **never an empty map**.
+reason, **never an empty map**. So is a report whose stated total exceeds the
+tests it lists (an xcresult summary naming only its failures): the map is per
+test, and a report that does not name every test cannot certify one red.
 
 **Usage**
 

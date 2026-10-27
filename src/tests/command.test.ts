@@ -106,6 +106,25 @@ describe("nen tests map", () => {
     expect(report.foreign.map((test) => test.token)).toEqual(["AC-1", "AC-2"]);
   });
 
+  it("refuses to certify red from a report whose stated total exceeds the rows it lists (zheref/nen#552/AC-4)", async () => {
+    // An xcresult summary lists only its failures: two tests ran, one row is
+    // named. Read as complete, --require-red certified AC-1 red off a run
+    // whose other AC-1 test may have passed (Bugbot on #556).
+    const summary = JSON.stringify({ totalTestCount: 2, passedTests: 1, failedTests: 1, skippedTests: 0, expectedFailures: 0, result: "Failed", testFailures: [{ targetName: "T", testName: "AC-1 a()", failureText: "x", testIdentifier: 1 }] });
+    const body = "## Acceptance criteria\n\n- AC-1: one\n";
+    const root = repo({ "issue.md": body, "summary.json": summary, "green.xml": junit([["AC-1 a()", "passed"]]) });
+    for (const argv of [
+      ["--issue-body", "issue.md", "--test-report", "summary.json", "--require-red"],
+      ["--issue-body", "issue.md", "--test-report", "green.xml", "--before-report", "summary.json"],
+    ]) {
+      const result = await map(root, argv, true);
+      expect(result.code).toBe(1);
+      const report = JSON.parse(result.out) as { verdict: string; reason: string };
+      expect(report.verdict).toBe("could-not-read");
+      expect(report.reason).toContain("states 2 test(s) and lists 1");
+    }
+  });
+
   it("is could-not-read at exit 1 for an unreadable body or report, never an empty map (zheref/nen#552/AC-4)", async () => {
     const root = repo({ "issue.md": BODY, "report.json": vitest([["AC-1", "passed"]]), "bad.json": "{not json", "latin.md": Buffer.from([0x2d, 0x20, 0x41, 0x43, 0x2d, 0x31, 0x3a, 0xff, 0xfe]) });
     for (const argv of [

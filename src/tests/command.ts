@@ -73,7 +73,8 @@ for a red run of that kind.
 Every criterion appears with its test count, 0 included. A test naming an id
 the issue does not carry is unrequested, by name. A body with no criterion
 row is not-verifiable; an unreadable body or report is could-not-read with
-the reason, never an empty map.
+the reason, never an empty map, and so is a report that states more tests
+than it lists (an xcresult summary naming only its failures).
 
 Exits: 0 every criterion met in the mode, nothing unrequested, no duplicate
 or unrecognised criterion row; 1 otherwise, and on not-verifiable or
@@ -142,12 +143,24 @@ function readBody(path: string, display: string): { body: string } | { reason: s
   return { body: bytes.toString("utf8").replace(/\r\n?/g, "\n") };
 }
 
-/** Every test of every report, or the first reason one could not be read. */
+/**
+ * Every test of every report, or the first reason one could not be read.
+ *
+ * A REPORT THAT LISTS FEWER TESTS THAN IT STATES IS NOT A PER-TEST REPORT
+ * (Bugbot on zheref/nen#556). An xcresult summary states its totals and names
+ * only its failures; mapped as if complete, a criterion whose one named test
+ * failed read red while its other tests, unnamed, may have passed. The map is
+ * per test, so such a report is could-not-read with the gap, never a map.
+ */
 function readReports(root: string, files: readonly string[]): { tests: TestCase[] } | { reason: string } {
   const tests: TestCase[] = [];
   for (const file of files) {
     try {
-      tests.push(...readTestReport(resolveAgainstRepo(root, file), file).parsed.tests);
+      const { parsed } = readTestReport(resolveAgainstRepo(root, file), file);
+      if (parsed.counts.total > parsed.tests.length) {
+        return { reason: `${file} states ${parsed.counts.total} test(s) and lists ${parsed.tests.length}: it does not name every test, so no criterion can be mapped from it per test. Hand a report that lists every test (JUnit, assertion-results, or an xcresult export with its test nodes).` };
+      }
+      tests.push(...parsed.tests);
     } catch (error) {
       if (error instanceof TestReportError) return { reason: error.message };
       throw error;
