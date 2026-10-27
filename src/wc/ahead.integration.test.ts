@@ -234,9 +234,55 @@ describe("readAhead -- the exported reader's own guards", () => {
     const report = readAhead(seams, "/repo", "0206", "HEAD");
     expect(report.verdict).toBe("unreadable");
     expect(report.reason).toBe("--of '0206' is an ambiguous short id in this clone -- give more of the id (error: short object ID 0206 is ambiguous); --head 'HEAD' is an ambiguous short id in this clone -- give more of the id (error: short object ID 0206 is ambiguous)");
-    expect(calls[0]?.args).toEqual(["-C", "/repo", "rev-parse", "--verify", "--end-of-options", "0206^{commit}"]);
+    expect(calls[0]?.args).toEqual(["--no-lazy-fetch", "-C", "/repo", "rev-parse", "--verify", "--end-of-options", "0206^{commit}"]);
     expect(calls.every((call) => (call.env as Record<string, string> | undefined)?.["GIT_NO_LAZY_FETCH"] === "1")).toBe(true);
-    expect(calls.every((call) => { const e = call.env as Record<string, string | undefined>; return "GIT_DIR" in e && e["GIT_DIR"] === undefined && "GIT_WORK_TREE" in e && e["GIT_WORK_TREE"] === undefined; })).toBe(true);
+    expect(calls.every((call) => { const e = call.env as Record<string, string | undefined>; return ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_CONFIG_PARAMETERS"].every((name) => name in e && e[name] === undefined); })).toBe(true);
+    // KEPT, as scrubbedGitEnv keeps them (./worktree.ts): the user's own choice of config files.
+    expect(calls.every((call) => { const e = call.env as Record<string, string | undefined>; return !("GIT_CONFIG_GLOBAL" in e) && !("GIT_CONFIG_SYSTEM" in e) && !("GIT_CONFIG_NOSYSTEM" in e); })).toBe(true);
+  });
+});
+
+/** The real runner, except where `override` answers a call itself. */
+function intercept(override: (args: readonly string[]) => CommandResult | null): Seams {
+  const real = defaultSeams();
+  return { ...real, run: (command, args, options) => (command === "git" ? override(args) : null) ?? real.run(command, args, options) };
+}
+const failed = (stderr: string, code = 128): CommandResult => ({ code, stdout: "", stderr, spawnFailed: false });
+
+describe("wc ahead -- round 2: the partial-clone branch, the git floor (hanten round 2)", () => {
+  it("a numstat failure in a clone that is NOT partial stays unreadable, never 'line counts not read'", async () => {
+    const w = world(); commit(w.repo, "b.txt", "b\n", "beyond");
+    const seams = intercept((args) => (args.includes("--numstat") ? failed("fatal: numstat broke") : null));
+    const result = await run(w.repo, ["--of", w.reviewed], true, seams);
+    expect(result.code).toBe(2);
+    expect(result.report).toMatchObject({ verdict: "unreadable", ahead: null, files: null });
+    expect(result.report?.reason).toBe("git diff --numstat failed: fatal: numstat broke");
+  });
+
+  it("numstat exiting 0 with output it cannot parse is unreadable, partial clone or not", async () => {
+    const w = world(); commit(w.repo, "b.txt", "b\n", "beyond");
+    const seams = intercept((args) => (args.includes("--numstat") ? { code: 0, stdout: "garbage\0", stderr: "", spawnFailed: false } : null));
+    const result = await run(w.repo, ["--of", w.reviewed], true, seams);
+    expect(result.code).toBe(2);
+    expect(result.report?.reason).toBe("git diff --numstat exited 0 with output this verb cannot parse");
+  });
+
+  it("in a partial clone, a failing --name-only quotes ITS OWN error, not the numstat one", async () => {
+    const w = served(["--filter=blob:none", "--no-checkout"]);
+    const seams = intercept((args) => (args.includes("--name-only") ? failed("fatal: names broke", 129) : null));
+    const result = await run(w.clone, ["--of", w.reviewed, "--head", "origin/main"], true, seams);
+    expect(result.code).toBe(2);
+    expect(result.report?.reason).toBe("git diff --name-only failed: fatal: names broke");
+  });
+
+  it("a git older than 2.44 refusing --no-lazy-fetch fails closed: unreadable naming the floor, never 'not a checkout'", async () => {
+    const w = world();
+    const seams = intercept((args) => (args[0] === "--no-lazy-fetch" ? failed("unknown option: --no-lazy-fetch\nusage: git [-v | --version] [-h | --help] [-C <path>]", 129) : null));
+    const result = await run(w.repo, ["--of", w.reviewed], true, seams);
+    expect(result.code).toBe(2);
+    expect(result.report).toMatchObject({ verdict: "unreadable", reviewedHead: null, headSha: null });
+    expect(result.report?.reason).toBe("this git refused --no-lazy-fetch, so it is older than 2.44 and cannot promise not to fetch in a partial clone; 'wc ahead' needs git >= 2.44 (nothing was read)");
+    expect(result.err).not.toContain("not a git checkout");
   });
 });
 

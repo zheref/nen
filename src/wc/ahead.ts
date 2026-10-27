@@ -92,8 +92,39 @@ export function aheadGitEnv(seams: Seams): Readonly<Record<string, string | unde
   return { ...scrubbedGitEnv(seams.env), ...GIT_ENV };
 }
 
-/** Every git call this verb makes: `-C <root>`, under {@link aheadGitEnv}. */
-const git = (seams: Seams, root: string, args: readonly string[]): CommandResult => seams.run(GIT, ["-C", root, ...args], { env: aheadGitEnv(seams) });
+/**
+ * The argv of every git call this verb makes. `--no-lazy-fetch` is passed as
+ * well as GIT_NO_LAZY_FETCH because git honours the variable only from 2.44
+ * (the option arrived in the same release): an older git would ignore the
+ * variable and fetch, but it REFUSES the option -- so it fails closed, and
+ * {@link gitFloorRefusal} names the floor (hanten round 2).
+ */
+export function aheadGitArgv(root: string, args: readonly string[]): readonly string[] {
+  return ["--no-lazy-fetch", "-C", root, ...args];
+}
+
+/** The git version this verb needs: the first that honours --no-lazy-fetch. */
+export const AHEAD_GIT_FLOOR = "2.44";
+
+/** The reason an older git refused `--no-lazy-fetch`, or null when it did not. */
+export function gitFloorRefusal(result: CommandResult): string | null {
+  if (result.spawnFailed || result.code === 0) return null;
+  if (!/unknown option:?\s*'?--no-lazy-fetch/.test(result.stderr)) return null;
+  return `this git refused --no-lazy-fetch, so it is older than ${AHEAD_GIT_FLOOR} and cannot promise not to fetch in a partial clone; 'wc ahead' needs git >= ${AHEAD_GIT_FLOOR} (nothing was read)`;
+}
+
+/** Every git call this verb makes: {@link aheadGitArgv}, under {@link aheadGitEnv}. */
+const git = (seams: Seams, root: string, args: readonly string[]): CommandResult => seams.run(GIT, aheadGitArgv(root, args), { env: aheadGitEnv(seams) });
+
+/** Whether the clone is PARTIAL (extensions.partialClone, or any remote.<r>.promisor true); null when git could not say. */
+function isPartialClone(seams: Seams, root: string): boolean | null {
+  const extension = git(seams, root, ["config", "--get", "extensions.partialClone"]);
+  if (extension.spawnFailed || (extension.code !== 0 && extension.code !== 1)) return null;
+  if (extension.code === 0 && extension.stdout.trim() !== "") return true;
+  const promisor = git(seams, root, ["config", "--bool", "--get-regexp", "^remote\\..*\\.promisor$"]);
+  if (promisor.spawnFailed || (promisor.code !== 0 && promisor.code !== 1)) return null;
+  return outputLines(promisor.stdout).some((line): boolean => line.trim().endsWith(" true"));
+}
 
 /**
  * A ref git would read as an option (SEC-7). Refused HERE, in the exported
@@ -110,6 +141,8 @@ function resolveCommit(seams: Seams, root: string, ref: string, flag: string): R
   // apart from one the clone does not hold (hanten round 1, Nobunaga).
   const result = git(seams, root, ["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`]);
   if (result.spawnFailed) return { sha: null, reason: "git could not be started" };
+  const floor = gitFloorRefusal(result);
+  if (floor !== null) return { sha: null, reason: floor };
   const sha = result.stdout.trim();
   if (result.code !== 0 || !/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(sha)) {
     const errors = outputLines(result.stderr).filter((line): boolean => line.startsWith("error:")).join(" ");
@@ -143,7 +176,8 @@ export function readAhead(seams: Seams, root: string, of: string, head: string):
   const reviewed = resolveCommit(seams, root, of, "--of");
   const tip = resolveCommit(seams, root, head, "--head");
   if (reviewed.sha === null || tip.sha === null) {
-    const reason = [reviewed.reason, tip.reason].filter((line): line is string => line !== null).join("; ");
+    const reasons = [reviewed.reason, tip.reason].filter((line): line is string => line !== null);
+    const reason = [...new Set(reasons)].join("; ");
     return { verdict: "unreadable", of, reviewedHead: reviewed.sha, head, headSha: tip.sha, ...none, reason };
   }
   const known = { reviewedHead: reviewed.sha, headSha: tip.sha };
@@ -194,29 +228,35 @@ export function readAhead(seams: Seams, root: string, of: string, head: string):
   if (ahead === 0) return unread(`git rev-list counted 0 commits between two different commits ${reviewed.sha} and ${tip.sha}`);
   const diff = git(seams, root, ["diff", "--numstat", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", reviewed.sha, tip.sha, "--"]);
   if (diff.spawnFailed) return unread("git could not be started");
-  const stat = diff.code === 0 ? parseNumstat(diff.stdout) : null;
-  if (stat === null) {
-    // THE LINE COUNTS NEED BLOBS; THE FILE COUNT NEEDS ONLY TREES. A partial
-    // clone missing a blob (no lazy fetch) keeps its count and its file count,
-    // and says why its line counts are null -- never a zero.
-    const names = git(seams, root, ["diff", "--name-only", "-z", "--no-renames", reviewed.sha, tip.sha, "--"]);
-    if (names.spawnFailed) return unread("git could not be started");
-    if (names.code !== 0) return unread(`git diff failed: ${gitReason(diff.stderr, `exit ${diff.code}`)}`);
-    const files = names.stdout.split("\0").filter((path): boolean => path !== "").length;
-    return {
-      verdict: "ahead",
-      of,
-      reviewedHead: known.reviewedHead,
-      head,
-      headSha: known.headSha,
-      ahead,
-      files,
-      insertions: null,
-      deletions: null,
-      reason: `line counts not read -- git diff --numstat failed (a partial clone missing blobs; no fetch is made): ${gitReason(diff.stderr, `exit ${diff.code}`)}`,
-    };
+  if (diff.code === 0) {
+    const stat = parseNumstat(diff.stdout);
+    // EXIT 0 WITH OUTPUT nen CANNOT READ is never "line counts not read".
+    if (stat === null) return unread("git diff --numstat exited 0 with output this verb cannot parse");
+    return { verdict: "ahead", of, reviewedHead: known.reviewedHead, head, headSha: known.headSha, ahead, ...stat, reason: null };
   }
-  return { verdict: "ahead", of, reviewedHead: known.reviewedHead, head, headSha: known.headSha, ahead, ...stat, reason: null };
+  const numstatError = gitReason(diff.stderr, `exit ${diff.code}`);
+  // THE LINE COUNTS NEED BLOBS; THE FILE COUNT NEEDS ONLY TREES. Only a
+  // PARTIAL clone (no lazy fetch) is let keep its count and file count with
+  // the line counts null; any other numstat failure is unreadable
+  // (hanten round 2).
+  const partial = isPartialClone(seams, root);
+  if (partial !== true) return unread(`git diff --numstat failed${partial === null ? " (and git could not say whether the clone is partial)" : ""}: ${numstatError}`);
+  const names = git(seams, root, ["diff", "--name-only", "-z", "--no-renames", reviewed.sha, tip.sha, "--"]);
+  if (names.spawnFailed) return unread("git could not be started");
+  if (names.code !== 0) return unread(`git diff --name-only failed: ${gitReason(names.stderr, `exit ${names.code}`)}`);
+  const files = names.stdout.split("\0").filter((path): boolean => path !== "").length;
+  return {
+    verdict: "ahead",
+    of,
+    reviewedHead: known.reviewedHead,
+    head,
+    headSha: known.headSha,
+    ahead,
+    files,
+    insertions: null,
+    deletions: null,
+    reason: `line counts not read -- git diff --numstat failed in this partial clone (missing blobs; no fetch is made): ${numstatError}`,
+  };
 }
 
 export function renderAhead(report: AheadReport): readonly string[] {

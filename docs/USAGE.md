@@ -5313,7 +5313,7 @@ nen wc ahead --repo <path> --of <reviewed-head> [--head <ref>] [--json]
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
-| `--repo <path>` | yes | The clone whose commits are counted. | Listed unbracketed: omitted, exits 2 by name. Not a git checkout exits 2 with no verdict. |
+| `--repo <path>` | yes | The clone whose commits are counted. | Listed unbracketed: omitted, exits 2 by name. Not a git checkout exits 2 with no verdict. Needs **git >= 2.44** (`--no-lazy-fetch`): an older git refuses the option and the verdict is `unreadable`, naming the floor. |
 | `--of <reviewed-head>` | yes | The commit the last review read -- a full or short id, or any ref the clone holds. | Missing, empty, or starting with `-` (git would read it as an option) exits 2. |
 | `--head <ref>` | no | The tip to count up to. | Default `HEAD`. Empty or starting with `-` exits 2. |
 
@@ -5340,11 +5340,18 @@ counts as a file with no lines.
 **`--repo` is the repository read, offline, whatever the clone.** Every git call runs with the inherited
 repository redirects (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, the object directories,
 `GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` …) scrubbed, exactly as [`wc worktree`](#nen-wc-worktree)
-scrubs them, so an ambient `GIT_DIR` never wins over `--repo`; and with `GIT_NO_LAZY_FETCH=1` (the precedent
-[`schema check`](#nen-schema-check)'s canon-mirror row sets), so a **partial clone** answers from what it
+scrubs them, so an ambient `GIT_DIR` never wins over `--repo` (`GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM` and
+`GIT_CONFIG_NOSYSTEM` are kept, as there: they are the user's own choice of config files, `safe.directory`
+included); and with both `--no-lazy-fetch` and `GIT_NO_LAZY_FETCH=1` (the variable is the precedent
+[`schema check`](#nen-schema-check)'s canon-mirror row sets). **The git floor is 2.44**, the first release
+that honours either: an older git would ignore the variable and fetch, but it refuses the option, so the
+verb fails closed at `unreadable` with the floor in `reason` rather than reading online. So a **partial clone** answers from what it
 holds and never fetches a missing object from its promisor remote: a `--head` it does not hold is
 `unreadable`, and one missing the blobs the line counts need keeps its `ahead` count and its `files` count
 (`git diff --name-only` reads trees only) with `insertions` and `deletions` `null` and `reason` saying why.
+That fallback is taken **only in a partial clone** (`extensions.partialClone`, or a `remote.<name>.promisor`
+set); any other `--numstat` failure, and a `--numstat` that exits 0 with output the verb cannot parse, is
+`unreadable`.
 A **shallow clone** whose cut history answers "not an ancestor" is `unreadable` naming the shallow clone,
 never `diverged`: it cannot tell a rewrite from a history it does not hold. An **ambiguous short id** is
 `unreadable` with git's own ambiguity named in `reason`, so a caller gives more of the id rather than

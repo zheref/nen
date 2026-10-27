@@ -8,7 +8,7 @@
 // a fixed path with the core-to-worktree copy; and -- zheref/nen#551 -- `nen
 // wc ahead` (./ahead.ts), the commits and diff stat beyond a named reviewed head.
 
-import { AHEAD_EXIT, aheadGitEnv, readAhead, refuseOptionRef, renderAhead } from "./ahead.js";
+import { AHEAD_EXIT, aheadGitArgv, aheadGitEnv, gitFloorRefusal, readAhead, refuseOptionRef, renderAhead } from "./ahead.js";
 import { runPrune } from "./prune.js";
 import { ancestryReader, computeOverlap, readEffortFiles, renderOverlap, withDeclared } from "./overlap.js";
 import { assertRepoRoot } from "../repo/root.js";
@@ -61,9 +61,13 @@ const USAGE = `nen wc ahead --repo <path> --of <reviewed-head> [--head <ref>] [-
   | unreadable (the clone does not hold one of the refs as a commit, or git
   could not answer, an ambiguous short id, or a SHALLOW clone saying "not an
   ancestor"; never zero, never "nothing new"). Every git call runs with
-  GIT_NO_LAZY_FETCH=1, so a partial clone never fetches a missing object; one
-  missing the blobs the line counts need keeps its count and file count, with
-  insertions/deletions null and reason saying why. Only 'even' means nothing
+  --no-lazy-fetch and GIT_NO_LAZY_FETCH=1, and the ambient GIT_DIR/
+  GIT_WORK_TREE/... scrubbed, so --repo is the repository read and a partial
+  clone never fetches. Needs git >= 2.44: an older git refuses
+  --no-lazy-fetch and the verdict is unreadable, naming the floor. A PARTIAL
+  clone missing the blobs the line counts need keeps its count and file
+  count, with insertions/deletions null and reason saying why; any other
+  numstat failure is unreadable. Only 'even' means nothing
   new: diverged and unreadable need their own branch in the caller (a
   rebased branch with new content is real change). An 'ahead' with files 0
   is commits whose net tree change is empty; whether that is reviewable is
@@ -1042,8 +1046,10 @@ function doAhead(context: CommandContext): number {
   refuseOptionRef("--of", of);
   refuseOptionRef("--head", head);
   // NOT A REPOSITORY IS WIRING, never "unreadable ref": the refs were never asked.
-  const probe = context.seams.run(GIT, ["-C", root, "rev-parse", "--git-dir"], { env: aheadGitEnv(context.seams) });
-  if (!probe.spawnFailed && probe.code !== 0) throw new VerbUsageError(`--repo '${root}' is not a git checkout; 'wc ahead' counts commits in a clone.`);
+  // An older git refusing --no-lazy-fetch is NOT "not a checkout": readAhead
+  // reports it as unreadable, naming the git floor.
+  const probe = context.seams.run(GIT, aheadGitArgv(root, ["rev-parse", "--git-dir"]), { env: aheadGitEnv(context.seams) });
+  if (!probe.spawnFailed && probe.code !== 0 && gitFloorRefusal(probe) === null) throw new VerbUsageError(`--repo '${root}' is not a git checkout; 'wc ahead' counts commits in a clone.`);
   const report = readAhead(context.seams, root, of, head);
   emit(context.io, context.json, report, renderAhead(report));
   return AHEAD_EXIT[report.verdict];
