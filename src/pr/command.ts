@@ -60,6 +60,7 @@ import {
   deriveRequirements,
   describeReader,
   discoverTemplate,
+  escapeRegExp,
   gitReader,
   workingTreeReader,
   type DerivedRequirement,
@@ -72,7 +73,7 @@ import { fetchPullRequest, type PrSnapshot } from "./fetch.js";
 import { assertPinnedHead, ConvergeReadError, readConvergeInput } from "./converge.js";
 import { convergeComposite } from "./convergecomposite.js";
 import { converge, DEFAULT_COVERAGE_POLICY, extractCriteria, PR_CONVERGE_CONTRACT, readCoveragePolicy, type ClosingIssue, type ConvergeReport, type CoveragePolicy, type CriteriaReport } from "../issue/criteria.js";
-import { DEFAULT_CRITERIA_PREFIX } from "../issue/shape.js";
+import { criterionGrammar, criterionId, idNumber } from "../issue/shape.js";
 import { parseCatalogue, type IssueSectionsCatalogue } from "../issue/shape.js";
 import { retarget } from "./retarget.js";
 import { requestReviews } from "./reviewers.js";
@@ -396,7 +397,8 @@ body-check:
                               --criteria-issue <[owner/name]#N> names the
                               issue, so <CODE>#<N>/AC-{n} rows match;
                               --catalogue <path> gives the issue-sections
-                              catalogue (prefix, sections, 'coverage').
+                              catalogue (prefix, id shape, sections,
+                              'coverage'); an id is whole: AC-12-001.
                               Local files only, as ever; live reads are
                               'pr converge'. One issue per run: several
                               closing issues are 'pr converge''s job.
@@ -438,17 +440,21 @@ converge:
   keywords) with the PR body's verify rows '| <criterion> | <word> |
   <evidence> |', where <criterion> is AC-{n}, <CODE>#<N>/AC-{n},
   <owner/name>#<N>/AC-{n}, #<N>/AC-{n} or none, and <word> is satisfied,
-  partial, missing, contradicts or unrequested. Criteria are read as 'nen
+  partial, missing, contradicts or unrequested. An id is compared whole:
+  NN#519/AC-12-001 names an epic-scoped AC-12-001, never AC-12, and with a
+  catalogue the id is read in its acceptance row pattern's shape
+  (zheref/nen#519); a first cell over 64 characters is malformed, and a
+  criterion id stated twice in one issue blocks. Criteria are read as 'nen
   issue criteria' reads them; --catalogue <catalogue.json> (deprecated alias
   here: --requirements-from, which on body-check, next-blocker and merge
-  names the body requirements) gives the
-  issue-sections catalogue (its acceptance prefix and section) and an
-  optional 'coverage' block (blocking words, the none word, evidence
-  required or optional) -- with none, the defaults are AC rows anywhere in
-  the body, missing and contradicts blocking, unrequested on none rows, and
-  evidence required. Reports per criterion: covered-with-evidence,
-  covered-without-evidence, missing-row, malformed-row, duplicate-rows,
-  not-verifiable, and the row's word. Exits: 0 nothing blocks (a PR into
+  names the body requirements) gives the issue-sections catalogue (its
+  acceptance prefix, id shape and section) and an optional 'coverage'
+  block (blocking words, the none word, evidence required or optional) --
+  with none, the defaults are AC rows anywhere in the body, missing and
+  contradicts blocking, unrequested on none rows, and evidence required.
+  Reports per criterion: covered-with-evidence, covered-without-evidence,
+  missing-row, malformed-row, duplicate-rows, not-verifiable, and the
+  row's word. Exits: 0 nothing blocks (a PR into
   the default branch closing no issue is 0); 1 any blocking row -- a
   missing-row, malformed-row (a word outside the five, or two words, in one
   row) or duplicate-rows criterion, a blocking word (its row quoted), a
@@ -1039,7 +1045,7 @@ function derivedRequirements(reader: TemplateReader, root: string): { requiremen
  * `pr merge --delivery` run. Null when neither flag is given. Usage errors are
  * thrown before the body is read.
  */
-function criteriaForBody(context: CommandContext, cwd: string): { issue: ClosingIssue; policy: CoveragePolicy } | null {
+function criteriaForBody(context: CommandContext, cwd: string): { issue: ClosingIssue; policy: CoveragePolicy; catalogue: IssueSectionsCatalogue | null } | null {
   const ids = context.args.values["criteria"];
   const from = context.args.values["criteria-from"];
   const issueFlag = context.args.values["criteria-issue"];
@@ -1061,14 +1067,19 @@ function criteriaForBody(context: CommandContext, cwd: string): { issue: Closing
   let report: CriteriaReport;
   let label: string;
   if (ids !== undefined) {
-    const prefix = catalogue?.criteriaPrefix ?? DEFAULT_CRITERIA_PREFIX;
+    // The ids are read in the catalogue's criterion grammar, as the issue's
+    // own rows would be: `AC-12-001` is one id, whole (zheref/nen#519).
+    const grammar = criterionGrammar(catalogue);
+    const prefix = grammar.prefix;
     const listed = commaList(ids);
     if (listed.length === 0) throw new VerbUsageError("--criteria names no criterion; give a comma-separated list such as AC-1,AC-2.");
-    const pattern = new RegExp(`^${prefix}-([1-9][0-9]{0,8})$`);
+    const pattern = new RegExp(`^${escapeRegExp(prefix)}-(?<nenListId>${grammar.tail})$`);
     const criteria = listed.map((id, index) => {
       const match = pattern.exec(id);
-      if (match === null) throw new VerbUsageError(`--criteria '${id}' is not a ${prefix}-<n> id.`);
-      return { id, number: Number(match[1]), text: "", line: index + 1 };
+      const written = match?.groups?.["nenListId"];
+      const order = written === undefined ? null : idNumber(written);
+      if (written === undefined || order === null || /^0+$/.test(written)) throw new VerbUsageError(`--criteria '${id}' is not a ${prefix}-<n> id.`);
+      return { id: criterionId(prefix, written), number: order, text: "", line: index + 1 };
     });
     const seen = new Map<string, number[]>();
     for (const entry of criteria) seen.set(entry.id, [...(seen.get(entry.id) ?? []), entry.line]);
@@ -1079,7 +1090,7 @@ function criteriaForBody(context: CommandContext, cwd: string): { issue: Closing
     report = extractCriteria(readTextFile(path, cwd).replace(/\r\n?/g, "\n"), catalogue);
     label = number === 0 ? `--criteria-from ${path}` : `${slug}#${number}`;
   }
-  return { issue: { target: slug, number, report, label }, policy };
+  return { issue: { target: slug, number, report, label, ...(ids !== undefined ? { listed: true } : {}) }, policy, catalogue };
 }
 
 /** The criteria half of a body-check: its lines, its `--json` field, and whether it blocks. */
@@ -1124,7 +1135,7 @@ function bodyCheck(context: CommandContext): number {
   const cwd = resolveRepoRoot({ repoFlag: context.repoFlag });
   const criteriaInput = criteriaForBody(context, cwd);
   const body = readTextFile(bodyPath, cwd);
-  const criteria = criteriaInput === null ? null : converge([criteriaInput.issue], body.replace(/\r\n?/g, "\n"), criteriaInput.policy);
+  const criteria = criteriaInput === null ? null : converge([criteriaInput.issue], body.replace(/\r\n?/g, "\n"), criteriaInput.policy, criteriaInput.catalogue);
   const criteriaOk = criteria === null || criteria.blocking.length === 0;
   const criteriaField = criteria === null ? {} : { criteria };
   const criteriaText = criteria === null ? [] : criteriaLines(criteria);
@@ -1594,7 +1605,7 @@ function convergeVerb(context: CommandContext): number | Promise<number> {
     context.io.err(plainLine(`nen pr converge: ${error.message}`));
     return 1;
   }
-  const report = converge(input.issues, input.body, policy);
+  const report = converge(input.issues, input.body, policy, catalogue);
   const closingIssues = input.issues.map((issue) => ({
     issue: `${issue.target}#${issue.number}`,
     criteria: issue.report.criteria.length,
