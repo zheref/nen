@@ -78,7 +78,7 @@ export type AgentRule =
  * - `cursor-v1`: `{ "version": 1, "hooks": { "<event>": [ { "command" } ] } }`
  *   -- one flat command per entry, no matcher, no timeout.
  */
-export type HookShape = "verbatim" | "groups" | "cursor-v1";
+export type HookShape = "verbatim" | "groups" | "cursor-v1" | "antigravity-json";
 
 /** The permission-pack file shapes this binary knows how to write. */
 export type PermissionShape = "claude-settings" | "codex-toml" | "cursor-cli-json";
@@ -710,13 +710,13 @@ export const SURFACES: readonly SurfaceRow[] = [
       file: "hooks.json",
       documentedPath: ".agents/hooks.json",
       scriptsDir: "hooks",
-      // No SessionStart event exists here; PreInvocation is the closest
-      // documented moment, and is what the consumer's own generator used.
-      events: { Stop: "Stop", PreToolUse: "PreToolUse", SessionStart: "PreInvocation" },
-      known: ["PreToolUse", "PostToolUse", "PreInvocation", "PostInvocation", "Stop"],
+      // Native hooks format, read 2026-10-26: SessionStart runs once before
+      // the first invocation; lifecycle events carry handlers directly.
+      events: { Stop: "Stop", PreToolUse: "PreToolUse", SessionStart: "SessionStart" },
+      known: ["SessionStart", "PreToolUse", "PostToolUse", "PreInvocation", "PostInvocation", "Stop"],
       matcher: "run_command",
       decisionKey: "decision: allow|deny|ask|force_ask|deny_unless_prior_grant (+ reason)",
-      shape: "groups",
+      shape: "antigravity-json",
       source: "https://antigravity.google/docs/hooks",
     },
     agentModelMap: true,

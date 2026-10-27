@@ -1255,6 +1255,12 @@ the target repo's `nen/gates.json`, or `--reviewers a,b,c` — there is no
 built-in default set, and with none of the three the verb refuses rather than
 guessing.
 
+A check titled `readiness undetermined — the verdict step did not report`
+(the same message as a check name in older captures is recognised too) supplies
+no readiness verdict, even when its conclusion is `SUCCESS`. Row 2 reports it
+as `unknown`, names the placeholder and failed checks, and never reports ready.
+Ordinary failed checks are named in the row's failure reason as well.
+
 <a id="pr-ready-gates-at-base"></a>
 
 **The gates file is the base's ([#372](https://github.com/zheref/nen/issues/372)).**
@@ -1286,6 +1292,14 @@ exclusions, so the two never come from different commits.
 | `--reviewers`' own identities | the same, and the base was read and declares **no** file | `null` | judged |
 | `--reviewers`' own identities, unverified | the same, and the base could **not be read**: whether it declares a gate is unknown; warned | `flags-unverified` | judged for a human reader; refused like `local-fallback` |
 | nothing | the same, and the base carries a file this build refuses | `local-unverified` | none: `unevaluated`, exit `1` |
+
+When the base declares no gates file and the caller supplies `--reviewers` or
+`--gates`, the evaluated result is a **caller-supplied judgement**, not an
+authoritative verdict. Its quotable line begins
+`caller-supplied judgement (not an authoritative verdict):`; JSON also carries
+`authority: "caller-supplied"`. The `verdict` still records the computed result
+and the exit code follows it. This differs from `unevaluated`, where the gate
+could not be established or the evidence could not be read.
 
 With a `nen/gates.json` in the checkout **or at the base**, `--reviewers` is not
 an identity source: it narrows the configured reviewer set the base's
