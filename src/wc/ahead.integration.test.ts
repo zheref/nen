@@ -194,6 +194,27 @@ describe("wc ahead -- offline in partial and shallow clones (hanten round 1)", (
   });
 });
 
+describe("wc ahead -- --repo wins over an ambient git environment (Bugbot round 1)", () => {
+  it("GIT_DIR and GIT_WORK_TREE naming another repository are scrubbed: the counts are --repo's", async () => {
+    const w = world();
+    const tip = commit(w.repo, "b.txt", "b\n", "beyond");
+    const other = world();
+    const saved = { GIT_DIR: process.env["GIT_DIR"], GIT_WORK_TREE: process.env["GIT_WORK_TREE"] };
+    process.env["GIT_DIR"] = join(other.repo, ".git");
+    process.env["GIT_WORK_TREE"] = other.repo;
+    try {
+      const result = await run(w.repo, ["--of", w.reviewed]);
+      expect(result.code).toBe(0);
+      expect(result.report).toMatchObject({ verdict: "ahead", reviewedHead: w.reviewed, headSha: tip, ahead: 1, files: 1 });
+    } finally {
+      for (const [name, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+});
+
 describe("readAhead -- the exported reader's own guards", () => {
   const never: Seams = { ...defaultSeams(), run: (): CommandResult => { throw new Error("git must not be spawned"); } };
   it("refuses a dash-led --of or --head itself, before any git call, so a second caller is guarded too (Feitan F2, SEC-7)", () => {
@@ -215,6 +236,7 @@ describe("readAhead -- the exported reader's own guards", () => {
     expect(report.reason).toBe("--of '0206' is an ambiguous short id in this clone -- give more of the id (error: short object ID 0206 is ambiguous); --head 'HEAD' is an ambiguous short id in this clone -- give more of the id (error: short object ID 0206 is ambiguous)");
     expect(calls[0]?.args).toEqual(["-C", "/repo", "rev-parse", "--verify", "--end-of-options", "0206^{commit}"]);
     expect(calls.every((call) => (call.env as Record<string, string> | undefined)?.["GIT_NO_LAZY_FETCH"] === "1")).toBe(true);
+    expect(calls.every((call) => { const e = call.env as Record<string, string | undefined>; return "GIT_DIR" in e && e["GIT_DIR"] === undefined && "GIT_WORK_TREE" in e && e["GIT_WORK_TREE"] === undefined; })).toBe(true);
   });
 });
 

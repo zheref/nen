@@ -8,7 +8,7 @@
 // a fixed path with the core-to-worktree copy; and -- zheref/nen#551 -- `nen
 // wc ahead` (./ahead.ts), the commits and diff stat beyond a named reviewed head.
 
-import { AHEAD_EXIT, readAhead, refuseOptionRef, renderAhead } from "./ahead.js";
+import { AHEAD_EXIT, aheadGitEnv, readAhead, refuseOptionRef, renderAhead } from "./ahead.js";
 import { runPrune } from "./prune.js";
 import { ancestryReader, computeOverlap, readEffortFiles, renderOverlap, withDeclared } from "./overlap.js";
 import { assertRepoRoot } from "../repo/root.js";
@@ -24,7 +24,6 @@ import {
 } from "../cli/command.js";
 import { readTextFile, splitList } from "../cli/inputs.js";
 import { GIT } from "../seam/exec.js";
-import { GIT_ENV } from "../schema/canonmirror.js";
 import { plainLine } from "../cli/plain.js";
 import { SchemaError } from "../schema/errors.js";
 import { loadWorkflow, WORKFLOW_FILE, type LoadedWorkflow } from "../schema/workflow.js";
@@ -1043,7 +1042,7 @@ function doAhead(context: CommandContext): number {
   refuseOptionRef("--of", of);
   refuseOptionRef("--head", head);
   // NOT A REPOSITORY IS WIRING, never "unreadable ref": the refs were never asked.
-  const probe = context.seams.run(GIT, ["-C", root, "rev-parse", "--git-dir"], { env: GIT_ENV });
+  const probe = context.seams.run(GIT, ["-C", root, "rev-parse", "--git-dir"], { env: aheadGitEnv(context.seams) });
   if (!probe.spawnFailed && probe.code !== 0) throw new VerbUsageError(`--repo '${root}' is not a git checkout; 'wc ahead' counts commits in a clone.`);
   const report = readAhead(context.seams, root, of, head);
   emit(context.io, context.json, report, renderAhead(report));

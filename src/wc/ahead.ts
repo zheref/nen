@@ -45,6 +45,7 @@
 import { VerbUsageError } from "../cli/command.js";
 import { GIT_ENV } from "../schema/canonmirror.js";
 import { GIT, outputLines, type CommandResult, type Seams } from "../seam/exec.js";
+import { scrubbedGitEnv } from "./worktree.js";
 
 export type AheadVerdict = "ahead" | "even" | "diverged" | "unreadable";
 
@@ -79,8 +80,20 @@ interface Resolved {
 
 const gitReason = (stderr: string, fallback: string): string => outputLines(stderr).filter((line): boolean => !line.startsWith("hint:")).join(" ") || fallback;
 
-/** Every git call this verb makes: `-C <root>`, offline under GIT_ENV, whatever the clone's promisor says. */
-const git = (seams: Seams, root: string, args: readonly string[]): CommandResult => seams.run(GIT, ["-C", root, ...args], { env: GIT_ENV });
+/**
+ * The environment every git call this verb makes runs under: the ambient
+ * repository redirects (GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, the object
+ * directories, GIT_CONFIG_KEY_n/VALUE_n ...) scrubbed exactly as
+ * ./worktree.ts's scrubbedGitEnv does, so `--repo` is the repository read --
+ * an inherited GIT_DIR would otherwise win over `-C` (Bugbot round 1) -- and
+ * GIT_NO_LAZY_FETCH=1 kept on top, so a partial clone never fetches.
+ */
+export function aheadGitEnv(seams: Seams): Readonly<Record<string, string | undefined>> {
+  return { ...scrubbedGitEnv(seams.env), ...GIT_ENV };
+}
+
+/** Every git call this verb makes: `-C <root>`, under {@link aheadGitEnv}. */
+const git = (seams: Seams, root: string, args: readonly string[]): CommandResult => seams.run(GIT, ["-C", root, ...args], { env: aheadGitEnv(seams) });
 
 /**
  * A ref git would read as an option (SEC-7). Refused HERE, in the exported

@@ -5337,7 +5337,10 @@ verdict is always printed. An `ahead` with `files: 0` is commits whose net tree 
 and its revert); whether that is reviewable is the caller's judgement, not this verb's. A binary file
 counts as a file with no lines.
 
-**Offline, whatever the clone.** Every git call runs with `GIT_NO_LAZY_FETCH=1` (the precedent
+**`--repo` is the repository read, offline, whatever the clone.** Every git call runs with the inherited
+repository redirects (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, the object directories,
+`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` …) scrubbed, exactly as [`wc worktree`](#nen-wc-worktree)
+scrubs them, so an ambient `GIT_DIR` never wins over `--repo`; and with `GIT_NO_LAZY_FETCH=1` (the precedent
 [`schema check`](#nen-schema-check)'s canon-mirror row sets), so a **partial clone** answers from what it
 holds and never fetches a missing object from its promisor remote: a `--head` it does not hold is
 `unreadable`, and one missing the blobs the line counts need keeps its `ahead` count and its `files` count
