@@ -604,7 +604,6 @@ describe("parseFutonInvocation -- a flag-shaped word in the scope is refused, ne
       ["nen@bug --DRY-RUN", "nen@bug --dry-run"],
       ["nen@bug --dry_run", "nen@bug --dry-run"],
       ["nen@bug \u2014dry-run", "nen@bug --dry-run"],
-      ["nen@bug --dry-run=false", "nen@bug --dry-run"],
       ["nen@bug -dry-run", "nen@bug --dry-run"],
       ["nen@bug --idel", "nen@bug --idle"],
       ["nen@high --dryrun then tag", "nen@high --dry-run then tag"],
@@ -713,6 +712,37 @@ describe("parseFutonInvocation -- round 2 on zheref/nen#562 (Feitan F-5, Nobunag
         expect(result.error.message, token).toMatch(/is not a flag of futon's scope/);
         expect(result.error.correctedLine, token).toBe("nen@bug");
       }
+    }
+  });
+});
+
+describe("parseFutonInvocation -- round 3 on zheref/nen#562 (Feitan F-6)", () => {
+  it("F-6: refuses a scope flag carrying '=<value>' with no flag offered", () => {
+    for (const token of ["--idle=false", "--idle=0", "--dry-run=false", "--dry-run=true"]) {
+      const result = parseFutonInvocation(`nen@bug ${token}`);
+      expect(result.ok, token).toBe(false);
+      if (!result.ok) {
+        expect(result.error.message, token).toMatch(/is not a flag of futon's scope/);
+        expect(result.error.correctedLine, token).toBe("nen@bug");
+      }
+    }
+    const kept = parseFutonInvocation("nen@bug --dry-run --idle=false");
+    expect(kept.ok).toBe(false);
+    if (!kept.ok) expect(kept.error.correctedLine).toBe("nen@bug --dry-run");
+  });
+
+  it("offers --idle only to a one-edit variant that keeps its first three letters", () => {
+    for (const [token, corrected] of [
+      ["--ide", "nen@bug --idle"],
+      ["--idly", "nen@bug --idle"],
+      ["--idel", "nen@bug --idle"],
+      ["--isle", "nen@bug"],
+      ["--ile", "nen@bug"],
+      ["--dyrrun", "nen@bug"],
+    ] as const) {
+      const result = parseFutonInvocation(`nen@bug ${token}`);
+      expect(result.ok, token).toBe(false);
+      if (!result.ok) expect(result.error.correctedLine, token).toBe(corrected);
     }
   });
 });

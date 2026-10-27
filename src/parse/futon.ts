@@ -197,19 +197,30 @@ const LEADING_DASHES = new RegExp(`^[-${DASHES}]+`);
 
 // The scope flag a token is an attempt at, offered in a corrected line only
 // for a variant that cannot mean anything else: another case, '_' or a
-// Unicode dash for '-', a dash dropped or doubled, a '=<value>' suffix, or ONE
+// Unicode dash for '-', a dash dropped or doubled, or ONE
 // edit -- a substitution, an insertion, a deletion or two letters swapped
 // (`--dryrun`, `--DRY-RUN`, `--dry_run`, `−−dry-run`,
-// `--dry-run=false`, `--idel`). Anything further (`-idea`, `--file`,
+// `--idel`). A '=<value>' suffix, a word that does not keep the flag's
+// first three letters, or anything further (`-idea`, `--file`,
 // `--title`) is no attempt at a scope flag: `null`, refused as an unknown
 // option and dropped, never turned into a flag nobody typed (Nobunaga R2-1 on
 // zheref/nen#562).
 function scopeFlagAttempt(token: string): ScopeFlag | null {
   if ((SCOPE_FLAGS as readonly string[]).includes(token)) return token as ScopeFlag;
-  const bare = token.toLowerCase().replace(LEADING_DASHES, "").split("=")[0]!.replace(new RegExp(`[-_\\s${DASHES}]`, "g"), "");
+  // A token carrying '=<value>' is never offered a flag: `--idle=false` asks
+  // for the OPPOSITE of `--idle`, and a corrected line that turned "not idle"
+  // into an unattended batch would be the guess this refusal exists to stop
+  // (Feitan F-6 on zheref/nen#562). It is an unknown option, dropped.
+  if (token.includes("=")) return null;
+  const bare = token.toLowerCase().replace(LEADING_DASHES, "").replace(new RegExp(`[-_\\s${DASHES}]`, "g"), "");
   if (bare === "") return null;
-  if (swapDistance(bare, "idle") <= 1) return "--idle";
-  if (swapDistance(bare, "dryrun") <= 1) return "--dry-run";
+  // The one edit must also keep the flag's first three letters (`idl`, or
+  // `ide` where the edit is the swap `--idel`), so a word that merely lands
+  // one edit away (`--isle`, `--ile`) is no attempt at it.
+  if (bare.startsWith("idl") || bare.startsWith("ide")) {
+    if (swapDistance(bare, "idle") <= 1) return "--idle";
+  }
+  if (bare.startsWith("dry") && swapDistance(bare, "dryrun") <= 1) return "--dry-run";
   return null;
 }
 

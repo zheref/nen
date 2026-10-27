@@ -16206,8 +16206,8 @@ punctuation (`then x --dry-run;`), and never inside quotes, where it is prose --
 line, as two argv words, or once each way (true of `--idle` too) -- it is refused at exit 2 with the
 corrected line, which writes each typed flag once, `--idle` before `--dry-run`, after the scope. **Any
 other flag-shaped word in the scope is refused at exit 2, never read into the label**: a near miss of
-either flag (`--dryrun`, `--DRY-RUN`, `--dry_run`, `-dry-run`, an em dash `—dry-run`, `--dry-run=false`,
-`--idel`, a run of any Unicode dash such as `−−dry-run`), with the exact flag in the corrected line -- offered only for a case, `_`, dash or `=<value>` variant or one edit (a swap counts as one); a word further off (`-idea`, `--file`) is an unknown option; an unknown `--option` (`nen@bug --dry-run --verbose`),
+either flag (`--dryrun`, `--DRY-RUN`, `--dry_run`, `-dry-run`, an em dash `—dry-run`,
+`--idel`, a run of any Unicode dash such as `−−dry-run`), with the exact flag in the corrected line -- offered only for a case, `_` or dash variant or one edit (a swap counts as one) that keeps the flag's first three letters; a word further off (`-idea`, `--file`, `--isle`) and any token carrying `=<value>` (`--idle=false`, `--dry-run=false`), which never has a flag offered, are unknown options; an unknown `--option` (`nen@bug --dry-run --verbose`),
 dropped from the corrected line; and a scope flag left inside the selector (`nen@x --dry-run y`), moved
 after it. Quote a label to keep such a word in it (`nen@"bug --dryrun"`). **A leading flag is its own
 argv word**: a QUOTED line that begins with `--` (`nen parse futon "--dry-run nen@bug"`) is refused by the
