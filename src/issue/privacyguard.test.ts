@@ -83,6 +83,7 @@ describe("every guarded verb, named once (zheref/nen#363)", () => {
       ["idea file", ideaCommand.flags],
       ["pr open", PR_SUBCOMMAND_FLAGS["open"]],
       ["pr edit-body", PR_SUBCOMMAND_FLAGS["edit-body"]],
+      ["pr edit-title", PR_SUBCOMMAND_FLAGS["edit-title"]],
       ["pr threads", PR_SUBCOMMAND_FLAGS["threads"]],
       ["wake", wakeCommand.flags],
     ];

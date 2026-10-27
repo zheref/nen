@@ -47,7 +47,7 @@ const STUB_SEAMS: Seams = {
 /** The `pr` subcommands that run the private-name guard (zheref/nen#363). */
 function runsPrivateNameGuard(argv: readonly string[]): boolean {
   if (argv[0] !== "pr") return false;
-  if (argv[1] === "edit-body" || argv[1] === "open") return true;
+  if (argv[1] === "edit-body" || argv[1] === "edit-title" || argv[1] === "open") return true;
   return argv[1] === "threads" && (argv[2] === "reply" || argv[2] === "settle");
 }
 
@@ -2433,11 +2433,11 @@ describe("nen pr edit-body -- replaces a pull request's body outright, byte for 
     expect(result.err.join("\n")).toMatch(/could not replace zheref\/nen#12's body/);
   });
 
-  it("refuses --dry-run on any subcommand that does not read it, naming all eight that do", async () => {
+  it("refuses --dry-run on any subcommand that does not read it, naming all nine that do", async () => {
     const result = await capture(["pr", "ready", "--dry-run"], null, new ScriptedSeams([]));
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toContain(
-      "--dry-run is only read by 'pr cascade-main', 'pr retarget', 'pr request-reviews', 'pr edit-body', 'pr mark-ready', 'pr threads', 'pr open' and 'pr ledger'.",
+      "--dry-run is only read by 'pr cascade-main', 'pr retarget', 'pr request-reviews', 'pr edit-body', 'pr edit-title', 'pr mark-ready', 'pr threads', 'pr open' and 'pr ledger'.",
     );
   });
 
@@ -3032,6 +3032,7 @@ describe("the family's one flag guard (zheref/nen#351)", () => {
     ["retarget", ["pr", "retarget", "--target", "zheref/nen", "--pr", "12", "--base", "main"]],
     ["request-reviews", ["pr", "request-reviews", "--target", "zheref/nen", "--pr", "12", "--add-reviewers", "octocat"]],
     ["edit-body", ["pr", "edit-body", "--target", "zheref/nen", "--pr", "12", "--body-file", BODY]],
+    ["edit-title", ["pr", "edit-title", "--target", "zheref/nen", "--pr", "12", "--title-file", TITLE]],
     ["mark-ready", ["pr", "mark-ready", "--target", "zheref/nen", "--pr", "12"]],
     ["threads", ["pr", "threads", "reply", "--target", "zheref/nen", "--pr", "12", "--thread", "T1", "--body-file", BODY]],
     ["threads", ["pr", "threads", "resolve", "--target", "zheref/nen", "--pr", "12", "--thread", "T1"]],
@@ -3205,6 +3206,7 @@ describe("the family's one flag guard (zheref/nen#351)", () => {
       retarget: { values: ["target", "pr", "base"], booleans: ["dry-run"] },
       "request-reviews": { values: ["target", "pr", "add-reviewers", "add-bots"], booleans: ["dry-run"] },
       "edit-body": { values: ["target", "pr", "body-file", "private-names-ignore-file"], booleans: ["dry-run", "skip-private-name-check", "allow-all-ignored"] },
+      "edit-title": { values: ["target", "pr", "title-file", "private-names-ignore-file"], booleans: ["dry-run", "skip-private-name-check", "allow-all-ignored"] },
       "mark-ready": { values: ["target", "pr", "require-head"], booleans: ["dry-run"] },
       threads: { values: ["target", "pr", "thread", "body-file", "from", "private-names-ignore-file"], booleans: ["dry-run", "skip-private-name-check", "allow-all-ignored"] },
       open: { values: ["target", "base", "title-file", "body-file", "head", "assignee", "private-names-ignore-file"], booleans: ["draft", "dry-run", "skip-private-name-check", "allow-all-ignored"] },
@@ -3405,5 +3407,160 @@ describe("body-check exact and prose flags", () => {
     const result = await capture(["pr", "body-check", "--body-from", body, "--exact", "--json"], repo);
     expect(result.code).toBe(1);
     expect(JSON.parse(result.out.join("\n"))).toMatchObject({ source: { kind: "derived" }, findings: [{ line: 3 }] });
+  });
+});
+
+describe("nen pr edit-title -- replaces a pull request's title from a file, then reads it back (zheref/nen#523)", () => {
+  const PULLS_12 = "gh api repos/zheref/nen/pulls/12";
+  const titled = (title: string): ScriptedCall => ({ match: PULLS_12, result: { stdout: JSON.stringify({ number: 12, title }) } });
+  const WRITE = (title: string): ScriptedCall => ({ match: `gh pr edit 12 --repo zheref/nen --title ${title}`, result: {} });
+  const argvFor = (contents: string, ...extra: string[]): string[] => [
+    "pr", "edit-title", "--target", "zheref/nen", "--pr", "12", "--title-file", tempFile("title.txt", contents), ...extra,
+  ];
+  const callLines = (seams: ScriptedSeams): string[] => seams.calls.map((call): string => [call.command, ...call.args].join(" "));
+
+  it("AC-1: certifies, writes through gh pr edit --title, reads the title back identical, exit 0", async () => {
+    const seams = new ScriptedSeams([titled("old (0.141.0)"), titled("feat: new (0.147.0)"), WRITE("feat: new (0.147.0)")]);
+    const result = await capture(argvFor("feat: new (0.147.0)\n"), null, seams);
+    expect(result.code).toBe(0);
+    expect(result.out).toEqual(["replaced zheref/nen#12's title, read back identical: feat: new (0.147.0)"]);
+    // The guard default (a private target) is one visibility read; the rest is certify, write, read back.
+    expect(callLines(seams).filter((line): boolean => !line.startsWith("gh api repos/zheref/nen ") && line !== "gh api repos/zheref/nen")).toEqual([
+      PULLS_12,
+      "gh pr edit 12 --repo zheref/nen --title feat: new (0.147.0)",
+      PULLS_12,
+    ]);
+  });
+
+  it("AC-1: a title GitHub stored differently is exit 1 naming both strings, never a success", async () => {
+    // Scripted order: certify answers "old", the read-back answers what GitHub stored.
+    const stored = new ScriptedSeams([titled("old"), titled("new"), WRITE("new  ")]);
+    const result = await capture(argvFor("new  \n"), null, stored);
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toContain(`zheref/nen#12's title reads back as "new", not the file's "new  "`);
+  });
+
+  it("AC-1: --json carries the contract, previous and new title, written and readBack", async () => {
+    const seams = new ScriptedSeams([titled("old"), titled("fresh"), WRITE("fresh")]);
+    const result = await capture(argvFor("fresh\n", "--json"), null, seams);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.out.join("\n"))).toEqual({
+      contract: "nen.pr.edit-title/v0.1",
+      target: "zheref/nen",
+      number: 12,
+      previous: "old",
+      title: "fresh",
+      written: true,
+      readBack: "identical",
+      dryRun: false,
+      privateNameCheck: { result: "skipped-private-target", targetVisibility: "private", listSize: null, owners: null, hits: [], ruled: [], error: null },
+    });
+  });
+
+  it("AC-1: --json on a mismatch says readBack mismatch with what was stored, exit 1", async () => {
+    const seams = new ScriptedSeams([titled("old"), titled("x".repeat(256)), WRITE("x".repeat(300))]);
+    const result = await capture(argvFor("x".repeat(300), "--json"), null, seams);
+    expect(result.code).toBe(1);
+    const report = JSON.parse(result.out.join("\n")) as { readBack: string; stored: string; written: boolean };
+    expect(report.readBack).toBe("mismatch");
+    expect(report.written).toBe(true);
+    expect(report.stored).toBe("x".repeat(256));
+  });
+
+  it("AC-1: a read-back that fails is exit 1, never reported as replaced", async () => {
+    const seams = new ScriptedSeams([titled("old"), { match: PULLS_12, result: { code: 1, stderr: "HTTP 502" } }, WRITE("fresh")]);
+    const result = await capture(argvFor("fresh"), null, seams);
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/could not read back zheref\/nen#12/);
+    expect(result.out).toEqual([]);
+  });
+
+  it("AC-2: a number that names an issue (pulls/<n> 404) is refused at exit 2 before any write", async () => {
+    const seams = new ScriptedSeams([{ match: PULLS_12, result: { code: 1, stderr: "HTTP 404: Not Found" } }]);
+    const result = await capture(argvFor("fresh"), null, seams);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/#12 does not read as a pull request in zheref\/nen/);
+    expect(callLines(seams)).toEqual([PULLS_12]);
+  });
+
+  it("AC-2: a title holding a line break is refused at exit 2 with zero calls", async () => {
+    for (const contents of ["first\nsecond\n", "first\r\nsecond", "one\n\n"]) {
+      const seams = new ScriptedSeams([]);
+      const result = await capture(argvFor(contents), null, seams);
+      expect(result.code, JSON.stringify(contents)).toBe(2);
+      expect(result.err.join("\n")).toMatch(/holds more than one line/);
+      expect(seams.calls.length).toBe(0);
+    }
+  });
+
+  it("AC-2: an empty or whitespace-only title, no --title-file and a loose --pr are refused at exit 2 with zero calls", async () => {
+    for (const argv of [
+      argvFor("\n"),
+      argvFor("   \n"),
+      ["pr", "edit-title", "--target", "zheref/nen", "--pr", "12"],
+      ["pr", "edit-title", "--target", "zheref/nen", "--pr", "1e3", "--title-file", tempFile("title.txt", "t")],
+    ]) {
+      const seams = new ScriptedSeams([]);
+      const result = await capture(argv, null, seams);
+      expect(result.code, argv.join(" ")).toBe(2);
+      expect(seams.calls.length).toBe(0);
+    }
+  });
+
+  it("drops a leading BOM and one CRLF, nothing else", async () => {
+    const seams = new ScriptedSeams([titled("old"), titled(" spaced"), WRITE(" spaced")]);
+    const result = await capture(argvFor("﻿ spaced\r\n"), null, seams);
+    expect(result.code).toBe(0);
+    expect(callLines(seams)).toContain("gh pr edit 12 --repo zheref/nen --title  spaced");
+  });
+
+  it("AC-3: --dry-run certifies, prints the argv and both titles, and writes nothing", async () => {
+    const seams = new ScriptedSeams([titled("old title")]);
+    const result = await capture(argvFor("new title\n", "--dry-run"), null, seams);
+    expect(result.code).toBe(0);
+    expect(result.out).toEqual([
+      'would run: gh pr edit 12 --repo zheref/nen --title "new title"',
+      "target: zheref/nen",
+      "number: 12",
+      "current title: old title",
+      "new title: new title",
+    ]);
+    expect(callLines(seams).some((line): boolean => line.startsWith("gh pr edit"))).toBe(false);
+  });
+
+  it("AC-3: --dry-run --json says written false and readBack null", async () => {
+    const seams = new ScriptedSeams([titled("old title")]);
+    const result = await capture(argvFor("new title", "--dry-run", "--json"), null, seams);
+    expect(result.code).toBe(0);
+    const report = JSON.parse(result.out.join("\n")) as { written: boolean; readBack: unknown; dryRun: boolean };
+    expect(report).toMatchObject({ written: false, readBack: null, dryRun: true });
+  });
+
+  it("AC-4: a private name in the title on a PUBLIC target refuses at exit 4 after certifying, before any write, never printing the name", async () => {
+    const seams = new ScriptedSeams([titled("old"), visibilityRow("zheref/nen", "public"), FULL_REACH_ROW, privateListRow(["acme/vault"])]);
+    const result = await capture(argvFor("ship acme/vault support"), null, seams, "scripted");
+    expect(result.code).toBe(4);
+    expect(callLines(seams)).toEqual([PULLS_12, "gh api repos/zheref/nen", SCOPES_CALL, PRIVATE_LIST_PAGE]);
+    const all = [...result.out, ...result.err].join("\n");
+    expect(all).toContain("nen pr edit-title: title:1: private repository #1");
+    expect(all).not.toMatch(/vault/i);
+  });
+
+  it("AC-4: --dry-run refuses the same way", async () => {
+    const seams = new ScriptedSeams([titled("old"), visibilityRow("zheref/nen", "public"), FULL_REACH_ROW, privateListRow(["acme/vault"])]);
+    const result = await capture(argvFor("ship acme/vault support", "--dry-run", "--json"), null, seams, "scripted");
+    expect(result.code).toBe(4);
+    const report = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
+    expect(report).toMatchObject({ written: false, dryRun: true, readBack: null, privateNameCheck: { result: "refused" } });
+    // A refusal's report never carries the refused text.
+    expect(report).not.toHaveProperty("title");
+    expect(result.out.join("\n")).not.toMatch(/vault/i);
+  });
+
+  it("'nen pr --help' documents edit-title and its read-back", async () => {
+    const result = await capture(["pr", "--help"], null);
+    const out = result.out.join("\n");
+    expect(out).toMatch(/nen pr edit-title --target <owner\/name> --pr <n> --title-file <path> \[--dry-run\]/);
+    expect(out).toMatch(/READS IT BACK/);
   });
 });
