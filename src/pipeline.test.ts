@@ -406,7 +406,14 @@ describe("ci runs the same three commands a developer runs", () => {
     ]);
     const windows = jobs["check-windows"] as Record<string, YamlValue>;
     expect(windows["name"]).toBe("check");
-    expect(windows["steps"]).toEqual((jobs["check"] as Record<string, YamlValue>)["steps"]);
+    // Only the approved POSIX host-admission prefix may differ. Windows
+    // remains explicitly inactive; every underlying command stays identical.
+    const posixSteps = (jobs["check"] as Record<string, YamlValue>)["steps"] as Record<string, YamlValue>[];
+    const underlying = posixSteps.map((step): Record<string, YamlValue> => typeof step["run"] === "string"
+      ? { ...step, run: step["run"].replaceAll("bun src/host/ci.ts ", "") } : step);
+    expect(windows["steps"]).toEqual(underlying);
+    expect((windows["env"] as Record<string, YamlValue>)["NEN_HOST_ADMISSION"]).toBe("");
+    expect(JSON.stringify(windows["steps"])).not.toContain("src/host/ci.ts");
   });
 
   it("pins every third-party action to a commit SHA", () => {

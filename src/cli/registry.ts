@@ -41,6 +41,7 @@ import { epicCommand } from "../epic/command.js";
 import { exitsCommand } from "../exits/command.js";
 import { fanoutCommand } from "../fanout/command.js";
 import { gateCommand } from "../gate/command.js";
+import { hostCommand } from "../host/command.js";
 import { ideaCommand } from "../idea/command.js";
 import { issueCommand } from "../issue/command.js";
 import { labelCommand } from "../label/command.js";
@@ -89,6 +90,7 @@ export const COMMANDS: readonly Command[] = [
   exitsCommand,
   fanoutCommand,
   gateCommand,
+  hostCommand,
   ideaCommand,
   issueCommand,
   labelCommand,

@@ -85,6 +85,7 @@ import {
   type ResolvedSelection,
   type ResolvedTarget,
 } from "./render.js";
+import { hasClaimMarkers, hostActivated } from "../host/execute.js";
 import { ARTIFACT_TOKEN, DEVICE_ID_TOKEN, findDevice, substituteSteps, tokensUsed } from "./launch.js";
 
 /**
@@ -1319,6 +1320,30 @@ export async function runVerb(
   // the run rather than about the declaration.
   for (const step of plan.steps) refuseUnwritableRedirect(step, repoRoot);
 
+  // One claim covers all steps, including device probes and after-steps. Dry
+  // runs return above. Effort slots and remote API quotas remain independent.
+  const heavy = ["build", "test", "coverage", "ui-test", "archive", "dev", "run", "deploy", "release"].includes(plan.verb);
+  if (heavy && (hostActivated(context.seams.env) || hasClaimMarkers(context.seams.env)) && plannedSteps(plan).some((step): boolean => step.stall !== undefined && step.stall !== null)) {
+    const message = "activated host admission cannot execute a declared onStall remedy until NN538 provides the owned remedy/cancellation boundary. Nothing was launched and no capacity was acquired; inactive behavior is unchanged.";
+    emitReport(context, sink, assemble(plan, cwd, repoRoot, preconditions, plannedSteps(plan).map((step): ShuStepReport => plannedStep(step, cwd)), 2, 0, "dry-run"));
+    throw new ShuRefusal(2, message);
+  }
+  const guard = heavy ? context.seams.hostAdmission?.(context.seams, `shu ${plan.verb} (${plan.lane})`, context.io.err) : undefined;
+  const admitted = guard === undefined ? context : { ...context, seams: guard.seams };
+  try {
+    return await runAdmitted(admitted, project, plan, options, cwd, repoRoot, preconditions, sink);
+  } finally {
+    // A failed/abandoned step leaves its unresolved claim occupied. finish
+    // refuses to release it; coordinator death alone never frees capacity.
+    guard?.finish();
+  }
+}
+
+async function runAdmitted(
+  context: CommandContext, project: ProjectBlock, plan: RenderedInvocation,
+  options: RunOptions, cwd: string, repoRoot: string,
+  preconditions: readonly AssertedPrecondition[], sink: ReportSink | undefined,
+): Promise<number> {
   const launch = launchOf(plan);
   if (launch !== null) {
     return runLaunch(context, plan, launch, cwd, repoRoot, preconditions, sink);

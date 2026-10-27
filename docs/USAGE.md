@@ -20138,3 +20138,92 @@ A `severity` enumeration with `[+]` is highest-first; two severities such as
 `high+low` are corrected to `low+`. The refused input remains exit 2 and JSON carries
 `corrected`. Mixed alternatives, incomplete lines and boundary-changing rewrites keep
 the existing refusal without an invented correction; legacy scalar placeholders stay.
+
+## Shared host capacity (`host`)
+
+`nen host` controls participating heavy work on one machine across repositories,
+worktrees, interactive sessions and self-hosted CI accounts. It is independent of
+`loop` effort slots and provider/API quotas. The default is **one heavy workload**.
+An operator may explicitly choose capacity 1–64 when provisioning a new store.
+This is an admission budget, not the pressure policy or a worker-count setting.
+
+```bash
+nen host init --store /Users/Shared/nen-host
+nen host status --store /Users/Shared/nen-host --json
+nen host run --store /Users/Shared/nen-host -- bun run typecheck
+```
+
+The operator must provision **one absolute, local-filesystem store per host** and
+set `NEN_HOST_STORE` to that identical path for every participating account. A
+shared trusted group needs read/write/search on the store and its `slots`
+directory (normally setgid mode `2770`), and read/write on `config.json` and claim
+files (`0660`). Arrange ownership/group membership during host setup; Nen does
+not elevate, install a daemon, change existing directory permissions or provision
+an alternative budget when a launch fails. Do not change capacity or replace the
+store while any claims exist. Network filesystems are outside the atomic-link
+store contract.
+
+Local Shu and POSIX CI adoption use the same explicit activation switch:
+set `NEN_HOST_ADMISSION=enabled` as well as the shared `NEN_HOST_STORE`. With
+activation unset, the integration visibly reports **admission unavailable**,
+**serialized fallback required** and **unprotected launch**; it preserves the
+existing command and makes no protection claim. Once enabled, missing, corrupt
+or unreadable state refuses before the child starts, with no fallback. Invalid
+activation values also refuse. Explicit `nen host run` always enforces the budget
+regardless of the rollout switch, and inherited active claims cannot be bypassed
+by clearing the switch.
+
+Activated local `shu build`, `test`, `coverage`, `ui-test`, `archive`, `dev`, `run`,
+`deploy` and `release` acquire a claim around the entire declared invocation,
+including launch probes and after-steps. Dry runs stay read-only. `host run`
+wraps another participating command, including a dependency install. There is no
+checkout-relative or per-user store fallback: missing, corrupt or unreadable
+configured state refuses before any heavy executable starts. At capacity, the
+refusal names the current owner and claim and reports **wait 0ms**; callers may
+retry after the owner finishes, without an unbounded polling loop.
+
+CI uses `bun src/host/ci.ts <exe> [args...]`, whose dependency-free entry can guard
+`bun install` itself. POSIX self-hosted runners activate with repository variable
+`NEN_HOST_ADMISSION=enabled` and read `NEN_HOST_STORE`; the latter must name the
+**same provisioned store** used by activated interactive accounts on that machine. This adoption requires the Nen release and the Hatsu
+pin/call-site update in addition to configuring each host. When activated, a GitHub-hosted,
+ephemeral job provisions its own disposable budget under `RUNNER_TEMP` and reuses
+it across steps. No self-hosted job receives that fallback.
+
+A complete owner record is published atomically before admission succeeds. Each
+step receives a fresh launch capability bound to a digest of its executable and
+arguments. Its supervisor must prove ancestry from the exact coordinator and
+atomically consume that capability by publishing an immutable registration in
+its own POSIX process group before the requested executable starts. A replay
+cannot replace the registered owner, and completion must match that exact
+coordinator, step and supervisor identity. Ordinary
+children inherit that group. Nested participating commands validate their
+inherited claim against both the actual group and ancestor chain and count as
+part of the same workload, avoiding self-deadlock or another independent slot.
+A forged, stale or wrong-group inherited claim refuses.
+
+Completion requires the supervisor's terminal receipt and a successful complete
+process-group snapshot proving its descendants quiescent. A crashed coordinator,
+old timestamp, absent PID, abandoned watcher or unreadable process snapshot
+**does not release capacity**. Unresolved claims stay visible in `host status`;
+there is no automatic timeout reap or force-release command. Resolve the recorded
+workload and ownership before changing host state. Claims contain owner labels,
+identities and lifecycle state, not command arguments or environment values.
+
+The current provider uses the host's POSIX `ps` on macOS/Linux and fails closed
+when the probe cannot read complete ownership. Explicit or activated Windows heavy launches refuse
+until an authoritative process-tree provider is available. Existing Windows CI
+command lines remain unchanged and activation is explicitly unset there: that
+CI lane is **unprotected**, pending the Windows provider. No Windows protection
+is claimed. Unwrapped third-party
+commands and commands deliberately escaping their process group cannot be
+contained by this guard; do not interpret a process-group snapshot as complete OS
+containment. Cancellation, host-pressure decisions and execution-receipt policy
+are separate guardrail slices. Dedicated groups require terminal-signal
+forwarding before enabling interactive `dev`/`run` in the deployment; admission
+alone does not provide that forwarding. As a staged implementation boundary,
+activated or inherited-owned heavy Shu plans declaring `onStall` refuse before
+capacity acquisition or any heavy child, through an ordinary structured Shu
+report naming NN538. Inactive remedy execution and dry-run rendering remain
+unchanged. This bounded implementation choice leaves tracked concurrent remedy
+execution to the owned cancellation integration.
