@@ -32,6 +32,7 @@ import {
   type Command,
   type CommandContext,
 } from "../cli/command.js";
+import { plainLine } from "../cli/plain.js";
 import { GrammarError, parseInvocation, parseTemplate, type Grammar } from "./engine.js";
 import { FutonResolveError, formatFutonSelector, parseFutonInvocation, resolveFutonRepo, type FutonStep } from "../parse/futon.js";
 import { parseIzanagiInvocation } from "../parse/izanagi.js";
@@ -109,6 +110,14 @@ futon:
   An optional '--idle' (HR-5), the first or last token before 'then',
   marks an idle batch: reported as 'idle: yes' / --json 'idle: true',
   never acted on here; after 'then' it is refused with the line moved.
+  An optional '--dry-run' (#520) follows the same rules beside it, in
+  either order: reported as 'dry-run: yes' / --json 'dryRun: true', never
+  acted on here; after 'then' or typed twice it is refused at exit 2. Any
+  other flag-shaped word in the scope (a near miss such as '--dryrun', an
+  unknown '--option', a flag left inside the selector) is refused, never
+  read into the label: quote the label to keep such a word. A leading flag
+  is its own argv word: a quoted line that begins with '--' is refused by
+  the argv reader as an unknown option. Anything after '--' is refused.
   A tag terminal is refused unless
   the resolved repo IS the one you are standing in (or --self names it) --
   a consumer's release is a different job than the registry owner's.
@@ -156,6 +165,14 @@ export const parseCommand: Command = {
       // words, or once as a word and once in the line -- is refused as given
       // twice rather than collapsed into one.
       if (skill === "futon") {
+        // Text after a bare `--` is never part of the line: dropping it would
+        // lose a typed `--dry-run` and read the run as live (Feitan F2 on
+        // zheref/nen#562), so it is refused by name.
+        if (context.args.passthrough.length > 0) {
+          throw new VerbUsageError(
+            `'parse futon' takes nothing after '--' (got '${plainLine(context.args.passthrough.join(" "))}'): type the line, and any '--idle' or '--dry-run', before it.`,
+          );
+        }
         const words = (["idle", "dry-run"] as const).flatMap((flag): string[] =>
           context.args.booleans.has(flag) ? new Array<string>(context.args.booleanCounts?.get(flag) ?? 1).fill(`--${flag} `) : [],
         );
@@ -275,9 +292,12 @@ function futon(context: CommandContext, raw: string): number {
       context.io.out(JSON.stringify({ ok: false, error: parsed.error }, null, 2));
       return 2;
     }
-    context.io.err(`nen: ${parsed.error.message}`);
+    // The message and the corrected line echo caller text; the terminal gets
+    // it with control bytes stripped (plainLine), --json keeps the bytes
+    // escaped (Feitan F4 on zheref/nen#562).
+    context.io.err(`nen: ${plainLine(parsed.error.message)}`);
     if (parsed.error.correctedLine !== null) {
-      context.io.err(`  try: ${parsed.error.correctedLine}`);
+      context.io.err(`  try: ${plainLine(parsed.error.correctedLine)}`);
     }
     return 2;
   }
@@ -305,17 +325,17 @@ function futon(context: CommandContext, raw: string): number {
     resolved = resolveFutonRepo(registry, parsed.value.repoToken, currentSlug);
   } catch (error) {
     if (error instanceof FutonResolveError) {
-      context.io.err(`nen: ${error.message}`);
+      context.io.err(`nen: ${plainLine(error.message)}`);
       return 2;
     }
     throw error;
   }
 
   if (parsed.value.terminal !== null && !resolved.isSelf) {
-    context.io.err(
+    context.io.err(plainLine(
       `nen: 'then ${parsed.value.terminal}' is refused against '${resolved.slug}' -- the terminal is that repository's own release machinery, and it is not the one you are standing in (${currentSlug}). Try the corrected build-only line:`,
-    );
-    context.io.err(`  try: ${parsed.value.repoToken ?? resolved.slug}@${formatFutonSelector(parsed.value)}`);
+    ));
+    context.io.err(plainLine(`  try: ${parsed.value.repoToken ?? resolved.slug}@${formatFutonSelector(parsed.value)}`));
     return 2;
   }
 
@@ -389,29 +409,29 @@ function futon(context: CommandContext, raw: string): number {
     context.io.out(JSON.stringify(result, null, 2));
     return 0;
   }
-  context.io.out(`repo: ${result.repo}${result.code === null ? "" : ` (${result.code})`}`);
+  context.io.out(plainLine(`repo: ${result.repo}${result.code === null ? "" : ` (${result.code})`}`));
   if (result.band !== null) {
     context.io.out(`band: ${result.band.severity}${result.band.plus ? "+" : ""} -> ${result.band.severities.join(", ")}`);
   } else {
-    context.io.out(`label: ${result.label ?? ""} (exact match, no expansion)`);
+    context.io.out(`label: ${plainLine(result.label ?? "")} (exact match, no expansion)`);
   }
   if (result.idle) context.io.out("idle: yes (--idle: an idle batch under the repository's typed idle profile, HR-5)");
-  if (result.dryRun) context.io.out("dry run: yes (--dry-run: the calling skill decides what a dry futon run does)");
+  if (result.dryRun) context.io.out("dry-run: yes (--dry-run: the calling skill decides what a dry futon run does)");
   const renderedThen = result.then;
   if (renderedThen === null) context.io.out("terminal: (none -- build-only)");
   else if (renderedThen.kind === "terminal") context.io.out(`terminal: ${renderedThen.terminal}`);
   else if (renderedThen.kind === "skills") {
     const chain = renderedThen.steps.map((step): string => (step.target === null ? step.skill : `${step.skill}@${step.target}`)).join(" -> ");
-    context.io.out(`then: skills ${chain} (existence and authority are the caller's to check)`);
+    context.io.out(`then: skills ${plainLine(chain)} (existence and authority are the caller's to check)`);
     for (const step of renderedThen.steps) {
       if (step.gate === undefined) continue;
       context.io.out(
         step.gate.allowed
-          ? `  gate: ${step.skill} allowed (${step.gate.reason}) [${step.gate.source}]`
-          : `  refused: ${step.skill} (${step.gate.reason}) [${step.gate.source}]`,
+          ? plainLine(`  gate: ${step.skill} allowed (${step.gate.reason}) [${step.gate.source}]`)
+          : plainLine(`  refused: ${step.skill} (${step.gate.reason}) [${step.gate.source}]`),
       );
     }
   }
-  else context.io.out(`then: prose "${(renderedThen as { readonly text: string }).text}" (verbatim; the caller decides what it may run)`);
+  else context.io.out(`then: prose "${plainLine((renderedThen as { readonly text: string }).text)}" (verbatim; the caller decides what it may run)`);
   return 0;
 }

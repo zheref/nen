@@ -16193,18 +16193,29 @@ the flag (an UNQUOTED label whose last word is `--idle` now reads as the flag: q
 `--idle` after `then` would be indistinguishable from prose and is refused at exit 2 with the line moved
 before `then`; given twice -- at both ends or twice at the same end (`nen@bug --idle --idle`) -- it is
 refused with one kept, never read as part of the label (zheref/nen#491). On any other skill it is exit 2.
-**`--dry-run`** (zheref/nen#520) is a second flag of the scope under the same rules: the first or the last
-token before any `then`, or its own argv word; nen reports it (`dry run: yes`, `--json` `dryRun: true`,
-otherwise `false`) and never acts on it -- what a dry futon run does is the calling skill's rule. Both
-flags may be typed together, in either order and at either end (`--dry-run nen@bug --idle`,
-`nen@bug --idle --dry-run`), and both are read. After `then`, or typed twice -- in the line, as two
-argv words, or once each way (true of `--idle` too) -- it is refused at exit 2 with the corrected line, which writes each typed flag once, `--idle` before `--dry-run`, after the
-scope. On `parse futon` it is part of the grammar, never a preview: `parse` writes nothing. On any other
-skill it is exit 2.
-**Kazaana carries the same flag through the generic grammar**, as a literal-only optional clause:
+**Kazaana carries `--idle` through the generic grammar**, as a literal-only optional clause:
 `nen parse kazaana --grammar "<repo> [on <line:…>] [--idle]" --line "hatsu on claude --idle"` reports
 `clauses: [{ literal: "--idle", present: true }]` (and `present: false` without it), so a caller reads
 the flag off the parse and strips nothing by hand.
+**`--dry-run`** (zheref/nen#520) is a second flag of the scope under the same rules: the first or the last
+token before any `then`, or its own argv word; nen reports it (`dry-run: yes`, `--json` `dryRun: true`,
+otherwise `false`) and never acts on it -- what a dry futon run does is the calling skill's rule. Both
+flags may be typed together, in either order and at either end (`--dry-run nen@bug --idle`,
+`nen@bug --idle --dry-run`), and both are read. After `then` -- followed by whitespace, the end or
+punctuation (`then x --dry-run;`), and never inside quotes, where it is prose -- or typed twice -- in the
+line, as two argv words, or once each way (true of `--idle` too) -- it is refused at exit 2 with the
+corrected line, which writes each typed flag once, `--idle` before `--dry-run`, after the scope. **Any
+other flag-shaped word in the scope is refused at exit 2, never read into the label**: a near miss of
+either flag (`--dryrun`, `--DRY-RUN`, `--dry_run`, `-dry-run`, an em dash `—dry-run`, `--dry-run=false`,
+`--idel`), with the exact flag in the corrected line; an unknown `--option` (`nen@bug --dry-run --verbose`),
+dropped from the corrected line; and a scope flag left inside the selector (`nen@x --dry-run y`), moved
+after it. Quote a label to keep such a word in it (`nen@"bug --dryrun"`). **A leading flag is its own
+argv word**: a QUOTED line that begins with `--` (`nen parse futon "--dry-run nen@bug"`) is refused by the
+argv reader as an unknown option at exit 2, so type `nen parse futon --dry-run nen@bug` or put the flag
+last. Anything after a bare `--` is refused at exit 2, never dropped. In the plain rendering the echoed
+line, label and `try:` line have control characters stripped; `--json` keeps them escaped. On
+`parse futon` the flag is part of the grammar, never a preview: `parse` writes nothing. On any other
+skill it is exit 2.
 
 **Arguments**
 
@@ -16214,7 +16225,7 @@ the flag off the parse and strips nothing by hand.
 | (positional invocation) | yes | The futon line itself, e.g. `BC@high+ then tag`. | Joined from every positional after `futon`. |
 | `--self <owner/name>` | no | Overrides "which repo am I standing in" (otherwise read from the git remote). | Needed when the caller's own remote does not resolve, or under test. |
 
-**Output and exit codes** -- prints `repo: <slug> (<code>)`, `band: <severity>[+] -> <severities>`, `terminal: <clause or '(none -- build-only)'>`. `--json`: `{ repo, code, isSelf, band, label, terminal, then, idle, dryRun }`; the plain rendering adds `idle: yes (...)` and `dry run: yes (...)` when each flag was given. Exit 0 on a resolved, permitted invocation; exit 2 on an unparseable line, an unresolvable repo token, or a `then <terminal>` clause against a repo that is not the caller's own (with a corrected, build-only line offered).
+**Output and exit codes** -- prints `repo: <slug> (<code>)`, `band: <severity>[+] -> <severities>`, `terminal: <clause or '(none -- build-only)'>`. `--json`: `{ repo, code, isSelf, band, label, terminal, then, idle, dryRun }`; the plain rendering adds `idle: yes (...)` and `dry-run: yes (...)` when each flag was given. Exit 0 on a resolved, permitted invocation; exit 2 on an unparseable line, an unresolvable repo token, or a `then <terminal>` clause against a repo that is not the caller's own (with a corrected, build-only line offered).
 
 **Example**
 

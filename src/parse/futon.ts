@@ -168,27 +168,137 @@ function nearMissTerminal(lowered: string): Terminal | null {
 const SCOPE_FLAGS = ["--idle", "--dry-run"] as const;
 type ScopeFlag = (typeof SCOPE_FLAGS)[number];
 
-// Strips every scope flag standing at either end of the head, counting each
-// copy, until the first and the last token are no flag. The core keeps
-// whatever lies between, so a flag in the middle of an unquoted label stays
-// part of the label.
-function stripScopeFlags(head: string): { readonly core: string; readonly seen: ReadonlyMap<ScopeFlag, number> } {
+// The text with every quoted span's interior blanked to spaces, same length,
+// so a scan for flag tokens never reads inside quotes (`nen@"x --idle"`,
+// `then "do not --dry-run here"`) and every index still maps to the original.
+// An unmatched quote blanks nothing from there on: it is not a quoted span.
+function blankQuoted(text: string): string {
+  let out = "";
+  let index = 0;
+  while (index < text.length) {
+    const char = text[index] as string;
+    const close = char === '"' || char === "'" ? text.indexOf(char, index + 1) : -1;
+    if (close === -1) {
+      out += char;
+      index++;
+      continue;
+    }
+    out += char + " ".repeat(close - index - 1) + char;
+    index = close + 1;
+  }
+  return out;
+}
+
+// A dash a terminal, a word processor or a phone keyboard may type in place of
+// `--`: the hyphen and dash block (U+2010-2015), minus (U+2212), and the small
+// and full-width hyphen-minus forms.
+const DASHES = "‐-―−﹘﹣－";
+const LEADING_DASHES = new RegExp(`^[-${DASHES}]+`);
+
+// The scope flag a token is an attempt at -- exact, or a near miss: another
+// case, '_' for '-', a dash dropped or doubled, a Unicode dash for '--', a
+// '=<value>' suffix, or one or two typos (`--dryrun`, `--DRY-RUN`,
+// `--dry_run`, `—dry-run`, `--dry-run=false`, `--idel`). `null` when it
+// is none of them.
+function scopeFlagAttempt(token: string): ScopeFlag | null {
+  if ((SCOPE_FLAGS as readonly string[]).includes(token)) return token as ScopeFlag;
+  const bare = token.toLowerCase().replace(LEADING_DASHES, "").split("=")[0]!.replace(/[-_\s]/g, "");
+  if (bare === "") return null;
+  if (bare === "idle" || (bare.length >= 3 && editDistance(bare, "idle") <= 2)) return "--idle";
+  if (bare === "dryrun" || (bare.length >= 4 && editDistance(bare, "dryrun") <= 2)) return "--dry-run";
+  return null;
+}
+
+// A head token that is written as a flag: `--anything`, a Unicode dash in
+// front of a word, or a single-dash near miss of a scope flag (`-dry-run`).
+function looksLikeFlag(token: string): boolean {
+  if (token.startsWith("--")) return true;
+  if (new RegExp(`^[${DASHES}]\\p{L}`, "u").test(token)) return true;
+  return token.startsWith("-") && scopeFlagAttempt(token) !== null;
+}
+
+interface HeadToken {
+  readonly text: string;
+  readonly start: number;
+  readonly end: number;
+}
+
+interface ScopeRead {
+  /** The head with every flag-shaped token taken out. */
+  readonly core: string;
+  /** Each scope flag accepted at an end of the head, with how many copies. */
+  readonly seen: ReadonlyMap<ScopeFlag, number>;
+  /** Flag-shaped tokens refused where they stand, each with the flag it attempts (or null). */
+  readonly refused: readonly { readonly token: string; readonly flag: ScopeFlag | null; readonly exact: boolean }[];
+}
+
+// Reads the scope flags off the head. An EXACT scope flag at either end is
+// accepted, peeling inward until the first and the last token are no flag.
+// Every other flag-shaped token outside quotes -- a near miss, an unknown
+// `--option`, an exact flag left standing inside the selector -- is REFUSED,
+// never read into the label: `nen@high --dryrun` taken as the label
+// `high --dryrun` would be a live run asked for as a dry one (Feitan F1 on
+// zheref/nen#562). A label that really carries such a word is quoted.
+function readScopeFlags(head: string): ScopeRead {
+  const blanked = blankQuoted(head);
+  const tokens: HeadToken[] = [...blanked.matchAll(/\S+/g)].map((match): HeadToken => ({
+    text: head.slice(match.index, match.index + match[0].length),
+    start: match.index,
+    end: match.index + match[0].length,
+  }));
   const seen = new Map<ScopeFlag, number>();
-  let core = head;
-  for (let changed = true; changed; ) {
+  const taken = new Set<HeadToken>();
+  let first = 0;
+  let last = tokens.length - 1;
+  for (let changed = true; changed && first <= last; ) {
     changed = false;
-    for (const flag of SCOPE_FLAGS) {
-      const leading = new RegExp(`^${flag}(?:\\s+|$)`);
-      const trailing = new RegExp(`(?:^|\\s+)${flag}$`);
-      for (const pattern of [leading, trailing]) {
-        if (!pattern.test(core)) continue;
-        seen.set(flag, (seen.get(flag) ?? 0) + 1);
-        core = core.replace(pattern, "").trim();
-        changed = true;
-      }
+    for (const index of [first, last]) {
+      const token = tokens[index];
+      if (token === undefined || taken.has(token) || !(SCOPE_FLAGS as readonly string[]).includes(token.text)) continue;
+      const flag = token.text as ScopeFlag;
+      seen.set(flag, (seen.get(flag) ?? 0) + 1);
+      taken.add(token);
+      if (index === first) first++;
+      else last--;
+      changed = true;
+      break;
     }
   }
-  return { core, seen };
+  const refused: { token: string; flag: ScopeFlag | null; exact: boolean }[] = [];
+  for (const token of tokens.slice(first, last + 1)) {
+    if (!looksLikeFlag(token.text)) continue;
+    taken.add(token);
+    refused.push({ token: token.text, flag: scopeFlagAttempt(token.text), exact: (SCOPE_FLAGS as readonly string[]).includes(token.text) });
+  }
+  return { core: removeSpans(head, tokens.filter((token): boolean => taken.has(token))), seen, refused };
+}
+
+// The text with each span cut out together with the whitespace in front of it.
+function removeSpans(text: string, spans: readonly { readonly start: number; readonly end: number }[]): string {
+  let out = text;
+  for (const span of [...spans].sort((a, b): number => b.start - a.start)) {
+    let from = span.start;
+    while (from > 0 && /\s/.test(out[from - 1] as string)) from--;
+    out = out.slice(0, from) + out.slice(span.end);
+  }
+  return out.trim();
+}
+
+// An exact scope flag in the `then` clause, outside quotes, as a whole word --
+// followed by whitespace, the end, or punctuation (`then x --dry-run;`, Feitan
+// F3 on zheref/nen#562). Quoted text after `then` is prose and never scanned,
+// so a corrected line never rewrites it.
+function flagsInTail(tail: string): { readonly flags: ReadonlySet<ScopeFlag>; readonly rest: string } {
+  const blanked = blankQuoted(tail);
+  const flags = new Set<ScopeFlag>();
+  const spans: { start: number; end: number }[] = [];
+  for (const flag of SCOPE_FLAGS) {
+    for (const match of blanked.matchAll(new RegExp(`(?<=^|\\s)${flag}(?=[\\s,;.:!?)\\]}]|$)`, "g"))) {
+      flags.add(flag);
+      spans.push({ start: match.index, end: match.index + flag.length });
+    }
+  }
+  return { flags, rest: removeSpans(tail, spans) };
 }
 
 // The line with each typed flag once, after the scope and before any `then`.
@@ -231,27 +341,31 @@ export function parseFutonInvocation(raw: string): FutonParseResult {
   // a guess with side effects. Each is one flag: typed twice -- at both ends,
   // twice at the same end, or once on each side of `then` -- it is refused
   // with one kept, never read as part of the label (zheref/nen#491 AC-2).
-  const stripped = stripScopeFlags(head);
-  const scopeHead = stripped.core;
-  const movedFromTail = new Set<ScopeFlag>();
-  let thenText = tail;
-  if (tail !== null) {
-    for (const flag of SCOPE_FLAGS) {
-      const token = new RegExp(`(?:^|\\s+)${flag}(?=\\s|$)`, "g");
-      if (!token.test(tail)) continue;
-      movedFromTail.add(flag);
-      thenText = (thenText ?? "").replace(token, "").trim();
-    }
-  }
-  const typed = new Set<ScopeFlag>([...stripped.seen.keys(), ...movedFromTail]);
-  const twice = SCOPE_FLAGS.find((flag): boolean => (stripped.seen.get(flag) ?? 0) + (movedFromTail.has(flag) ? 1 : 0) > 1);
-  const misplaced = SCOPE_FLAGS.find((flag): boolean => movedFromTail.has(flag));
-  if (twice !== undefined || misplaced !== undefined) {
+  const scope = readScopeFlags(head);
+  const scopeHead = scope.core;
+  const moved = tail === null ? { flags: new Set<ScopeFlag>(), rest: null } : flagsInTail(tail);
+  const thenText = moved.rest;
+  const attempted = scope.refused.map((entry): ScopeFlag | null => entry.flag).filter((flag): flag is ScopeFlag => flag !== null);
+  const typed = new Set<ScopeFlag>([...scope.seen.keys(), ...moved.flags, ...attempted]);
+  const copies = (flag: ScopeFlag): number =>
+    (scope.seen.get(flag) ?? 0) + (moved.flags.has(flag) ? 1 : 0) + attempted.filter((each): boolean => each === flag).length;
+  const twice = SCOPE_FLAGS.find((flag): boolean => copies(flag) > 1);
+  const misplaced = SCOPE_FLAGS.find((flag): boolean => moved.flags.has(flag));
+  // A word that is no exact flag is named first: it is the one the caller
+  // most likely did not mean (`nen@bug --dry-run --verbose` names --verbose).
+  const stray = scope.refused.find((entry): boolean => !entry.exact) ?? scope.refused[0];
+  if (twice !== undefined || stray !== undefined || misplaced !== undefined) {
     const correctedLine = scopeLine(scopeHead, typed, thenText);
     const message =
       twice !== undefined
         ? `'${twice}' is given twice. It is one flag of the scope.`
-        : `'${misplaced}' after 'then' is read as part of the then clause. It is a flag of the scope: put it before 'then'.`;
+        : stray !== undefined
+          ? stray.exact
+            ? `'${stray.token}' stands inside the selector. A flag of the scope is the first or the last token before 'then'; quote the label to keep the word in it.`
+            : stray.flag !== null
+              ? `'${stray.token}' is not '${stray.flag}', and is never read into the label. Type the flag exactly, or quote the label to keep the word in it.`
+              : `'${stray.token}' is not a flag of futon's scope (${SCOPE_FLAGS.join(", ")}), and is never read into the label. Drop it, or quote the label to keep the word in it.`
+          : `'${misplaced}' after 'then' is read as part of the then clause. It is a flag of the scope: put it before 'then'.`;
     return { ok: false, error: { message, correctedLine } };
   }
   const idle = typed.has("--idle");

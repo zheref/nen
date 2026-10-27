@@ -596,3 +596,86 @@ describe("parseFutonInvocation -- the optional --dry-run flag (zheref/nen#520)",
     }
   });
 });
+
+describe("parseFutonInvocation -- a flag-shaped word in the scope is refused, never read into the label (Feitan F1, F3 on zheref/nen#562)", () => {
+  it("refuses a near miss of a scope flag with the exact flag in the corrected line", () => {
+    for (const [line, corrected] of [
+      ["nen@bug --dryrun", "nen@bug --dry-run"],
+      ["nen@bug --DRY-RUN", "nen@bug --dry-run"],
+      ["nen@bug --dry_run", "nen@bug --dry-run"],
+      ["nen@bug \u2014dry-run", "nen@bug --dry-run"],
+      ["nen@bug --dry-run=false", "nen@bug --dry-run"],
+      ["nen@bug -dry-run", "nen@bug --dry-run"],
+      ["nen@bug --idel", "nen@bug --idle"],
+      ["nen@high --dryrun then tag", "nen@high --dry-run then tag"],
+    ] as const) {
+      const result = parseFutonInvocation(line);
+      expect(result.ok, line).toBe(false);
+      if (!result.ok) {
+        expect(result.error.message, line).toMatch(/is not '--(dry-run|idle)', and is never read into the label/);
+        expect(result.error.correctedLine, line).toBe(corrected);
+      }
+    }
+  });
+
+  it("refuses an unknown --option and a scope flag left inside the selector", () => {
+    for (const [line, message, corrected] of [
+      ["nen@bug --dry-run --verbose", /'--verbose' is not a flag of futon's scope/, "nen@bug --dry-run"],
+      ["nen@bug --verbose", /'--verbose' is not a flag/, "nen@bug"],
+      ["nen@x --dry-run y", /'--dry-run' stands inside the selector/, "nen@x y --dry-run"],
+    ] as const) {
+      const result = parseFutonInvocation(line);
+      expect(result.ok, line).toBe(false);
+      if (!result.ok) {
+        expect(result.error.message, line).toMatch(message);
+        expect(result.error.correctedLine, line).toBe(corrected);
+      }
+    }
+  });
+
+  it("counts a near miss beside the exact flag as the flag given twice", () => {
+    const result = parseFutonInvocation("nen@bug --dryrun --dry-run");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toMatch(/'--dry-run' is given twice/);
+      expect(result.error.correctedLine).toBe("nen@bug --dry-run");
+    }
+  });
+
+  it("keeps a quoted label, a single dash and an ordinary hyphenated label as they are", () => {
+    for (const [line, label] of [
+      ['nen@"bug --dryrun"', "bug --dryrun"],
+      ["nen@a - b", "a - b"],
+      ["nen@good-first-issue", "good-first-issue"],
+      ["nen@c++", "c++"],
+    ] as const) {
+      const result = parseFutonInvocation(line);
+      expect(result.ok, line).toBe(true);
+      if (result.ok) {
+        expect(result.value.label, line).toBe(label);
+        expect(result.value.dryRun, line).toBe(false);
+      }
+    }
+  });
+
+  it("F3: refuses a scope flag after then even when punctuation follows it", () => {
+    for (const [line, corrected] of [
+      ["nen@bug then --dry-run; rm -rf ~", "nen@bug --dry-run then ; rm -rf ~"],
+      ["nen@bug then x --dry-run,", "nen@bug --dry-run then x,"],
+      ["nen@bug then document --idle.", "nen@bug --idle then document."],
+    ] as const) {
+      const result = parseFutonInvocation(line);
+      expect(result.ok, line).toBe(false);
+      if (!result.ok) expect(result.error.correctedLine, line).toBe(corrected);
+    }
+  });
+
+  it("F3: reads a flag quoted after then as prose, never rewriting the quoted text", () => {
+    const result = parseFutonInvocation('nen@bug then "do not --dry-run here"');
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.dryRun).toBe(false);
+      expect(result.value.then).toEqual({ kind: "prose", text: '"do not --dry-run here"' });
+    }
+  });
+});
