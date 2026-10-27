@@ -12,14 +12,20 @@
 // name or its suite: `AC-3`, `#552/AC-3`, `NN#552/AC-3` or
 // `zheref/nen#552/AC-3` (the verify-row key HR-11 uses). Nothing is run.
 //
-// THREE MODES, ONE MAP. With `--test-report` alone the run is read as the one
-// AFTER the change: a criterion is met when it has a test and every test of it
-// that ran passed. With `--require-red` the same report is read as the
-// checkpoint BEFORE the change: a criterion is met when every test naming it
-// failed there. With `--before-report` both runs are read and each criterion is
-// red-first (a test of it failed before and passes after), green-only (it
-// passes after and none of its passing tests was red before), failing (a test
-// of it fails after) or untested.
+// THREE MODES, ONE MAP, ONE RED BAR. With `--test-report` alone the run is read
+// as the one AFTER the change: a criterion is met when it has a test, none of
+// its tests failed and one passed. With `--require-red` the same report is read
+// as the checkpoint BEFORE the change. With `--before-report` both runs are
+// read. Both red readings apply the SAME bar (zheref/nen#556 review N3): a
+// criterion was red when EVERY test naming it failed in the red run -- `red`
+// under --require-red, `red-first` (when it now passes) under --before-report.
+//
+// A FILE THAT FAILED TO LOAD IS A RED RUN TOO. A test written before its module
+// exists fails at collection, and the report then carries one row for the
+// FILE (JUnit: name = classname = the file; the assertion-results reader
+// emits the same row for a failed file with no assertions) rather than one
+// per test. In the before run such a row is attributed to every after test
+// in that suite, read as `load-failed` (review N2).
 //
 // WHAT IS NEVER A PASS. A body with no AC row is `not-verifiable`; a report or
 // body nen cannot read is `could-not-read` with the reason, never an empty
@@ -48,8 +54,12 @@ export interface MappedTest {
   readonly name: string;
   readonly suite: string | null;
   readonly status: TestStatus;
-  /** The same test's status in `--before-report`: "absent" when it did not run there; null with no before report. */
-  readonly before: TestStatus | "absent" | null;
+  /**
+   * The same test's status in `--before-report`: "load-failed" when its suite
+   * failed to load there (a file-level failure row), "absent" when it did not
+   * run there at all; null with no before report.
+   */
+  readonly before: TestStatus | "absent" | "load-failed" | null;
 }
 
 export interface CriterionMap {
@@ -93,6 +103,8 @@ export interface TestsMapReport {
   readonly criteria: readonly CriterionMap[];
   readonly unrequested: readonly UnrequestedTest[];
   readonly foreign: readonly ForeignTest[];
+  /** Suites the red run read as file-level failures (load failures), sorted; [] in the `after` mode. */
+  readonly loadFailures: readonly string[];
   readonly duplicates: readonly { readonly id: string; readonly lines: readonly number[] }[];
   readonly unrecognised: readonly { readonly line: number; readonly text: string }[];
   readonly counts: {
@@ -119,36 +131,66 @@ export interface Token {
   readonly number: number;
 }
 
+const QUALIFIER = "[A-Za-z][A-Za-z0-9]*|[A-Za-z0-9._-]+\\/[A-Za-z0-9._-]+";
+
 /**
- * Every criterion token in `text`. `AC-3` stands alone: a letter, digit, `_`
- * or `-` before it, or a digit, letter, `_` or `-<digit>` after it, and it is
- * not the token (`XAC-3`, `AC-30`, `AC-3a`, and `AC-3-001`, the
- * `AC-{epic}-{nnn}` form zheref/nen#519 has not landed yet). A qualified token
- * carries `<CODE>#<N>/`, `<owner/name>#<N>/` or `#<N>/` before it.
+ * Every criterion token in `text`. `AC-3` stands alone: a letter, digit, `_`,
+ * `.`, `#` or `-` before it, or a digit, letter, `_` or `-<digit>` after it,
+ * and it is not the token (`XAC-3`, `AC-30`, `AC-3a`, and `AC-3-001`, the
+ * `AC-{epic}-{nnn}` form zheref/nen#519 has not landed yet). A `/` before it
+ * is a separator (`AC-1/AC-2` is two tokens, review N4) unless what precedes
+ * the `/` is `#<N>`: then it is a qualified token, carrying `<CODE>#<N>/`,
+ * `<owner/name>#<N>/` or `#<N>/` before it.
  */
 export function tokensIn(text: string, prefix = "AC"): Token[] {
+  const id = `${escapeRegExp(prefix)}-(\\d{1,9})(?![A-Za-z0-9_]|-\\d)`;
   const pattern = new RegExp(
-    `(?<![A-Za-z0-9_./#-])(?:([A-Za-z][A-Za-z0-9]*|[A-Za-z0-9._-]+\\/[A-Za-z0-9._-]+)?#(\\d{1,9})\\/)?(?<![A-Za-z0-9_-])${escapeRegExp(prefix)}-(\\d{1,9})(?![A-Za-z0-9_]|-\\d)`,
+    `(?<![A-Za-z0-9_./#-])(?:(${QUALIFIER})?#(\\d{1,9})\\/)${id}|(?<![A-Za-z0-9_.#-])(?<!#\\d{1,9}\\/)${id}`,
     "g",
   );
   const out: Token[] = [];
   for (const match of text.matchAll(pattern)) {
+    const qualified = match[3] !== undefined;
     out.push({
       token: match[0],
-      qualifier: match[1] ?? null,
-      issue: match[2] === undefined ? null : Number(match[2]),
-      number: Number(match[3]),
+      qualifier: qualified ? (match[1] ?? null) : null,
+      issue: qualified ? Number(match[2]) : null,
+      number: Number(qualified ? match[3] : match[4]),
     });
   }
   return out;
 }
 
-/** Does a qualified token name the anchored issue? A bare token always does; a CODE prefix is echoed, never resolved. */
-function namesAnchor(token: Token, anchor: IssueAnchor | null): boolean {
-  if (token.issue === null || anchor === null) return true;
-  if (token.issue !== anchor.number) return false;
-  if (token.qualifier === null || !token.qualifier.includes("/")) return true;
-  return anchor.prefix === null || !anchor.prefix.includes("/") || anchor.prefix.toLowerCase() === token.qualifier.toLowerCase();
+/** An issue reference in a test's text: `#<N>`, `<CODE>#<N>` or `<owner/name>#<N>`. */
+export interface IssueRef {
+  readonly qualifier: string | null;
+  readonly issue: number;
+}
+
+/** Every issue reference in `text`, including those inside qualified tokens. */
+export function issueRefsIn(text: string): IssueRef[] {
+  const pattern = new RegExp(`(?<![A-Za-z0-9_./#-])(${QUALIFIER})?#(\\d{1,9})(?!\\d)`, "g");
+  return [...text.matchAll(pattern)].map((match): IssueRef => ({ qualifier: match[1] ?? null, issue: Number(match[2]) }));
+}
+
+/** Does a reference name the anchored issue? A CODE prefix is echoed, never resolved. */
+function refNamesAnchor(ref: IssueRef, anchor: IssueAnchor): boolean {
+  if (ref.issue !== anchor.number) return false;
+  if (ref.qualifier === null || !ref.qualifier.includes("/")) return true;
+  return anchor.prefix === null || !anchor.prefix.includes("/") || anchor.prefix.toLowerCase() === ref.qualifier.toLowerCase();
+}
+
+/**
+ * Does a token name the anchored issue? Without an anchor, always. A qualified
+ * token names it when its own `#<N>` (and `owner/name`, when stated) does. A
+ * BARE token names it unless the test's name or suite carries issue
+ * references and none of them is the anchor (review N1): a bare `AC-1` in a
+ * suite titled for zheref/nen#509 is that issue's criterion, not this one's.
+ */
+function namesAnchor(token: Token, anchor: IssueAnchor | null, refs: readonly IssueRef[]): boolean {
+  if (anchor === null) return true;
+  if (token.issue === null) return refs.length === 0 || refs.some((ref): boolean => refNamesAnchor(ref, anchor));
+  return refNamesAnchor({ qualifier: token.qualifier, issue: token.issue }, anchor);
 }
 
 const identity = (test: { name: string; suite: string | null }): string => `${test.suite ?? ""}\u0000${test.name}`;
@@ -160,14 +202,20 @@ function outcomeOf(tests: readonly MappedTest[]): Outcome {
   return "passing";
 }
 
+/** THE ONE RED BAR (review N3): every test naming the criterion failed in the red run. */
+const allRed = (tests: readonly MappedTest[], red: (test: MappedTest) => boolean): boolean => tests.length > 0 && tests.every(red);
+
 function checkpointOf(mode: MapMode, outcome: Outcome, tests: readonly MappedTest[]): Checkpoint | null {
   if (mode === "after") return null;
   if (tests.length === 0) return "untested";
-  if (mode === "require-red") return tests.every((test): boolean => test.status === "failed") ? "red" : "not-red";
+  if (mode === "require-red") return allRed(tests, (test): boolean => test.status === "failed") ? "red" : "not-red";
   if (outcome === "failing") return "failing";
   if (outcome === "skipped") return "untested";
-  return tests.some((test): boolean => test.status === "passed" && test.before === "failed") ? "red-first" : "green-only";
+  return allRed(tests, (test): boolean => test.before === "failed" || test.before === "load-failed") ? "red-first" : "green-only";
 }
+
+/** A file-level failure row: the report names the suite, not a test, because the file failed to load. */
+export const isLoadFailure = (test: TestCase): boolean => test.status === "failed" && test.suite !== null && test.name === test.suite;
 
 const MET: Readonly<Record<MapMode, (outcome: Outcome, checkpoint: Checkpoint | null) => boolean>> = {
   after: (outcome): boolean => outcome === "passing",
@@ -196,6 +244,9 @@ export function mapTests(input: MapInput): TestsMapReport {
     const seen = before.get(identity(test));
     if (seen !== "failed") before.set(identity(test), test.status);
   }
+  const redRun = input.mode === "before-after" ? (input.before ?? []) : input.mode === "require-red" ? input.tests : [];
+  const loadFailures = [...new Set(redRun.filter(isLoadFailure).map((test): string => test.suite as string))].sort();
+  const loadFailed = new Set(input.mode === "before-after" ? loadFailures : []);
   const numbers = new Map<number, Criterion>();
   for (const criterion of input.criteria.criteria) if (!numbers.has(criterion.number)) numbers.set(criterion.number, criterion);
   const byNumber = new Map<number, MappedTest[]>();
@@ -204,8 +255,9 @@ export function mapTests(input: MapInput): TestsMapReport {
   for (const test of input.tests) {
     const text = test.suite === null ? test.name : `${test.suite} ${test.name}`;
     const numbered = new Set<number>();
+    const refs = input.issue === null ? [] : issueRefsIn(text);
     for (const token of tokensIn(text, input.prefix)) {
-      if (!namesAnchor(token, input.issue)) {
+      if (!namesAnchor(token, input.issue, refs)) {
         foreign.push({ token: token.token, name: test.name, suite: test.suite });
         continue;
       }
@@ -219,7 +271,7 @@ export function mapTests(input: MapInput): TestsMapReport {
         name: test.name,
         suite: test.suite,
         status: test.status,
-        before: input.before === null ? null : (before.get(identity(test)) ?? "absent"),
+        before: input.before === null ? null : (before.get(identity(test)) ?? (test.suite !== null && loadFailed.has(test.suite) ? "load-failed" : "absent")),
       };
       byNumber.set(token.number, [...(byNumber.get(token.number) ?? []), entry]);
     }
@@ -263,6 +315,7 @@ export function mapTests(input: MapInput): TestsMapReport {
     criteria,
     unrequested,
     foreign,
+    loadFailures,
     duplicates: input.criteria.duplicates,
     unrecognised: input.criteria.unrecognised,
     counts: {
@@ -292,6 +345,7 @@ export function unreadableMap(input: { mode: MapMode; issueBody: string; issueLa
     criteria: [],
     unrequested: [],
     foreign: [],
+    loadFailures: [],
     duplicates: [],
     unrecognised: [],
     counts: { criteria: 0, mapped: 0, unmapped: 0, met: 0, unrequested: 0, foreign: 0, tests: 0 },
@@ -313,6 +367,7 @@ export function renderMap(report: TestsMapReport): string[] {
   }
   for (const test of report.unrequested) lines.push(`  UNREQUESTED ${test.id} ${test.status}  ${testLabel(test)}`);
   for (const test of report.foreign) lines.push(`  FOREIGN ${test.token}  ${testLabel(test)}`);
+  for (const suite of report.loadFailures) lines.push(`  LOAD-FAILED ${suite} (the red run names the file, not its tests)`);
   for (const duplicate of report.duplicates) lines.push(`  DUPLICATE ${duplicate.id} lines ${duplicate.lines.join(", ")}`);
   for (const row of report.unrecognised) lines.push(`  UNRECOGNISED line ${row.line}: ${row.text}`);
   return lines;

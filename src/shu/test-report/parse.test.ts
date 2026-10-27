@@ -10,7 +10,7 @@
 // table of what each file is for.
 
 import { describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { testReport, TEST_REPORTS } from "../fixtures/paths.js";
@@ -20,10 +20,14 @@ import {
   FORMATS,
   formatNamedBy,
   fsRefusal,
+  MAX_REPORT_BYTES,
   readTestReport,
   recognisedByName,
   supportedFormats,
 } from "./parse.js";
+import { ASSERTION_RESULTS } from "./formats/assertion-results.js";
+import { JUNIT } from "./formats/junit.js";
+import { XCRESULT_SUMMARY } from "./formats/xcresult.js";
 import { TestReportError, type ParsedTests, type TestCase } from "./shape.js";
 
 function text(name: string): string {
@@ -391,5 +395,45 @@ describe("a DIRECTORY artifact", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("outcome tables read their own keys only (zheref/nen#556 review F1)", () => {
+  it("keeps a FAILED JUnit case failed when a child is named for an Object.prototype key", () => {
+    const parsed = JUNIT.parse('<testsuite><testcase name="a"><failure/><constructor/><toString/></testcase><testcase name="b"><__proto__/></testcase></testsuite>', "r.xml");
+    expect(parsed.tests.map((test) => test.status)).toEqual(["failed", "passed"]);
+  });
+
+  it("refuses a JSON status or result word that is an Object.prototype key", () => {
+    const json = JSON.stringify({ testResults: [{ name: "f", assertionResults: [{ fullName: "a", status: "constructor" }] }] });
+    expect(refusal((): unknown => ASSERTION_RESULTS.parse(json, "r.json"))).toContain('"constructor"');
+    const xc = text("xcresult-nodes.json").replace(/"result" *: *"Passed"/, '"result": "toString"');
+    expect(xc).toContain('"toString"');
+    expect(refusal((): unknown => XCRESULT_SUMMARY.parse(xc, "r.json"))).toContain('"toString"');
+  });
+});
+
+describe("a file that failed to load is a failed row (zheref/nen#556 review N2)", () => {
+  it("reads a failed file with no assertions as one failed row named for the file", () => {
+    const json = JSON.stringify({ testResults: [{ name: "/abs/src/feat.test.ts", status: "failed", message: "Failed to load url ./feat.js", assertionResults: [] }, { name: "/abs/src/ok.test.ts", status: "passed", assertionResults: [] }] });
+    expect(rows(ASSERTION_RESULTS.parse(json, "r.json"))).toEqual(["/abs/src/feat.test.ts | /abs/src/feat.test.ts | failed | -"]);
+  });
+});
+
+describe("the read is bounded (zheref/nen#556 review F2)", () => {
+  it("refuses a report over MAX_REPORT_BYTES before reading it", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-report-size-"));
+    try {
+      const path = join(dir, "big.xml");
+      writeFileSync(path, "");
+      truncateSync(path, MAX_REPORT_BYTES + 1);
+      expect(refusal((): unknown => readTestReport(path, "big.xml"))).toContain(`over the ${MAX_REPORT_BYTES}-byte limit`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses JUnit nested past the scanner's depth as a TestReportError", () => {
+    expect(refusal((): unknown => JUNIT.parse(`<testsuites>${"<testsuite>".repeat(300)}`, "deep.xml"))).toContain("nest deeper than 256 levels");
   });
 });

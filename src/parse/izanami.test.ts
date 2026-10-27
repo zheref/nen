@@ -349,6 +349,10 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     expect(classifyCommand("nen canon clause check --file docs/ROSTER.md --prefix HR --base origin/main:docs/ROSTER.md --leaves 'claude/**/*.md'").classification).toBe("read-only");
     expect(classifyCommand("nen ref resolve --citation HR-2 --root .").classification).toBe("read-only");
     expect(classifyCommand("nen decisions summary --repo . --json").classification).toBe("read-only");
+    // zheref/nen#552 (review F3 on #556): tests map reads files only; anything else in the family is unknown.
+    expect(classifyCommand("nen tests map --issue-body i.md --test-report r.xml --json").classification).toBe("read-only");
+    expect(classifyCommand("nen tests").classification).toBe("unknown");
+    expect(classifyCommand("nen tests run --issue-body i.md").classification).toBe("unknown");
     expect(classifyCommand("nen idea file --target o/r --title x --body-file b.md").classification).toBe("mutating");
     expect(classifyCommand("nen scaffold init").classification).toBe("mutating");
     expect(classifyCommand("nen fanout record --range v1..v2").classification).toBe("mutating");

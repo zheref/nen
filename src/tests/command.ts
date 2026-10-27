@@ -25,7 +25,7 @@ const SUBCOMMANDS = ["map"] as const;
 
 const USAGE = `nen tests map --issue-body <file> --test-report <file>[,<file>...]
               [--before-report <file>[,<file>...] | --require-red]
-              [--issue <owner/name>#<N> | <CODE>#<N> | #<N>]
+              [--issue <owner/name>#<N> | <CODE>#<N> | #<N> | <N>]
               [--requirements-from <catalogue.json>] [--repo <path>] [--json]
 
 Read-only. Each acceptance criterion of an issue body with the tests whose
@@ -38,26 +38,37 @@ file or a directory of *.xml), a JSON assertion-results document, an
 xcresult summary -- so no runner is named and nothing is run.
 
 A test names a criterion by carrying its id as a token in its name or its
-suite: AC-3, #552/AC-3, NN#552/AC-3 or zheref/nen#552/AC-3. AC-30, XAC-3,
-AC-3a and AC-3-001 are not AC-3. With --issue, a qualified token naming
-another issue (or another owner/name) is listed as foreign and maps to
-nothing; a CODE prefix is echoed, never resolved. Without --issue a
-qualified token maps by its criterion number alone.
+suite: AC-3, #552/AC-3, NN#552/AC-3 or zheref/nen#552/AC-3; 'AC-1/AC-2'
+is two tokens. AC-30, XAC-3, AC-3a and AC-3-001 are not AC-3. With --issue,
+a qualified token naming another issue (or another owner/name) is foreign
+and maps to nothing, and so is a BARE token in a test whose name or suite
+carries issue references none of which is --issue (a bare AC-1 under a
+suite titled for #509 is #509's). A CODE prefix is echoed, never resolved.
+Without --issue every token maps by its criterion number alone.
 
-Three modes:
+Three modes, and ONE red bar for both red readings: a criterion was red when
+EVERY test naming it failed in the red run.
   (default)        --test-report is the run AFTER the change: a criterion is
                    met when a test names it and none of its tests failed and
                    at least one passed.
   --require-red    --test-report is the checkpoint run BEFORE the change: a
-                   criterion is met ('red') when a test names it and every
-                   test naming it failed; a pass or a skip is 'not-red'.
-  --before-report  both runs: each criterion reads red-first (a test of it
-                   failed before and passes now), green-only (it passes now
-                   and none of its passing tests failed before), failing (a
-                   test of it fails now) or untested (no test, or every test
-                   skipped). Only red-first is met. A test is matched across
-                   the two runs by suite and name; one absent before reads
-                   'absent'.
+                   criterion is met ('red') when it clears the red bar; a
+                   pass or a skip among its tests is 'not-red'.
+  --before-report  both runs: each criterion reads red-first (it clears the
+                   red bar before and passes now), green-only (it passes now
+                   and does not), failing (a test of it fails now) or
+                   untested (no test, or every test skipped). Only red-first
+                   is met. A test is matched across the two runs by suite
+                   and name; one absent before reads 'absent'.
+
+A red run whose test FILE failed to load (the module under test does not
+exist yet) names the file, not its tests: a failed row whose name is its
+suite (JUnit name = classname; a failed assertion-results file with no
+assertions). Under --before-report it is attributed to every after test of
+that suite, read as 'load-failed', which is red. Such suites are listed in
+loadFailures. Under --require-red there are no test names to attribute it
+to, so those criteria read untested (zheref/nen#559): use --before-report
+for a red run of that kind.
 
 Every criterion appears with its test count, 0 included. A test naming an id
 the issue does not carry is unrequested, by name. A body with no criterion
@@ -73,8 +84,9 @@ could-not-read; 2 usage (a missing flag, both --before-report and
   { contract: "${TESTS_MAP_CONTRACT}", verdict, mode, issueBody, issue,
     testReports, beforeReports, criteria: [{ id, number, text, line, status,
     count, outcome, checkpoint, met, tests: [{ name, suite, status, before }] }],
+    (before: passed | failed | skipped | load-failed | absent | null)
     unrequested: [{ id, token, name, suite, status }], foreign: [{ token, name,
-    suite }], duplicates, unrecognised, counts: { criteria, mapped, unmapped,
+    suite }], loadFailures, duplicates, unrecognised, counts: { criteria, mapped, unmapped,
     met, unrequested, foreign, tests }, blocking, reason }
   verdict: met | unmet | not-verifiable | could-not-read
   mode: after | require-red | before-after

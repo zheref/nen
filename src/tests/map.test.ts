@@ -4,7 +4,7 @@
 import { describe, expect, it } from "vitest";
 import { extractCriteria } from "../issue/criteria.js";
 import type { TestCase } from "../shu/test-report/shape.js";
-import { mapTests, renderMap, tokensIn, unreadableMap, type MapInput } from "./map.js";
+import { issueRefsIn, mapTests, renderMap, tokensIn, unreadableMap, type MapInput } from "./map.js";
 
 const BODY = ["## Acceptance criteria", "", "- AC-1: one", "- AC-2: two", "- AC-3: three", ""].join("\n");
 const t = (name: string, status: TestCase["status"] = "passed", suite: string | null = "src/x.test.ts"): TestCase => ({ name, suite, status, durationMs: null });
@@ -34,9 +34,26 @@ describe("tokensIn", () => {
       [null, 552, 4],
       [null, null, 5],
     ]);
-    for (const miss of ["AC-30x", "XAC-3", "AC-3a", "AC-3-001", "foo/AC-3", "AC-", "ac-3"]) expect(tokensIn(miss)).toEqual([]);
+    for (const miss of ["AC-30x", "XAC-3", "AC-3a", "AC-3-001", "x.AC-3", "AC-", "ac-3"]) expect(tokensIn(miss)).toEqual([]);
     expect(tokensIn("AC-30").map((token) => token.number)).toEqual([30]);
     expect(tokensIn("SC-2 then AC-2", "SC").map((token) => token.token)).toEqual(["SC-2"]);
+  });
+
+  it("reads '/' as a separator between bare tokens, never inside a qualified one (zheref/nen#552/AC-2)", () => {
+    expect(tokensIn("AC-1/AC-2 c").map((token) => [token.issue, token.number])).toEqual([
+      [null, 1],
+      [null, 2],
+    ]);
+    expect(tokensIn("covers #552/AC-3").map((token) => [token.issue, token.number])).toEqual([[552, 3]]);
+    expect(tokensIn("src/AC-4").map((token) => token.number)).toEqual([4]);
+  });
+
+  it("reads every issue reference, qualified tokens included", () => {
+    expect(issueRefsIn("one effort-id grammar (zheref/nen#509) > AC-1 and NN#7/AC-2 and #12").map((ref) => [ref.qualifier, ref.issue])).toEqual([
+      ["zheref/nen", 509],
+      ["NN", 7],
+      [null, 12],
+    ]);
   });
 });
 
@@ -82,6 +99,20 @@ describe("mapTests", () => {
     expect(mapTests({ ...anchored, issue: null }).criteria.map((row) => row.count)).toEqual([1, 2, 2]);
   });
 
+  it("reads a bare token as foreign when the test names another issue and not the anchor (zheref/nen#552/AC-2)", () => {
+    const suite = "src/ledger/effort.test.ts";
+    const tests = [
+      t("one effort-id grammar (zheref/nen#509) > AC-1: exactly one EFFORT_ID declaration", "passed", suite),
+      t("tests map (zheref/nen#552) > AC-2 holds", "passed", "src/tests/map.test.ts"),
+      t("AC-3 with no reference at all"),
+      t("AC-1 for #509 and NN#552"),
+    ];
+    const report = mapTests(input(tests, { issue: { prefix: "zheref/nen", number: 552 }, issueLabel: "zheref/nen#552" }));
+    expect(report.foreign.map((test) => [test.token, test.name])).toEqual([["AC-1", tests[0]?.name]]);
+    expect(report.criteria.map((row) => row.count)).toEqual([1, 1, 1]);
+    expect(mapTests(input(tests)).criteria[0]?.count).toBe(2);
+  });
+
   it("reads red-first, green-only, failing or untested over a before and an after run (zheref/nen#552/AC-3)", () => {
     const before = [t("AC-1 a", "failed"), t("AC-2 b", "passed")];
     const after = [t("AC-1 a"), t("AC-2 b"), t("AC-2 new")];
@@ -96,6 +127,33 @@ describe("mapTests", () => {
     expect(failing.criteria.map((row) => row.checkpoint)).toEqual(["failing", "green-only", "untested"]);
     const allRed = mapTests(input([t("AC-1"), t("AC-2"), t("AC-3")], { mode: "before-after", beforeReports: ["red.json"], before: [t("AC-1", "failed"), t("AC-2", "failed"), t("AC-3", "failed"), t("AC-3", "passed")] }));
     expect(allRed.verdict).toBe("met");
+  });
+
+  it("attributes a file that failed to load in the red run to every after test of that suite (zheref/nen#552/AC-3)", () => {
+    const loadFailure = t("src/x.test.ts", "failed", "src/x.test.ts");
+    const report = mapTests(input([t("AC-1 a"), t("AC-2 b"), t("AC-3 c", "passed", "src/other.test.ts")], { mode: "before-after", beforeReports: ["red.xml"], before: [loadFailure] }));
+    expect(report.criteria.map((row) => [row.checkpoint, row.tests[0]?.before])).toEqual([
+      ["red-first", "load-failed"],
+      ["red-first", "load-failed"],
+      ["green-only", "absent"],
+    ]);
+    expect(report.loadFailures).toEqual(["src/x.test.ts"]);
+    expect(renderMap(report)).toContain("  LOAD-FAILED src/x.test.ts (the red run names the file, not its tests)");
+  });
+
+  it("applies one red bar in both red modes: every test naming the criterion failed (zheref/nen#552/AC-3)", () => {
+    const red = [t("AC-1 a", "failed"), t("AC-1 b", "passed"), t("AC-2 a", "failed"), t("AC-2 b", "failed")];
+    const green = [t("AC-1 a"), t("AC-1 b"), t("AC-2 a"), t("AC-2 b")];
+    const requireRed = mapTests(input(red, { mode: "require-red" }));
+    const beforeAfter = mapTests(input(green, { mode: "before-after", beforeReports: ["red.json"], before: red }));
+    expect(requireRed.criteria.slice(0, 2).map((row) => [row.checkpoint, row.met])).toEqual([
+      ["not-red", false],
+      ["red", true],
+    ]);
+    expect(beforeAfter.criteria.slice(0, 2).map((row) => [row.checkpoint, row.met])).toEqual([
+      ["green-only", false],
+      ["red-first", true],
+    ]);
   });
 
   it("reads --require-red: met only when every test naming a criterion failed (zheref/nen#552/AC-3)", () => {

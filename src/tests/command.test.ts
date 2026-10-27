@@ -47,7 +47,7 @@ describe("nen tests map", () => {
     const result = await map(root, ["--issue-body", "issue.md", "--test-report", "a.json,b.xml"], true);
     expect(result.code).toBe(1);
     const report = JSON.parse(result.out) as Record<string, unknown> & { criteria: { id: string; count: number; status: string }[]; counts: { tests: number } };
-    expect(Object.keys(report)).toEqual(["contract", "verdict", "mode", "issueBody", "issue", "testReports", "beforeReports", "criteria", "unrequested", "foreign", "duplicates", "unrecognised", "counts", "blocking", "reason"]);
+    expect(Object.keys(report)).toEqual(["contract", "verdict", "mode", "issueBody", "issue", "testReports", "beforeReports", "criteria", "unrequested", "foreign", "loadFailures", "duplicates", "unrecognised", "counts", "blocking", "reason"]);
     expect(report.contract).toBe("nen.tests.map/v0.1");
     expect(report.criteria.map((row) => [row.id, row.status, row.count])).toEqual([
       ["AC-1", "mapped", 1],
@@ -76,6 +76,34 @@ describe("nen tests map", () => {
     expect(red.out).toContain("AC-2 mapped · 1 test(s) · not-red (unmet)");
     const allRed = repo({ "issue.md": BODY, "red.xml": junit([["AC-1 a", "failed"], ["AC-2 b", "failed"]]) });
     expect((await map(allRed, ["--issue-body", "issue.md", "--test-report", "red.xml", "--require-red"])).code).toBe(0);
+  });
+
+  it("reads a red run whose test files failed to load as red-first, in JUnit and JSON (zheref/nen#552/AC-3)", async () => {
+    // The shape vitest writes when the module under test does not exist yet:
+    // one JUnit case per FILE (name = classname = the file), and in JSON a
+    // failed file with no assertions.
+    const loadFailed = `<?xml version="1.0"?>\n<testsuites><testsuite name="src/feat.test.ts" tests="1" failures="1"><testcase classname="src/feat.test.ts" name="src/feat.test.ts"><failure message="Failed to load url ./feat.js"/></testcase></testsuite></testsuites>\n`;
+    const green = `<?xml version="1.0"?>\n<testsuites><testsuite name="src/feat.test.ts"><testcase classname="src/feat.test.ts" name="feat &gt; AC-1 works"/><testcase classname="src/feat.test.ts" name="feat &gt; AC-2 holds"/></testsuite></testsuites>\n`;
+    const redJson = JSON.stringify({ testResults: [{ name: "/abs/src/feat.test.ts", status: "failed", message: "Failed to load url ./feat.js", assertionResults: [] }] });
+    const greenJson = vitest([["AC-1 works", "passed"], ["AC-2 holds", "passed"]]).replace("/abs/src/x.test.ts", "/abs/src/feat.test.ts");
+    const root = repo({ "issue.md": BODY, "red.xml": loadFailed, "green.xml": green, "red.json": redJson, "green.json": greenJson });
+    for (const [after, before] of [["green.xml", "red.xml"], ["green.json", "red.json"]] as const) {
+      const result = await map(root, ["--issue-body", "issue.md", "--test-report", after, "--before-report", before]);
+      expect(result.code).toBe(0);
+      expect(result.out).toContain("AC-1 mapped · 1 test(s) · red-first");
+      expect(result.out).toContain("(before: load-failed)");
+      expect(result.out).toContain("LOAD-FAILED");
+    }
+  });
+
+  it("maps no bare token from a suite written for another issue, in the JUnit shape nen's own suite writes (zheref/nen#552/AC-2)", async () => {
+    const effort = `<?xml version="1.0"?>\n<testsuites><testsuite name="src/ledger/effort.test.ts"><testcase classname="src/ledger/effort.test.ts" name="one effort-id grammar (zheref/nen#509) &gt; AC-1: exactly one EFFORT_ID declaration exists in shipped src/"/><testcase classname="src/ledger/effort.test.ts" name="one effort-id grammar (zheref/nen#509) &gt; AC-2: encodes injectively"/></testsuite></testsuites>\n`;
+    const root = repo({ "issue.md": BODY, "effort.xml": effort });
+    const result = await map(root, ["--issue-body", "issue.md", "--test-report", "effort.xml", "--issue", "zheref/nen#552"], true);
+    expect(result.code).toBe(1);
+    const report = JSON.parse(result.out) as { criteria: { status: string }[]; foreign: { token: string }[] };
+    expect(report.criteria.map((row) => row.status)).toEqual(["unmapped", "unmapped"]);
+    expect(report.foreign.map((test) => test.token)).toEqual(["AC-1", "AC-2"]);
   });
 
   it("is could-not-read at exit 1 for an unreadable body or report, never an empty map (zheref/nen#552/AC-4)", async () => {

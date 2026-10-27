@@ -238,7 +238,25 @@ function xmlFilesUnder(root: string, prefix = "", found: Found[] = []): readonly
   return found;
 }
 
+/**
+ * The largest report file nen reads, in bytes (zheref/nen#556 review F2): a
+ * report is a file somebody else's run wrote, and it is sized before it is
+ * read rather than discovered to be too large after the whole of it is in
+ * memory. 64 MiB is several times the largest whole-suite report this
+ * repository's own runs write.
+ */
+export const MAX_REPORT_BYTES = 64 * 1024 * 1024;
+
 function readText(absolute: string, display: string): string {
+  let size: number;
+  try {
+    size = statSync(absolute).size;
+  } catch (error) {
+    throw fsRefusal(error, display, "read");
+  }
+  if (size > MAX_REPORT_BYTES) {
+    throw new TestReportError(`${display} is ${size} bytes, over the ${MAX_REPORT_BYTES}-byte limit nen reads a test report up to; it is refused rather than read.`);
+  }
   try {
     return readFileSync(absolute, "utf8");
   } catch (error) {

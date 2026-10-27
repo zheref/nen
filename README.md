@@ -473,14 +473,13 @@ they compose into. The families group roughly as:
   `schema` (`check`, `set`: validate the declarations, or write one value
   into one by JSON pointer), `color`, `repo`, `ref`
 - **Release mechanics** — `release`, `changelog`, `tag`, `fanout`, `run`
-- **Issue & idea filing** — `issue`, `idea`
+- **Issue & idea filing** — `issue`, `idea`, `tests` (`map`: an issue's
+  acceptance criteria against the tests that name them, with a red-first
+  checkpoint over a before and an after run)
 - **Repository scaffolding & canon** — `scaffold`, `canon`, `quality`, `commit`,
   `spec` (`number`, `check`, `cite-check`, `index`: a Spec Kit spec repository, read),
   `decisions` (`summary`: the decision matrix counted, so prose never carries
-  the numbers),
-  `tests` (`map`: an issue's acceptance criteria against the tests that name
-  them, with a red-first checkpoint over a before and an after run);
-  `canon lint` and `canon clause check` hold a canon's prose to a
+  the numbers); `canon lint` and `canon clause check` hold a canon's prose to a
   caller-owned rules contract and its clause ids unique, and `ref resolve`
   says where one citation lands
 - **Stack-aware developer verbs** — `shu` (`detect`, `build`, `test`,

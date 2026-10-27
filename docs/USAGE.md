@@ -12930,20 +12930,35 @@ are read from each `--test-report` through
 directory of `*.xml`), a JSON assertion-results document, an xcresult summary —
 so no runner is named. A test **names a criterion** by carrying its id as a
 token in its name or its suite: `AC-3`, `#552/AC-3`, `NN#552/AC-3` or
-`zheref/nen#552/AC-3`, the verify-row key HR-11 uses. `AC-30`, `XAC-3`, `AC-3a`
-and `AC-3-001` are not `AC-3`. With `--issue`, a qualified token naming another
-issue (or another `owner/name`) is listed as **foreign** and maps to nothing; a
-CODE prefix is echoed, never resolved. Without `--issue`, a qualified token maps
-by its criterion number alone.
+`zheref/nen#552/AC-3`, the verify-row key HR-11 uses; `AC-1/AC-2` is two
+tokens. `AC-30`, `XAC-3`, `AC-3a` and `AC-3-001` are not `AC-3`. With
+`--issue`, a qualified token naming another issue (or another `owner/name`) is
+listed as **foreign** and maps to nothing, and so is a **bare** token in a test
+whose name or suite carries issue references none of which is `--issue` — a
+bare `AC-1` under a suite titled for `zheref/nen#509` is that issue's. A CODE
+prefix is echoed, never resolved. Without `--issue`, every token maps by its
+criterion number alone.
+
+**One red bar for both red readings:** a criterion was red when **every** test
+naming it failed in the red run.
 
 | Mode | The report(s) read as | A criterion is met when |
 |---|---|---|
 | default (`after`) | `--test-report` is the run after the change | a test names it, none of its tests failed and at least one passed |
-| `--require-red` | `--test-report` is the checkpoint run before the change | a test names it and **every** test naming it failed (`red`); a pass or a skip is `not-red` |
-| `--before-report` (`before-after`) | `--before-report` before, `--test-report` after | it reads `red-first`: a test of it failed before and passes now. `green-only` (passes now, none of its passing tests failed before), `failing` (a test of it fails now) and `untested` (no test, or every test skipped) are unmet |
+| `--require-red` | `--test-report` is the checkpoint run before the change | it clears the red bar (`red`); a pass or a skip among its tests is `not-red` |
+| `--before-report` (`before-after`) | `--before-report` before, `--test-report` after | it reads `red-first`: it clears the red bar before and passes now. `green-only` (passes now, did not clear the bar), `failing` (a test of it fails now) and `untested` (no test, or every test skipped) are unmet |
 
 A test is matched across the two runs by suite and name; one that did not run
-before reads `absent`. Every criterion appears with its test count, `0`
+before reads `absent`. **A red run whose test file failed to load** (the
+module under test does not exist yet) names the file, not its tests: a failed
+row whose name is its suite (JUnit `name` = `classname`; an assertion-results
+file that failed with no assertions, which [`shu test-report`](#nen-shu-test-report)
+now reads as one failed row named for the file rather than as nothing). Under
+`--before-report` it is attributed to every after test of that suite, read as
+`load-failed`, which is red; the suites are listed in `loadFailures`. Under
+`--require-red` there is no test name to attribute it to, so those criteria
+read `untested` ([#559](https://github.com/zheref/nen/issues/559)): use
+`--before-report` for a red run of that kind. Every criterion appears with its test count, `0`
 included. A test naming an id the issue does not carry is **unrequested**, by
 name. A body with no criterion row is `not-verifiable` — nothing to map, never
 "all mapped" — and an unreadable body or report is `could-not-read` with the
@@ -12954,7 +12969,7 @@ reason, **never an empty map**.
 ```text
 nen tests map --issue-body <file> --test-report <file>[,<file>...]
               [--before-report <file>[,<file>...] | --require-red]
-              [--issue <owner/name>#<N> | <CODE>#<N> | #<N>]
+              [--issue <owner/name>#<N> | <CODE>#<N> | #<N> | <N>]
               [--requirements-from <catalogue.json>] [--repo <path>] [--json]
 ```
 
@@ -12972,16 +12987,18 @@ nen tests map --issue-body <file> --test-report <file>[,<file>...]
 **Output and exit codes** — `<verdict>: <met>/<n> criteria met (<mode>) · <m>
 mapped · <u> unmapped · <r> unrequested · <t> test(s) read`, then per criterion
 `<id> <status> · <count> test(s) · <checkpoint or outcome>` and its tests, then
-`UNREQUESTED`, `FOREIGN`, `DUPLICATE` and `UNRECOGNISED` lines. `--json`
+`UNREQUESTED`, `FOREIGN`, `LOAD-FAILED`, `DUPLICATE` and `UNRECOGNISED` lines. `--json`
 top-level keys, in order: `contract` (`nen.tests.map/v0.1`), `verdict` (`met` \|
 `unmet` \| `not-verifiable` \| `could-not-read`), `mode` (`after` \|
 `require-red` \| `before-after`), `issueBody`, `issue`, `testReports`,
 `beforeReports`, `criteria` (`{ id, number, text, line, status, count, outcome,
 checkpoint, met, tests: [{ name, suite, status, before }] }` each; `status`
 `mapped` \| `unmapped`; `outcome` `passing` \| `failing` \| `skipped` \|
-`untested`; `checkpoint` null in `after`, else the mode's word; `before` null
-without a before report), `unrequested` (`{ id, token, name, suite, status }`),
-`foreign` (`{ token, name, suite }`), `duplicates`, `unrecognised`, `counts`
+`untested`; `checkpoint` null in `after`, else the mode's word; `before`
+`passed` \| `failed` \| `skipped` \| `load-failed` \| `absent`, null without a
+before report), `unrequested` (`{ id, token, name, suite, status }`),
+`foreign` (`{ token, name, suite }`), `loadFailures` (the red run's
+load-failed suites, sorted; `[]` in `after`), `duplicates`, `unrecognised`, `counts`
 (`{ criteria, mapped, unmapped, met, unrequested, foreign, tests }`),
 `blocking` (one line per fact that sets exit 1), `reason`. Exit **0** when every
 criterion is met in the mode, nothing is unrequested and no criterion row is
@@ -15076,7 +15093,7 @@ caught:
 | `report.format` | what it is | conventionally |
 |---|---|---|
 | `junit` | JUnit XML — the shape almost every runner on earth can be asked to write. `<failure>` and `<error>` are both failures; `<skipped>` is a skip; `time` is **seconds** | `*.xml`, one file **or a directory of them** |
-| `assertion-results` | the `testResults[].assertionResults[]` JSON a JavaScript runner writes with its JSON reporter. The test **file** is the suite; `duration` is **milliseconds** | any `*.json` the reporter is pointed at (commonly `test-results.json`) |
+| `assertion-results` | the `testResults[].assertionResults[]` JSON a JavaScript runner writes with its JSON reporter. The test **file** is the suite; `duration` is **milliseconds**; a file that failed with no assertions (it failed to load) is one failed row named for the file, never nothing | any `*.json` the reporter is pointed at (commonly `test-results.json`) |
 | `xcresult-summary` | the JSON test summary a **declared** result-bundle extraction step writes. It states its totals and lists only its failures | any `*.json` that step's output is redirected into |
 
 **nen never opens a result bundle itself.** A bundle is a directory in a
