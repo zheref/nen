@@ -64,6 +64,7 @@ import { runSchemaSet, SCHEMA_SET_FLAGS } from "./schema/set.js";
 import { CANON_VALUES_FILE, isMirrorReadError, mirrorRowFile } from "./schema/canonmirror.js";
 import { defaultSeams, type Seams } from "./seam/exec.js";
 import { BootstrapExit, runBootstrap } from "./supply/bootstrap.js";
+import { runtimeSupervisorInvocation } from "./host/execute.js";
 import { PROGRAM, VERSION } from "./version.js";
 
 export interface Io {
@@ -835,7 +836,7 @@ if (import.meta.main) {
       process.stdout.write(chunk);
     },
     err: stderr,
-  });
+  }, defaultSeams(runtimeSupervisorInvocation({ executable: process.execPath, standalone: typeof Bun === "undefined" ? undefined : Bun.isStandaloneExecutable, entrypoint: typeof Bun === "undefined" ? "" : Bun.main }, ["host", "_exec"])));
   // Both halves -- the ordinary code and the last-resort one -- come out of
   // `exitCodeFor`, which is a function with tests. Nothing in this block
   // decides anything.

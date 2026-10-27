@@ -11,8 +11,8 @@ binary](#getting-the-binary)), or as `bun src/index.ts` from a checkout of this
 repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
-what each version changed: 48 command
-families, 172 verbs, every flag checked against that binary.
+what each version changed: 49 command
+families, 176 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -48,9 +48,9 @@ a forgotten flag into a confident wrong answer (zheref/nen#28):
 [`canon resolve`](#nen-canon-resolve),
 [`parse futon`](#nen-parse-futon) and
 [`report data`](#nen-report-data).
-Twenty-eight verbs accept it and never read it at all — they work entirely from
+Thirty-two verbs accept it and never read it at all — they work entirely from
 the paths and slugs they are handed. Every verb of
-[`effort`](#family-effort), [`epic`](#family-epic), [`loop`](#family-loop),
+[`effort`](#family-effort), [`epic`](#family-epic), [`host`](#family-host), [`loop`](#family-loop),
 [`quality`](#family-quality), [`run`](#family-run), [`split`](#family-split),
 [`wake`](#family-wake) and [`watch`](#family-watch) is one; so are
 [`backlog fetch`](#nen-backlog-fetch),
@@ -257,7 +257,7 @@ including every refusal reason. The raw NUL-delimited stream
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **103 shapes** and **107 ids** (`nen.runner.plan`
+binary carries**, writing or reading — **107 shapes** and **111 ids** (`nen.runner.plan`
 and `nen.wc.worktree.copies` each have two versions, `nen.stop.mark` three, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -301,6 +301,7 @@ file formats).
 - **`dev`** — `nen.dev.release-publish/v0.1`
 - **`exits`** — `nen.exits/v0.1`
 - **`direct`** — `nen.direct.answer/v0.1` · `nen.direct.matrix/v0.1` · `nen.direct.registry/v0.1` · `nen.direct.resolve/v0.1`
+- **`host`** — `nen.host/v0.1` · `nen.host.claim/v0.1` · `nen.host.init/v0.1` · `nen.host.status/v0.1`
 - **`issue`** — `nen.issue.body-check/v0.1` · `nen.issue.criteria/v0.1` · `nen.issue.edit-body/v0.3` · `nen.issue.questions/v0.1` · `nen.issue.questions.batch/v0.1` · `nen.issue.reconcile/v0.1`
 - **`loop`** — `nen.loop.iterate/v0.1`
 - **`phase`** — `nen.phase.ledger/v0.1`
@@ -326,13 +327,14 @@ file formats).
 - **`workflow`** — `nen.workflow/v0.1`
 <!-- contract-ids:end -->
 
-Four verbs have no `--json` because they have no result of their own to
-render: [`dev test`](#nen-dev-test) and [`dev lint`](#nen-dev-lint) inherit
+Six verbs have no `--json` because they have no result of their own to
+render: [`dev test`](#nen-dev-test), [`dev lint`](#nen-dev-lint),
+[`host run`](#nen-host-run) and the internal [`host _exec`](#nen-host-_exec) inherit
 their subprocess's stdio, [`bootstrap`](#nen-bootstrap) prints only the
 verified binary path, and [`report mermaid`](#nen-report-mermaid) prints the
-diagram text itself. The last of them **refuses `--json` by name** rather than
-accepting and ignoring it; the other three predate that rule and still accept
-it silently. <a id="the-refusal-envelope"></a>
+diagram text itself. `report mermaid`, `host run` and `host _exec`
+**refuse `--json` by name** rather than accepting and ignoring it; the other
+three predate that rule and still accept it silently. <a id="the-refusal-envelope"></a>
 
 **The refusal envelope.** [`issue file`](#nen-issue-file),
 [`idea file`](#nen-idea-file), [`canon resolve`](#nen-canon-resolve) and
@@ -997,7 +999,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 172 verbs, grouped as the README groups them. **Reads** is what a
+All 176 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -1100,6 +1102,10 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`surface`](#family-surface) | [`nen surface install`](#nen-surface-install) | make, re-point or report a host's FIRST-PARTY install of a plugin from a checkout, per surface: the Claude Code skills-directory link with the hand-over of a prior marketplace copy, the Codex marketplace and plugin, the Antigravity global plugin link -- never replacing what it did not make, never editing a settings file, every write read back | the checkout's manifests; the surface's own directory (--config-dir) and registry files; claude / codex / agy and one `git rev-parse`; writes a link under --config-dir and runs the surface's install CLI unless --dry-run; no gh | yes |
 | [`surface`](#family-surface) | [`nen surface status`](#nen-surface-status) | the version each surface serves for a plugin, read back from `claude plugin list --json`, `codex plugin list` or the linked `plugin.json`, and whether it is a given checkout; with `--trees`, the copies Claude Code SERVES judged as `check --plugin` judges them | the surface's directory and registry files; claude / codex / agy list and validate commands; with --trees, the copies and the source; writes nothing; no gh | yes |
 | [`surface`](#family-surface) | [`nen surface capabilities`](#nen-surface-capabilities) | what a running session on a surface can do -- picker, subagent, hook events and decision key, worktree isolation, artifact, notify, permissions file and shape, agent model key, rules file and limit, description budget -- as data with a citation per row | nothing; a table this binary ships | yes |
+| [`host`](#family-host) | [`nen host init`](#nen-host-init) | explicitly provision a new host-owned heavy-work budget, capacity one unless overridden | absolute --store or NEN_HOST_STORE; writes config.json and slots; never runs heavy work | yes |
+| [`host`](#family-host) | [`nen host status`](#nen-host-status) | report every occupied or unreadable slot without reaping owners | absolute --store or NEN_HOST_STORE; reads configuration and slot files | yes |
+| [`host`](#family-host) | [`nen host run`](#nen-host-run) | acquire shared capacity and supervise one command with inherited stdio; always enforced regardless of rollout activation | provisioned host store; authoritative POSIX process snapshots; requested executable | no |
+| [`host`](#family-host) | [`nen host _exec`](#nen-host-_exec) | internal one-use supervisor handshake; validate the request and coordinator before starting its registered process group | reserved host claim, immutable registration and POSIX process snapshots; requested executable | no |
 | [`run`](#family-run) | [`nen run rerun-failed`](#nen-run-rerun-failed) | re-run a workflow run's failed jobs (gh run rerun --failed) | github (gh) | yes |
 | [`run`](#family-run) | [`nen run start`](#nen-run-start) | start a batch run's manifest (`nen.run/v0.1`) at `<git-common-dir>/.nen/runs/<id>.json` with its repository and launch-time idle answers (HR-5); the same answers again is the resume, other answers or another repository refused | git (rev-parse --git-common-dir); writes the manifest unless --dry-run | yes |
 | [`run`](#family-run) | [`nen run append`](#nen-run-append) | record one PR the run opened, whatever its base, read live (base, branch, head); a PR created before the run started is refused; idempotent on the same facts, updated on a moved head or base, refused on another issue, kind or effort | git (rev-parse --git-common-dir), the manifest, github (gh pr view); writes it unless --dry-run | yes |
@@ -20139,6 +20145,8 @@ A `severity` enumeration with `[+]` is highest-first; two severities such as
 `corrected`. Mixed alternatives, incomplete lines and boundary-changing rewrites keep
 the existing refusal without an invented correction; legacy scalar placeholders stay.
 
+<a id="family-host"></a>
+
 ## Shared host capacity (`host`)
 
 `nen host` controls participating heavy work on one machine across repositories,
@@ -20227,3 +20235,98 @@ capacity acquisition or any heavy child, through an ordinary structured Shu
 report naming NN538. Inactive remedy execution and dry-run rendering remain
 unchanged. This bounded implementation choice leaves tracked concurrent remedy
 execution to the owned cancellation integration.
+
+
+### `nen host init`
+
+Explicitly provision a new store; this is operator setup, separate from admission.
+See [the host deployment contract](#shared-host-capacity-host) for shared permissions,
+activation and provider prerequisites. `--repo` is accepted and never read.
+
+```text
+nen host init --store <absolute-path> [--capacity <1..64>] [--json]
+```
+
+| Flag | Required | Meaning |
+|---|---|---|
+| `--store <absolute-path>` | unless `NEN_HOST_STORE` is set | One local-filesystem host store, shared across participating accounts; the flag overrides the environment |
+| `--capacity <1..64>` | no | Integer heavy-work budget; default `1`; never changes an existing store |
+| `--json` | no | Print the provisioning result instead of prose |
+
+Exits **0** after provisioning, **1** for existing/unreadable state or a filesystem
+failure, **2** for invalid arguments. Nen does not overwrite configuration,
+change existing permissions, elevate or start any workload.
+
+`--json` has top-level keys `contract` (`nen.host.init/v0.1`), `root` (the canonical
+absolute store path) and `config` (`{ contract, hostId, capacity }`). The config's
+contract is `nen.host/v0.1`; `hostId` is its generated UUID.
+
+### `nen host status`
+
+Read shared capacity and report owners. It never frees a slot, even when the
+coordinator is dead. `--repo` is accepted and never read.
+
+```text
+nen host status [--store <absolute-path>] [--json]
+```
+
+`--store` overrides `NEN_HOST_STORE`; one must name the provisioned absolute store.
+`--json` selects the structured result. Exits **0** for a readable configuration,
+including occupied or unreadable slots, **1** for missing/unreadable configuration,
+and **2** for invalid arguments. No process or heavy command is launched.
+
+`--json` has top-level keys `contract` (`nen.host.status/v0.1`), `root`, `config`
+(the same fields as [`host init`](#nen-host-init)) and `owners` (an array of
+`{ slot, claim, problem }`). Empty slots are omitted. An unreadable occupied slot
+has `claim: null` and an explanatory `problem`; a readable claim has
+`problem: null`. A `nen.host.claim/v0.1` claim contains `id`, `owner`, `createdAt`,
+`coordinator`, `group`, `state` and `reason`, plus optional `launch` and
+`spawnFailed`. Process identities carry `pid`, `pgid`, `started`; state is
+`reserved`, `running`, `complete` or `unresolved`. A launch carries its unique
+`id` and request `digest`. Arguments and environment values are not stored.
+
+### `nen host run`
+
+Always acquire or validate host ownership before the requested command starts,
+regardless of `NEN_HOST_ADMISSION`. `--repo` is accepted and never read.
+
+```text
+nen host run [--store <absolute-path>] -- <exe> [args...]
+```
+
+`--store` overrides `NEN_HOST_STORE`; one must name the provisioned absolute store.
+The executable and its arguments belong after `--` and pass through unchanged.
+There is no `--json`: stdio belongs to the requested command. Exits **0** when the
+command succeeds and ownership resolves, **1** for a failed command, refused
+admission or unresolved ownership, **2** for invalid arguments. At capacity it
+refuses immediately, naming the owner and bounded wait **0ms**. Missing state or
+unsupported ownership providers refuse before the requested executable starts.
+Nested owned commands validate ancestry and share the existing claim.
+
+### `nen host _exec`
+
+Internal supervisor dispatch, used only by Nen's current entry adapter. It is not
+an operator entry point or an independent capacity request. `--repo` is accepted
+and never read.
+
+```text
+nen host _exec --store <absolute-path> --slot <n> --claim <id> --launch <step-id> -- <exe> [args...]
+```
+
+`--slot` is a positive slot number; `--claim` and `--launch` must match the
+reserved claim and fresh request-bound launch capability. `--store` is the
+provisioned absolute store (`NEN_HOST_STORE` remains the fallback). The adapter
+passes the exact executable and argv after `--`. The supervisor proves coordinator
+ancestry and atomically publishes its immutable registration before execution;
+replays and mismatches refuse. There is no `--json`: it inherits stdio.
+
+Normal completion returns the requested command's exit code; spawn failure is
+**127**, unresolved ownership or other state failure **1**, invalid arguments
+**2**. Its completion receipt does not release capacity: the coordinator must
+also prove the registered group quiescent. Current entry adapters use the
+explicit Bun standalone-executable flag and absolute source entrypoint: compiled
+Nen reexecutes its installed binary; source CLI, host entry and dependency-free
+CI entry reexecute their exact current adapter through the current Bun runtime.
+No repository/module-root discovery or globally installed Nen is used. An absent
+entry contract refuses before capacity acquisition. Interactive cancellation and
+concurrent stalled remedies remain subject to the NN538 boundary above.

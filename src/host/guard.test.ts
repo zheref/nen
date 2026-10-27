@@ -30,6 +30,7 @@ function finishStep(store: HostStore, state: HostClaim["state"] = "complete"): v
 }
 function seams(store: HostStore, action: () => void): Seams {
   return {
+    hostSupervisor: { exe: "/synthetic/current-runtime", argv: ["/synthetic/current-entry", "_exec"] },
     env: { NEN_HOST_STORE: store.root }, platform: "linux", now: (): Date => new Date(0),
     run: vi.fn(() => { action(); return { code: 0, stdout: "out", stderr: "", spawnFailed: false }; }),
     runInteractive: vi.fn(() => { action(); return { code: 0, signal: null, spawnFailed: false }; }),
@@ -38,6 +39,11 @@ function seams(store: HostStore, action: () => void): Seams {
   };
 }
 describe("host guard lifecycle with synthetic ownership", (): void => {
+  it("refuses an absent entry adapter before acquiring capacity or spawning", (): void => {
+    const store = fixture(); const original = seams(store, (): void => {});
+    expect((): unknown => admitWorkload({ ...original, hostSupervisor: undefined }, "missing adapter")).toThrow(/entry adapter/);
+    expect(slots(store)).toEqual([]); expect(original.run).not.toHaveBeenCalled();
+  });
   it("stages local activation visibly and never treats an inactive launch as protected", (): void => {
     const store = fixture(); const original = seams(store, (): void => {}); const notices: string[] = [];
     const guard = admitConfiguredWorkload(original, "local test", (message): void => { notices.push(message); });

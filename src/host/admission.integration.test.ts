@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { initStore, readRegistration, readSlot, reserve, slots } from "./store.js";
 import { prepareLaunch } from "./execute.js";
@@ -16,6 +16,8 @@ function fixture(): ReturnType<typeof initStore> {
 const contender = fileURLToPath(new URL("./fixtures/contender.ts", import.meta.url));
 const race = fileURLToPath(new URL("./fixtures/supervisor-race.ts", import.meta.url));
 const entry = fileURLToPath(new URL("./entry.ts", import.meta.url));
+const cliEntry = fileURLToPath(new URL("../index.ts", import.meta.url));
+const ciEntry = fileURLToPath(new URL("./ci.ts", import.meta.url));
 function syntheticEnv(): NodeJS.ProcessEnv {
   // These tiny fixtures prove independent sessions against their own temp
   // budget; they never reuse or mutate a real CI/interactive store.
@@ -41,6 +43,36 @@ function lineQueue(child: ChildProcessWithoutNullStreams): () => Promise<string>
   };
 }
 describe("host admission synthetic process fixtures", (): void => {
+  it.skipIf(process.platform === "win32").each([
+    ["source CLI", cliEntry, ["host", "run", "--"]],
+    ["dependency-free host entry", entry, ["run", "--"]],
+    ["dependency-free CI entry", ciEntry, []],
+  ] as const)("F4: %s self-reexecutes from an unrelated cwd", (_name, adapter, prefix): void => {
+    const store = fixture(); const elsewhere = mkdtempSync(join(tmpdir(), "nen-host-cwd-")); fixtures.push(elsewhere);
+    const result = spawnSync("bun", [adapter, ...prefix, "bun", "-e", "console.log('adapter workload ran')"], {
+      cwd: elsewhere, encoding: "utf8", timeout: 10_000,
+      env: { ...syntheticEnv(), NEN_HOST_STORE: store.root, NEN_HOST_ADMISSION: "enabled", RUNNER_ENVIRONMENT: "self-hosted" },
+    });
+    expect(result.error).toBeUndefined(); expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("adapter workload ran"); expect(slots(store)).toEqual([]);
+  });
+  it.skipIf(process.platform === "win32").each(["entry.ts", "ci.ts"])("F4: dependency-free %s supervises without installed packages", (adapter): void => {
+    const store = fixture(); const checkout = mkdtempSync(join(tmpdir(), "nen-host-no-deps-")); fixtures.push(checkout);
+    const source = fileURLToPath(new URL("../", import.meta.url));
+    // Exact builtin-only pre-install entry graph. No package manifest or
+    // node_modules is copied; an added runtime dependency must fail this proof.
+    for (const module of ["host/ci.ts", "host/entry.ts", "host/command.ts", "host/execute.ts", "host/process.ts", "host/store.ts", "seam/exec.ts", "seam/zone.ts", "cli/args.ts", "cli/command.ts", "cli/plain.ts"]) {
+      const target = join(checkout, "src", module); mkdirSync(dirname(target), { recursive: true }); copyFileSync(join(source, module), target);
+    }
+    expect(existsSync(join(checkout, "node_modules"))).toBe(false);
+    const prefix = adapter === "entry.ts" ? ["run", "--"] : [];
+    const result = spawnSync("bun", [join(checkout, "src", "host", adapter), ...prefix, "bun", "-e", "console.log('pre-install workload ran')"], {
+      cwd: tmpdir(), encoding: "utf8", timeout: 10_000,
+      env: { ...syntheticEnv(), NEN_HOST_STORE: store.root, NEN_HOST_ADMISSION: "enabled", RUNNER_ENVIRONMENT: "self-hosted" },
+    });
+    expect(result.error).toBeUndefined(); expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("pre-install workload ran"); expect(slots(store)).toEqual([]);
+  });
   it("AC1/SC1: two sessions compete for capacity one and at most one is admitted", async (): Promise<void> => {
     const store = fixture();
     const children = ["repository-A/session-A", "repository-B/CI"].map((owner): ChildProcessWithoutNullStreams => spawn("bun", [contender, store.root, owner], { stdio: "pipe" }));

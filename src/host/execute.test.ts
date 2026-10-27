@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CLAIM_ENV, HOST_STORE_ENV, inheritedClaim, SLOT_ENV } from "./execute.js";
+import { CLAIM_ENV, HOST_STORE_ENV, inheritedClaim, runtimeSupervisorInvocation, SLOT_ENV } from "./execute.js";
 import { initStore, registerSupervisor, reserve, writeClaim } from "./store.js";
 import type { HostProcess } from "./process.js";
 const roots: string[] = [];
@@ -36,5 +36,24 @@ describe("inherited host ownership", (): void => {
     expect((): unknown => inheritedClaim(env, (): readonly HostProcess[] => [rows[0]!, { ...rows[1]!, pgid: 900 }])).toThrow(/does not own/);
     expect((): unknown => inheritedClaim(env, (): readonly HostProcess[] => [rows[0]!, { ...rows[1]!, ppid: 1 }])).toThrow(/does not own/);
     expect((): unknown => inheritedClaim(env, (): never => { throw new Error("denied"); })).toThrow(/denied/);
+  });
+});
+
+describe("explicit current runtime supervisor invocation", (): void => {
+  it("re-executes a compiled binary directly even when its name resembles source", (): void => {
+    const exe = join(tmpdir(), "installed-nen.ts");
+    expect(runtimeSupervisorInvocation({ executable: exe, standalone: true, entrypoint: "/virtual/embedded/index.ts" }, ["host", "_exec"]))
+      .toEqual({ exe, argv: ["host", "_exec"] });
+  });
+  it("uses the exact source entrypoint and its adapter dispatch regardless of filename or cwd", (): void => {
+    const exe = join(tmpdir(), "runtime"); const entrypoint = join(tmpdir(), "checkout", "extensionless-entry");
+    expect(runtimeSupervisorInvocation({ executable: exe, standalone: false, entrypoint }, ["_exec"]))
+      .toEqual({ exe, argv: [entrypoint, "_exec"] });
+  });
+  it("refuses missing runtime mode or a relative runtime/entrypoint rather than discovering a checkout", (): void => {
+    const executable = join(tmpdir(), "bun");
+    expect((): unknown => runtimeSupervisorInvocation({ executable, standalone: undefined, entrypoint: "" }, ["_exec"])).toThrow(/current runtime/);
+    expect((): unknown => runtimeSupervisorInvocation({ executable: "bun", standalone: false, entrypoint: "entry.ts" }, ["_exec"])).toThrow(/current runtime/);
+    expect((): unknown => runtimeSupervisorInvocation({ executable, standalone: false, entrypoint: "entry.ts" }, ["_exec"])).toThrow(/absolute/);
   });
 });

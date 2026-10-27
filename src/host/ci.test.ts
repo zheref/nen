@@ -13,6 +13,14 @@ const roots: string[] = [];
 beforeEach((): void => { vi.stubEnv("NEN_HOST_CLAIM", undefined); vi.stubEnv("NEN_HOST_SLOT", undefined); });
 afterEach((): void => { vi.unstubAllEnvs(); vi.clearAllMocks(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 describe("CI uses the same host boundary before dependency install", (): void => {
+  it("dispatches its internal supervisor through the shared action before rollout logic", (): void => {
+    vi.stubEnv("NEN_HOST_ADMISSION", "invalid");
+    const invocation = { exe: "/runtime/bun", argv: ["/checkout/ci.ts", "_exec"] };
+    const args = ["_exec", "--store", "/fixture", "--slot", "1", "--claim", "claim", "--launch", "step", "--", "payload"];
+    expect(ci(args, invocation)).toBe(0);
+    expect(standalone).toHaveBeenCalledWith(args, invocation);
+    expect(spawnInteractiveRunner).not.toHaveBeenCalled();
+  });
   it("inactive POSIX CI visibly reports unavailable admission and keeps the legacy command", (): void => {
     vi.stubEnv("RUNNER_ENVIRONMENT", "self-hosted"); vi.stubEnv("NEN_HOST_ADMISSION", "");
     const stderr = vi.spyOn(process.stderr, "write").mockImplementation((): boolean => true);
@@ -26,7 +34,7 @@ describe("CI uses the same host boundary before dependency install", (): void =>
   it("keeps inherited active CI ownership enforced even when rollout activation is cleared", (): void => {
     vi.stubEnv("NEN_HOST_ADMISSION", ""); vi.stubEnv("NEN_HOST_CLAIM", "inherited"); vi.stubEnv("NEN_HOST_SLOT", "1");
     expect(ci(["placeholder-test"])).toBe(0);
-    expect(standalone).toHaveBeenCalledWith(["run", "--", "placeholder-test"]);
+    expect(standalone).toHaveBeenCalledWith(["run", "--", "placeholder-test"], undefined);
     expect(spawnInteractiveRunner).not.toHaveBeenCalled();
   });
   it("refuses invalid activation before either a guarded or legacy child starts", (): void => {
@@ -43,7 +51,7 @@ describe("CI uses the same host boundary before dependency install", (): void =>
   it("never invents a fallback host store for a self-hosted runner", (): void => {
     vi.stubEnv("RUNNER_ENVIRONMENT", "self-hosted"); vi.stubEnv("NEN_HOST_STORE", ""); vi.stubEnv("NEN_HOST_ADMISSION", "enabled");
     expect(ci(["placeholder-command"])).toBe(0);
-    expect(standalone).toHaveBeenCalledWith(["run", "--", "placeholder-command"]);
+    expect(standalone).toHaveBeenCalledWith(["run", "--", "placeholder-command"], undefined);
     expect(process.env.NEN_HOST_STORE).toBe("");
   });
   it("provisions one disposable hosted budget and preserves unresolved prior-step ownership", (): void => {

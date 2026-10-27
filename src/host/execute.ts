@@ -1,8 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
 import { isAbsolute } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { InteractiveResult, RunOptions, Seams } from "../seam/exec.js";
 import { HostRefusal, assertOwner, openStore, readRegistration, readSlot, registerSupervisor, release, removeRegistration, reserve, sameIdentity, writeClaim, type LaunchStep, type ProcessIdentity, type Reservation } from "./store.js";
 import { belongsToGroup, descendsFrom, groupMembers, ownIdentity, snapshot, type Snapshot } from "./process.js";
@@ -48,16 +46,23 @@ export function inheritedClaim(env: Readonly<Record<string, string | undefined>>
   if (!sameIdentity(registration.supervisor, claim.group) || !belongsToGroup(claim.group, ownIdentity(read), read)) throw new HostRefusal(`inherited host claim does not own this process/group; owner ${claim.owner} retains capacity. Nothing was launched.`);
   return reservation;
 }
-// Re-exec the CURRENT source or compiled binary. No dependency on a globally
-// installed Nen (which could predate host admission); CI's entry needs builtins only.
-export function supervisorInvocation(): { exe: string; argv: readonly string[] } {
-  const invoked = process.argv[1] ?? "";
-  if (process.versions.bun !== undefined && !/\.(?:[cm]?js|ts)$/.test(invoked)) return { exe: process.execPath, argv: ["host", "_exec"] };
-  const source = fileURLToPath(new URL("./entry.ts", import.meta.url));
-  // Source development and the Node-hosted Vitest harness both use this repo's
-  // declared Bun runtime; a published binary re-executes itself instead.
-  if (existsSync(source)) return { exe: process.versions.bun === undefined ? "bun" : process.execPath, argv: [source, "_exec"] };
-  return { exe: process.execPath, argv: ["host", "_exec"] };
+/** Explicit current-runtime contract supplied by the executable's entry adapter. */
+export interface SupervisorInvocation { readonly exe: string; readonly argv: readonly string[] }
+export interface EntryRuntime {
+  readonly executable: string;
+  readonly standalone: boolean | undefined;
+  readonly entrypoint: string;
+}
+export function runtimeSupervisorInvocation(runtime: EntryRuntime, dispatch: readonly string[]): SupervisorInvocation {
+  if (!isAbsolute(runtime.executable) || typeof runtime.standalone !== "boolean" || dispatch.length === 0) throw new HostRefusal("current runtime cannot describe its supervisor entrypoint; nothing was launched");
+  if (runtime.standalone) return { exe: runtime.executable, argv: [...dispatch] };
+  if (!isAbsolute(runtime.entrypoint)) throw new HostRefusal("source supervisor entrypoint must be absolute; nothing was launched");
+  return { exe: runtime.executable, argv: [runtime.entrypoint, ...dispatch] };
+}
+function supervisorInvocation(seams: Seams): SupervisorInvocation {
+  const invocation = seams.hostSupervisor;
+  if (invocation === undefined || !isAbsolute(invocation.exe) || invocation.argv.length === 0) throw new HostRefusal("current entry adapter did not supply a supervisor invocation; nothing was launched and no capacity was acquired");
+  return { exe: invocation.exe, argv: [...invocation.argv] };
 }
 function envFor(reservation: Reservation): Readonly<Record<string, string>> {
   return { [HOST_STORE_ENV]: reservation.store.root, [CLAIM_ENV]: reservation.claim.id, [SLOT_ENV]: String(reservation.slot) };
@@ -65,8 +70,8 @@ function envFor(reservation: Reservation): Readonly<Record<string, string>> {
 function launchOptions(options: RunOptions | undefined, reservation: Reservation): RunOptions {
   return { ...options, env: { ...options?.env, ...envFor(reservation) } };
 }
-function supervisorArgs(command: string, args: readonly string[], reservation: Reservation, step: LaunchStep): readonly string[] {
-  return [...supervisorInvocation().argv, "--store", reservation.store.root, "--slot", String(reservation.slot), "--claim", reservation.claim.id, "--launch", step.id, "--", command, ...args];
+function supervisorArgs(invocation: SupervisorInvocation, command: string, args: readonly string[], reservation: Reservation, step: LaunchStep): readonly string[] {
+  return [...invocation.argv, "--store", reservation.store.root, "--slot", String(reservation.slot), "--claim", reservation.claim.id, "--launch", step.id, "--", command, ...args];
 }
 function requestDigest(command: string, args: readonly string[]): string {
   return createHash("sha256").update(JSON.stringify([command, args])).digest("hex");
@@ -88,8 +93,9 @@ function afterStep(reservation: Reservation, step: LaunchStep): boolean {
 }
 export const admitWorkload: HostAdmission = (seams, owner): HostGuard => {
   if (inheritedClaim(seams.env) !== null) return { seams, finish(): void {} };
-  const reservation = reserve(openStore(storePath(seams.env)), owner, ownIdentity());
-  const invocation = supervisorInvocation();
+  const store = openStore(storePath(seams.env));
+  const invocation = supervisorInvocation(seams);
+  const reservation = reserve(store, owner, ownIdentity());
   const steps: LaunchStep[] = [];
   // Every direct child is a tiny supervisor in a new POSIX process group. It
   // writes that group's identity BEFORE it starts the requested executable.
@@ -99,21 +105,21 @@ export const admitWorkload: HostAdmission = (seams, owner): HostGuard => {
     run(command, args, options) {
       const step = prepareLaunch(reservation, command, args);
       steps.push(step);
-      const result = seams.run(invocation.exe, supervisorArgs(command, args, reservation, step), { ...launchOptions(options, reservation), detached: true });
+      const result = seams.run(invocation.exe, supervisorArgs(invocation, command, args, reservation, step), { ...launchOptions(options, reservation), detached: true });
       const spawnFailed = afterStep(reservation, step);
       return { ...result, spawnFailed: result.spawnFailed || spawnFailed };
     },
     runInteractive(command, args, options) {
       const step = prepareLaunch(reservation, command, args);
       steps.push(step);
-      const result = seams.runInteractive(invocation.exe, supervisorArgs(command, args, reservation, step), { ...launchOptions(options, reservation), detached: true });
+      const result = seams.runInteractive(invocation.exe, supervisorArgs(invocation, command, args, reservation, step), { ...launchOptions(options, reservation), detached: true });
       const spawnFailed = afterStep(reservation, step);
       return { ...result, spawnFailed: result.spawnFailed || spawnFailed };
     },
     async runStreamed(command, args, options) {
       const step = prepareLaunch(reservation, command, args);
       steps.push(step);
-      const result = await seams.runStreamed(invocation.exe, supervisorArgs(command, args, reservation, step), { ...options, ...launchOptions(options, reservation), detached: true });
+      const result = await seams.runStreamed(invocation.exe, supervisorArgs(invocation, command, args, reservation, step), { ...options, ...launchOptions(options, reservation), detached: true });
       const spawnFailed = afterStep(reservation, step);
       return { ...result, spawnFailed: result.spawnFailed || spawnFailed };
     },

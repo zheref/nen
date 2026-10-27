@@ -78,7 +78,7 @@
 // null` -- cannot assert -- exactly as it reports a kind it does not know.
 
 import { readHostZone } from "./zone.js";
-import { admitConfiguredWorkload, type HostAdmission } from "../host/execute.js";
+import { admitConfiguredWorkload, type HostAdmission, type SupervisorInvocation } from "../host/execute.js";
 import { spawn, spawnSync } from "node:child_process";
 import { connect } from "node:net";
 import { constants as osConstants } from "node:os";
@@ -313,6 +313,8 @@ export function outputWindow(
 export interface Seams {
   /** Real CLI boundary; deterministic scripted seams may supply a test guard. */
   readonly hostAdmission?: HostAdmission;
+  /** Current executable/entrypoint supplied explicitly by its adapter. */
+  readonly hostSupervisor?: SupervisorInvocation;
   readonly run: Runner;
   /** A long-running child, on this terminal. See InteractiveRunner. */
   readonly runInteractive: InteractiveRunner;
@@ -844,9 +846,10 @@ export const connectProbe: PortProbe = async (port): Promise<PortVerdict> =>
     );
   });
 
-export function defaultSeams(): Seams {
+export function defaultSeams(hostSupervisor?: SupervisorInvocation): Seams {
   return {
     hostAdmission: admitConfiguredWorkload,
+    hostSupervisor,
     run: spawnRunner,
     runInteractive: spawnInteractiveRunner,
     runStreamed: spawnStreamedRunner,
