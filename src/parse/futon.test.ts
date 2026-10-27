@@ -679,3 +679,40 @@ describe("parseFutonInvocation -- a flag-shaped word in the scope is refused, ne
     }
   });
 });
+
+describe("parseFutonInvocation -- round 2 on zheref/nen#562 (Feitan F-5, Nobunaga R2-1)", () => {
+  it("F-5: refuses a run of Unicode dashes in front of a scope flag, offering the ASCII flag", () => {
+    for (const [line, corrected] of [
+      ["nen@bug −−dry-run", "nen@bug --dry-run"],
+      ["nen@bug －－dry-run", "nen@bug --dry-run"],
+      ["nen@bug ——dry-run", "nen@bug --dry-run"],
+      ["nen@bug ‐‐idle", "nen@bug --idle"],
+    ] as const) {
+      const result = parseFutonInvocation(line);
+      expect(result.ok, line).toBe(false);
+      if (!result.ok) expect(result.error.correctedLine, line).toBe(corrected);
+    }
+  });
+
+  it("R2-1: offers a scope flag only for a one-edit or spelling variant", () => {
+    for (const [line, corrected] of [
+      ["nen@bug --idel", "nen@bug --idle"],
+      ["nen@bug --dry_run", "nen@bug --dry-run"],
+    ] as const) {
+      const result = parseFutonInvocation(line);
+      expect(result.ok, line).toBe(false);
+      if (!result.ok) expect(result.error.correctedLine, line).toBe(corrected);
+    }
+  });
+
+  it("R2-1: refuses -idea, --file and --title as unknown options, dropped from the corrected line", () => {
+    for (const token of ["-idea", "--file", "--title"]) {
+      const result = parseFutonInvocation(`nen@bug ${token}`);
+      expect(result.ok, token).toBe(false);
+      if (!result.ok) {
+        expect(result.error.message, token).toMatch(/is not a flag of futon's scope/);
+        expect(result.error.correctedLine, token).toBe("nen@bug");
+      }
+    }
+  });
+});

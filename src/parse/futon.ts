@@ -195,26 +195,47 @@ function blankQuoted(text: string): string {
 const DASHES = "‐-―−﹘﹣－";
 const LEADING_DASHES = new RegExp(`^[-${DASHES}]+`);
 
-// The scope flag a token is an attempt at -- exact, or a near miss: another
-// case, '_' for '-', a dash dropped or doubled, a Unicode dash for '--', a
-// '=<value>' suffix, or one or two typos (`--dryrun`, `--DRY-RUN`,
-// `--dry_run`, `—dry-run`, `--dry-run=false`, `--idel`). `null` when it
-// is none of them.
+// The scope flag a token is an attempt at, offered in a corrected line only
+// for a variant that cannot mean anything else: another case, '_' or a
+// Unicode dash for '-', a dash dropped or doubled, a '=<value>' suffix, or ONE
+// edit -- a substitution, an insertion, a deletion or two letters swapped
+// (`--dryrun`, `--DRY-RUN`, `--dry_run`, `−−dry-run`,
+// `--dry-run=false`, `--idel`). Anything further (`-idea`, `--file`,
+// `--title`) is no attempt at a scope flag: `null`, refused as an unknown
+// option and dropped, never turned into a flag nobody typed (Nobunaga R2-1 on
+// zheref/nen#562).
 function scopeFlagAttempt(token: string): ScopeFlag | null {
   if ((SCOPE_FLAGS as readonly string[]).includes(token)) return token as ScopeFlag;
-  const bare = token.toLowerCase().replace(LEADING_DASHES, "").split("=")[0]!.replace(/[-_\s]/g, "");
+  const bare = token.toLowerCase().replace(LEADING_DASHES, "").split("=")[0]!.replace(new RegExp(`[-_\\s${DASHES}]`, "g"), "");
   if (bare === "") return null;
-  if (bare === "idle" || (bare.length >= 3 && editDistance(bare, "idle") <= 2)) return "--idle";
-  if (bare === "dryrun" || (bare.length >= 4 && editDistance(bare, "dryrun") <= 2)) return "--dry-run";
+  if (swapDistance(bare, "idle") <= 1) return "--idle";
+  if (swapDistance(bare, "dryrun") <= 1) return "--dry-run";
   return null;
 }
 
-// A head token that is written as a flag: `--anything`, a Unicode dash in
-// front of a word, or a single-dash near miss of a scope flag (`-dry-run`).
+// Edit distance counting two adjacent letters swapped as one edit (optimal
+// string alignment), so `idel` is one edit from `idle`.
+function swapDistance(a: string, b: string): number {
+  const d: number[][] = Array.from({ length: a.length + 1 }, (_, i): number[] => Array.from({ length: b.length + 1 }, (_, j): number => (i === 0 ? j : j === 0 ? i : 0)));
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let best = Math.min(d[i - 1]![j]! + 1, d[i]![j - 1]! + 1, d[i - 1]![j - 1]! + cost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) best = Math.min(best, d[i - 2]![j - 2]! + 1);
+      d[i]![j] = best;
+    }
+  }
+  return d[a.length]![b.length]!;
+}
+
+// A head token written as a flag: a run of dashes -- ASCII or any Unicode
+// dash, mixed or repeated (`--x`, `-x`, `−−dry-run`,
+// `－－dry-run`, `——dry-run`, `‐‐idle`) -- in front of a
+// letter, or any `--` token (Feitan F-5 on zheref/nen#562). A lone `-` or a
+// number (`-1`) is not.
+const FLAG_SHAPED = new RegExp(`^[-${DASHES}]+\\p{L}`, "u");
 function looksLikeFlag(token: string): boolean {
-  if (token.startsWith("--")) return true;
-  if (new RegExp(`^[${DASHES}]\\p{L}`, "u").test(token)) return true;
-  return token.startsWith("-") && scopeFlagAttempt(token) !== null;
+  return token.startsWith("--") || FLAG_SHAPED.test(token);
 }
 
 interface HeadToken {
