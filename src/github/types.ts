@@ -80,6 +80,8 @@ export type StatusContextState =
 // it is `null` and the compiler remembers instead.
 export interface CheckRun {
   readonly kind: "check_run";
+  /** The reported verdict title; optional for older captured rollups (#532). */
+  readonly title?: string | null;
   // `null` when the rollup entry carried no name at all. latestChecks() keeps
   // such entries in singleton groups rather than collapsing them into one
   // another (bankai-core#558/#564).

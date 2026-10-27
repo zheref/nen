@@ -133,6 +133,11 @@
 //
 // (7) is recorded inline, at the CON-30 carve-out below.
 //
+// (12) READINESS PLACEHOLDERS ARE UNKNOWN (zheref/nen#532). A success
+//      conclusion cannot override a title saying the verdict never reported.
+//      Row 2 names those placeholders and failed checks; ordinary failures
+//      now name their checks too. These are deliberate reason-string changes.
+//
 // (8) EVERY ROW IS EVALUATED; THE WALK NO LONGER STOPS AT THE FIRST FAILURE
 //     (zheref/nen#248). The original short-circuits, and this port used to
 //     report every row after the first failure as `unevaluated`. On
@@ -327,6 +332,7 @@
 import {
   cancelledLatestReport,
   checksAllGreen,
+  readinessUndetermined,
   checksSettled,
   dependabotCarveOutSatisfied,
   excludeCheckNames,
@@ -1394,6 +1400,19 @@ export function evaluateReady(
     // and what a DECLARATION dropped from it, with the ruling's reason
     // (zheref/nen#249): an exclusion never widens the verdict silently.
     const unchecked = uncheckedChecks(checksExcluded);
+    const latest = latestChecks(checksExcluded);
+    const undetermined = latest.filter(readinessUndetermined);
+    if (undetermined.length > 0) {
+      const names = undetermined.map((entry): string =>
+        `${entry.kind === "check_run" ? entry.name ?? "unnamed check" : entry.context ?? "unnamed check"} (${entry.kind === "check_run" ? entry.title ?? entry.name ?? "verdict did not report" : "verdict did not report"})`,
+      );
+      const notGreen = cancelledLatestReport(latest);
+      return unknown(
+        `readiness undetermined: ${names.join(", ")}` +
+        (notGreen.cancelled.length === 0 ? "" : `; cancelled (no verdict): ${notGreen.cancelled.join(", ")}`) +
+        (notGreen.failing.length === 0 ? "" : `; failing: ${notGreen.failing.join(", ")}`),
+      );
+    }
     if (checksAllGreen(checksExcluded)) {
       const notes = [
         ...(unchecked.length === 0
@@ -1485,7 +1504,8 @@ export function evaluateReady(
           "beside a SUCCESS.",
       );
     }
-    return failed("not-ready: required checks reported but are not all green (CON-32a)");
+    return failed("not-ready: required checks reported but are not all green (CON-32a)" +
+      (failingList === "" ? "" : ` — failing: ${failingList}`));
   })();
 
   // ── row 6: zero unresolved threads (CON-32(d)) ──────────────────────────

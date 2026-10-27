@@ -285,10 +285,23 @@ const GREEN_STATUSES: ReadonlySet<string> = new Set([
   "SKIPPED",
 ]);
 
+/**
+ * #532: a successful placeholder explicitly says the verdict never reported.
+ * Match the observed title (also accepted as a name in older captured blobs),
+ * independently of conclusion: SUCCESS cannot supply the missing verdict.
+ */
+export function readinessUndetermined(entry: RollupEntry): boolean {
+  if (entry.kind !== "check_run") return false;
+  return [entry.title, entry.name].some((text): boolean =>
+    text !== undefined && text !== null &&
+    /readiness undetermined\s*[—–-]\s*the verdict step did not report/i.test(text),
+  );
+}
+
 /** One latest entry, read alone: SUCCESS, NEUTRAL or SKIPPED. Never the verdict. */
 export function checkAdmissible(entry: RollupEntry): boolean {
   const status = rollupEntryStatus(entry);
-  return status !== null && GREEN_STATUSES.has(status);
+  return !readinessUndetermined(entry) && status !== null && GREEN_STATUSES.has(status);
 }
 
 export function checksAllGreen(entries: readonly RollupEntry[]): boolean {
