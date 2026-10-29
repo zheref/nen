@@ -5,6 +5,8 @@
 // precisely so this file can drive it with plain objects.
 
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   EARLIER_COMMIT_READS_DEFAULT,
   PULL_REQUEST_COMMITS_CAP,
@@ -15,11 +17,16 @@ import {
   fullReviewRequests,
   requestedAt,
   unresolvedThreadCount,
+  readWorkflowRuns,
+  headWorkflowSuitesWanted,
+  workflowReadScope,
+  newWorkflowWalk,
+  WORKFLOW_RUN_READS_MAX,
   type FetchStateOptions,
   type PrRef,
   type PrStateSource,
 } from "./pr_state.js";
-import { loadGateIdentities, parseGateIdentities } from "../schema/gates.js";
+import { loadGateIdentities, parseGateIdentities, type GateIdentities } from "../schema/gates.js";
 import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 import type {
   CheckRollupPage,
@@ -1316,5 +1323,383 @@ describe("fetchPrState -- earlier-head round checks are wired in, bounded, and f
     });
     await fetchPrState(source, REPO, 7, ownOptions());
     expect(reads).toBe(EARLIER_COMMIT_READS_DEFAULT);
+  });
+});
+
+// --- zheref/nen#546: producer evidence capture ------------------------------
+describe("round-check producer evidence (zheref/nen#546)", () => {
+  const OWN_RAW = JSON.parse(readFileSync(join(process.cwd(), "nen", "gates.json"), "utf8")) as {
+    reviewers: Record<string, unknown>[];
+  } & Record<string, unknown>;
+  const withProducer = (producer: unknown): GateIdentities =>
+    parseGateIdentities("/fixture/nen/gates.json", {
+      ...OWN_RAW,
+      reviewers: OWN_RAW.reviewers.map((reviewer): Record<string, unknown> =>
+        reviewer["name"] === "bugbot" ? { ...reviewer, round_check_producer: producer } : reviewer,
+      ),
+    });
+  const APP = withProducer({ app: { slug: "cursor", id: 1210556 } });
+  const WORKFLOW = withProducer({
+    workflow: { path: ".github/workflows/bugbot.yml", repository: "zheref/example", events: ["workflow_run"] },
+  });
+  const PR = { number: 7, baseRef: "main" };
+  const SCOPE = workflowReadScope(WORKFLOW, PR);
+  const runPayload = (suite: number, fields: Record<string, unknown> = {}): unknown => ({
+    total_count: 1,
+    workflow_runs: [
+      {
+        id: suite * 100,
+        check_suite_id: suite,
+        path: ".github/workflows/bugbot.yml",
+        event: "workflow_run",
+        repository: { full_name: "zheref/example" },
+        pull_requests: [{ number: 7, base: { ref: "main" } }],
+        ...fields,
+      },
+    ],
+  });
+  const jobsPayload = (ids: readonly number[], total = ids.length): unknown => ({ total_count: total, jobs: ids.map((id) => ({ id })) });
+  const sourceFor = (extra: Partial<PrStateSource> = {}): PrStateSource =>
+    stubSource({
+      checkSuiteWorkflowRuns: async (_r, suite) => runPayload(suite),
+      workflowRunJobs: async (_r, runId) => jobsPayload([runId + 1]),
+      ...extra,
+    });
+
+  describe("readWorkflowRuns -- fails closed, never manufactures evidence", () => {
+    it("reads one run per suite, with its pull requests and, when it can match, its jobs", async () => {
+      const result = await readWorkflowRuns(sourceFor(), REPO, [33, 33], SCOPE);
+      expect(result.runs).toEqual([
+        {
+          checkSuiteId: 33,
+          runId: 3300,
+          path: ".github/workflows/bugbot.yml",
+          repository: "zheref/example",
+          event: "workflow_run",
+          pullRequests: [PR],
+          jobIds: [3301],
+        },
+      ]);
+      expect(result.warnings).toEqual([]);
+    });
+
+    it("pages a run's jobs until total_count, and fails closed on an unreadable or failing page", async () => {
+      const pages: number[] = [];
+      const paged = await readWorkflowRuns(
+        sourceFor({ workflowRunJobs: async (_r, _id, page) => { pages.push(page); return jobsPayload(page === 1 ? [1, 2] : [3], 3); } }),
+        REPO,
+        [33],
+        SCOPE,
+      );
+      expect(pages).toEqual([1, 2]);
+      expect(paged.runs[0]?.jobIds).toEqual([1, 2, 3]);
+      const failing = await readWorkflowRuns(sourceFor({ workflowRunJobs: async () => { throw new Error("403"); } }), REPO, [33], SCOPE);
+      expect(failing.runs[0]?.jobIds).toBeNull();
+      expect(failing.warnings[0]).toContain("reading the run's jobs failed (403)");
+      const missing = await readWorkflowRuns(stubSource({ checkSuiteWorkflowRuns: async (_r, suite) => runPayload(suite) }), REPO, [33], SCOPE);
+      expect(missing.runs[0]?.jobIds).toBeNull();
+      expect(missing.warnings[0]).toContain("cannot read a run's jobs");
+    });
+
+    it("F5/N8: spends no read on the jobs of a run that cannot match -- another file, another event, another pull request", async () => {
+      for (const fields of [
+        { path: ".github/workflows/evil.yml" },
+        { event: "pull_request" },
+        { pull_requests: [{ number: 8, base: { ref: "scratch" } }] },
+        { pull_requests: [] },
+      ]) {
+        let jobReads = 0;
+        const result = await readWorkflowRuns(
+          sourceFor({ checkSuiteWorkflowRuns: async (_r, suite) => runPayload(suite, fields), workflowRunJobs: async () => { jobReads += 1; return jobsPayload([1]); } }),
+          REPO,
+          [33],
+          SCOPE,
+        );
+        expect(jobReads, JSON.stringify(fields)).toBe(0);
+        expect(result.runs[0]?.jobIds).toBeNull();
+      }
+    });
+
+    it("a source that cannot read runs, a throw, an empty or a disagreeing payload each leave the suite unverified, with a warning", async () => {
+      const none = await readWorkflowRuns(stubSource(), REPO, [33], SCOPE);
+      expect(none.runs).toEqual([]);
+      expect(none.warnings[0]).toContain("cannot read workflow runs");
+      const thrown = await readWorkflowRuns(stubSource({ checkSuiteWorkflowRuns: async () => { throw new Error("403 actions:read"); } }), REPO, [33], SCOPE);
+      expect(thrown.runs).toEqual([]);
+      expect(thrown.warnings[0]).toContain("403 actions:read");
+      const otherSuite = await readWorkflowRuns(sourceFor({ checkSuiteWorkflowRuns: async () => runPayload(99) }), REPO, [33], SCOPE);
+      expect(otherSuite.runs).toEqual([]);
+      expect(otherSuite.warnings[0]).toContain("names no readable workflow run");
+      const disagree = await readWorkflowRuns(
+        sourceFor({
+          checkSuiteWorkflowRuns: async () => ({
+            workflow_runs: [
+              { id: 1, check_suite_id: 33, path: ".github/workflows/a.yml", event: "push", repository: { full_name: "zheref/example" } },
+              { id: 1, check_suite_id: 33, path: ".github/workflows/b.yml", event: "push", repository: { full_name: "zheref/example" } },
+            ],
+          }),
+        }),
+        REPO,
+        [33],
+        SCOPE,
+      );
+      expect(disagree.runs).toEqual([]);
+      expect(disagree.warnings[0]).toContain("disagree");
+    });
+
+    it("stops at its read budget and says so once, naming the round check and the suites left unread", async () => {
+      const suites = Array.from({ length: WORKFLOW_RUN_READS_MAX + 2 }, (_v, index) => index + 1);
+      let calls = 0;
+      const result = await readWorkflowRuns(
+        sourceFor({
+          checkSuiteWorkflowRuns: async (_r, suite) => { calls += 1; return runPayload(suite, { path: ".github/workflows/other.yml" }); },
+        }),
+        REPO,
+        suites,
+        SCOPE,
+      );
+      expect(calls).toBe(WORKFLOW_RUN_READS_MAX);
+      expect(result.runs).toHaveLength(WORKFLOW_RUN_READS_MAX);
+      expect(result.warnings).toEqual([
+        `round-check producer: the read budget of ${WORKFLOW_RUN_READS_MAX} on zheref/example was spent before 2 check suite(s) of '^Cursor Bugbot$' were read (${WORKFLOW_RUN_READS_MAX + 1}, ${WORKFLOW_RUN_READS_MAX + 2}); they are unverified and their round checks are not counted`,
+      ]);
+    });
+  });
+
+  describe("the shared workflow walk (round 2, Nobunaga N13)", () => {
+    it("a failed read is never read again, and a spent budget is ONE warning for the walk", async () => {
+      const calls: number[] = [];
+      const source = sourceFor({
+        checkSuiteWorkflowRuns: async (_r, suite) => {
+          calls.push(suite);
+          if (suite === 1) throw new Error("boom");
+          return runPayload(suite, { path: ".github/workflows/other.yml" });
+        },
+      });
+      const walk = newWorkflowWalk();
+      const budget = { reads: 0 };
+      const first = await readWorkflowRuns(source, REPO, [1], SCOPE, new Map(), budget, walk);
+      expect(first.warnings[0]).toContain("failed (boom)");
+      await readWorkflowRuns(source, REPO, [1], SCOPE, new Map(), budget, walk);
+      expect(calls).toEqual([1]);
+      budget.reads = WORKFLOW_RUN_READS_MAX;
+      const a = await readWorkflowRuns(source, REPO, [5], SCOPE, new Map(), budget, walk);
+      const b = await readWorkflowRuns(source, REPO, [6, 5], SCOPE, new Map(), budget, walk);
+      expect([...a.warnings, ...b.warnings]).toEqual([]);
+      expect(walk.unread).toEqual([5, 6]);
+    });
+
+    it("the earlier-head walk emits one budget warning at its end, not one per candidate", async () => {
+      const commits = Array.from({ length: 4 }, (_v, index) => ({ sha: `c${index}` }));
+      const source = sourceFor({
+        pullRequestCommits: async () => [...commits, { sha: "head" }],
+        commitCheckRuns: async (_r, sha) =>
+          page([{ id: 1, name: "Cursor Bugbot", status: "completed", conclusion: "success", pull_requests: [listed(7)], app: { slug: "github-actions", id: 15368 }, check_suite: { id: Number(sha.slice(1)) + 40 } }]),
+      });
+      const result = await readEarlierRoundChecks(
+        source, REPO, 7, "head",
+        [{ reviewer: "bugbot", pattern: /^Cursor Bugbot$/i, producer: WORKFLOW.reviewer("bugbot")?.roundCheckProducer ?? null }],
+        20, new Map(), { reads: WORKFLOW_RUN_READS_MAX }, PR,
+      );
+      const budgetLines = result.warnings.filter((warning) => warning.includes("read budget"));
+      expect(budgetLines).toEqual([
+        `round-check producer: the read budget of ${WORKFLOW_RUN_READS_MAX} on zheref/example was spent before 4 check suite(s) of '^Cursor Bugbot$' were read (43, 42, 41, 40); they are unverified and their round checks are not counted`,
+      ]);
+    });
+  });
+
+  describe("readEarlierRoundChecks -- the producer is asked of each attributed run", () => {
+    const run = (fields: Record<string, unknown> = {}): Record<string, unknown> => ({
+      name: "Cursor Bugbot",
+      status: "completed",
+      conclusion: "success",
+      pull_requests: [listed(7)],
+      ...fields,
+    });
+    const source = (pages: Record<string, unknown>, extra: Partial<PrStateSource> = {}): PrStateSource =>
+      stubSource({
+        pullRequestCommits: async () => [{ sha: "old" }, { sha: "new" }, { sha: "head" }],
+        commitCheckRuns: async (_r, sha) => pages[sha] ?? page([]),
+        ...extra,
+      });
+
+    it("passes over a newer IMPERSONATING run with a warning and finds the reviewer's own older one, carrying its evidence", async () => {
+      const result = await readEarlierRoundChecks(
+        source({
+          new: page([run({ id: 2201, app: { slug: "github-actions", id: 15368 }, check_suite: { id: 22 } })]),
+          old: page([run({ id: 1101, app: { slug: "cursor", id: 1210556 }, check_suite: { id: 11 } })]),
+        }),
+        REPO,
+        7,
+        "head",
+        [{ reviewer: "bugbot", pattern: /^Cursor Bugbot$/i, producer: APP.reviewer("bugbot")?.roundCheckProducer ?? null }],
+        20,
+      );
+      expect(result.checks).toEqual([
+        { sha: "old", name: "Cursor Bugbot", status: "COMPLETED", conclusion: "SUCCESS", appSlug: "cursor", appId: 1210556, checkSuiteId: 11, checkRunId: 1101 },
+      ]);
+      expect(result.warnings).toEqual([
+        "earlier-head round checks: a successful 'Cursor Bugbot' run for bugbot on new of zheref/example#7 was not counted: produced by app 'github-actions', not app 'cursor' (id 1210556)",
+      ]);
+    });
+
+    it("a run whose App is unread is not counted", async () => {
+      const result = await readEarlierRoundChecks(
+        source({ new: page([run()]) }),
+        REPO,
+        7,
+        "head",
+        [{ reviewer: "bugbot", pattern: /^Cursor Bugbot$/i, producer: APP.reviewer("bugbot")?.roundCheckProducer ?? null }],
+        20,
+      );
+      expect(result.checks).toEqual([]);
+      expect(result.warnings[0]).toContain("no producing App was read");
+    });
+
+    it("looks up a workflow producer's run and jobs by check suite, binds the pull request, and returns the evidence it read", async () => {
+      const suites: number[] = [];
+      const wanted = [{ reviewer: "bugbot", pattern: /^Cursor Bugbot$/i, producer: WORKFLOW.reviewer("bugbot")?.roundCheckProducer ?? null }];
+      const s = source(
+        { new: page([run({ id: 3301, app: { slug: "github-actions", id: 15368 }, check_suite: { id: 33 } })]) },
+        { checkSuiteWorkflowRuns: async (_r, suite) => { suites.push(suite); return runPayload(suite); }, workflowRunJobs: async () => jobsPayload([3301]) },
+      );
+      const result = await readEarlierRoundChecks(s, REPO, 7, "head", wanted, 20, new Map(), { reads: 0 }, PR);
+      expect(suites).toEqual([33]);
+      expect(result.checks).toHaveLength(1);
+      expect(result.workflowRuns?.[0]).toMatchObject({ checkSuiteId: 33, runId: 3300, jobIds: [3301], pullRequests: [PR] });
+      // F1 at an earlier head: a check that is no job of the run is not counted.
+      const foreign = await readEarlierRoundChecks(
+        source(
+          { new: page([run({ id: 9999, app: { slug: "github-actions", id: 15368 }, check_suite: { id: 33 } })]) },
+          { checkSuiteWorkflowRuns: async (_r, suite) => runPayload(suite), workflowRunJobs: async () => jobsPayload([3301]) },
+        ),
+        REPO, 7, "head", wanted, 20, new Map(), { reads: 0 }, PR,
+      );
+      expect(foreign.checks).toEqual([]);
+      expect(foreign.warnings.some((warning) => warning.includes("check run 9999 is not a job of run 3300"))).toBe(true);
+      // F2 at an earlier head: the pull request unknown, nothing counts.
+      const unknown = await readEarlierRoundChecks(s, REPO, 7, "head", wanted, 20);
+      expect(unknown.checks).toEqual([]);
+    });
+
+    it("no producer declared: the first attributed run, no lookups, exactly as before", async () => {
+      const result = await readEarlierRoundChecks(
+        source(
+          { new: page([run({ app: { slug: "github-actions" } })]) },
+          { checkSuiteWorkflowRuns: async () => { throw new Error("must not be called"); } },
+        ),
+        REPO,
+        7,
+        "head",
+        [{ reviewer: "bugbot", pattern: /^Cursor Bugbot$/i }],
+        20,
+      );
+      expect(result.checks).toHaveLength(1);
+      expect(result.warnings).toEqual([]);
+      expect(result).not.toHaveProperty("workflowRuns");
+    });
+  });
+
+  describe("earlierRoundCheckWanted / headWorkflowSuitesWanted", () => {
+    const head = (app: string, suite = 22, startedAt: string | null = null, status = "COMPLETED"): unknown => ({
+      __typename: "CheckRun",
+      name: "Cursor Bugbot",
+      status,
+      conclusion: status === "COMPLETED" ? "SUCCESS" : null,
+      startedAt,
+      databaseId: suite * 100 + 1,
+      checkSuite: { databaseId: suite, app: { slug: app, databaseId: app === "cursor" ? 1210556 : 15368 } },
+    });
+
+    it("an impostor's SUCCESS at head does not settle a producer-constrained reviewer: history is still read", () => {
+      expect(earlierRoundCheckWanted(APP, "bounded", ["copilot", "bugbot"], [head("github-actions")], []).map((w) => w.reviewer)).toEqual(["bugbot"]);
+      expect(earlierRoundCheckWanted(APP, "bounded", ["copilot", "bugbot"], [head("cursor")], [])).toEqual([]);
+    });
+
+    it("N2: a later impostor cannot hide the reviewer's run in flight -- history is not read while it runs", () => {
+      const checks = [head("cursor", 11, "2026-10-26T00:00:00Z", "IN_PROGRESS"), head("github-actions", 22, "2026-10-26T00:05:00Z")];
+      expect(earlierRoundCheckWanted(APP, "bounded", ["copilot", "bugbot"], checks, [])).toEqual([]);
+    });
+
+    it("N10/F8: EVERY name-matching Actions SUCCESS suite is wanted, newest first -- [own 33 earlier, impostor 22 later] -> both", () => {
+      expect(
+        headWorkflowSuitesWanted(WORKFLOW, [head("github-actions", 33, "2026-10-26T00:00:00Z"), head("github-actions", 22, "2026-10-26T00:05:00Z")]),
+      ).toEqual([22, 33]);
+    });
+
+    it("only a GitHub Actions SUCCESS of a workflow-constrained round check is looked up, and another App's later run cannot hide it", () => {
+      expect(headWorkflowSuitesWanted(WORKFLOW, [head("github-actions", 33)])).toEqual([33]);
+      expect(headWorkflowSuitesWanted(WORKFLOW, [head("cursor", 44)])).toEqual([]);
+      expect(headWorkflowSuitesWanted(WORKFLOW, [head("github-actions", 33, "2026-10-26T00:00:00Z"), head("cursor", 44, "2026-10-26T00:05:00Z")])).toEqual([33]);
+      expect(headWorkflowSuitesWanted(APP, [head("github-actions", 33)])).toEqual([]);
+      expect(headWorkflowSuitesWanted(IDENTITIES, [head("github-actions", 33)])).toEqual([]);
+    });
+  });
+
+  describe("fetchPrState -- the workflow evidence rides in the state, only when declared", () => {
+    const headCheck = {
+      __typename: "CheckRun",
+      name: "Cursor Bugbot",
+      status: "COMPLETED",
+      conclusion: "SUCCESS",
+      databaseId: 3301,
+      checkSuite: { databaseId: 33, app: { slug: "github-actions", databaseId: 15368 } },
+    };
+    const withHead = (extra: Partial<PrStateSource> = {}): PrStateSource =>
+      sourceFor({ pullRequestSnapshot: async () => snapshot({ checkRollup: [headCheck] }), ...extra });
+
+    it("a workflow producer: the head suite is looked up once and recorded with the pull request it must name", async () => {
+      const suites: number[] = [];
+      const result = await fetchPrState(
+        withHead({ checkSuiteWorkflowRuns: async (_r, suite) => { suites.push(suite); return runPayload(suite); } }),
+        REPO,
+        7,
+        baseOptions({ identities: WORKFLOW }),
+      );
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("unreachable");
+      expect(suites).toEqual([33]);
+      expect(result.state["pr_number"]).toBe(7);
+      expect(result.state["base_ref"]).toBe("main");
+      expect(result.state["round_check_workflow_runs"]).toEqual([
+        {
+          check_suite_id: 33,
+          run_id: 3300,
+          path: ".github/workflows/bugbot.yml",
+          repository: "zheref/example",
+          event: "workflow_run",
+          pull_requests: [{ number: 7, base_ref: "main" }],
+          job_ids: [3301],
+        },
+      ]);
+    });
+
+    it("an unreadable lookup is a warning and no evidence -- never a failed read", async () => {
+      const result = await fetchPrState(
+        withHead({ checkSuiteWorkflowRuns: async () => { throw new Error("Resource not accessible by integration"); } }),
+        REPO,
+        7,
+        baseOptions({ identities: WORKFLOW }),
+      );
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("unreachable");
+      expect(result.state["round_check_workflow_runs"]).toEqual([]);
+      expect(result.warnings.some((warning) => warning.includes("Resource not accessible"))).toBe(true);
+    });
+
+    it("no workflow producer declared: no lookup and no new key (AC-5)", async () => {
+      for (const identities of [APP, IDENTITIES, loadGateIdentities(process.cwd())]) {
+        const result = await fetchPrState(
+          withHead({ checkSuiteWorkflowRuns: async () => { throw new Error("must not be called"); } }),
+          REPO,
+          7,
+          baseOptions({ identities }),
+        );
+        expect(result.ok).toBe(true);
+        if (!result.ok) throw new Error("unreachable");
+        expect(result.state).not.toHaveProperty("round_check_workflow_runs");
+        expect(result.state).not.toHaveProperty("pr_number");
+      }
+    });
   });
 });

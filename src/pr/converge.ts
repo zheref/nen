@@ -110,6 +110,8 @@ export interface ConvergeInput {
   readonly closingSource: ClosingSource;
   /** GitHub's own closing references (the Development links), as read; empty on a non-default base. */
   readonly linked: readonly { readonly slug: string; readonly number: number }[];
+  /** The catalogue the closing issues' criteria were read with: the verify rows' ids are read in its grammar too (zheref/nen#519). */
+  readonly catalogue?: IssueSectionsCatalogue | null;
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -237,6 +239,7 @@ export function convergeInputFromView(
     issues,
     closingSource,
     linked: closingSource === "github" ? named.slice() : [],
+    catalogue,
   };
 }
 
@@ -285,7 +288,7 @@ export function closingLinksConjunct(input: ConvergeInput, target: Target): Conv
  * AC-5, the integrator's ruling of 2026-10-23).
  */
 export function criteriaConjunct(input: ConvergeInput, policy: CoveragePolicy = DEFAULT_COVERAGE_POLICY): ConvergeConjunct & { readonly blocking: readonly string[] } {
-  const report = converge(input.issues, input.body, policy);
+  const report = converge(input.issues, input.body, policy, input.catalogue ?? null);
   const head =
     input.issues.length === 0
       ? input.closingSource === "none-on-non-default-base"

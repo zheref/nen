@@ -206,7 +206,7 @@ export function nextBlocker(
       : null;
   const { owed: stillOwed } = quorumExcusedRounds(owed, quorum);
   if (stillOwed.length > 0) {
-    const detail = stillOwed.map((round): string => `${round.reviewer} (${round.state === undefined ? round.reason : `owed, ${round.state === "in-flight" ? "in flight" : round.state}`})`).join(", ");
+    const detail = stillOwed.map((round): string => `${round.reviewer} (${round.state === undefined ? `${round.reason}${round.producer === undefined ? "" : `: ${round.producer}`}` : `owed, ${round.state === "in-flight" ? "in flight" : round.state}`})`).join(", ");
     return {
       kind: "owed-round",
       detail: quorumClause === null ? detail : `${detail} — and ${quorumClause}`,
