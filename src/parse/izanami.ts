@@ -1126,6 +1126,17 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
     },
   },
   gate: { subcommands: { derive: RO("derives a gate from a changed-file set -- pure computation") } },
+  // Host status only reads configuration and occupied slots. Every executing
+  // form writes lifecycle/registration state even when its requested child is
+  // a read; no child argv and no unsupported --dry-run can certify that write.
+  host: {
+    subcommands: {
+      status: RO("reads the provisioned host budget and reports occupied or unreadable slots; never reclaims capacity"),
+      init: MUT("provisions host configuration and the slots directory; no dry-run form"),
+      run: MUT("reserves shared capacity and writes supervisor lifecycle state before executing caller-supplied argv"),
+      _exec: MUT("consumes the reserved launch capability, writes immutable supervisor registration and completion state, and executes the bound argv"),
+    },
+  },
   idea: { subcommands: { file: DRY("creates a GitHub issue unless --dry-run is given") } },
   issue: {
     subcommands: {

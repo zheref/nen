@@ -1766,6 +1766,73 @@ describe("NEN_VERB_TABLE -- the forwarding rows match who actually forwards", ()
   });
 });
 
+// NN536: the host family must participate in the same closed policy table as
+// every other registered family. A harmless child does not make claim writes
+// read-only, and the internal supervisor is not a read gate or a wrapper bypass.
+describe("NEN_VERB_TABLE -- shared host admission", () => {
+  it("classifies exactly the registered host subcommands with status as the sole read", () => {
+    const registered = findCommand("host");
+    expect(registered).toBeDefined();
+    expect(Object.keys(NEN_VERB_TABLE["host"]!.subcommands).sort()).toEqual([...registered!.subcommands!].sort());
+    expect(Object.entries(NEN_VERB_TABLE["host"]!.subcommands).filter(([, policy]) => policy.kind === "read-only").map(([verb]) => verb)).toEqual(["status"]);
+  });
+
+  it("admits status with its valid store/json forms and quoted inert path values", () => {
+    for (const line of [
+      "nen host status",
+      "nen host status --store /tmp/host-budget --json",
+      "nen host status --store=/tmp/host-budget",
+      "nen --repo /tmp/another-checkout --json host status",
+      "nen host status --store '/tmp/host budget'",
+      'nen host status --store "/tmp/init run _exec"',
+    ]) expect(classifyCommand(line).classification, line).toBe("read-only");
+  });
+
+  it("refuses provisioning and execution even beside unsupported dry-run or JSON flags", () => {
+    for (const verb of ["init", "run", "_exec"]) {
+      for (const suffix of ["", " --dry-run", " --json", " --store /tmp/host-budget --dry-run"]) {
+        const line = `nen host ${verb}${suffix}`;
+        expect(classifyCommand(line).classification, line).toBe("mutating");
+      }
+    }
+  });
+
+  it("never certifies a caller-supplied child through run or the internal supervisor", () => {
+    for (const line of [
+      "nen host run -- /usr/bin/true",
+      "nen host run -- arbitrary-child --dry-run",
+      'nen host run -- "unknown executable" --read-only',
+      "nen host _exec --store /tmp/host-budget --slot 1 --claim id --launch step -- /usr/bin/true",
+      "nen host _exec -- arbitrary-child --dry-run",
+    ]) expect(classifyCommand(line).classification, line).toBe("mutating");
+  });
+
+  it("keeps unknown, missing or unprovable verb paths refused", () => {
+    for (const line of [
+      "nen host",
+      "nen host invented --dry-run",
+      "nen host --store /tmp/host-budget status",
+      "nen host 'status' --store /tmp/host-budget",
+      "nen 'host' status",
+    ]) expect(classifyCommand(line).classification, line).toBe("unknown");
+  });
+
+  it("retains passthrough and shell-composition refusals on the read-only status path", () => {
+    for (const line of [
+      "nen host status -- /usr/bin/true",
+      "nen host status -- init --store /tmp/host-budget",
+      "nen host status > /tmp/result.json",
+      "nen host status; nen host init --store /tmp/host-budget",
+    ]) expect(classifyCommand(line).classification, line).toBe("unknown");
+  });
+
+  it("refuses the whole read-only loop if host provisioning or execution is included", () => {
+    for (const command of ["nen host init --store /tmp/host-budget", "nen host run -- /usr/bin/true", "nen host _exec -- arbitrary-child"]) {
+      expect(classifyInvocation({ commands: ["nen host status", command], condition: "capacity is free" }).ok, command).toBe(false);
+    }
+  });
+});
+
 // THE EXHAUSTIVENESS TEST (#31): the table is worthless the day a verb family
 // lands without a row, because that family would silently classify "unknown"
 // forever -- correct in the fail-closed direction, but exactly the "every nen

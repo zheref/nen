@@ -78,6 +78,7 @@
 // null` -- cannot assert -- exactly as it reports a kind it does not know.
 
 import { readHostZone } from "./zone.js";
+import { admitConfiguredWorkload, type HostAdmission, type SupervisorInvocation } from "../host/execute.js";
 import { spawn, spawnSync } from "node:child_process";
 import { connect } from "node:net";
 import { constants as osConstants } from "node:os";
@@ -94,6 +95,8 @@ export const GIT = "git";
 export const GH = "gh";
 
 export interface RunOptions {
+  /** Dedicated supervisor session/group; host admission sets this only. */
+  readonly detached?: boolean;
   /** Working directory. Defaults to the runner's own inherited cwd. */
   readonly cwd?: string;
   /** Extra environment, merged over the process environment. */
@@ -308,6 +311,10 @@ export function outputWindow(
 }
 
 export interface Seams {
+  /** Real CLI boundary; deterministic scripted seams may supply a test guard. */
+  readonly hostAdmission?: HostAdmission;
+  /** Current executable/entrypoint supplied explicitly by its adapter. */
+  readonly hostSupervisor?: SupervisorInvocation;
   readonly run: Runner;
   /** A long-running child, on this terminal. See InteractiveRunner. */
   readonly runInteractive: InteractiveRunner;
@@ -552,6 +559,7 @@ export const spawnRunner: Runner = (command, args, options = {}): CommandResult 
   if (options.bytes === true) return spawnBytes(command, args, options);
   const result = spawnSync(command, [...args], {
     ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+    ...(options.detached === undefined ? {} : { detached: options.detached }),
     ...(options.env === undefined
       ? {}
       : { env: { ...process.env, ...options.env } as NodeJS.ProcessEnv }),
@@ -583,6 +591,7 @@ export const spawnRunner: Runner = (command, args, options = {}): CommandResult 
 function spawnBytes(command: string, args: readonly string[], options: RunOptions): CommandResult {
   const result = spawnSync(command, [...args], {
     ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+    ...(options.detached === undefined ? {} : { detached: options.detached }),
     ...(options.env === undefined
       ? {}
       : { env: { ...process.env, ...options.env } as NodeJS.ProcessEnv }),
@@ -607,13 +616,16 @@ function spawnBytes(command: string, args: readonly string[], options: RunOption
  * The interactive runner. Nothing is captured and nothing is parsed: the child
  * owns the terminal until it exits.
  *
- * SIGINT IS FORWARDED BY THE TERMINAL, NOT BY NEN -- and nen's job is to stay
+ * For ordinary children, SIGINT IS FORWARDED BY THE TERMINAL -- and nen's job is to stay
  * alive long enough to report what happened. A Ctrl-C at an interactive child
  * goes to the whole foreground process group, so the child already has it; what
  * would otherwise happen is that node's DEFAULT SIGINT handler kills nen too,
  * mid-`spawnSync`, so the developer gets no exit line and no `--json` object for
  * a run they deliberately stopped. Installing a no-op handler for the duration
- * suppresses that default while changing nothing about what the child receives,
+ * suppresses that default while changing nothing about what an ordinary child receives.
+ * Host-admitted supervisors request a dedicated group through `detached`;
+ * that group requires the host-cancellation integration to forward terminal
+ * signals. Admission itself never claims that isolation forwards a signal,
  * and the handler is removed in a `finally` so a later verb in the same process
  * is not left un-interruptible.
  */
@@ -627,6 +639,7 @@ export const spawnInteractiveRunner: InteractiveRunner = (
   try {
     const result = spawnSync(command, [...args], {
       ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+      ...(options.detached === undefined ? {} : { detached: options.detached }),
       ...(options.env === undefined
         ? {}
         : { env: { ...process.env, ...options.env } as NodeJS.ProcessEnv }),
@@ -696,6 +709,7 @@ export const spawnStreamedRunner: StreamedRunner = (command, args, options = {})
     try {
       child = spawn(command, [...args], {
         ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+        ...(options.detached === undefined ? {} : { detached: options.detached }),
         ...(options.env === undefined
           ? {}
           : { env: { ...process.env, ...options.env } as NodeJS.ProcessEnv }),
@@ -832,8 +846,10 @@ export const connectProbe: PortProbe = async (port): Promise<PortVerdict> =>
     );
   });
 
-export function defaultSeams(): Seams {
+export function defaultSeams(hostSupervisor?: SupervisorInvocation): Seams {
   return {
+    hostAdmission: admitConfiguredWorkload,
+    hostSupervisor,
     run: spawnRunner,
     runInteractive: spawnInteractiveRunner,
     runStreamed: spawnStreamedRunner,

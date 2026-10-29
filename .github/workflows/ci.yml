@@ -6,7 +6,7 @@
 # WHY IT EXISTS BEFORE ANY VERB DOES. Future pull requests need required-check
 # material, and a repository that acquires branch protection after it has a
 # backlog of green-by-default merges has protected nothing. The three commands
-# are the same three a developer runs (`bun run typecheck|lint|test`), invoked
+# are the same three a developer runs (`bun src/host/ci.ts bun run typecheck|lint|test`), invoked
 # by name rather than re-spelled here: a CI job that reimplements the local
 # commands is a CI job that will one day disagree with them about what passing
 # means.
@@ -53,6 +53,10 @@ env:
   # different toolchains while both workflows stay green. Bump them in the same
   # pull request or not at all.
   BUN_VERSION: '1.4.0'
+  # Operator-provisioned, identical for interactive and CI accounts on a host.
+  # Missing/unreadable configuration refuses heavy work; there is no fallback.
+  NEN_HOST_STORE: ${{ vars.NEN_HOST_STORE }}
+  NEN_HOST_ADMISSION: ${{ vars.NEN_HOST_ADMISSION }}
 
 jobs:
   check:
@@ -73,9 +77,9 @@ jobs:
             runner: '["self-hosted","macOS","ARM64","pool-macos-arm64"]'
     runs-on: ${{ fromJSON(matrix.runner) }}
     timeout-minutes: 15
-    # check-windows below repeats these steps VERBATIM (no YAML anchor: nen's
-    # own reader refuses them); src/pipeline.test.ts asserts the two lists are
-    # equal, so a copy that drifts fails CI.
+    # Windows repeats the same underlying commands. Only POSIX wraps them in
+    # staged host admission; pipeline.test.ts asserts that exact delta and
+    # compares the underlying steps, so either copy drifting still fails CI.
     steps:
       - name: Check out
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -92,19 +96,19 @@ jobs:
       # dependency tree differs from bun.lock is a pull request whose green
       # checks describe a tree nobody reviewed.
       - name: Install dependencies (frozen lockfile)
-        run: bun install --ignore-scripts --frozen-lockfile
+        run: bun src/host/ci.ts bun install --ignore-scripts --frozen-lockfile
 
       - name: Typecheck
-        run: bun run typecheck
+        run: bun src/host/ci.ts bun run typecheck
 
       - name: Lint
-        run: bun run lint
+        run: bun src/host/ci.ts bun run lint
 
       # The whole harness, including the cases that drive bootstrap/nen.sh
       # through `bash`. Those skip themselves on a host with no bash; the guard
       # below makes sure that never silently becomes "the shell is untested".
       - name: Test
-        run: bun run test
+        run: bun src/host/ci.ts bun run test
 
       # A skip is invisible in a summary, and the shell coverage is exactly the
       # part a cross-platform difference lives in. On ubuntu and macOS, bash
@@ -124,7 +128,7 @@ jobs:
           # Only the supply suite is re-run, with a machine-readable reporter --
           # it is the one that skips itself, so it is the only one worth paying
           # a second run for.
-          bunx vitest run src/supply/bootstrap.test.ts \
+          bun src/host/ci.ts bunx vitest run src/supply/bootstrap.test.ts \
             --reporter=json --outputFile=vitest-supply.json >/dev/null
           skipped="$(bun -e 'const r = await Bun.file("vitest-supply.json").json(); console.log(r.numPendingTests ?? 0)')"
           echo "skipped in the supply suite on ${{ matrix.os }}: ${skipped}"
@@ -146,6 +150,10 @@ jobs:
   # and the leg is back, under the same check name, with no edit here.
   # (Maintainer ruling, 2026-09-23, during the NN@p1 futon run.)
   check-windows:
+    # POSIX-first staged rollout: Windows commands remain unchanged and
+    # unprotected until an authoritative Windows process-tree provider exists.
+    env:
+      NEN_HOST_ADMISSION: ''
     name: check
     if: github.repository == 'zheref/nen' && vars.NEN_WINDOWS_RUNNER == 'online'
     strategy:
@@ -246,14 +254,14 @@ jobs:
           bun-version: ${{ env.BUN_VERSION }}
 
       - name: Install dependencies (frozen lockfile)
-        run: bun install --ignore-scripts --frozen-lockfile
+        run: bun src/host/ci.ts bun install --ignore-scripts --frozen-lockfile
 
       - name: Cross-compile the three release binaries
         run: |
           set -euo pipefail
-          bun run build:linux-x64
-          bun run build:darwin-arm64
-          bun run build:windows-x64
+          bun src/host/ci.ts bun run build:linux-x64
+          bun src/host/ci.ts bun run build:darwin-arm64
+          bun src/host/ci.ts bun run build:windows-x64
 
       # The one that can actually be executed here, run for real. A binary that
       # compiles and then cannot answer `--version` is the failure mode
