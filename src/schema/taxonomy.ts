@@ -25,7 +25,7 @@ import { MARKER_FILE, parseMarker } from "../stop/marker.js";
 import { assertRepoRoot, type RepoRootOptions } from "../repo/root.js";
 import { loadColorVocabulary, type ColorVocabulary } from "./colors.js";
 import { describeContract, loadContract, precedenceRestatementFindings, withinOneEdit, type DeployTarget } from "./contract.js";
-import { GatesDuplicateKeyError, GatesUnknownKeyError, loadGateIdentities, pointerSegment, visibleKey, type GateIdentities } from "./gates.js";
+import { GatesDuplicateKeyError, GatesUnknownKeyError, loadGateIdentities, pointerSegment, producerOptInWarnings, visibleKey, type GateIdentities } from "./gates.js";
 import { loadLabelTaxonomy, type LabelTaxonomy } from "./labels.js";
 import { loadRepoRegistry, type RepoRegistry } from "./repos.js";
 import { SchemaError } from "./errors.js";
@@ -781,9 +781,12 @@ export function checkTaxonomy(options: CheckOptions = {}): CheckReport {
       // `checks.excluded` (zheref/nen#249) is counted only when declared, so a
       // file without it reads exactly as it did before the key existed.
       const excluded = gates.excludedChecks?.length ?? 0;
+      // Feitan F3 on #546: a workflow producer in force through the
+      // trusts_pull_request_revision opt-in is said on every check.
+      const optIn = producerOptInWarnings(gates);
       return `${gates.reviewers.length} reviewer identities${
         excluded === 0 ? "" : `, ${excluded} declared check exclusion${excluded === 1 ? "" : "s"}`
-      }`;
+      }${optIn.map((warning): string => `; warning: ${warning}`).join("")}`;
     }),
     // `nen/contract.json` IS OPTIONAL AND ITS ABSENCE IS AN `ok` ROW, not a
     // warning -- unlike gates.json, whose absence is a warning because the
