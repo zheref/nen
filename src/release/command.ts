@@ -43,6 +43,43 @@ import {
   type KeyScopedContext,
 } from "./unitcheck.js";
 
+const LIVE_CHORE_FIELDS = ["name", "issueOpen", "integrationBranchExists", "openPrTargetsIntegrationOrMain"] as const;
+
+/** Validate caller-gathered facts before any tool runs (zheref/nen#461). */
+function readLiveChores(path: string, root: string): LiveChoreCandidate[] {
+  const input = readJsonFile<unknown>(path, root);
+  const shape = "expected an array of objects with name (string), issueOpen (boolean), integrationBranchExists (boolean), and openPrTargetsIntegrationOrMain (boolean), with no other keys";
+  const refuse = (pointer: string, detail: string): never => {
+    throw new VerbUsageError(`--live-chores-from '${path}' at ${pointer}: ${detail}; ${shape}.`);
+  };
+  if (!Array.isArray(input)) return refuse("$", "not an array");
+  return input.map((entry: unknown, index: number): LiveChoreCandidate => {
+    const pointer = `$[${index}] (entry ${index + 1})`;
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
+      return refuse(pointer, "expected an object");
+    }
+    const object = entry as Record<string, unknown>;
+    for (const key of Object.keys(object)) {
+      if (!LIVE_CHORE_FIELDS.some((field): boolean => field === key)) {
+        refuse(pointer, `unknown field ${JSON.stringify(key)}`);
+      }
+    }
+    const name = object["name"];
+    if (typeof name !== "string") return refuse(`${pointer}.name`, "expected a string");
+    const booleanField = (field: Exclude<(typeof LIVE_CHORE_FIELDS)[number], "name">): boolean => {
+      const value = object[field];
+      if (typeof value !== "boolean") return refuse(`${pointer}.${field}`, "expected a boolean");
+      return value;
+    };
+    return {
+      name,
+      issueOpen: booleanField("issueOpen"),
+      integrationBranchExists: booleanField("integrationBranchExists"),
+      openPrTargetsIntegrationOrMain: booleanField("openPrTargetsIntegrationOrMain"),
+    };
+  });
+}
+
 /**
  * RELEASE_HOLD has THREE states, not two (review finding): `gh` failing to
  * spawn, exiting non-zero for a reason other than "the variable was never
@@ -323,7 +360,7 @@ export const releaseCommand: Command = {
         ? null
         : root === undefined
           ? undefined
-          : gather(() => readJsonFile<LiveChoreCandidate[]>(liveChoresPath, root));
+          : gather(() => readLiveChores(liveChoresPath, root));
 
     // THE SAME SEAM ../changelog/command.ts USES for the same flag, so the two
     // verbs cannot drift again: absent directory -> no fragments, `''` and a
