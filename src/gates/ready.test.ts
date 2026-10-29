@@ -26,6 +26,7 @@ import { loadGateIdentities, parseGateIdentities } from "../schema/gates.js";
 import { parseCheckRollup } from "../github/parse.js";
 import { defaultReviewers, reviewerRoundFacts } from "./predicates.js";
 import { BANKAI_REPO, EVENT_REPO } from "../schema/fixtures/paths.js";
+import { HA62_REMEDIATION } from "./fixtures/ha62-remediation.js";
 
 // The same fixture identities ./predicates.test.ts runs the ported bats cases
 // against: sasuke/tenma (default approvers, review-check gated), copilot
@@ -71,6 +72,63 @@ const OPTIONS = {
   now: NOW,
   excludeCheckNames: [] as readonly string[],
 };
+
+describe("NN216: historical HA62 remediation replay", () => {
+  const { gates, state, provenance } = HA62_REMEDIATION;
+  const identities = parseGateIdentities(provenance.policyAtBase, gates);
+  const options = { ...OPTIONS, now: provenance.evaluatedAt };
+
+  it("passes every bounded conjunct at the exact premerge head using the two prior COMMENTED rounds", () => {
+    expect(state.head_sha).toBe("554314cb9e463f4e5d7bae871330c48584667aca");
+    expect(state.base_sha).toBe("41ef23fff07cd5ec40848b539038e605a1a9d495");
+    expect(state.mergeable).toBe("MERGEABLE");
+    expect(gates.reviewers[0]).not.toHaveProperty("bounded_policy_exempt");
+    expect(identities.reviewer("copilot")?.boundedPolicyExempt).toBe(false);
+    expect(state.reviews.map((review) => review.state)).not.toContain("APPROVED");
+    const copilot = state.reviews.filter((review) => review.author === "copilot-pull-request-reviewer");
+    expect(copilot.map((review) => review.state)).toEqual(["COMMENTED", "COMMENTED"]);
+    expect(copilot.map((review) => review.commit_id)).toEqual([
+      "c5f453b143796728aa5404ec3ffb929fec5e9562",
+      "9937635aef2f2db5618fefb7a9e677bbcc1b512c",
+    ]);
+    for (const review of state.reviews) expect(Date.parse(review.submitted_at)).toBeLessThan(Date.parse(options.now));
+    expect(state.checks).toHaveLength(4);
+    for (const check of state.checks) {
+      expect(check.conclusion).toBe("SUCCESS");
+      expect(Date.parse(check.completedAt)).toBeLessThan(Date.parse(options.now));
+    }
+
+    const evaluation = evaluateReady(identities, state, options);
+    expect(evaluation.ready).toBe(true);
+    expect(evaluation.line).toBe("ready");
+    expect(evaluation.failing).toEqual([]);
+    expect(evaluation.context).toMatchObject({
+      headSha: state.head_sha, reviewers: ["copilot"], approvers: [],
+      approvalPolicy: "review-round-only", policy: "bounded",
+      deliveryPr: false, dependabotCarveOut: false,
+      settlement: { roundsAtHead: [] },
+    });
+    expect(evaluation.conjuncts.map(({ id, status }) => [id, status])).toEqual([
+      ["mergeable", "ready"], ["checks-green", "ready"], ["round-stalled", "ready"],
+      ["rounds-owed", "ready"], ["approvals-at-head", "ready"], ["unresolved-threads", "ready"],
+    ]);
+    expect(evaluation.conjuncts.find((row) => row.id === "rounds-owed")?.owedRounds).toEqual([]);
+  });
+
+  it.each([
+    { name: "strict policy", state, policy: "strict" as const, reason: "no-round-at-head" },
+    { name: "both Copilot rounds removed, retaining the human comments at head", state: { ...state, reviews: state.reviews.filter((review) => review.author !== "copilot-pull-request-reviewer") }, policy: "bounded" as const, reason: "no-round-at-head" },
+    { name: "a fresh pending Copilot request", state: { ...state, review_requests: [{ login: "copilot-pull-request-reviewer" }] }, policy: "bounded" as const, reason: "review-requested-not-yet-posted" },
+  ])("still owes Copilot with $name", ({ state: negative, policy, reason }) => {
+    const evaluation = evaluateReady(identities, negative, { ...options, roundPolicyDefault: policy });
+    expect(evaluation.ready).toBe(false);
+    expect(evaluation.failing).toEqual(["rounds-owed"]);
+    const owed = evaluation.conjuncts.find((row) => row.id === "rounds-owed");
+    expect(owed?.status).toBe("failed");
+    expect(owed?.owedRounds).toEqual([{ reviewer: "copilot", reason, coveredByQuorum: false }]);
+    expect(evaluation.conjuncts.filter((row) => row.id !== "rounds-owed").every((row) => row.status === "ready")).toBe(true);
+  });
+});
 
 describe("evaluateReady -- the ready path", () => {
   it("passes all six conjuncts, in order, with no reason attached to any", () => {
