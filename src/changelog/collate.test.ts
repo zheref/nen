@@ -111,6 +111,24 @@ describe("collateChangelog -- no Unreleased: anchored on the top dated section (
     );
   });
 
+  it("preserves explicit delivery PR citations in the new Nen-shaped dated section (zheref/nen#446 AC-2)", () => {
+    // Citations belong to the supplied fragment bodies; the renderer preserves
+    // them rather than inferring a delivery PR from a fragment's filename.
+    const citedFragments = [
+      { name: "10-surface.md", content: "- Surface mapping ([#507](https://github.com/zheref/nen/pull/507)).\n" },
+      { name: "20-dated-heading.md", content: "- Dated heading support ([#527](https://github.com/zheref/nen/pull/527)).\n" },
+    ];
+    const result = collateChangelog(head, "v0.28.0", "Release with delivery citations.", citedFragments, { date: "2026-10-23" });
+    expect(result.anchor).toBe("dated-section");
+    expect(result.heading).toBe("## v0.28.0 — 2026-10-23");
+    const at = head.indexOf("## v0.27.0");
+    expect(result.text.slice(0, at)).toBe(head.slice(0, at));
+    expect(result.text.endsWith(head.slice(at))).toBe(true);
+    expect(result.text.slice(at, result.text.length - (head.length - at))).toBe(
+      "## v0.28.0 — 2026-10-23\n\nRelease with delivery citations.\n\n- Dated heading support ([#527](https://github.com/zheref/nen/pull/527)).\n- Surface mapping ([#507](https://github.com/zheref/nen/pull/507)).\n\n",
+    );
+  });
+
   it("writes the theme as the suffix when the top heading carries no date, at that heading's level", () => {
     const themed = "### v1.0.0 — prior\n- **old** entry\n";
     const result = collateChangelog(themed, "1.1.0", "theme", fragments);
