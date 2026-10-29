@@ -19,7 +19,7 @@
 // wrong number of cells) is `malformed-row`, never skipped, and two rows for
 // one criterion are `duplicate-rows`: nen will not pick one.
 
-import { DEFAULT_CRITERIA_PREFIX, maskedLines, readIdRows, sectionLines, type IssueSectionsCatalogue } from "./shape.js";
+import { criterionCellPatterns, criterionGrammar, criterionId, DEFAULT_CRITERION_GRAMMAR, MAX_CRITERION_CELL, MAX_QUALIFIED_CELL, maskedLines, readIdRows, sectionLines, type CriterionGrammar, type IssueSectionsCatalogue } from "./shape.js";
 
 /** The `--json` contract of `nen issue criteria`. */
 export const ISSUE_CRITERIA_CONTRACT = "nen.issue.criteria/v0.1";
@@ -29,7 +29,9 @@ export const PR_CONVERGE_CONTRACT = "nen.pr.converge/v0.1";
 // --- the issue side: `- AC-{n}: text` ----------------------------------------
 
 export interface Criterion {
+  /** The whole id: `AC-3`, or an epic-scoped `AC-12-001`, never truncated (zheref/nen#519). */
   readonly id: string;
+  /** The id's last digit run: `AC-3` is 3, `AC-12-001` is 1. Rows are matched by `id`, never by this. */
   readonly number: number;
   readonly text: string;
   readonly line: number;
@@ -49,20 +51,23 @@ export interface CriteriaReport {
  * Every acceptance-criterion row of an issue body, in document order, outside
  * fenced code and HTML comments, read in ./shape.ts's one id-row grammar
  * (`readIdRows`): a list item -- `-`, `*`, `+`, `1.`, `1)`, a task-list
- * checkbox allowed -- whose first token is `<PREFIX>-{n}` and a colon. With a
- * catalogue the prefix is the catalogue's acceptance-row prefix and rows are
- * read inside its acceptance section(s) only, exactly as `issue body-check`
- * reads them; with none the prefix is `AC` and the whole body is read. A list
- * row naming the id in no admitted shape is `unrecognised`.
+ * checkbox allowed -- whose first token is `<PREFIX>-<id>` and a colon. With a
+ * catalogue the prefix is the catalogue's acceptance-row prefix, the id's
+ * shape is the group its acceptance row pattern declares (zheref/nen#519
+ * AC-3), and rows are read inside its acceptance section(s) only, exactly as
+ * `issue body-check` reads them; with none the prefix is `AC`, the id is
+ * one number or several joined by hyphens (`AC-3`, `AC-12-001`) and the
+ * whole body is read. A list row naming the id in no admitted shape is
+ * `unrecognised`.
  */
 export function extractCriteria(body: string, catalogue: IssueSectionsCatalogue | null = null): CriteriaReport {
-  const prefix = catalogue?.criteriaPrefix ?? DEFAULT_CRITERIA_PREFIX;
+  const grammar = criterionGrammar(catalogue);
   const scope =
     catalogue === null || catalogue.criteriaSections.length === 0
       ? maskedLines(body, { keepInlineCode: true })
       : sectionLines(body, catalogue, catalogue.criteriaSections, { keepInlineCode: true });
-  const read = readIdRows(scope, prefix);
-  const criteria: Criterion[] = read.rows.map((row): Criterion => ({ id: `${prefix}-${row.number}`, number: row.number, text: row.text, line: row.line }));
+  const read = readIdRows(scope, grammar.prefix, grammar.tail);
+  const criteria: Criterion[] = read.rows.map((row): Criterion => ({ id: row.id, number: row.number, text: row.text, line: row.line }));
   const lines = new Map<string, number[]>();
   for (const criterion of criteria) lines.set(criterion.id, [...(lines.get(criterion.id) ?? []), criterion.line]);
   const duplicates = [...lines.entries()]
@@ -77,10 +82,10 @@ export function extractCriteria(body: string, catalogue: IssueSectionsCatalogue 
 export const COVERAGE_WORDS = ["satisfied", "partial", "missing", "contradicts", "unrequested"] as const;
 export type CoverageWord = (typeof COVERAGE_WORDS)[number];
 
-/** How a verify row names its criterion. */
+/** How a verify row names its criterion: by the criterion's whole id (`criterionId`'s reading). */
 export type RowCriterion =
-  | { readonly kind: "id"; readonly number: number }
-  | { readonly kind: "qualified"; readonly prefix: string | null; readonly issue: number; readonly number: number }
+  | { readonly kind: "id"; readonly id: string }
+  | { readonly kind: "qualified"; readonly prefix: string | null; readonly issue: number; readonly id: string }
   | { readonly kind: "none" };
 
 export interface VerifyRow {
@@ -97,8 +102,15 @@ export interface VerifyRow {
 }
 
 const WRAPPER = /^(?:\*\*|__|`)(.*)(?:\*\*|__|`)$/;
-const BARE_ID = /^AC-(\d{1,9})$/;
-const QUALIFIED_ID = /^([A-Za-z][A-Za-z0-9]*|[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+)?#(\d{1,9})\/AC-(\d{1,9})$/;
+
+/**
+ * Whether a cell is past the caps: its id -- after the last '/', so an
+ * `<owner/name>#<N>/` qualifier never counts against it -- over
+ * MAX_CRITERION_CELL, or the whole cell over MAX_QUALIFIED_CELL.
+ */
+function overCap(text: string): boolean {
+  return text.length > MAX_QUALIFIED_CELL || text.slice(text.lastIndexOf("/") + 1).length > MAX_CRITERION_CELL;
+}
 
 function unwrap(cell: string): string {
   let text = cell.trim();
@@ -128,14 +140,19 @@ function cellsOf(text: string): string[] | null {
   return cells.map((cell): string => cell.trim());
 }
 
-function parseCriterionCell(cell: string): RowCriterion | null {
+function parseCriterionCell(cell: string, grammar: CriterionGrammar): RowCriterion | null {
   const text = unwrap(cell);
   if (/^none$/i.test(text)) return { kind: "none" };
-  const bare = BARE_ID.exec(text);
-  if (bare !== null) return { kind: "id", number: Number(bare[1]) };
-  const qualified = QUALIFIED_ID.exec(text);
+  // A cell is author-controlled text: past the cap it is not matched at all,
+  // and one that mentions the prefix is then malformed (zheref/nen#519, F3).
+  if (overCap(text)) return null;
+  const patterns = criterionCellPatterns(grammar);
+  const bare = patterns.bare.exec(text);
+  if (bare !== null) return { kind: "id", id: criterionId(grammar.prefix, bare.groups?.["nenCellId"] as string) };
+  const qualified = patterns.qualified.exec(text);
   if (qualified !== null) {
-    return { kind: "qualified", prefix: qualified[1] ?? null, issue: Number(qualified[2]), number: Number(qualified[3]) };
+    const groups = qualified.groups as Record<string, string | undefined>;
+    return { kind: "qualified", prefix: groups["nenCellPrefix"] ?? null, issue: Number(groups["nenCellIssue"]), id: criterionId(grammar.prefix, groups["nenCellId"] as string) };
   }
   return null;
 }
@@ -144,20 +161,28 @@ function parseCriterionCell(cell: string): RowCriterion | null {
  * Every verify row of a PR body: a table line, outside fenced code and HTML
  * comments, whose first cell names a criterion (`AC-{n}`,
  * `<CODE>#<N>/AC-{n}`, `<owner/name>#<N>/AC-{n}`, `#<N>/AC-{n}`) or `none`.
- * A first cell that mentions `AC-` and is none of those is a malformed row,
- * listed with its problem rather than dropped. Header and separator rows name
- * no criterion and are not rows here.
+ * The id after the prefix is read in `grammar` -- the closing issues' own
+ * criterion grammar, so `NN#519/AC-12-001` names `AC-12-001` whole
+ * (zheref/nen#519 AC-2). A first cell that mentions the prefix and is none of
+ * those is a malformed row, listed with its problem rather than dropped.
+ * Header and separator rows name no criterion and are not rows here.
  */
-export function readVerifyRows(body: string): VerifyRow[] {
+export function readVerifyRows(body: string, grammar: CriterionGrammar = DEFAULT_CRITERION_GRAMMAR): VerifyRow[] {
   const rows: VerifyRow[] = [];
+  const mention = criterionCellPatterns(grammar).mention;
+  const p = grammar.prefix;
+  // The placeholder names the shape the grammar reads (N6): `<n>` for the
+  // default, `<id>` and the shape for a catalogue's.
+  const n = grammar.tail === DEFAULT_CRITERION_GRAMMAR.tail ? "<n>" : "<id>";
+  const shapeNote = n === "<n>" ? "" : ` (<id> in the shape '${grammar.tail}')`;
   for (const line of maskedLines(body, { keepInlineCode: true })) {
     const cells = cellsOf(line.text);
     if (cells === null || cells.length === 0) continue;
     const first = cells[0] as string;
-    const criterion = parseCriterionCell(first);
+    const criterion = parseCriterionCell(first, grammar);
     if (criterion === null) {
-      if (/AC-/i.test(first)) {
-        rows.push({ line: line.line, raw: line.text.trim(), cell: first, criterion: null, word: null, evidence: "", problem: `'${first}' is not a criterion: write AC-<n>, <CODE>#<N>/AC-<n>, <owner/name>#<N>/AC-<n> or none` });
+      if (mention.test(first)) {
+        rows.push({ line: line.line, raw: line.text.trim(), cell: first, criterion: null, word: null, evidence: "", problem: `'${first}' is not a criterion: write ${p}-${n}, <CODE>#<N>/${p}-${n}, <owner/name>#<N>/${p}-${n} or none${shapeNote}${overCap(unwrap(first)) ? `; a criterion id is at most ${MAX_CRITERION_CELL} characters, its cell at most ${MAX_QUALIFIED_CELL}` : ""}` });
       }
       continue;
     }
@@ -205,6 +230,8 @@ export interface ClosingIssue {
   readonly report: CriteriaReport;
   /** How the issue is named in a report, when it is not `owner/name#N` (a `--criteria` list read off the command line). */
   readonly label?: string;
+  /** The criteria are a `--criteria` list: a criterion's `line` is its position in the list, said so in a refusal. */
+  readonly listed?: boolean;
 }
 
 export type Coverage =
@@ -245,7 +272,7 @@ export interface ConvergeReport {
   readonly unrequested: readonly { readonly line: number; readonly word: CoverageWord | null; readonly evidence: string; readonly problem: string | null }[];
   /** Rows naming a criterion no closing issue carries, or naming one ambiguously. */
   readonly unmatched: readonly UnmatchedRow[];
-  /** Rows whose first cell mentions AC- and names no criterion. */
+  /** Rows whose first cell mentions the prefix (or, under another prefix, the default AC-) and names no criterion. */
   readonly malformed: readonly UnmatchedRow[];
   readonly counts: Readonly<Record<Coverage, number>> & { readonly words: Readonly<Record<CoverageWord, number>> };
   /** One line per row that sets exit 1: a criterion, an unrecognised issue row, a none row with a problem, an unmatched or malformed verify row. */
@@ -294,13 +321,14 @@ const BLOCKING_COVERAGE: ReadonlySet<Coverage> = new Set(["missing-row", "malfor
  * Which closing issues a row's criterion can name. A bare `AC-{n}` names every
  * closing issue that states AC-{n}; `#N/AC-{n}` names closing issue N, and a
  * prefix holding a slash must be that issue's repository. A CODE prefix is
- * echoed and never resolved.
+ * echoed and never resolved. Ids are compared whole: `AC-12` never names
+ * `AC-12-001`.
  */
 function candidates(criterion: RowCriterion, issues: readonly ClosingIssue[]): ClosingIssue[] {
   if (criterion.kind === "none") return [];
-  const number = criterion.number;
+  const id = criterion.id;
   return issues.filter((issue): boolean => {
-    if (!issue.report.criteria.some((entry): boolean => entry.number === number)) return false;
+    if (!issue.report.criteria.some((entry): boolean => entry.id === id)) return false;
     if (criterion.kind === "id") return true;
     if (issue.number !== criterion.issue) return false;
     const prefix = criterion.prefix;
@@ -308,14 +336,19 @@ function candidates(criterion: RowCriterion, issues: readonly ClosingIssue[]): C
   });
 }
 
-/** Compare the closing issues' criteria with the PR body's verify rows. */
-export function converge(issues: readonly ClosingIssue[], prBody: string, policy: CoveragePolicy = DEFAULT_COVERAGE_POLICY): ConvergeReport {
-  const rows = readVerifyRows(prBody);
+/**
+ * Compare the closing issues' criteria with the PR body's verify rows. The
+ * catalogue the issues' criteria were read with is the one the verify rows'
+ * ids are read with: one criterion grammar for both lists (zheref/nen#519).
+ */
+export function converge(issues: readonly ClosingIssue[], prBody: string, policy: CoveragePolicy = DEFAULT_COVERAGE_POLICY, catalogue: IssueSectionsCatalogue | null = null): ConvergeReport {
+  const grammar = criterionGrammar(catalogue);
+  const rows = readVerifyRows(prBody, grammar);
   const byKey = new Map<string, VerifyRow[]>();
   const unrequested: ConvergeReport["unrequested"][number][] = [];
   const unmatched: UnmatchedRow[] = [];
   const malformed: UnmatchedRow[] = [];
-  const key = (issue: ClosingIssue, number: number): string => `${issue.target.toLowerCase()}#${issue.number}/AC-${number}`;
+  const key = (issue: ClosingIssue, id: string): string => `${issue.target.toLowerCase()}#${issue.number}/${id}`;
   for (const row of rows) {
     if (row.criterion === null) {
       malformed.push({ line: row.line, cell: row.cell, reason: row.problem ?? "unreadable" });
@@ -339,10 +372,10 @@ export function converge(issues: readonly ClosingIssue[], prBody: string, policy
       unmatched.push({
         line: row.line,
         cell: row.cell,
-        reason: `ambiguous: ${found.map((issue): string => `${issue.target}#${issue.number}`).join(" and ")} each state AC-${row.criterion.number}; write <CODE>#<N>/AC-<n>`,
+        reason: `ambiguous: ${found.map((issue): string => `${issue.target}#${issue.number}`).join(" and ")} each state ${row.criterion.id}; write <CODE>#<N>/${grammar.prefix}-<n>`,
       });
     } else {
-      const at = key(found[0] as ClosingIssue, row.criterion.number);
+      const at = key(found[0] as ClosingIssue, row.criterion.id);
       byKey.set(at, [...(byKey.get(at) ?? []), row]);
     }
   }
@@ -354,11 +387,11 @@ export function converge(issues: readonly ClosingIssue[], prBody: string, policy
       criteria.push({ issue: name, id: null, text: null, coverage: "not-verifiable", word: null, evidence: null, rows: [], raw: null });
       continue;
     }
-    const seen = new Set<number>();
+    const seen = new Set<string>();
     for (const criterion of issue.report.criteria) {
-      if (seen.has(criterion.number)) continue;
-      seen.add(criterion.number);
-      const named = byKey.get(key(issue, criterion.number)) ?? [];
+      if (seen.has(criterion.id)) continue;
+      seen.add(criterion.id);
+      const named = byKey.get(key(issue, criterion.id)) ?? [];
       const lines = named.map((row): number => row.line);
       const only = named.length === 1 ? (named[0] as VerifyRow) : null;
       let coverage: Coverage;
@@ -403,7 +436,11 @@ export function converge(issues: readonly ClosingIssue[], prBody: string, policy
     else if (entry.coverage === "covered-without-evidence" && policy.evidenceRequired) blocking.push(`${where}: no evidence`);
   }
   for (const issue of issues) {
-    for (const row of issue.report.unrecognised) blocking.push(`${issue.label ?? `${issue.target}#${issue.number}`}: unrecognised criterion row at line ${row.line}`);
+    const name = issue.label ?? `${issue.target}#${issue.number}`;
+    for (const row of issue.report.unrecognised) blocking.push(`${name}: unrecognised criterion row at line ${row.line}`);
+    // AN ID STATED TWICE BLOCKS (zheref/nen#519, F1): one verify row would
+    // otherwise clear both rows, and the second is never verified.
+    for (const duplicate of issue.report.duplicates) blocking.push(`${name}: duplicate criterion id ${duplicate.id} at ${issue.listed === true ? "positions" : "lines"} ${duplicate.lines.join(", ")}`);
   }
   for (const row of unrequested) if (row.problem !== null) blocking.push(`none row line ${row.line}: ${row.problem}`);
   for (const row of unmatched) blocking.push(`row line ${row.line} '${row.cell}': unmatched -- ${row.reason}`);

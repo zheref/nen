@@ -19,10 +19,11 @@ import {
   earlierRoundChecks,
   evaluateReady,
   minutesSince,
+  roundCheckWorkflowRuns,
   type Conjunct,
   type ConjunctId,
 } from "./ready.js";
-import { loadGateIdentities, parseGateIdentities } from "../schema/gates.js";
+import { loadGateIdentities, parseGateIdentities, type GateIdentities } from "../schema/gates.js";
 import { parseCheckRollup } from "../github/parse.js";
 import { defaultReviewers, reviewerRoundFacts } from "./predicates.js";
 import { BANKAI_REPO, EVENT_REPO } from "../schema/fixtures/paths.js";
@@ -2219,5 +2220,156 @@ describe("readiness verdict did not report (#532)", () => {
   it("names failed checks even when no placeholder reported", () => {
     const result = evaluateReady(IDENTITIES, readyState({ checks: checks.slice(1) }), OPTIONS);
     for (const check of checks.slice(1)) expect(result.line).toContain(check.name);
+  });
+});
+
+// --- zheref/nen#546: the verdict explains a producer mismatch ---------------
+describe("evaluateReady -- round_check_producer (zheref/nen#546)", () => {
+  const RAW = JSON.parse(readFileSync(join(process.cwd(), "nen", "gates.json"), "utf8")) as {
+    reviewers: Record<string, unknown>[];
+  } & Record<string, unknown>;
+  const constrained = (producer: unknown): GateIdentities =>
+    parseGateIdentities("/fixture/nen/gates.json", {
+      ...RAW,
+      reviewers: RAW.reviewers.map((reviewer): Record<string, unknown> =>
+        reviewer["name"] === "bugbot" ? { ...reviewer, round_check_producer: producer } : reviewer,
+      ),
+    });
+  const APP = constrained({ app: { slug: "cursor", id: 1210556 } });
+  const WORKFLOW = constrained({
+    workflow: { path: ".github/workflows/bugbot.yml", repository: "zheref/nen", events: ["workflow_run"] },
+  });
+  const bugbotCheck = (slug: string, appId: number, suite: number): Record<string, unknown> => ({
+    name: "Cursor Bugbot",
+    status: "COMPLETED",
+    conclusion: "SUCCESS",
+    checkSuite: { databaseId: suite, app: { slug, databaseId: appId } },
+  });
+  const state = (overrides: Record<string, unknown>): Record<string, unknown> =>
+    readyState({ reviews: [], reviewers: "copilot,bugbot", ...overrides });
+  const owedReason = (evaluation: ReturnType<typeof evaluateReady>): string | null =>
+    evaluation.conjuncts.find((row): boolean => row.id === "rounds-owed")?.reason ?? null;
+
+  it("CORRECT producer: the declared App's SUCCESS is the round and the PR is ready", () => {
+    const evaluation = evaluateReady(APP, state({ checks: [greenCheck(), bugbotCheck("cursor", 1210556, 11)] }), OPTIONS);
+    expect(evaluation.ready).toBe(true);
+  });
+
+  it("SAME-NAME IMPERSONATION: a github-actions check named 'Cursor Bugbot' is not ready, and the row says why", () => {
+    const evaluation = evaluateReady(APP, state({ checks: [greenCheck(), bugbotCheck("github-actions", 15368, 22)] }), OPTIONS);
+    expect(evaluation.ready).toBe(false);
+    expect(evaluation.firstFailing).toBe("rounds-owed");
+    const reason = owedReason(evaluation) ?? "";
+    expect(reason).toContain(
+      "bugbot (round check from the wrong producer: 'Cursor Bugbot' at head produced by app 'github-actions', not app 'cursor' (id 1210556) — a check's name is not its identity)",
+    );
+    expect(reason).toContain("'Cursor Bugbot' check SUCCESS not counted: produced by app 'github-actions', not app 'cursor' (id 1210556)");
+  });
+
+  it("the SAME impostor state reads ready under the unconstrained file -- the compatibility reading (AC-5)", () => {
+    const evaluation = evaluateReady(
+      loadGateIdentities(process.cwd()),
+      state({ checks: [greenCheck(), bugbotCheck("github-actions", 15368, 22)] }),
+      OPTIONS,
+    );
+    expect(evaluation.ready).toBe(true);
+  });
+
+  it("MISSING evidence: a SUCCESS with no App read is owed as unverified", () => {
+    const evaluation = evaluateReady(APP, state({ checks: [greenCheck(), greenCheck("Cursor Bugbot")] }), OPTIONS);
+    expect(evaluation.ready).toBe(false);
+    expect(owedReason(evaluation)).toContain("bugbot (round check producer unverified: 'Cursor Bugbot' at head no producing App was read");
+  });
+
+  const RUNS = [
+    {
+      check_suite_id: 33,
+      run_id: 3300,
+      path: ".github/workflows/bugbot.yml",
+      repository: "zheref/nen",
+      event: "workflow_run",
+      pull_requests: [{ number: 7, base_ref: "main" }],
+      job_ids: [3301],
+    },
+  ];
+  const wfCheck = (databaseId = 3301): Record<string, unknown> => ({ ...bugbotCheck("github-actions", 15368, 33), databaseId });
+  const wfState = (overrides: Record<string, unknown> = {}): Record<string, unknown> =>
+    state({ checks: [greenCheck(), wfCheck()], pr_number: 7, base_ref: "main", round_check_workflow_runs: RUNS, ...overrides });
+
+  it("WORKFLOW producer: the blob's run, pull request and job decide it, and an unlisted suite is unverified", () => {
+    expect(evaluateReady(WORKFLOW, wfState(), OPTIONS).ready).toBe(true);
+    const unread = evaluateReady(WORKFLOW, wfState({ round_check_workflow_runs: [] }), OPTIONS);
+    expect(unread.ready).toBe(false);
+    expect(owedReason(unread)).toContain("the workflow run of check suite 33 was not read");
+    const prRun = [{ ...RUNS[0], event: "pull_request" }];
+    expect(owedReason(evaluateReady(WORKFLOW, wfState({ round_check_workflow_runs: prRun }), OPTIONS))).toContain(
+      "on 'pull_request', not workflow zheref/nen/.github/workflows/bugbot.yml on workflow_run",
+    );
+  });
+
+  it("F1 through the verdict: a check written into the trusted suite, no job of its run, is not ready", () => {
+    const evaluation = evaluateReady(WORKFLOW, wfState({ checks: [greenCheck(), wfCheck(9999)] }), OPTIONS);
+    expect(evaluation.ready).toBe(false);
+    expect(owedReason(evaluation)).toContain("round check from the wrong producer: 'Cursor Bugbot' at head check run 9999 is not a job of run 3300");
+  });
+
+  it("F2 through the verdict: a run naming another pull request, or the judged pull request unknown, is not ready", () => {
+    const scratch = [{ ...RUNS[0], pull_requests: [{ number: 8, base_ref: "scratch" }] }];
+    expect(owedReason(evaluateReady(WORKFLOW, wfState({ round_check_workflow_runs: scratch }), OPTIONS))).toContain(
+      "does not name pull request #7 onto 'main'",
+    );
+    expect(evaluateReady(WORKFLOW, wfState({ pr_number: undefined }), OPTIONS).ready).toBe(false);
+    expect(evaluateReady(WORKFLOW, wfState({ base_ref: "release" }), OPTIONS).ready).toBe(false);
+  });
+
+  it("N1: settlement's roundsAtHead counts a matching workflow producer and leaves out an unread suite", () => {
+    expect(evaluateReady(WORKFLOW, wfState(), OPTIONS).context.settlement.roundsAtHead).toEqual([
+      { reviewer: "bugbot", via: "round-check" },
+    ]);
+    expect(evaluateReady(WORKFLOW, wfState({ round_check_workflow_runs: [] }), OPTIONS).context.settlement.roundsAtHead).toEqual([]);
+  });
+
+  it("F3: a producer in force through trusts_pull_request_revision warns on every evaluation", () => {
+    const optIn = constrained({
+      workflow: { path: ".github/workflows/bugbot.yml", repository: "zheref/nen", events: ["pull_request_target"], trusts_pull_request_revision: true },
+    });
+    expect(evaluateReady(optIn, wfState(), OPTIONS).context.warnings).toContain(
+      "round_check_producer of 'bugbot' trusts a revision the default branch did not define (trusts_pull_request_revision: true, events pull_request_target): on those events the workflow file is the one the pull request, an actor or the named base carries -- on pull_request_target the base is whichever branch a writer names -- so any branch writer can produce this round; prefer an app producer (zheref/nen#546)",
+    );
+    expect(evaluateReady(WORKFLOW, wfState(), OPTIONS).context.warnings).toEqual([]);
+  });
+
+  it("EARLIER HEAD: the blob carries producer evidence per earlier run, and only the declared producer's counts", () => {
+    const earlier = (fields: Record<string, unknown>): Record<string, unknown>[] => [
+      { sha: "r0sha", name: "Cursor Bugbot", status: "COMPLETED", conclusion: "SUCCESS", ...fields },
+    ];
+    expect(
+      evaluateReady(APP, state({ checks: [greenCheck()], earlier_round_checks: earlier({ app_slug: "cursor", app_id: 1210556 }) }), OPTIONS).ready,
+    ).toBe(true);
+    expect(
+      evaluateReady(APP, state({ checks: [greenCheck()], earlier_round_checks: earlier({ app_slug: "github-actions", app_id: 15368 }) }), OPTIONS).ready,
+    ).toBe(false);
+    expect(earlierRoundChecks({ earlier_round_checks: earlier({ app_slug: "cursor", app_id: "x", check_suite_id: 4 }) })).toEqual([
+      { sha: "r0sha", name: "Cursor Bugbot", status: "COMPLETED", conclusion: "SUCCESS", appSlug: "cursor", checkSuiteId: 4 },
+    ]);
+  });
+
+  it("roundCheckWorkflowRuns drops malformed entries -- which can only leave a round unverified", () => {
+    expect(roundCheckWorkflowRuns({})).toEqual([]);
+    expect(
+      roundCheckWorkflowRuns({
+        round_check_workflow_runs: [
+          { check_suite_id: 1, run_id: 10, path: ".github/workflows/a.yml", repository: "o/r", event: "push", pull_requests: [{ number: 7, base_ref: "main" }, { number: "8" }], job_ids: [11] },
+          { check_suite_id: 4, path: ".github/workflows/a.yml", repository: "o/r", event: "push", job_ids: [1, "2"] },
+          { check_suite_id: "1", path: ".github/workflows/a.yml", repository: "o/r", event: "push" },
+          { check_suite_id: 2, path: "", repository: "o/r", event: "push" },
+          { check_suite_id: 3, path: ".github/workflows/a.yml", repository: "o/r" },
+          null,
+        ],
+      }),
+    ).toEqual([
+      { checkSuiteId: 1, runId: 10, path: ".github/workflows/a.yml", repository: "o/r", event: "push", pullRequests: [{ number: 7, baseRef: "main" }], jobIds: [11] },
+      { checkSuiteId: 4, runId: null, path: ".github/workflows/a.yml", repository: "o/r", event: "push", pullRequests: [], jobIds: null },
+    ]);
   });
 });

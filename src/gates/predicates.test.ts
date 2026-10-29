@@ -50,7 +50,9 @@ import {
   utcDay,
   type QuorumMember,
   type QuorumResult,
+  roundsAtHead,
 } from "./predicates.js";
+import type { WorkflowRunEvidence } from "./producer.js";
 import { loadGateIdentities, parseGateIdentities, type GateIdentities } from "../schema/gates.js";
 import { ALT_REPO, BANKAI_REPO, EVENT_REPO } from "../schema/fixtures/paths.js";
 
@@ -3123,5 +3125,303 @@ describe("readiness placeholder admission (#532)", () => {
       checkRun({ name: "readiness", title, conclusion: "SUCCESS", startedAt: "2026-10-25T01:00:00Z" }),
       checkRun({ name: "readiness", title: "ready", conclusion: "SUCCESS", startedAt: "2026-10-25T02:00:00Z" }),
     ])).toBe(true);
+  });
+});
+
+// --- zheref/nen#546: the round check's PRODUCER, not only its name ----------
+//
+// The four documented fixtures of AC-6, each proving acceptance or refusal:
+// CORRECT producer (a round), WRONG producer (owed, mismatch explained),
+// MISSING evidence (owed, unverified), and SAME-NAME IMPERSONATION (a pull
+// request's own workflow job named like the reviewer's check: owed). Plus
+// the earlier-head and in-flight limbs (AC-4), the run binding of hanten
+// round 1 (F1 jobs, F2 pull request), the producer-scoped reduction (N2) and
+// the unconstrained file's unchanged reading (AC-5).
+describe("round_check_producer -- a name alone is never identity (zheref/nen#546)", () => {
+  const RAW = JSON.parse(
+    readFileSync(join(BANKAI_REPO, "nen", "gates.json"), "utf8"),
+  ) as { reviewers: Record<string, unknown>[] } & Record<string, unknown>;
+  const withProducer = (producer: unknown, extra: Record<string, unknown> = {}): GateIdentities =>
+    parseGateIdentities("/fixture/nen/gates.json", {
+      ...RAW,
+      ...extra,
+      reviewers: RAW.reviewers.map((reviewer): Record<string, unknown> =>
+        reviewer["name"] === "bugbot" ? { ...reviewer, round_check_producer: producer } : reviewer,
+      ),
+    });
+  const APP = withProducer({ app: { slug: "cursor", id: 1210556 } });
+  const APP_QUORUM = withProducer({ app: { slug: "cursor", id: 1210556 } }, { round_quorum: { any_of: ["copilot", "bugbot"], minimum: 1 } });
+  const WORKFLOW = withProducer({
+    workflow: { path: ".github/workflows/bugbot.yml", repository: "zheref/nen", events: ["workflow_run"] },
+  });
+  const success = (fields: Partial<Omit<CheckRun, "kind">> = {}): CheckRun =>
+    checkRun({ name: "Cursor Bugbot", status: "COMPLETED", conclusion: "SUCCESS", ...fields });
+  const cursorRun = success({ appSlug: "cursor", appId: 1210556, checkSuiteId: 11 });
+  const impostor = success({ appSlug: "github-actions", appId: 15368, checkSuiteId: 22, databaseId: 2201 });
+  const PR = { number: 7, baseRef: "main" };
+  const trustedWorkflow: WorkflowRunEvidence = {
+    checkSuiteId: 33,
+    runId: 3300,
+    path: ".github/workflows/bugbot.yml",
+    repository: "zheref/nen",
+    event: "workflow_run",
+    pullRequests: [PR],
+    jobIds: [3301],
+  };
+  const trusted = success({ appSlug: "github-actions", appId: 15368, checkSuiteId: 33, databaseId: 3301 });
+  const wf = (overrides: Partial<RoundInputs>): RoundInputs => rounds({ pullRequest: PR, workflowRuns: [trustedWorkflow], ...overrides });
+
+  it("CORRECT producer: a SUCCESS from the declared App at head is the round (AC-2)", () => {
+    expect(pendingRounds(APP, rounds({ checks: [cursorRun] }), "headsha", ["bugbot"], "bounded")).toEqual([]);
+    expect(pendingRounds(APP, rounds({ checks: [cursorRun] }), "headsha", ["bugbot"], "strict")).toEqual([]);
+  });
+
+  it("WRONG producer: the same name from another App does not satisfy the round, and says why (AC-1)", () => {
+    const owed = pendingRounds(APP, rounds({ checks: [impostor] }), "headsha", ["bugbot"], "bounded");
+    expect(owed).toEqual([
+      {
+        reviewer: "bugbot",
+        reason: "round-check-producer-mismatch",
+        producer: "'Cursor Bugbot' at head produced by app 'github-actions', not app 'cursor' (id 1210556)",
+      },
+    ]);
+  });
+
+  it("WRONG producer: the right slug with a different App id is a mismatch too", () => {
+    const owed = pendingRounds(APP, rounds({ checks: [success({ appSlug: "cursor", appId: 7 })] }), "headsha", ["bugbot"], "bounded");
+    expect(owed[0]).toMatchObject({ reason: "round-check-producer-mismatch" });
+    expect(owed[0]?.producer).toContain("with id 7");
+  });
+
+  it("MISSING evidence: a SUCCESS whose App was not read stays owed, unverified -- never accepted by name (AC-3)", () => {
+    for (const run of [success(), success({ appSlug: "cursor" })]) {
+      const owed = pendingRounds(APP, rounds({ checks: [run] }), "headsha", ["bugbot"], "bounded");
+      expect(owed).toHaveLength(1);
+      expect(owed[0]).toMatchObject({ reviewer: "bugbot", reason: "round-check-producer-unverified" });
+    }
+  });
+
+  it("SAME-NAME IMPERSONATION: a pull request's own workflow job named like the check is not the workflow producer", () => {
+    // The pull request adds a job called `Cursor Bugbot` to a workflow it
+    // controls: GitHub Actions made it, from the pull request's own event.
+    const prWorkflow: WorkflowRunEvidence = { ...trustedWorkflow, checkSuiteId: 22, runId: 2200, event: "pull_request", jobIds: [2201] };
+    const owed = pendingRounds(WORKFLOW, wf({ checks: [impostor], workflowRuns: [prWorkflow] }), "headsha", ["bugbot"], "bounded");
+    expect(owed).toEqual([
+      {
+        reviewer: "bugbot",
+        reason: "round-check-producer-mismatch",
+        producer:
+          "'Cursor Bugbot' at head produced by zheref/nen/.github/workflows/bugbot.yml on 'pull_request', not workflow zheref/nen/.github/workflows/bugbot.yml on workflow_run",
+      },
+    ]);
+    const otherFile = { ...prWorkflow, path: ".github/workflows/evil.yml", event: "workflow_run" };
+    expect(pendingRounds(WORKFLOW, wf({ checks: [impostor], workflowRuns: [otherFile] }), "headsha", ["bugbot"], "bounded")[0]).toMatchObject({
+      reason: "round-check-producer-mismatch",
+    });
+    // A third-party App's check of that name is not a workflow run at all.
+    expect(pendingRounds(WORKFLOW, wf({ checks: [cursorRun] }), "headsha", ["bugbot"], "bounded")[0]).toMatchObject({
+      reason: "round-check-producer-mismatch",
+    });
+  });
+
+  it("CORRECT workflow producer: the declared file, repository, event, pull request and job at head is the round; an unread run is unverified", () => {
+    expect(pendingRounds(WORKFLOW, wf({ checks: [trusted] }), "headsha", ["bugbot"], "bounded")).toEqual([]);
+    expect(pendingRounds(WORKFLOW, rounds({ checks: [trusted], pullRequest: PR }), "headsha", ["bugbot"], "bounded")[0]).toMatchObject({
+      reason: "round-check-producer-unverified",
+    });
+    expect(pendingRounds(WORKFLOW, wf({ checks: [success({ appSlug: "github-actions" })] }), "headsha", ["bugbot"], "bounded")[0]).toMatchObject({
+      reason: "round-check-producer-unverified",
+    });
+  });
+
+  it("F1: a check a token wrote into the trusted run's suite is no job of that run -- a mismatch, not the round", () => {
+    const written = success({ appSlug: "github-actions", appId: 15368, checkSuiteId: 33, databaseId: 9999 });
+    const owed = pendingRounds(WORKFLOW, wf({ checks: [written] }), "headsha", ["bugbot"], "bounded");
+    expect(owed).toHaveLength(1);
+    // The jobs were read in full and exclude it: a known other producer (N9).
+    expect(owed[0]).toMatchObject({ reason: "round-check-producer-mismatch" });
+    expect(owed[0]?.producer).toContain("check run 9999 is not a job of run 3300");
+    // Jobs unread is unverified too.
+    expect(pendingRounds(WORKFLOW, wf({ checks: [trusted], workflowRuns: [{ ...trustedWorkflow, jobIds: null }] }), "headsha", ["bugbot"], "bounded")[0]).toMatchObject({
+      reason: "round-check-producer-unverified",
+    });
+  });
+
+  it("F2: a trusted-file run of ANOTHER pull request on the same head (a scratch base) is not this pull request's round", () => {
+    const scratch: WorkflowRunEvidence = { ...trustedWorkflow, pullRequests: [{ number: 8, baseRef: "scratch" }] };
+    const owed = pendingRounds(WORKFLOW, wf({ checks: [trusted], workflowRuns: [scratch] }), "headsha", ["bugbot"], "bounded");
+    expect(owed[0]).toMatchObject({ reason: "round-check-producer-unverified" });
+    expect(owed[0]?.producer).toContain("does not name pull request #7 onto 'main'");
+    // Same number, another base (a retargeted twin): still not this one.
+    const otherBase: WorkflowRunEvidence = { ...trustedWorkflow, pullRequests: [{ number: 7, baseRef: "scratch" }] };
+    expect(pendingRounds(WORKFLOW, wf({ checks: [trusted], workflowRuns: [otherBase] }), "headsha", ["bugbot"], "bounded")).toHaveLength(1);
+    // A fork's run names no pull request: fails closed.
+    expect(pendingRounds(WORKFLOW, wf({ checks: [trusted], workflowRuns: [{ ...trustedWorkflow, pullRequests: [] }] }), "headsha", ["bugbot"], "bounded")).toHaveLength(1);
+    // The judged pull request unknown: unverified.
+    expect(pendingRounds(WORKFLOW, wf({ checks: [trusted], pullRequest: null }), "headsha", ["bugbot"], "bounded")).toHaveLength(1);
+  });
+
+  it("UNCONSTRAINED (AC-5): a file with no producer reads exactly as before -- the name and SUCCESS alone", () => {
+    for (const run of [impostor, cursorRun, success()]) {
+      expect(pendingRounds(BANKAI, rounds({ checks: [run] }), "headsha", ["bugbot"], "bounded")).toEqual([]);
+    }
+    expect(BANKAI.reviewer("bugbot")?.roundCheckProducer).toBeNull();
+  });
+
+  it("EARLIER HEAD (AC-4): bounded counts the declared producer's earlier run, never another's, never an unread one", () => {
+    const earlier = (fields: Partial<EarlierHeadCheck> = {}): EarlierHeadCheck => ({
+      sha: "earliersha",
+      name: "Cursor Bugbot",
+      status: "COMPLETED",
+      conclusion: "SUCCESS",
+      ...fields,
+    });
+    const right = earlier({ appSlug: "cursor", appId: 1210556 });
+    expect(pendingRounds(APP, rounds({ earlierChecks: [right] }), "headsha", ["bugbot"], "bounded")).toEqual([]);
+    expect(pendingRounds(APP, rounds({ earlierChecks: [earlier({ appSlug: "github-actions" })] }), "headsha", ["bugbot"], "bounded")).toEqual([
+      {
+        reviewer: "bugbot",
+        reason: "round-check-producer-mismatch",
+        producer: "'Cursor Bugbot' at earlier head earlier produced by app 'github-actions', not app 'cursor' (id 1210556)",
+      },
+    ]);
+    expect(pendingRounds(APP, rounds({ earlierChecks: [earlier()] }), "headsha", ["bugbot"], "bounded")[0]).toMatchObject({
+      reason: "round-check-producer-unverified",
+    });
+    // An impersonating run listed FIRST cannot hide the reviewer's own.
+    expect(
+      pendingRounds(APP, rounds({ earlierChecks: [earlier({ sha: "newer", appSlug: "github-actions" }), right] }), "headsha", ["bugbot"], "bounded"),
+    ).toEqual([]);
+    // STRICT is untouched: no earlier run counts, whatever its producer.
+    expect(pendingRounds(APP, rounds({ earlierChecks: [right] }), "headsha", ["bugbot"], "strict")).toEqual([
+      { reviewer: "bugbot", reason: "no-round-at-head" },
+    ]);
+    // A workflow producer's earlier run needs its run, its pull request and its job.
+    const wfEarlier = earlier({ appSlug: "github-actions", checkSuiteId: 33, checkRunId: 3301 });
+    expect(pendingRounds(WORKFLOW, wf({ earlierChecks: [wfEarlier] }), "headsha", ["bugbot"], "bounded")).toEqual([]);
+    expect(pendingRounds(WORKFLOW, rounds({ earlierChecks: [wfEarlier], pullRequest: PR }), "headsha", ["bugbot"], "bounded")[0]).toMatchObject({
+      reason: "round-check-producer-unverified",
+    });
+    expect(pendingRounds(WORKFLOW, wf({ earlierChecks: [{ ...wfEarlier, checkRunId: 9999 }] }), "headsha", ["bugbot"], "bounded")[0]).toMatchObject({
+      reason: "round-check-producer-mismatch",
+    });
+  });
+
+  it("IN FLIGHT (AC-4): the declared producer's run in flight still supersedes history; a known impostor's does not", () => {
+    const right: EarlierHeadCheck = { sha: "earliersha", name: "Cursor Bugbot", status: "COMPLETED", conclusion: "SUCCESS", appSlug: "cursor", appId: 1210556 };
+    const inFlight = (fields: Partial<Omit<CheckRun, "kind">>): CheckRun =>
+      checkRun({ name: "Cursor Bugbot", status: "IN_PROGRESS", conclusion: null, startedAt: "2026-10-26T00:00:00Z", ...fields });
+    // The reviewer's own run is in flight: owed, exactly as before.
+    expect(pendingRounds(APP, rounds({ checks: [inFlight({ appSlug: "cursor", appId: 1210556 })], earlierChecks: [right] }), "headsha", ["bugbot"], "bounded")).toHaveLength(1);
+    // A run whose producer is unread may be the reviewer's: still owed.
+    expect(pendingRounds(APP, rounds({ checks: [inFlight({})], earlierChecks: [right] }), "headsha", ["bugbot"], "bounded")).toHaveLength(1);
+    // A run KNOWN to be another producer's is not the reviewer's work.
+    expect(pendingRounds(APP, rounds({ checks: [inFlight({ appSlug: "github-actions" })], earlierChecks: [right] }), "headsha", ["bugbot"], "bounded")).toEqual([]);
+  });
+
+  it("N2 probe A: an impostor's LATER success cannot hide the reviewer's run still in flight (bounded -> owed)", () => {
+    const right: EarlierHeadCheck = { sha: "earliersha", name: "Cursor Bugbot", status: "COMPLETED", conclusion: "SUCCESS", appSlug: "cursor", appId: 1210556 };
+    const reviewerInFlight = checkRun({ name: "Cursor Bugbot", status: "IN_PROGRESS", conclusion: null, startedAt: "2026-10-26T00:00:00Z", appSlug: "cursor", appId: 1210556 });
+    const laterImpostor = success({ appSlug: "github-actions", appId: 15368, startedAt: "2026-10-26T00:05:00Z", completedAt: "2026-10-26T00:06:00Z" });
+    const owed = pendingRounds(APP, rounds({ checks: [reviewerInFlight, laterImpostor], earlierChecks: [right] }), "headsha", ["bugbot"], "bounded");
+    expect(owed).toEqual([{ reviewer: "bugbot", reason: "no-round-at-head" }]);
+    const quorum = roundQuorum(APP_QUORUM, rounds({ checks: [reviewerInFlight, laterImpostor], earlierChecks: [right] }), "headsha", "bounded");
+    expect(quorum?.members[1]?.roundCheck?.state).toBe("pending");
+  });
+
+  it("N2 probe B: an impostor's LATER success cannot hide the reviewer's own success (strict -> not owed)", () => {
+    const reviewerSuccess = success({ appSlug: "cursor", appId: 1210556, startedAt: "2026-10-26T00:00:00Z", completedAt: "2026-10-26T00:01:00Z" });
+    const laterImpostor = success({ appSlug: "github-actions", appId: 15368, startedAt: "2026-10-26T00:05:00Z", completedAt: "2026-10-26T00:06:00Z" });
+    expect(pendingRounds(APP, rounds({ checks: [reviewerSuccess, laterImpostor] }), "headsha", ["bugbot"], "strict")).toEqual([]);
+    expect(roundsAtHead(APP, rounds({ checks: [reviewerSuccess, laterImpostor] }), "headsha", ["bugbot"])).toEqual([
+      { reviewer: "bugbot", via: "round-check" },
+    ]);
+    expect(reviewerRoundFacts(APP, rounds({ checks: [reviewerSuccess, laterImpostor] }), "headsha", ["bugbot"], "strict")[0]?.round).toBe("round-check");
+  });
+
+  it("N9 probe A, WORKFLOW form: a token-written later SUCCESS in the trusted suite cannot hide the reviewer's job in flight (bounded -> owed)", () => {
+    const right: EarlierHeadCheck = {
+      sha: "earliersha", name: "Cursor Bugbot", status: "COMPLETED", conclusion: "SUCCESS",
+      appSlug: "github-actions", checkSuiteId: 33, checkRunId: 3301,
+    };
+    const ownJobInFlight = checkRun({
+      name: "Cursor Bugbot", status: "IN_PROGRESS", conclusion: null, startedAt: "2026-10-26T00:00:00Z",
+      appSlug: "github-actions", appId: 15368, checkSuiteId: 33, databaseId: 3301,
+    });
+    const tokenWritten = success({
+      appSlug: "github-actions", appId: 15368, checkSuiteId: 33, databaseId: 9999,
+      startedAt: "2026-10-26T00:05:00Z", completedAt: "2026-10-26T00:06:00Z",
+    });
+    expect(pendingRounds(WORKFLOW, wf({ checks: [ownJobInFlight, tokenWritten], earlierChecks: [right] }), "headsha", ["bugbot"], "bounded")).toEqual([
+      { reviewer: "bugbot", reason: "no-round-at-head" },
+    ]);
+  });
+
+  it("N9 probe B, WORKFLOW form: a token-written later SUCCESS cannot hide the reviewer's own job's SUCCESS (strict -> not owed)", () => {
+    const ownJob = success({
+      appSlug: "github-actions", appId: 15368, checkSuiteId: 33, databaseId: 3301,
+      startedAt: "2026-10-26T00:00:00Z", completedAt: "2026-10-26T00:01:00Z",
+    });
+    const tokenWritten = success({
+      appSlug: "github-actions", appId: 15368, checkSuiteId: 33, databaseId: 9999,
+      startedAt: "2026-10-26T00:05:00Z", completedAt: "2026-10-26T00:06:00Z",
+    });
+    expect(pendingRounds(WORKFLOW, wf({ checks: [ownJob, tokenWritten] }), "headsha", ["bugbot"], "strict")).toEqual([]);
+    // N10's shape: the reviewer's run in suite 33, a later same-name job of a
+    // PR workflow in suite 22. Both suites read, 22 drops, 33 is the round.
+    const prJob = success({
+      appSlug: "github-actions", appId: 15368, checkSuiteId: 22, databaseId: 2201,
+      startedAt: "2026-10-26T00:05:00Z", completedAt: "2026-10-26T00:06:00Z",
+    });
+    const prRun: WorkflowRunEvidence = { ...trustedWorkflow, checkSuiteId: 22, runId: 2200, path: ".github/workflows/pr.yml", jobIds: [2201] };
+    expect(pendingRounds(WORKFLOW, wf({ checks: [ownJob, prJob], workflowRuns: [trustedWorkflow, prRun] }), "headsha", ["bugbot"], "strict")).toEqual([]);
+  });
+
+  it("F7: a pull_request_target run of #8 that also lists #7 cannot be declared a producer without the opt-in -- and with it, the run counts and the read warns", () => {
+    const declare = (extra: Record<string, unknown>): GateIdentities =>
+      withProducer({ workflow: { path: ".github/workflows/bugbot.yml", repository: "zheref/nen", events: ["pull_request_target"], ...extra } });
+    // Settled at load: pull_request_target is outside the allowlist.
+    expect(() => declare({})).toThrow(/events\[0\], is 'pull_request_target'.*any branch writer can produce this round/);
+    // GitHub fills pull_requests[] from the HEAD: #8's run onto a scratch base lists #7 too.
+    const twin: WorkflowRunEvidence = {
+      ...trustedWorkflow,
+      event: "pull_request_target",
+      pullRequests: [{ number: 7, baseRef: "main" }, { number: 8, baseRef: "scratch" }],
+    };
+    const optedIn = declare({ trusts_pull_request_revision: true });
+    // Which is exactly why the binding is the allowlist, not pull_requests[]:
+    // behind the opt-in the run counts, and the opt-in is what warns.
+    expect(pendingRounds(optedIn, wf({ checks: [trusted], workflowRuns: [twin] }), "headsha", ["bugbot"], "bounded")).toEqual([]);
+  });
+
+  it("QUORUM: an impostor's SUCCESS is not a member's round, and the member's report says why", () => {
+    const result = roundQuorum(APP_QUORUM, rounds({ checks: [impostor] }), "headsha", "bounded");
+    expect(result?.met).toBe(false);
+    expect(result?.members[1]?.round).toBeNull();
+    // The impostor is a KNOWN mismatch, dropped before the reduction (N2),
+    // and still named as a SUCCESS not counted (AC-1).
+    expect(result?.members[1]?.roundCheck).toMatchObject({
+      name: "Cursor Bugbot",
+      state: "unsuccessful",
+      conclusion: "SUCCESS",
+      producer: "produced by app 'github-actions', not app 'cursor' (id 1210556)",
+    });
+    // An UNREAD producer is kept and reported as not counted.
+    const unread = roundQuorum(APP_QUORUM, rounds({ checks: [success()] }), "headsha", "bounded");
+    expect(unread?.members[1]?.roundCheck).toMatchObject({
+      name: "Cursor Bugbot",
+      state: "unsuccessful",
+      conclusion: "SUCCESS",
+      producer: "no producing App was read for the check, so it cannot be shown to be app 'cursor' (id 1210556)",
+    });
+    const met = roundQuorum(APP_QUORUM, rounds({ checks: [cursorRun] }), "headsha", "bounded");
+    expect(met?.met).toBe(true);
+    expect(met?.members[1]?.roundCheck).toMatchObject({ state: "completed" });
+    expect(met?.members[1]?.roundCheck).not.toHaveProperty("producer");
+  });
+
+  it("reviewerRoundFacts reads the same producer rule", () => {
+    expect(reviewerRoundFacts(APP, rounds({ checks: [impostor] }), "headsha", ["bugbot"], "bounded")[0]?.round).toBeNull();
+    expect(reviewerRoundFacts(APP, rounds({ checks: [cursorRun] }), "headsha", ["bugbot"], "bounded")[0]?.round).toBe("round-check");
   });
 });

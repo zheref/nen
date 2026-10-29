@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
@@ -145,6 +145,36 @@ describe("nen run record", () => {
     expect(result.code).toBe(1);
     expect(result.json()).toMatchObject({ verdict: "could-not-read" });
     expect(readdirSync(elsewhere)).toEqual([]);
+  });
+
+  it.skipIf(process.platform === "win32")("reads nothing through a record directory that is a link (N8 on #522)", async () => {
+    const state = mkdtempSync(join(tmpdir(), "nen-record-state-"));
+    const elsewhere = mkdtempSync(join(tmpdir(), "nen-record-elsewhere-"));
+    writeFileSync(join(elsewhere, `${ID}.json`), JSON.stringify(RECORD));
+    mkdirSync(join(state, "hatsu"));
+    symlinkSync(elsewhere, join(state, "hatsu", "specs"));
+    const result = await run(["record", "read", "--schema", "hatsu.spec.run/v0.1", "--id", ID], { XDG_STATE_HOME: state });
+    expect(result.code).toBe(1);
+    expect(result.json()).toMatchObject({ verdict: "could-not-read", record: null });
+    expect(String(result.json()["reason"])).toMatch(/not a real directory \(a link or a file\); nen reads no record through one/);
+  });
+
+  it.skipIf(process.platform === "win32")("refuses a linked ANCESTOR of the record directory for a read and a write (Bugbot on NN-PR-#549)", async () => {
+    const state = mkdtempSync(join(tmpdir(), "nen-record-state-"));
+    const elsewhere = mkdtempSync(join(tmpdir(), "nen-record-ancestor-"));
+    mkdirSync(join(elsewhere, "specs"));
+    writeFileSync(join(elsewhere, "specs", `${ID}.json`), JSON.stringify(RECORD));
+    chmodSync(join(elsewhere, "specs"), 0o755);
+    symlinkSync(elsewhere, join(state, "hatsu"));
+    const read = await run(["record", "read", "--schema", "hatsu.spec.run/v0.1", "--id", ID], { XDG_STATE_HOME: state });
+    expect(read.code).toBe(1);
+    expect(read.json()).toMatchObject({ verdict: "could-not-read", record: null });
+    expect(String(read.json()["reason"])).toContain(`${join(state, "hatsu")} is not a real directory`);
+    const write = await run(["record", "write", "--schema", "hatsu.spec.run/v0.1", "--id", ID, "--from", input(RECORD)], { XDG_STATE_HOME: state });
+    expect(write.code).toBe(1);
+    expect(write.json()).toMatchObject({ verdict: "could-not-read" });
+    expect(statSync(join(elsewhere, "specs")).mode & 0o777).toBe(0o755);
+    expect(readdirSync(join(elsewhere, "specs"))).toEqual([`${ID}.json`]);
   });
 
   it("accepts Hatsu's own fixture record shape", () => {

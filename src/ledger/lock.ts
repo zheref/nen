@@ -8,6 +8,8 @@
 
 import { closeSync, fstatSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { dirname } from "node:path";
+import { platform } from "node:os";
+import { performance } from "node:perf_hooks";
 
 /** The lock file beside a ledger: `<ledger>.lock`. */
 export function ledgerLockPath(path: string): string {
@@ -19,6 +21,14 @@ export const LEDGER_LOCK_STALE_MS = 30_000;
 /** How long an append waits for another holder before giving up. */
 export const LEDGER_LOCK_WAIT_MS = 2_000;
 const LEDGER_LOCK_BACKOFF_MS = 25;
+
+// Windows can refuse replacement with EPERM even while our advisory writer
+// lock is held (zheref/nen#566). These are containment bounds, not a promise
+// that an external sharing/permission conflict clears: well below the 2s
+// lock wait and 30s stale age above. The attempt cap also bounds a stuck clock.
+const LEDGER_REPLACE_WAIT_MS = 500;
+const LEDGER_REPLACE_BACKOFF_MS = 25;
+const LEDGER_REPLACE_MAX_ATTEMPTS = 21;
 
 export interface LedgerLockOptions {
   /** Where "broke a stale lock" is said. Defaults to stderr. */
@@ -164,6 +174,31 @@ export function withLedgerLock<T>(path: string, body: () => T, options: LedgerLo
   }
 }
 
+/** Retry only replacement, retaining the complete temp file and caller's lock. */
+function replaceLedgerTemp(temp: string, path: string): void {
+  const windows = platform() === "win32";
+  const deadline = performance.now() + LEDGER_REPLACE_WAIT_MS;
+  let attempts = 0;
+  for (;;) {
+    attempts += 1;
+    try {
+      renameSync(temp, path);
+      return;
+    } catch (error) {
+      if (!windows || (error as NodeJS.ErrnoException).code !== "EPERM") throw error;
+      const exhausted = (): Error => new Error(
+        `Could not atomically replace ledger '${path}' on Windows: EPERM persisted after ${attempts} attempt(s). Recovery is bounded to ${LEDGER_REPLACE_WAIT_MS}ms and ${LEDGER_REPLACE_MAX_ATTEMPTS} attempts. The prior ledger was not removed; retry, or check permissions and other programs holding the file open.`,
+        { cause: error },
+      );
+      const remaining = deadline - performance.now();
+      if (remaining <= 0 || attempts >= LEDGER_REPLACE_MAX_ATTEMPTS) throw exhausted();
+      sleepMs(Math.min(LEDGER_REPLACE_BACKOFF_MS, remaining));
+      // A delayed sleep must not start another replacement after the deadline.
+      if (performance.now() >= deadline) throw exhausted();
+    }
+  }
+}
+
 /**
  * Write `document` to `path` as pretty JSON THROUGH A TEMP FILE AND A RENAME,
  * so a reader never sees a torn ledger: `rename(2)` replaces the path in one
@@ -173,10 +208,20 @@ export function withLedgerLock<T>(path: string, body: () => T, options: LedgerLo
 export function writeLedgerAtomically(path: string, document: unknown): void {
   mkdirSync(dirname(path), { recursive: true });
   const temp = `${path}.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`;
+  let failed = false;
   try {
     writeFileSync(temp, `${JSON.stringify(document, null, 2)}\n`, "utf8");
-    renameSync(temp, path);
+    replaceLedgerTemp(temp, path);
+  } catch (error) {
+    failed = true;
+    throw error;
   } finally {
-    rmSync(temp, { force: true });
+    try {
+      rmSync(temp, { force: true });
+    } catch (error) {
+      // A secondary cleanup refusal must not hide the write/replacement error.
+      // On a successful write, a cleanup failure is still reported as before.
+      if (!failed) throw error;
+    }
   }
 }
