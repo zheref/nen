@@ -83,7 +83,7 @@ export const JACOCO: CoverageFormat = {
   },
 
   sniff(text: string): boolean {
-    const elements = scanXml(text);
+    const elements = scanXml(text, (reason): Error => new CoverageReportError(reason));
     return (
       elements[0]?.name === "report" &&
       elements.some(
@@ -94,7 +94,7 @@ export const JACOCO: CoverageFormat = {
   },
 
   parse(text: string, path: string): ParsedCoverage {
-    const elements = scanXml(text);
+    const elements = scanXml(text, (reason): Error => new CoverageReportError(reason));
     if (elements[0]?.name !== "report") {
       throw new CoverageReportError(
         `${path}: has no <report> root element. This file was read as JaCoCo XML because of its name or its first bytes.`,

@@ -451,10 +451,10 @@ it stays pending and holds every pull request's checks with it.
 
 ## The verb surface
 
-`nen --help` lists every command family (48); each
+`nen --help` lists every command family (49); each
 family's own `--help` (`nen pr --help`, `nen board --help`, ...) documents
 its verbs and flags in full. [`docs/USAGE.md`](docs/USAGE.md) documents all
-172 verbs outside the binary — each one's purpose, arguments, exit codes and
+173 verbs outside the binary — each one's purpose, arguments, exit codes and
 `--json` shape — plus the conventions they share and the developer workflows
 they compose into. The families group roughly as:
 
@@ -473,7 +473,9 @@ they compose into. The families group roughly as:
   `schema` (`check`, `set`: validate the declarations, or write one value
   into one by JSON pointer), `color`, `repo`, `ref`
 - **Release mechanics** — `release`, `changelog`, `tag`, `fanout`, `run`
-- **Issue & idea filing** — `issue`, `idea`
+- **Issue & idea filing** — `issue`, `idea`, `tests` (`map`: an issue's
+  acceptance criteria against the tests that name them, with a red-first
+  checkpoint over a before and an after run)
 - **Repository scaffolding & canon** — `scaffold`, `canon`, `quality`, `commit`,
   `spec` (`number`, `check`, `cite-check`, `index`: a Spec Kit spec repository, read),
   `decisions` (`summary`: the decision matrix counted, so prose never carries

@@ -42,6 +42,8 @@ import {
   worse,
   millisecondsFromSeconds,
   optionalName,
+  ownEntry,
+  TestReportError,
   type ParsedTests,
   type TestCase,
   type TestReportFormat,
@@ -110,7 +112,7 @@ export const JUNIT: TestReportFormat = {
   },
 
   parse(text: string, path: string): ParsedTests {
-    const elements = scanXml(text);
+    const elements = scanXml(text, (reason): Error => new TestReportError(reason));
     const enclosing = suiteNames(elements);
     const tests: TestCase[] = [];
     let current: number | null = null;
@@ -130,7 +132,7 @@ export const JUNIT: TestReportFormat = {
         current = tests.length - 1;
         continue;
       }
-      const outcome = OUTCOMES[element.name];
+      const outcome = ownEntry(OUTCOMES, element.name);
       if (outcome === undefined || parentOf(element) !== CASE || current === null) continue;
       const row = tests[current];
       /* c8 ignore next -- `current` is an index this loop just pushed */
