@@ -35,7 +35,9 @@ import {
   planAppend,
   planPark,
   planStart,
+  combineModes,
   readRunManifest,
+  renderModes,
   ROW_ID,
   RUN_CONTRACT,
   RUN_KINDS,
@@ -43,6 +45,8 @@ import {
   runIdSegment,
   RunManifestError,
   withManifest,
+  type LocatedManifest,
+  type ModeOps,
   type RunKind,
   type RunManifest,
 } from "./manifest.js";
@@ -50,7 +54,7 @@ import { readLivePr, renderVerify, verifyRun } from "./verify.js";
 import { normaliseIssue } from "./issue.js";
 import { CONSUMER_RUN_CONTRACTS, CONSUMER_RUN_DISPLAY, consumerRunPath, planImport, readConsumerRun } from "./import.js";
 import { computeBudget, renderBudget, runEfforts, type BudgetCeiling } from "./budget.js";
-import { readFileSync } from "node:fs";
+import { chmodSync, readFileSync } from "node:fs";
 import { readRecord, RECORD_SCHEMAS, recordSchema, renderRecord, runIdMatches, unreadableRecord, writeRecord } from "./record.js";
 
 const SUBCOMMANDS = ["rerun-failed", "start", "append", "verify", "budget", "park", "record", "import"] as const;
@@ -68,9 +72,10 @@ usage:
                  [--repo <path>] [--dry-run] [--json]
   nen run park   --id <run-id> --issue <ref> --row <decisions-row-id> [--repo <path>]
                  [--dry-run] [--json]
-  nen run verify --id <run-id> --target <owner/name> [--repo <path>] [--json]
+  nen run verify --id <run-id> --target <owner/name> [--repo <path>] [--dry-run]
+                 [--json]
   nen run budget --id <run-id> [--claim] [--max-minutes <n>] [--max-tokens <n>]
-                 [--effort <id,...>] [--repo <path>] [--json]
+                 [--effort <id,...>] [--repo <path>] [--dry-run] [--json]
   nen run record read  --schema <id> --id <run-id> [--json]
   nen run record write --schema <id> --id <run-id> --from <file> [--dry-run] [--json]
   nen run import --id <run-id> [--from <file>] [--repo <path>] [--dry-run] [--json]
@@ -83,8 +88,34 @@ and that line, and calls nothing; --json: { ok, message, dryRun, command }.
 The manifest lives at '<git-common-dir>/${RUN_MANIFEST_DIR}/<run-id>.json' -- the git
 common dir, so every worktree of the project shares it and no effort cleanup
 removes it; one an earlier build wrote under the legacy spelling is
-moved there once. git is asked with an inherited GIT_DIR, GIT_COMMON_DIR and
-GIT_WORK_TREE dropped. nen records and reads; it decides nothing.
+moved there once, by the first run verb that reads it without --dry-run. git is asked with an
+inherited GIT_DIR, GIT_COMMON_DIR and GIT_WORK_TREE dropped. nen records and
+reads; it decides nothing.
+
+MODES (zheref/nen#522). Every write -- start, append, park, import and the
+legacy move -- lands the manifest at 0600 in a 0700 directory: the directory
+is created at 0700, the file is written to a temp file at 0600 and renamed
+over, and a wider mode an earlier build left (0644 under 0755) is narrowed on
+the next write. The modes are READ BACK and printed as 'mode: file 0600,
+directory 0700' (with '(narrowed: file 0644 -> 0600, ...)' when a write
+narrowed one); --json carries 'mode': { verdict, file, directory, repaired,
+reason } -- the legacy move's narrowing included, null when neither the
+plan nor a legacy move writes. A manifest, legacy manifest or runs directory (or any component of
+it below the git common dir, such as .nen) that is a symbolic link (or not a
+regular file) is refused at exit 1: nen never chmods or writes
+through a link. Where a mode cannot be set -- a win32
+host, a chmod that fails, a read-back that is not 0600/0700 -- the write
+stands and the verb says 'mode: not set (<reason>)', verdict not-set; it never
+claims the mode.
+
+DRY FORMS. Every verb that can write the manifest takes --dry-run, and a
+dry run writes nothing: no file, no directory, no mode change, no move. The
+legacy move counts as a write, so verify and budget, which move a legacy
+manifest when they read it, take --dry-run too: it prints 'would move run
+manifest ... (dry run: nothing moved; read where it is)' on stderr and reads
+the file in place. start, append, park and import print 'mode: would set file
+0600, directory 0700' for the write they would make. 'nen loop slots
+--from-run' never moves a manifest; it reads a legacy one in place.
 
   start   Write the manifest: id, repo (--target), startedAt, idleAnswers (a
           JSON object from ask-once row id to default | hold | refuse, HR-5),
@@ -113,6 +144,7 @@ GIT_WORK_TREE dropped. nen records and reads; it decides nothing.
           run's repo (exit 2 otherwise). Exit 0 when every PR was read, 1
           when any could not be -- an unread PR is never counted, and the
           unmerged list is then 'unknown (<n> unread)', null in --json.
+          --dry-run: the legacy move printed, not made (see DRY FORMS).
   budget  Minutes are WALL-CLOCK since the manifest's startedAt
           (idle.budget.minutes as its catalogue row defines it); the
           efforts' own minutes are printed as effortMinutes, never compared.
@@ -124,7 +156,8 @@ GIT_WORK_TREE dropped. nen records and reads; it decides nothing.
           when an entry was recorded --not-reported, a delivery PR names no
           effort, a delivery PR's or an --effort's effort has no ledger, or a
           ledger will not read. With --claim: exit 1 once either ceiling is reached -- an
-          answer, not a failure, the loop cap's shape. Nothing is written.
+          answer, not a failure, the loop cap's shape. Nothing is written
+          but the one-time legacy move, which --dry-run prints and skips.
   import  Read the consumer plane's futon run manifest
           (${CONSUMER_RUN_CONTRACTS.join(" or ")}, at
           '${CONSUMER_RUN_DISPLAY}', or --from <file>)
@@ -169,7 +202,7 @@ const OWNED: Readonly<Record<string, readonly Subcommand[]>> = {
   "max-tokens": ["budget"],
 };
 const OWNED_BOOLEANS: Readonly<Record<string, readonly Subcommand[]>> = {
-  "dry-run": ["rerun-failed", "start", "append", "park", "record", "import"],
+  "dry-run": ["rerun-failed", "start", "append", "park", "record", "import", "verify", "budget"],
   claim: ["budget"],
 };
 
@@ -277,12 +310,31 @@ function runId(context: CommandContext): string {
   return id;
 }
 
-/** The manifest path for --id under the checkout's git common dir (a legacy one moved there once), or null with the reason printed. */
-function manifestPath(context: CommandContext, root: string, id: string): string | null {
+/** How this invocation sets the manifest's modes: the host's platform, through the seam, and its chmod. */
+function modeOps(context: CommandContext): ModeOps {
+  return { platform: context.seams.platform, chmod: chmodSync };
+}
+
+/**
+ * The manifest for --id under the checkout's git common dir, or null with the
+ * reason printed. A manifest at a legacy path is moved there once -- a WRITE,
+ * so under --dry-run it is printed as 'would move' and left where it is, and
+ * the verb reads it in place (zheref/nen#522 AC-2). Either way the move, and
+ * the modes it set or would set, go to stderr.
+ */
+function locateManifest(context: CommandContext, root: string, id: string, dryRun: boolean): LocatedManifest | null {
   try {
-    const located = locateRunManifest(gitCommonDir(context.seams, root), id);
-    if (located.migratedFrom !== null) context.io.err(`nen: moved run manifest '${id}' from ${located.migratedFrom} to ${located.path} (nen's common-dir root; this happens once).`);
-    return located.path;
+    const located = locateRunManifest(gitCommonDir(context.seams, root), id, { dryRun, ops: modeOps(context) });
+    if (located.migratedFrom !== null) {
+      context.io.err(
+        located.moved
+          ? `nen: moved run manifest '${id}' from ${located.migratedFrom} to ${located.path} (nen's common-dir root; this happens once).`
+          : `nen: would move run manifest '${id}' from ${located.migratedFrom} to ${located.path} (dry run: nothing moved; read where it is).`,
+      );
+      // The move's modes are part of the verb's `mode`: alone when the plan writes nothing (N5), combined when it writes too (N9).
+      for (const line of renderModes(located.modes)) context.io.err(`nen: ${line}`);
+    }
+    return located;
   } catch (error) {
     context.io.err(`nen: ${error instanceof Error ? error.message : String(error)}`);
     return null;
@@ -311,20 +363,22 @@ function doStart(context: CommandContext): number {
       throw new VerbUsageError(error instanceof Error ? error.message : String(error));
     }
   }
-  const path = manifestPath(context, root, id);
-  if (path === null) return 1;
   const dryRun = context.args.booleans.has("dry-run");
+  const located = locateManifest(context, root, id, dryRun);
+  if (located === null) return 1;
+  const path = located.path;
   let result;
   try {
-    result = withManifest(path, (existing) => planStart(existing, id, target.slug, context.seams.now().toISOString(), answers), !dryRun);
+    result = withManifest(path, (existing) => planStart(existing, id, target.slug, context.seams.now().toISOString(), answers), !dryRun, { readPath: located.readPath, ops: modeOps(context) });
   } catch (error) {
     context.io.err(`nen: ${error instanceof Error ? error.message : String(error)}`);
     return 1;
   }
   const outcome = dryRun && result.outcome === "started" ? "dry-run" : result.outcome;
   const reason = result.outcome === "conflict" ? result.reason : null;
-  emit(context.io, context.json, { outcome, path, reason, manifest: result.manifest }, [
+  emit(context.io, context.json, { outcome, path, reason, manifest: result.manifest, mode: combineModes(located.modes, result.modes) }, [
     reason === null ? `${outcome}: run ${id} -- ${path}` : `refused: ${reason}`,
+    ...renderModes(combineModes(located.modes, result.modes)),
   ]);
   return result.outcome === "conflict" ? 1 : 0;
 }
@@ -349,13 +403,14 @@ function doAppend(context: CommandContext): number {
 
   const root = resolveRepoRoot({ repoFlag: context.repoFlag });
   const issue = issueRaw === undefined ? null : normaliseIssue(root, issueRaw);
-  const path = manifestPath(context, root, id);
-  if (path === null) return 1;
   const dryRun = context.args.booleans.has("dry-run");
+  const located = locateManifest(context, root, id, dryRun);
+  if (located === null) return 1;
+  const path = located.path;
   const now = context.seams.now().toISOString();
   let result;
   try {
-    const started = readRunManifest(path);
+    const started = readRunManifest(located.readPath);
     if (started === null) {
       throw new RunManifestError(`no run '${id}' at ${path} -- 'nen run start --id ${id}' first. A PR recorded into a run nobody started would be a run with no launch answers.`);
     }
@@ -380,6 +435,7 @@ function doAppend(context: CommandContext): number {
         return planAppend(existing, { issue, pr, base: live.pr.base, branch: live.pr.headRef, kind: kind as RunKind, head: live.pr.head, effort, now });
       },
       !dryRun,
+      { readPath: located.readPath, ops: modeOps(context) },
     );
   } catch (error) {
     context.io.err(`nen: ${error instanceof Error ? error.message : String(error)}`);
@@ -391,10 +447,11 @@ function doAppend(context: CommandContext): number {
   const previous = result.outcome === "updated" || result.outcome === "conflict" ? result.previous : null;
   const reason = result.outcome === "conflict" ? result.reason : null;
   const would = dryRun && writes ? ` (would be ${result.outcome})` : "";
-  emit(context.io, context.json, { outcome, path, reason, entry, previous }, [
+  emit(context.io, context.json, { outcome, path, reason, entry, previous, mode: combineModes(located.modes, result.modes) }, [
     reason === null
       ? `${outcome}${would}: #${pr} ${issue ?? "(no issue)"} [${kind}] ${entry?.branch ?? ""} -> ${entry?.base ?? ""} @ ${(entry?.head ?? "").slice(0, 12)} in run ${id}`
       : `refused: ${reason}`,
+    ...renderModes(combineModes(located.modes, result.modes)),
   ]);
   return result.outcome === "conflict" ? 1 : 0;
 }
@@ -407,9 +464,10 @@ function doPark(context: CommandContext): number {
   if (!ROW_ID.test(row)) throw new VerbUsageError(`--row '${row}' is not [a-z0-9-]+, the spelling nen/decisions.json uses.`);
   const root = resolveRepoRoot({ repoFlag: context.repoFlag });
   const issue = normaliseIssue(root, issueRaw);
-  const path = manifestPath(context, root, id);
-  if (path === null) return 1;
   const dryRun = context.args.booleans.has("dry-run");
+  const located = locateManifest(context, root, id, dryRun);
+  if (located === null) return 1;
+  const path = located.path;
   let result;
   try {
     result = withManifest(
@@ -419,24 +477,29 @@ function doPark(context: CommandContext): number {
         return planPark(existing, issue, row, context.seams.now().toISOString());
       },
       !dryRun,
+      { readPath: located.readPath, ops: modeOps(context) },
     );
   } catch (error) {
     context.io.err(`nen: ${error instanceof Error ? error.message : String(error)}`);
     return 1;
   }
   const outcome = dryRun && result.outcome === "parked" ? "dry-run" : result.outcome;
-  emit(context.io, context.json, { outcome, path, entry: result.entry }, [`${outcome}: ${issue} parked on row ${row} in run ${id} (since ${result.entry.at})`]);
+  emit(context.io, context.json, { outcome, path, entry: result.entry, mode: combineModes(located.modes, result.modes) }, [
+    `${outcome}: ${issue} parked on row ${row} in run ${id} (since ${result.entry.at})`,
+    ...renderModes(combineModes(located.modes, result.modes)),
+  ]);
   return 0;
 }
 
+/** The manifest a reading verb reads; under --dry-run a legacy-path one is read in place, never moved (AC-2). */
 function loadManifest(context: CommandContext, id: string): RunManifest | null {
   const root = resolveRepoRoot({ repoFlag: context.repoFlag });
-  const path = manifestPath(context, root, id);
-  if (path === null) return null;
+  const located = locateManifest(context, root, id, context.args.booleans.has("dry-run"));
+  if (located === null) return null;
   try {
-    const manifest = readRunManifest(path);
+    const manifest = readRunManifest(located.readPath);
     if (manifest === null) {
-      context.io.err(`nen: no run '${id}' at ${path}. A run that was never started has no PRs to read, which is not the same as a run whose PRs are all merged.`);
+      context.io.err(`nen: no run '${id}' at ${located.path}. A run that was never started has no PRs to read, which is not the same as a run whose PRs are all merged.`);
       return null;
     }
     return manifest;
@@ -524,24 +587,26 @@ function doImport(context: CommandContext): number {
     return 1;
   }
   const from = fromFlag === undefined ? consumerRunPath(common, id) : resolve(root, fromFlag);
-  const path = manifestPath(context, root, id);
-  if (path === null) return 1;
+  const located = locateManifest(context, root, id, dryRun);
+  if (located === null) return 1;
+  const path = located.path;
   const now = context.seams.now().toISOString();
   let result;
   try {
     const run = readConsumerRun(from);
     if (run.id !== id) throw new RunManifestError(`'${from}' records run '${run.id}', not '${id}'. Nothing was written.`);
-    result = withManifest(path, (existing) => planImport(context.seams, existing, run, id, now, root), !dryRun);
+    result = withManifest(path, (existing) => planImport(context.seams, existing, run, id, now, root), !dryRun, { readPath: located.readPath, ops: modeOps(context) });
   } catch (error) {
     context.io.err(`nen: ${error instanceof Error ? error.message : String(error)}`);
     return 1;
   }
   const outcome = dryRun && result.outcome === "imported" ? "dry-run" : result.outcome;
-  emit(context.io, context.json, { outcome, from, path, reason: result.reason, prs: result.prs, parked: result.parked, manifest: result.manifest }, [
+  emit(context.io, context.json, { outcome, from, path, reason: result.reason, prs: result.prs, parked: result.parked, manifest: result.manifest, mode: combineModes(located.modes, result.modes) }, [
     result.reason === null
       ? `${outcome}: run ${id} from ${from} -- ${result.prs.length} PR(s), ${result.parked.length} parked -- ${path}`
       : `refused: ${result.reason}`,
     ...result.prs.map((row): string => `  #${row.pr}: ${row.outcome}`),
+    ...renderModes(combineModes(located.modes, result.modes)),
   ]);
   return result.outcome === "conflict" ? 1 : 0;
 }

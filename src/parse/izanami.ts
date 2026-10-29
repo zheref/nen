@@ -1312,8 +1312,8 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       // zheref/nen#486 AC-5: reads the consumer's run manifest (never writes it)
       // and every PR over gh pr view; writes nen's manifest unless --dry-run.
       import: DRY("reads the consumer's run manifest and every PR over gh pr view, and writes the run manifest under the git common dir unless --dry-run is given"),
-      verify: RO("reads the run manifest and every recorded PR over gh pr view"),
-      budget: RO("reads the run manifest and the usage ledgers; a claim is a question and writes nothing"),
+      verify: DRY("reads the run manifest and every recorded PR over gh pr view; moves a legacy-path manifest to the common-dir root once unless --dry-run is given (zheref/nen#522)"),
+      budget: DRY("reads the run manifest and the usage ledgers, a claim writing nothing; moves a legacy-path manifest to the common-dir root once unless --dry-run is given (zheref/nen#522)"),
       // zheref/nen#493: a caller's run record under its XDG state directory.
       "record read": RO("reads and validates the run record; writes nothing"),
       "record write": DRY("writes the run record (0600, in a 0700 directory) unless --dry-run is given"),

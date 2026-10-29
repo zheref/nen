@@ -243,7 +243,7 @@ describe("nen issue criteria", () => {
   it("lists an issue's AC rows from --ref and --target, and --json carries the contract", async () => {
     const result = await run(issueCommand, ["issue", "criteria", "--ref", "NN#12", "--target", "o/n"], [issueRead(12, ISSUE_BODY)]);
     expect(result.code).toBe(0);
-    expect(result.out.split("\n")).toEqual(["2 AC row(s), 0 duplicate number(s) -- o/n#12", "AC-1 line 3: lists rows", "AC-2 line 4: exits 2 unread"]);
+    expect(result.out.split("\n")).toEqual(["2 AC row(s), 0 duplicate id(s) -- o/n#12", "AC-1 line 3: lists rows", "AC-2 line 4: exits 2 unread"]);
     const json = await run(issueCommand, ["issue", "criteria", "--ref", "NN#12", "--target", "o/n"], [issueRead(12, ISSUE_BODY)], { json: true });
     const report = JSON.parse(json.out) as { contract: string; verifiable: boolean; source: { kind: string; number: number } };
     expect(report.contract).toBe("nen.issue.criteria/v0.1");
