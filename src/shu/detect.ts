@@ -1586,9 +1586,12 @@ function isReadablePattern(pattern: string): boolean {
 /** Whether a resolved member path is a directory that is actually there. */
 function memberExists(laneDirectory: string, memberPath: string): boolean {
   const segments = memberPath.split("/");
+  const root = resolve(laneDirectory);
   // Literal workspace members must obey the same checkout boundary as walks.
   for (let i = 1; i <= segments.length; i++) {
-    if (isLinkedCheckout(join(laneDirectory, ...segments.slice(0, i)))) return false;
+    const prefix = join(root, ...segments.slice(0, i));
+    // A leading './' names the requested root, not a nested checkout.
+    if (prefix !== root && isLinkedCheckout(prefix)) return false;
   }
   const name = segments[segments.length - 1];
   if (name === undefined || name === "") return false;
