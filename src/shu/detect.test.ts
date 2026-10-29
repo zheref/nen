@@ -112,6 +112,42 @@ describe("linked checkout boundaries (NN533)", () => {
     }
   });
 
+  it("keeps dot-prefixed workspace members when the requested root is linked", () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-detect-worktree-workspace-"));
+    const git = (...argv: string[]): void => {
+      execFileSync("git", ["-C", root, ...argv], { stdio: "pipe" });
+    };
+    try {
+      cpSync(NEXTJS_SINGLE, root, { recursive: true });
+      git("init");
+      git("add", ".");
+      git(
+        "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+        "-c", "commit.gpgsign=false", "-c", `core.hooksPath=${join(root, "unused-hooks")}`,
+        "commit", "-m", "fixture",
+      );
+      const linked = join(root, "linked");
+      git("worktree", "add", "--detach", linked, "HEAD");
+      mkdirSync(join(linked, "packages", "app"), { recursive: true });
+      writeFileSync(join(linked, "packages", "app", "package.json"), JSON.stringify({ name: "@fixture/app" }));
+      const excluded = join(linked, "packages", "excluded");
+      git("worktree", "add", "--detach", excluded, "HEAD");
+      writeFileSync(join(excluded, "package.json"), JSON.stringify({ name: "@fixture/excluded" }));
+      const manifestPath = join(linked, "package.json");
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
+      for (const pattern of ["./packages/app", "./packages/*"]) {
+        writeFileSync(manifestPath, JSON.stringify({ ...manifest, workspaces: [pattern, "./packages/excluded"] }));
+        const report = detect(linked);
+        expect(report.lanes.map((lane) => lane.cwd), pattern).toEqual(["."]);
+        const notes = report.lanes[0]?.notes.join("\n") ?? "";
+        expect(notes, pattern).toContain("members nen can see here are @fixture/app.");
+        expect(notes, pattern).not.toContain("@fixture/excluded");
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("excludes arbitrary linked checkout names but preserves ordinary lanes under worktrees", () => {
     const root = mkdtempSync(join(tmpdir(), "nen-detect-boundary-"));
     try {
