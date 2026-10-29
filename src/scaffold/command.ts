@@ -152,7 +152,11 @@ attribution trailer --agent-trailer resolved to (zheref/nen#167).
 
 --hook-path defaults to .git/hooks/commit-msg, and names the DIRECTORY both
 generated hooks go in: the trunk guard is written as 'pre-commit' beside it,
-with no flag of its own. When a DIFFERENT hook already exists at either path,
+with no flag of its own. A checkout whose .git is a gitdir file refuses
+that default before any write: run from the main checkout to install shared
+hooks, or pass --hook-path for hooks configured inside this checkout. Nen does
+not read core.hooksPath; state its matching hook path explicitly when configured.
+When a DIFFERENT hook already exists at either path,
 init REFUSES rather than overwriting it silently; pass --force to replace it
 (the existing hook is backed up to '<path>.bak' first). A hook with identical
 generated content is left alone either way (idempotent). The same

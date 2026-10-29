@@ -49,7 +49,7 @@
 // would be nen choosing an indirection layer for somebody.
 
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, relative, sep } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { VerbUsageError } from "../cli/command.js";
 import {
   loadProfilesPack,
@@ -109,6 +109,24 @@ const SKIP = new Set([
   "Pods",
   "DerivedData",
 ]);
+
+/** Linked worktrees have a gitdir file and per-worktree commondir metadata. */
+function isLinkedCheckout(directory: string): boolean {
+  try {
+    const match = /^gitdir: ([^\r\n]+)\r?\n?$/.exec(readFileSync(join(directory, ".git"), "utf8"));
+    if (match?.[1] === undefined) return false;
+    // Submodules and separate-git-dir repositories also use gitdir files;
+    // without commondir they remain legitimate lane roots.
+    return readFileSync(join(resolve(directory, match[1]), "commondir"), "utf8").trim() !== "";
+  } catch {
+    return false;
+  }
+}
+
+/** Applied only to children: a requested worktree root is scanned normally. */
+function scanChild(directory: string, entry: Entry): boolean {
+  return entry.directory && !SKIP.has(entry.name) && !isLinkedCheckout(join(directory, entry.name));
+}
 
 /**
  * How deep the scan goes.
@@ -846,7 +864,7 @@ function fileCarrying(
   for (const entry of listDirectory(directory)) {
     const path = join(directory, entry.name);
     if (entry.directory) {
-      if (depth === 0 || SKIP.has(entry.name)) continue;
+      if (depth === 0 || !scanChild(directory, entry)) continue;
       if (isOwnBuildRoot(path, context)) {
         nestedBuilds.add(path);
         continue;
@@ -1194,7 +1212,7 @@ function scan(
     if (matches.length > 0) out.push({ directory, matches });
     if (depth === 0) return;
     for (const entry of listDirectory(directory)) {
-      if (!entry.directory || SKIP.has(entry.name)) continue;
+      if (!scanChild(directory, entry)) continue;
       // A bundle IS a directory on disk; descending into one finds the same
       // marker again one level down and proposes a phantom lane.
       if (XCWORKSPACE.test(entry.name) || XCODEPROJ.test(entry.name)) continue;
@@ -1546,7 +1564,7 @@ function expandWorkspacePattern(
   if (segments[segments.length - 1] !== "*") return [pattern];
   const parent = segments.slice(0, -1).join("/");
   return listDirectory(join(laneDirectory, ...segments.slice(0, -1)))
-    .filter((entry): boolean => entry.directory && !SKIP.has(entry.name))
+    .filter((entry): boolean => scanChild(join(laneDirectory, ...segments.slice(0, -1)), entry))
     .map((entry): string => `${parent}/${entry.name}`);
 }
 
@@ -1568,6 +1586,10 @@ function isReadablePattern(pattern: string): boolean {
 /** Whether a resolved member path is a directory that is actually there. */
 function memberExists(laneDirectory: string, memberPath: string): boolean {
   const segments = memberPath.split("/");
+  // Literal workspace members must obey the same checkout boundary as walks.
+  for (let i = 1; i <= segments.length; i++) {
+    if (isLinkedCheckout(join(laneDirectory, ...segments.slice(0, i)))) return false;
+  }
   const name = segments[segments.length - 1];
   if (name === undefined || name === "") return false;
   return listDirectory(join(laneDirectory, ...segments.slice(0, -1))).some(
@@ -3576,7 +3598,7 @@ function walkLaneFiles(repoRoot: string, laneDirectory: string): readonly TreeFi
     for (const entry of listDirectory(directory)) {
       const absolute = join(directory, entry.name);
       if (entry.directory) {
-        if (depth === 0 || SKIP.has(entry.name)) continue;
+        if (depth === 0 || !scanChild(directory, entry)) continue;
         walk(absolute, depth - 1);
         continue;
       }

@@ -8,6 +8,7 @@
 // directory, so a run of this suite can never write into the checkout.
 
 import { describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { toolsNamedIn } from "./fixtures/toolchain.js";
 import { tmpdir } from "node:os";
@@ -84,6 +85,60 @@ import { ASSERTABLE_KINDS, TARGETED_VERBS } from "./render.js";
 function detect(repo: string, platform: NodeJS.Platform = "linux"): ReturnType<typeof detectOn> {
   return detectOn(repo, platform);
 }
+
+describe("linked checkout boundaries (NN533)", () => {
+  it("finds one lane beside three real linked worktrees and scans a requested worktree normally", () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-detect-worktrees-"));
+    const git = (...argv: string[]): void => {
+      execFileSync("git", ["-C", root, ...argv], { stdio: "pipe" });
+    };
+    try {
+      cpSync(NEXTJS_SINGLE, root, { recursive: true });
+      git("init");
+      git("add", ".");
+      git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "-c", `core.hooksPath=${join(root, "unused-hooks")}`, "commit", "-m", "fixture");
+      for (const name of ["one", "two", "three"]) {
+        git("worktree", "add", "--detach", join(root, ".claude", "worktrees", name), "HEAD");
+      }
+      const report = detect(root);
+      expect(report.lanes).toHaveLength(1);
+      expect(report.lanes[0]?.cwd).toBe(".");
+      expect((report.proposal?.["project"] as { defaultLane: string | null }).defaultLane).toBe(report.lanes[0]?.lane);
+      const linked = detect(join(root, ".claude", "worktrees", "one"));
+      expect(linked.lanes).toHaveLength(1);
+      expect(linked.lanes[0]?.cwd).toBe(".");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("excludes arbitrary linked checkout names but preserves ordinary lanes under worktrees", () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-detect-boundary-"));
+    try {
+      cpSync(NEXTJS_SINGLE, root, { recursive: true });
+      const linked = join(root, "efforts", "arbitrary-name");
+      cpSync(NEXTJS_SINGLE, linked, { recursive: true });
+      writeFileSync(join(linked, ".git"), "gitdir: ../../.git/worktrees/arbitrary-name\n");
+      mkdirSync(join(root, ".git", "worktrees", "arbitrary-name"), { recursive: true });
+      writeFileSync(join(root, ".git", "worktrees", "arbitrary-name", "commondir"), "../..\n");
+      cpSync(NEXTJS_SINGLE, join(root, "worktrees", "real-app"), { recursive: true });
+      expect(detect(root).lanes.map((lane) => lane.cwd)).toEqual([".", "worktrees/real-app"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves a lane with a gitdir file that has no linked-worktree commondir", () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-detect-submodule-"));
+    try {
+      cpSync(NEXTJS_SINGLE, join(root, "module"), { recursive: true });
+      writeFileSync(join(root, "module", ".git"), "gitdir: ../.git/modules/module\n");
+      expect(detect(root).lanes.map((lane) => lane.cwd)).toEqual(["module"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 interface Captured {
   readonly code: number;
