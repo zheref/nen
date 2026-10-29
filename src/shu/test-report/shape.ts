@@ -112,6 +112,18 @@ const SEVERITY: Readonly<Record<TestStatus, number>> = { failed: 0, skipped: 1, 
  * the last child would report a failure as a skip on a file whose elements
  * happen to be in the other order. The worse one is the true one.
  */
+/**
+ * A table lookup that reads the table's OWN keys only (zheref/nen#556 review
+ * F1). `TABLE[word]` on a plain object literal also answers for every
+ * Object.prototype key -- `constructor`, `toString`, `__proto__` -- so a
+ * `<constructor/>` child, or `"status": "constructor"`, resolved to a function
+ * and replaced a FAILED status. Every outcome table in these formats is read
+ * through this.
+ */
+export function ownEntry<T>(table: Readonly<Record<string, T>>, key: string): T | undefined {
+  return Object.hasOwn(table, key) ? table[key] : undefined;
+}
+
 export function worse(left: TestStatus, right: TestStatus): TestStatus {
   return SEVERITY[left] <= SEVERITY[right] ? left : right;
 }

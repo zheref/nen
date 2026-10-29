@@ -189,10 +189,8 @@ export const CAPABILITIES: readonly SurfaceCapabilities[] = [
     hooks: {
       file: ".agents/hooks.json",
       stop: "Stop",
-      // No SessionStart event exists; PreInvocation is the documented moment
-      // closest to it, and what a session-start job is mapped to.
       preToolUse: "PreToolUse",
-      sessionStart: "PreInvocation (no SessionStart event)",
+      sessionStart: "SessionStart",
       decisionKey: "decision: allow|deny|ask|force_ask|deny_unless_prior_grant (+ reason)",
     },
     worktreeIsolation: true,
@@ -203,7 +201,7 @@ export const CAPABILITIES: readonly SurfaceCapabilities[] = [
     // approves arbitrary commands, so no pack is written for this surface.
     permissionsFile: "per-agent commandExecutionPolicy (off|auto|eager|sandbox, default sandbox) in .agents/agents/<name>.md",
     agentModelKey: "model (inherit|flash|pro)",
-    hookEvents: ["PreToolUse", "PostToolUse", "PreInvocation", "PostInvocation", "Stop"],
+    hookEvents: ["SessionStart", "PreToolUse", "PostToolUse", "PreInvocation", "PostInvocation", "Stop"],
     rulesFile: ".agents/rules/<name>.md",
     // Re-read 2026-09-28 from https://antigravity.google/docs/rules: "truncates
     // any single rule file that exceeds 24,000 bytes" (the 2026-09-20 page

@@ -748,10 +748,14 @@ usage:
       present and empty, a content pattern not matched, a row section with no
       <PREFIX>-{n} row, a row not in its pattern's shape or naming its id in no
       admitted shape (row-shape), rows not numbered 1..n in order, a row whose
-      text fails its measure. A none section may say only noneText. Vague
-      adjectives, and technology terms on acceptance rows, are advisories,
-      never a miss. With several kinds, no --kind and no common list it
-      refuses (exit 2): nen will not pick a kind. --ref reads the issue from
+      text fails its measure. The acceptance row's id has the shape its
+      pattern's group after the prefix declares (an epic-scoped AC-12-001
+      under '^- AC-([0-9]+-[0-9]{3}): ...'; zheref/nen#519), reported whole
+      and ordered within its leading group (AC-12-001, AC-12-002, then
+      AC-13-001). A none section may say only noneText. Vague adjectives,
+      and technology terms on acceptance rows, are advisories, never a miss.
+      With several kinds, no --kind and no common list it refuses (exit 2):
+      nen will not pick a kind. --ref reads the issue from
       --target; its CODE is echoed, never resolved, and a number naming a pull
       request is refused (exit 2). Exits: 0 no miss, 1 a miss or an unreadable
       issue, 2 usage or a malformed catalogue. --json: '{ contract:
@@ -789,15 +793,22 @@ usage:
       Read-only. Lists the acceptance criteria an issue body states: every
       list row '- AC-{n}: <text>' ('*', '+', '1.' and '1)' bullets, a
       task-list checkbox and a bold id read) outside fenced code and comments,
-      with its number, text and line, and any AC number stated twice. A list
-      row naming AC-{n} in no admitted shape, or inside a blockquote, is
-      unrecognised. --requirements-from takes the prefix from the catalogue's
-      acceptance rows and reads them inside its acceptance section only, as
-      'issue body-check' does; with none, AC rows anywhere in the body. A
-      body with no AC row is reported not verifiable -- nothing to verify,
-      never "all verified". 'nen pr converge' compares these rows with a PR's
-      verify rows. Exits: 0 whenever the body was read, 1 when the issue could
-      not be read or carried no body, 2 usage or a malformed catalogue.
+      with its whole id, number, text and line, and any id stated twice. The
+      id is one number or several joined by hyphens: an epic-scoped
+      '- AC-12-001:' is the criterion AC-12-001, never AC-12
+      (zheref/nen#519). A list row naming AC-{n} in no admitted shape, or
+      inside a blockquote, is unrecognised, and so is a row whose last number
+      runs past nine digits. --requirements-from takes the prefix, and the id
+      shape, from the catalogue's acceptance row: its pattern's group right
+      after the prefix ('^- AC-([0-9]+): ...' reads AC-3 and refuses
+      AC-12-001; a pattern with no group there, or one outside the safe
+      subset in docs/USAGE.md, is a malformed catalogue). Rows are read inside
+      its acceptance section only, as 'issue body-check' does; with none, AC
+      rows anywhere in the body. A body with no AC row is reported not
+      verifiable -- nothing to verify, never "all verified". 'nen pr
+      converge' compares these rows with a PR's verify rows. Exits: 0
+      whenever the body was read, 1 when the issue could not be read or
+      carried no body, 2 usage or a malformed catalogue.
       --json: '{ contract: "nen.issue.criteria/v0.1", source, verifiable,
       criteria: [{ id, number, text, line }], duplicates: [{ id, lines }],
       unrecognised: [{ line, text }] }'.`;
@@ -2428,7 +2439,7 @@ function issueCriteria(context: CommandContext): number {
   const report = extractCriteria(body, catalogue);
   const lines = [
     report.verifiable
-      ? `${report.criteria.length} AC row(s), ${report.duplicates.length} duplicate number(s) -- ${describeSource(source)}`
+      ? `${report.criteria.length} AC row(s), ${report.duplicates.length} duplicate id(s) -- ${describeSource(source)}`
       : `0 AC row(s): not verifiable -- ${describeSource(source)}`,
     ...report.criteria.map((criterion): string => `${criterion.id} line ${criterion.line}: ${criterion.text}`),
     ...report.duplicates.map((duplicate): string => `DUPLICATE ${duplicate.id} lines ${duplicate.lines.join(", ")}`),

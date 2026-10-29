@@ -14,9 +14,9 @@
 // so ./mirror.ts's `check` and `generate` treat it as their own (the universe
 // rule): as an HTML comment in markdown, as a `# ` line-1 comment in TOML, and
 // in JSON -- which has no comment -- as a top-level `"$generated"` key holding
-// the marker's text. `$`-prefixed keys are the convention every consumer of
-// these files already ignores (`$schema`, `$comment`), so the key is read by
-// nen and by nobody else. ./mirror.ts's `readMarker` reads all three.
+// the marker's text. Antigravity hooks are the exception: the native loader
+// treats EVERY top-level value as a hook definition, so their ownership text
+// is the generated definition's name instead (#543). ./mirror.ts reads both.
 
 import { lstatSync, readFileSync } from "node:fs";
 import { basename, dirname, extname, join } from "node:path";
@@ -317,7 +317,12 @@ export function rebaseCommand(command: string, root: string): string {
 
 type HooksRule = NonNullable<SurfaceRow["hooks"]>;
 
-/** The manifest in the row's shape, as file content. */
+/**
+ * The manifest in the row's shape. Antigravity's native format maps hook
+ * names to definitions, so the ownership marker is the definition's NAME,
+ * never a string-valued metadata entry the native parser treats as a hook.
+ * https://antigravity.google/docs/hooks?tab=cli (read 2026-10-26).
+ */
 export function renderHooks(
   rule: HooksRule,
   manifest: HooksManifest,
@@ -337,6 +342,17 @@ export function renderHooks(
       );
       continue;
     }
+    if (rule.shape === "antigravity-json" && event !== "PreToolUse") {
+      // SessionStart and Stop are direct handler lists, not matcher groups.
+      rendered[name] = groups.flatMap((group): readonly Record<string, unknown>[] =>
+        group.hooks.map((hook): Record<string, unknown> => ({
+          type: "command",
+          command: command(hook),
+          ...(hook.timeout === null ? {} : { timeout: hook.timeout }),
+        })),
+      );
+      continue;
+    }
     rendered[name] = groups.map((group): Record<string, unknown> => ({
       ...(group.matcher !== null && rule.matcher !== null ? { matcher: rule.matcher } : {}),
       hooks: group.hooks.map((hook): Record<string, unknown> => ({
@@ -347,7 +363,9 @@ export function renderHooks(
     }));
   }
   const document: Record<string, unknown> =
-    rule.shape === "cursor-v1"
+    rule.shape === "antigravity-json"
+      ? { [marker]: rendered }
+      : rule.shape === "cursor-v1"
       ? { $generated: marker, version: 1, hooks: rendered }
       : { $generated: marker, hooks: rendered };
   return `${JSON.stringify(document, null, 2)}\n`;

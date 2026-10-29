@@ -463,7 +463,7 @@ describe("nen watch until --pr -- the native compound predicate (zheref/nen#264)
     expect(result.out[0]).toMatch(/observation failed: --require-head 1234567 does not match/);
   });
 
-  it("--json carries the loop result plus until, pr and the last read's verdict and settlement", async () => {
+  it("--json preserves the non-authoritative caller judgement alongside verdict and settlement (#532)", async () => {
     const result = await watch([...BASE, "--until", "settled-and-reviewed"], deps([PENDING, READY]), true);
     expect(result.code).toBe(0);
     const doc = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
@@ -473,7 +473,7 @@ describe("nen watch until --pr -- the native compound predicate (zheref/nen#264)
     expect(doc["readyAtWake"]).toBe(true);
     expect(doc["last"]).toEqual({
       verdict: "ready",
-      gateLine: "ready",
+      gateLine: "caller-supplied judgement (not an authoritative verdict): ready",
       judgedHead: HEAD,
       warnings: [],
       notes: [],

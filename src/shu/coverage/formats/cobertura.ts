@@ -128,13 +128,13 @@ export const COBERTURA: CoverageFormat = {
   },
 
   sniff(text: string): boolean {
-    const elements = scanXml(text);
+    const elements = scanXml(text, (reason): Error => new CoverageReportError(reason));
     const root = elements[0];
     return root?.name === "coverage" && root.attributes["line-rate"] !== undefined;
   },
 
   parse(text: string, path: string): ParsedCoverage {
-    const elements = scanXml(text);
+    const elements = scanXml(text, (reason): Error => new CoverageReportError(reason));
     const root = elements[0];
     if (root === undefined || root.name !== "coverage") {
       throw new CoverageReportError(

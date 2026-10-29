@@ -984,7 +984,7 @@ describe("prReady -- the checks-rollup distinction (zheref/nen#14, empty vs. unr
     const report = JSON.parse(out.join("\n")) as ReadyReport;
     expect(report.verdict).toBe("not-ready");
     expect(report.gateLine).toBe(
-      "not-ready: NO checks reported at head (CON-32a) — an EMPTY rollup, not a red one. Either " +
+      "caller-supplied judgement (not an authoritative verdict): not-ready: NO checks reported at head (CON-32a) — an EMPTY rollup, not a red one. Either " +
         "CI has not started yet, or its run concluded startup_failure and no check will ever " +
         "attach. Tell them apart with: gh run list --branch <head-branch> --limit 5 --json " +
         "conclusion,path,headSha",
@@ -1046,7 +1046,7 @@ describe("prReady -- check-rollup pagination (zheref/nen#14's fact-check, zheref
     };
   }
 
-  it("THE PIN: a rollup spanning two pages, with the FAILING entry on page two, is not-ready -- byte-identical to the oracle's own reason, never a false green", async () => {
+  it("THE PIN: a rollup spanning two pages, with the FAILING entry on page two, is not-ready and names that entry", async () => {
     const source = stubSource({
       pullRequestSnapshot: async (): Promise<PullRequestSnapshot> => pagedSnapshot(),
       checkRollupPage: async (): Promise<CheckRollupPage> => ({
@@ -1061,10 +1061,8 @@ describe("prReady -- check-rollup pagination (zheref/nen#14's fact-check, zheref
     const report = JSON.parse(out.join("\n")) as ReadyReport;
     expect(report.verdict).toBe("not-ready");
     expect(report.firstFailing).toBe("checks-green");
-    // The oracle's OWN reason string (scripts/pr_ready_gate.sh's
-    // `evaluate_ready`), quoted verbatim -- this is the CON-32(a) branch the
-    // shell reaches once the failing entry is actually visible to it.
-    expect(report.gateLine).toBe("not-ready: required checks reported but are not all green (CON-32a)");
+    // #532 retains the failure and names the entry that page two supplied.
+    expect(report.gateLine).toBe("caller-supplied judgement (not an authoritative verdict): not-ready: required checks reported but are not all green (CON-32a) — failing: sasuke / audit");
   });
 
   it("a FETCH FAILURE on page two is unevaluated, NEVER a partial ready -- the entry never seen cannot be weighed as green", async () => {
@@ -1287,7 +1285,7 @@ describe("prReady -- the happy path and the frozen --json contract", () => {
     const report = JSON.parse(out.join("\n")) as ReadyReport;
     expect(report.contract).toBe(CONTRACT);
     expect(report.verdict).toBe("ready");
-    expect(report.gateLine).toBe("ready");
+    expect(report.gateLine).toBe("caller-supplied judgement (not an authoritative verdict): ready");
     expect(report.firstFailing).toBeNull();
     expect(report.conjuncts).toHaveLength(6);
     expect(report.conjuncts.every((c): boolean => c.status === "ready")).toBe(true);
@@ -1352,7 +1350,7 @@ describe("prReady -- the happy path and the frozen --json contract", () => {
   it("without --json, --explain renders the human table", async () => {
     const { io, out } = capture();
     await prReady(input({ booleans: new Set(["explain"]) }), io, stubDeps(stubSource()));
-    expect(out.join("\n")).toContain("zheref/example#9: ready");
+    expect(out.join("\n")).toContain("zheref/example#9: caller-supplied judgement (not an authoritative verdict): ready");
     expect(out.join("\n")).toContain("What the gate does NOT decide:");
   });
 
@@ -1369,17 +1367,17 @@ describe("prReady -- the happy path and the frozen --json contract", () => {
     });
     const { io, out } = capture();
     await prReady(input({ booleans: new Set(["explain"]) }), io, stubDeps(source));
-    expect(out.join("\n")).toContain("zheref/example#9: ready");
+    expect(out.join("\n")).toContain("zheref/example#9: caller-supplied judgement (not an authoritative verdict): ready");
     expect(out.join("\n")).toContain("admitted beside a SUCCESS, not verified: windows (SKIPPED)");
   });
 
   it("the plain default is the gate's own quotable line, repo-prefixed", async () => {
     const { io, out } = capture();
     await prReady(input({ booleans: new Set() }), io, stubDeps(stubSource()));
-    // The FIRST line is unchanged -- a caller reading one line reads what it
-    // always read. The judged head follows it, unconditionally (zheref/nen#245).
+    // #532 identifies the caller-supplied judgement on its quotable line.
+    // The judged head follows it, unconditionally (zheref/nen#245).
     expect(out).toEqual([
-      "zheref/example#9: ready",
+      "zheref/example#9: caller-supplied judgement (not an authoritative verdict): ready",
       "  judged head: cafebabe (GitHub's head for this pull request when it was read; the verdict is about this commit)",
       "  aiReviewers required; base basebase: required (workflow file absent); default tip basebase: required (workflow file absent)",
     ]);
@@ -1451,7 +1449,7 @@ describe("prReady -- --exclude-check (zheref/hatsu#81)", () => {
     expect(code).toBe(1);
     const report = JSON.parse(out.join("\n")) as ReadyReport;
     expect(report.verdict).toBe("not-ready");
-    expect(report.gateLine).toMatch(/^not-ready: no checks reported \(after excluding: readiness\)/);
+    expect(report.gateLine).toBe("caller-supplied judgement (not an authoritative verdict): not-ready: no checks reported (after excluding: readiness) (CON-32a) — the rollup held only the excluded name(s), so the gate has no evidence to judge. This is an ABSENT verdict, not a red one; ask again once a check outside that exclusion reports.");
     expect(report.meta.excludedChecks).toEqual(["readiness"]);
   });
 
@@ -1673,7 +1671,7 @@ describe("prReady -- every CON-32 row is reported, not the first failure alone (
     expect(report.verdict).toBe("not-ready");
     expect(report.firstFailing).toBe("checks-green");
     expect(report.failing).toEqual(["checks-green", "unresolved-threads"]);
-    expect(report.gateLine).toBe("not-ready: required checks reported but are not all green (CON-32a)");
+    expect(report.gateLine).toBe("caller-supplied judgement (not an authoritative verdict): not-ready: required checks reported but are not all green (CON-32a) — failing: ci / windows");
     const threads = report.conjuncts.find((c): boolean => c.id === "unresolved-threads");
     expect(threads?.status).toBe("failed");
     expect(threads?.reason).toBe("not-ready: 2 unresolved review thread(s) (CON-32d)");
@@ -1691,7 +1689,7 @@ describe("prReady -- every CON-32 row is reported, not the first failure alone (
   it("the plain line stays the first failure; every OTHER failing row follows it", async () => {
     const { io, out } = capture();
     await prReady(input({ booleans: new Set() }), io, stubDeps(redCheckAndThreads()));
-    expect(out[0]).toBe("zheref/example#9: not-ready: required checks reported but are not all green (CON-32a)");
+    expect(out[0]).toBe("zheref/example#9: caller-supplied judgement (not an authoritative verdict): not-ready: required checks reported but are not all green (CON-32a) — failing: ci / windows");
     expect(out).toContain("  also FAILED CON-32(d): not-ready: 2 unresolved review thread(s) (CON-32d)");
   });
 
@@ -1748,7 +1746,7 @@ describe("prReady -- local tip differs from GitHub's head: a warning naming both
   it("plain: the warning follows the verdict line", async () => {
     const { io, out } = capture();
     await prReady(input({ booleans: new Set() }), io, stubDeps(stubSource(), behind));
-    expect(out[0]).toBe("zheref/example#9: ready");
+    expect(out[0]).toBe("zheref/example#9: caller-supplied judgement (not an authoritative verdict): ready");
     expect(out.join("\n")).toMatch(/warning: head mismatch: .*cafebabe.*0123456789abcdef/);
   });
 
@@ -2679,6 +2677,27 @@ describe("prReady -- every nen/gates.json input is read at the PR's base (zheref
     expect(report?.meta.warnings).toEqual([]);
   });
 
+  it.each(["json", "plain", "explain"] as const)("caller-supplied gates without base configuration are non-authoritative in %s (#532)", async (mode) => {
+    const root = bare();
+    const absent = (): PrStateSource => source(["rev"], async (): Promise<string | null> => null);
+    const flags = await run(root, absent(), mode, { reviewers: "rev", approvers: "" });
+    expect(flags.code).toBe(0);
+    expect(flags.out.join("\n")).toContain("caller-supplied judgement (not an authoritative verdict): ready");
+    if (mode === "json") {
+      expect(flags.report?.authority).toBe("caller-supplied");
+      expect(flags.report?.verdict).toBe("ready");
+    }
+    const elsewhere = mkdtempSync(join(tmpdir(), "nen-532-caller-"));
+    dirs.push(elsewhere);
+    const callerFile = join(elsewhere, "gates.json");
+    writeFileSync(callerFile, JSON.stringify(STRICT));
+    const file = await run(root, source(["rev-bot[bot]"], async (): Promise<string | null> => null), mode, { gates: callerFile });
+    expect(file.out.join("\n")).toContain("caller-supplied judgement (not an authoritative verdict): ready");
+    const unknown = await run(checkout(STRICT), absent(), mode);
+    expect(unknown.code).toBe(1);
+    expect(unknown.out.join("\n")).toContain("unevaluated: no gate to apply");
+  });
+
   it("--reviewers with no gates file and a base that could not be READ: flags-unverified, warned, and --require-base-gates refuses it", async () => {
     const failing = (): PrStateSource =>
       source(["rev"], async (): Promise<string | null> => {
@@ -2912,7 +2931,7 @@ describe("prReady -- the rounds-owed row's own-request reading (zheref/nen#240)"
     expect(report.verdict).toBe("not-ready");
     expect(report.firstFailing).toBe("rounds-owed");
     expect(report.gateLine).toBe(
-      "not-ready: a configured reviewer's round is still owed at the current head (CON-32b): sasuke (review requested, not yet posted)" +
+      "caller-supplied judgement (not an authoritative verdict): not-ready: a configured reviewer's round is still owed at the current head (CON-32b): sasuke (review requested, not yet posted)" +
         " — pending request only: no owed reviewer lacks a round at any head; each is owed because a review request for it is still pending (zheref/nen#240)" +
         "; own-request: every pending request was made by zheref, the identity running this gate",
     );
@@ -3080,5 +3099,36 @@ describe("pr ready trusted aiReviewers policy (#408)", () => {
     const { code, out } = await runPolicy("optional", "off", gates(), mode);
     expect(code).toBe(0); expect(out.join("\n")).toContain("aiReviewers optional; base basebase: optional; default tip defaulttip: off");
     expect(out.join("\n")).toContain("waived bot round: robot");
+  });
+});
+
+
+describe("prReady placeholder diagnostics (#532)", () => {
+  it.each(["json", "plain", "explain"] as const)("names failed and undetermined checks despite an earlier failure in %s", async (mode) => {
+    const src = stubSource({
+      pullRequestSnapshot: async (): Promise<PullRequestSnapshot> => {
+        const base = await stubSource().pullRequestSnapshot({ owner: "zheref", repo: "example" }, 9);
+        if (base.pullRequest === undefined) throw new Error("fixture has no pull request");
+        return {
+          ...base,
+          pullRequest: { ...base.pullRequest, mergeable: "CONFLICTING" },
+          checkRollup: [
+            { name: "readiness / verdict", title: "readiness undetermined — the verdict step did not report", status: "COMPLETED", conclusion: "SUCCESS" },
+            { name: "readiness / run-a", status: "COMPLETED", conclusion: "FAILURE" },
+            { name: "readiness / run-b", status: "COMPLETED", conclusion: "FAILURE" },
+          ],
+        };
+      },
+    });
+    const { io, out } = capture();
+    const code = await prReady(input({ booleans: new Set(mode === "plain" ? [] : [mode]) }), io, stubDeps(src));
+    expect(code).toBe(1);
+    const text = out.join("\n");
+    for (const name of ["readiness / verdict", "readiness / run-a", "readiness / run-b"]) expect(text).toContain(name);
+    if (mode === "json") {
+      const report = JSON.parse(text) as ReadyReport;
+      expect(report.verdict).toBe("not-ready");
+      expect(report.conjuncts.find((row) => row.id === "checks-green")?.status).toBe("unevaluated");
+    }
   });
 });
