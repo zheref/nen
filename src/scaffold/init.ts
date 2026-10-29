@@ -26,7 +26,7 @@
 // module imports no seam and `--dry-run` cannot spawn even by accident: a dry
 // run never calls it.
 
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { VerbUsageError } from "../cli/command.js";
 import { containedPath, realContainment } from "../repo/contain.js";
@@ -167,7 +167,7 @@ export interface ScaffoldInitOptions {
   /** Repo-relative directories to create, e.g. ["src", "tests", "docs"]. */
   readonly directories: readonly string[];
   readonly hook: HookSpec;
-  /** Repo-relative path for the git hook. Default '.git/hooks/commit-msg'. */
+  /** Repo-relative hook path. A linked checkout must state it explicitly. */
   readonly hookPath?: string;
   /**
    * When a DIFFERENT hook already lives at the hook path, overwrite it
@@ -534,6 +534,11 @@ export function scaffoldInit(options: ScaffoldInitOptions): ScaffoldInitResult {
   // refusal leaves the repository exactly as it was -- and so that `--hook-path`
   // and `--canon-values-path` are answered at exit 2 like every other usage
   // refusal rather than half-way through a report.
+  if (options.hookPath === undefined && existsSync(join(root, ".git")) && !statSync(join(root, ".git")).isDirectory()) {
+    throw new VerbUsageError(
+      "the default hook path cannot be installed from this checkout: .git is a gitdir file, not a directory. Run scaffold init from the main checkout to install the shared hooks; if core.hooksPath configures hooks inside this checkout, pass the matching --hook-path explicitly. Nen does not guess or parse Git configuration, and nothing was written.",
+    );
+  }
   const hookRelative = options.hookPath ?? join(".git", "hooks", "commit-msg");
   const hookPath = containFlag(root, hookRelative, "--hook-path");
   const canonValuesPath =

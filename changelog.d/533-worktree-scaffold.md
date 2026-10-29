@@ -1,0 +1,1 @@
+Exclude nested linked Git checkouts from lane detection and recursive evidence scans while scanning a requested worktree root normally. Scaffold init now declines its default hook path before writing in a linked checkout, naming the main-checkout recourse and preserving explicit contained hook paths. Genuine multi-lane proposals retain their explicit default-lane warning.
