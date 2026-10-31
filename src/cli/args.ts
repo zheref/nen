@@ -56,6 +56,14 @@ export interface ParsedArgs {
   readonly positionals: readonly string[];
   readonly values: Readonly<Record<string, string>>;
   readonly booleans: ReadonlySet<string>;
+  /**
+   * How many times each boolean flag was typed. `booleans` collapses a repeat
+   * (`--json --json` is one `--json`), which every verb but one is content
+   * with; a verb whose boolean is part of a grammar that refuses a repeat
+   * (`parse futon --dry-run`, zheref/nen#520) reads the count here. Optional
+   * so a hand-built ParsedArgs need not carry it: absent reads as "once".
+   */
+  readonly booleanCounts?: ReadonlyMap<string, number>;
   /** Every occurrence of each declared list flag, in argv order. A flag never given is absent. */
   readonly lists: Readonly<Record<string, readonly string[]>>;
   /** Everything after a bare `--`, passed through untouched. */
@@ -84,6 +92,7 @@ export function parseArgs(argv: readonly string[], spec: FlagSpec): ParsedArgs {
   const positionals: string[] = [];
   const values: Record<string, string> = {};
   const booleans = new Set<string>();
+  const booleanCounts = new Map<string, number>();
   const lists: Record<string, string[]> = {};
   const passthrough: string[] = [];
   const rest: string[] = [];
@@ -129,6 +138,7 @@ export function parseArgs(argv: readonly string[], spec: FlagSpec): ParsedArgs {
         );
       }
       booleans.add(name);
+      booleanCounts.set(name, (booleanCounts.get(name) ?? 0) + 1);
       continue;
     }
 
@@ -235,5 +245,5 @@ export function parseArgs(argv: readonly string[], spec: FlagSpec): ParsedArgs {
     );
   }
 
-  return { positionals, values, booleans, lists, passthrough, rest };
+  return { positionals, values, booleans, booleanCounts, lists, passthrough, rest };
 }
