@@ -479,7 +479,7 @@ verb does by default:
 | [`issue edit-body`](#nen-issue-edit-body) | no | `--dry-run` | **still reads GitHub** to certify the number is an issue, not a PR, before printing the byte count, first/last line, `current body sha256:` and a `body check:` line saying what was and was not checked; with `--expect-body-sha256` it also compares, and a mismatch exits **3** (conflict, nothing written) exactly as a real run would; `--current-body-out <path>` writes the read's exact bytes |
 | [`issue attach-sub`](#nen-issue-attach-sub) | no | `--dry-run` | **still reads GitHub** to certify every number is an issue, not a PR |
 | [`issue consolidate-close`](#nen-issue-consolidate-close) | no | `--dry-run` | **still reads GitHub** for the object-class check and the open-PR guard |
-| [`labels sync`](#nen-labels-sync) | no | `--dry-run` | reads remote labels, without mutations |
+| [`labels sync`](#nen-labels-sync) | no | `--dry-run` | reads remote labels, without mutations; `--ref <ref>` and `--working-tree` invert it — a dry run unless `--apply` |
 | [`labels rename`](#nen-labels-rename) | no | `--dry-run` | **still calls `gh label list`** to decide idempotence |
 | [`label apply`](#nen-label-apply) | yes | `--run` | the ledger line is written either way, with `outcome: "dry-run"` |
 | [`wake verify`](#nen-wake-verify) | yes | `--run` | despite the name, `--run` reruns workflows and posts comments; the dry run also runs the [private-name guard](#the-private-name-guard) ([#363](https://github.com/zheref/nen/issues/363)) |
@@ -7393,12 +7393,27 @@ without a failed-create retry. One label's failure does not prevent later labels
 
 ```text
 nen labels sync --target <owner/name> --repo <path> [--dry-run] [--json]
+nen labels sync --target <owner/name> --repo <path> (--ref <ref> | --working-tree) [--apply] [--json]
 ```
 
 Both `--target` and `--repo` are required (missing/malformed target or missing repo:
 exit 2). The checkout supplies `nen/labels.json`; the target independently names
 the GitHub repository. `--dry-run` reads remote labels too, but never mutates them.
 A failed or malformed remote read refuses before any mutation.
+
+**Reading the file from a branch, before it merges** ([#591](https://github.com/zheref/nen/issues/591)).
+`--ref <ref>` reads `nen/labels.json` as a branch, tag or commit in the `--repo` checkout has it
+(`git cat-file blob <ref>:nen/labels.json`, no fetch), so a pull request that adds or changes the labels file
+can diff — and, on purpose, sync — its labels while it is still open. `--working-tree` names the
+checkout's own file explicitly, the file the plain form reads. **Both modes preview by default**:
+nothing is mutated unless `--apply` is given, and stderr opens with `source: <where> (dry run;
+--apply syncs)`. The plain form keeps its behaviour (it syncs unless `--dry-run`). Refused as usage
+errors (exit 2) before any read: `--ref` beside `--working-tree`, `--apply` beside `--dry-run`,
+`--apply` without either mode, and a ref that opens with `-` or carries `:` or whitespace. A ref the
+checkout cannot show, or a file there that is not a valid taxonomy, refuses at exit 1 before GitHub
+is read. [`parse izanami`](#nen-parse-izanami) still classifies `labels sync` without `--dry-run` as mutating,
+the conservative reading of the preview modes. `classify install --sync`'s default-branch refusal
+names this mode.
 
 Progress goes to stderr: `[0/N] reading remote labels`, then `[1/N] created: name`,
 `[2/N] unchanged: name`, and so on as each entry finishes, including with `--json`.
@@ -7413,7 +7428,9 @@ There are no timing or progress fields in this document. A failed remote read
 produces no report; its error goes to stderr.
 
 Human stdout prints one result per label; dry-run differences say `would create`
-or `would update` and carry the `would-sync` status in JSON. Exit 0 includes a
+or `would update` and carry the `would-sync` status in JSON. A `would update` line ends with the
+remote's current values of only the fields that differ — `(was: color #000000)`,
+`(was: description "old")`, or both separated by `;` — so a preview is a diff. Exit 0 includes a
 complete no-op; exit 1 names failed reads or mutations. A no-op uses only the
 paginated read, independent of how many
 labels are already declared; GitHub response time is outside Nen's control.

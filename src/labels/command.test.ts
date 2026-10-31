@@ -3,7 +3,9 @@ import { runFamily, type Io } from "../index.js";
 import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import type { Seams } from "../seam/exec.js";
-import { listLabelsArgv } from "./sync.js";
+import { createArgv, listLabelsArgv } from "./sync.js";
+import { showLabelsArgv } from "./source.js";
+import { loadLabelTaxonomy } from "../schema/labels.js";
 import { labelsCommand } from "./command.js";
 import { listLabelNamesArgv, renameArgv } from "./rename.js";
 
@@ -72,7 +74,97 @@ describe("nen labels sync -- CLI wiring", () => {
   });
 });
 
+// zheref/nen#591: a labels PR could not prove its labels before it merged.
+describe("nen labels sync --ref / --working-tree -- preview by default, --apply to sync", () => {
+  const TARGET = { owner: "zheref", repo: "nen", slug: "zheref/nen" };
+  const LABEL = { name: "from-branch", color: "abcdef", description: "declared on the branch only" };
+  const readRemote: ScriptedCall = { match: `gh ${listLabelsArgv(TARGET).join(" ")}`, result: { stdout: "[[]]" } };
+  const showRef = (ref: string, stdout: string, code = 0): ScriptedCall => ({
+    match: `git ${showLabelsArgv(BANKAI_REPO, ref).join(" ")}`,
+    result: { stdout, code, stderr: code === 0 ? "" : `fatal: invalid object name '${ref}'.` },
+  });
+  const branchFile = JSON.stringify({ labels: [LABEL] });
+
+  it("--ref reads nen/labels.json at the ref and diffs it without mutating", async () => {
+    const result = await capture(["labels", "sync", "--target", "zheref/nen", "--ref", "feature/labels"], [showRef("feature/labels", branchFile), readRemote]);
+    expect(result.code).toBe(0);
+    expect(result.out).toEqual(["would create: from-branch (#abcdef) -- declared on the branch only"]);
+    expect(result.err[0]).toBe("source: feature/labels:nen/labels.json (dry run; --apply syncs)");
+    expect(result.seams.calls).toHaveLength(2);
+  });
+
+  it("--ref --apply syncs the ref's labels", async () => {
+    const result = await capture(["labels", "sync", "--target", "zheref/nen", "--ref", "feature/labels", "--apply"], [
+      showRef("feature/labels", branchFile), readRemote, { match: `gh ${createArgv(TARGET, LABEL).join(" ")}`, result: {} },
+    ]);
+    expect(result.code).toBe(0);
+    expect(result.out).toEqual(["created: from-branch"]);
+    expect(result.err[0]).toBe("source: feature/labels:nen/labels.json");
+    expect(result.seams.calls).toHaveLength(3);
+  });
+
+  it("--working-tree reads the checkout's file and previews by default", async () => {
+    const result = await capture(["labels", "sync", "--target", "zheref/nen", "--working-tree", "--json"], [readRemote]);
+    expect(result.code).toBe(0);
+    const report = JSON.parse(result.out[0]!);
+    expect(report.entries.length).toBeGreaterThan(0);
+    expect(report.entries.every((entry: { status: string }): boolean => entry.status === "would-sync")).toBe(true);
+    expect(result.err[0]).toMatch(/^source: .*nen\/labels\.json \(dry run; --apply syncs\)$/);
+    expect(result.seams.calls).toHaveLength(1);
+  });
+
+  it("--working-tree --apply syncs the checkout's labels", async () => {
+    const declared = loadLabelTaxonomy(BANKAI_REPO).labels;
+    const result = await capture(["labels", "sync", "--target", "zheref/nen", "--working-tree", "--apply", "--json"], [
+      readRemote, ...declared.map((label): ScriptedCall => ({ match: `gh ${createArgv(TARGET, label).join(" ")}`, result: {} })),
+    ]);
+    expect(result.code).toBe(0);
+    expect(result.err[0]).toMatch(/^source: .*nen\/labels\.json$/);
+    expect(JSON.parse(result.out[0]!).entries.every((entry: { status: string }): boolean => entry.status === "created")).toBe(true);
+    expect(result.seams.calls.length).toBe(declared.length + 1);
+    expect(result.seams.calls.slice(1).every((call): boolean => call.args[0] === "label" && call.args[1] === "create")).toBe(true);
+  });
+
+  it("an unreadable ref refuses at exit 1 before reading GitHub", async () => {
+    const result = await capture(["labels", "sync", "--target", "zheref/nen", "--ref", "nope"], [showRef("nope", "", 128)]);
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/could not read nope:nen\/labels\.json .*invalid object name 'nope'.*nothing was synced/);
+    expect(result.seams.calls).toHaveLength(1);
+  });
+
+  it("a ref whose file is not a valid taxonomy refuses at exit 1", async () => {
+    const notJson = await capture(["labels", "sync", "--target", "zheref/nen", "--ref", "main"], [showRef("main", "{")]);
+    expect(notJson.code).toBe(1);
+    expect(notJson.err.join("\n")).toMatch(/main:nen\/labels\.json is not valid JSON/);
+    const bad = await capture(["labels", "sync", "--target", "zheref/nen", "--ref", "main"], [showRef("main", JSON.stringify({ labels: [{ name: "x" }] }))]);
+    expect(bad.code).toBe(1);
+    expect(bad.err.join("\n")).toMatch(/main:nen\/labels\.json/);
+    expect(bad.seams.calls).toHaveLength(1);
+  });
+
+  it.each([
+    [["--ref", "main", "--working-tree"], /give one/],
+    [["--ref", "main", "--apply", "--dry-run"], /contradict/],
+    [["--apply"], /only applies with --ref <ref> or --working-tree/],
+    [["--ref=--upload-pack=x"], /not a ref nen will pass to git/],
+    [["--ref", "main:other"], /not a ref nen will pass to git/],
+    [["--ref", "a b"], /not a ref nen will pass to git/],
+  ])("refuses %j as a usage error (exit 2) before any read", async (flags, message) => {
+    const result = await capture(["labels", "sync", "--target", "zheref/nen", ...flags]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(message);
+    expect(result.seams.calls).toHaveLength(0);
+  });
+});
+
 describe("nen labels rename -- CLI wiring", () => {
+  it.each([[["--ref", "x"]], [["--working-tree"]], [["--apply"]]])("refuses sync's %j at exit 2 before any read (Nobunaga N-1)", async (flags) => {
+    const result = await capture(["labels", "rename", "--target", "zheref/nen", "--map", "a=b", ...flags]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/applies to 'labels sync' only/);
+    expect(result.seams.calls).toHaveLength(0);
+  });
+
   const TARGET = { owner: "zheref", repo: "nen", slug: "zheref/nen" };
 
   it("renames per --map and exits 0 on success", async () => {

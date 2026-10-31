@@ -301,7 +301,7 @@ export function runInstall(context: CommandContext): number {
   if (there.length > 0) {
     if (context.json) context.io.out(JSON.stringify(body(null, null), null, 2));
     err(
-      `nen: the declaration is not landed on ${target.slug}'s default branch '${landed.branch}': ${there.length} label(s) absent or drifted there (${there.map((entry): string => entry.name).join(", ")}). Merge the pull request carrying 'nen classify install --write', then sync.`,
+      `nen: the declaration is not landed on ${target.slug}'s default branch '${landed.branch}': ${there.length} label(s) absent or drifted there (${there.map((entry): string => entry.name).join(", ")}). Merge the pull request carrying 'nen classify install --write', then sync -- or, to diff the unmerged branch's declaration against GitHub first, run 'nen labels sync --target ${target.slug} --repo <checkout> --ref <branch>' (a dry run; --apply syncs).`,
     );
     return 1;
   }
