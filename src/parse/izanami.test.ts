@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { runFamily, type Io } from "../index.js";
+import { defaultSeams, type CommandResult, type Seams } from "../seam/exec.js";
+import { wcCommand } from "../wc/command.js";
 import { parseArgs, type FlagSpec } from "../cli/args.js";
 import { mergeFlags } from "../cli/command.js";
 import { COMMANDS, findCommand } from "../cli/registry.js";
@@ -337,6 +340,7 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     expect(classifyCommand("nen pr ledger bogus --target o/r --pr 1").classification).not.toBe("read-only");
     expect(classifyCommand("nen run budget --id r1 --claim --max-minutes 5 --max-tokens 9 --dry-run").classification).toBe("read-only");
     expect(classifyCommand("nen wc overlap --efforts a,b --repo .").classification).toBe("read-only");
+    expect(classifyCommand("nen wc ahead --repo . --of abc1234").classification).toBe("read-only");
     expect(classifyCommand("nen stage check --exclusive --target o/r --issue 7").classification).toBe("read-only");
     expect(classifyCommand("nen loop slots --from-run r1 --target o/r --local-cap 2").classification).toBe("read-only");
     // The spec family (SDD piece N10): three reads; index writes only under --write, and not under --dry-run.
@@ -2117,5 +2121,28 @@ describe("runner relabel (#340) -- read-only bare, mutating only with --run", ()
   it("certifies the dry form and refuses to certify the writing one", () => {
     expect(classifyCommand("nen runner relabel --target o/r --pool windows-x64").classification).toBe("read-only");
     expect(classifyCommand("nen runner relabel --target o/r --pool windows-x64 --runner NZ-NNR1 --run").classification).toBe("mutating");
+  });
+});
+
+describe("izanami's read-only row for wc ahead is tied to doAhead's refusals (zheref/nen#551, hanten round 1 Feitan F3)", () => {
+  it("every wc flag but --repo/--of/--head/--json is refused by 'wc ahead' at exit 2 before git is spawned", async () => {
+    expect(classifyCommand("nen wc ahead --repo . --of abc1234 --head HEAD --json").classification).toBe("read-only");
+    const never: Seams = { ...defaultSeams(), run: (): CommandResult => { throw new Error("git must not be spawned"); } };
+    const io: Io = { out: () => undefined, err: () => undefined };
+    const spec = wcCommand.flags ?? {};
+    const own = new Set(["of", "head"]);
+    const values = (spec.values ?? []).filter((flag) => !own.has(flag));
+    expect(values.length + (spec.booleans ?? []).length).toBeGreaterThan(10);
+    for (const flag of values) {
+      expect(await runFamily(wcCommand, ["wc", "ahead", "--repo", ".", "--of", "HEAD", `--${flag}`, "x"], process.cwd(), false, io, never), flag).toBe(2);
+    }
+    for (const flag of spec.booleans ?? []) {
+      expect(await runFamily(wcCommand, ["wc", "ahead", "--repo", ".", "--of", "HEAD", `--${flag}`], process.cwd(), false, io, never), flag).toBe(2);
+    }
+    for (const flag of spec.lists ?? []) {
+      expect(await runFamily(wcCommand, ["wc", "ahead", "--repo", ".", "--of", "HEAD", `--${flag}`, "x"], process.cwd(), false, io, never), flag).toBe(2);
+    }
+    // A flag no wc verb declares never reaches doAhead: the parser refuses it.
+    expect(await runFamily(wcCommand, ["wc", "ahead", "--repo", ".", "--of", "HEAD", "--out", "x"], process.cwd(), false, io, never)).toBe(2);
   });
 });

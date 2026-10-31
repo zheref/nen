@@ -12,7 +12,7 @@ repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
 what each version changed: 49 command
-families, 173 verbs, every flag checked against that binary.
+families, 174 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -438,6 +438,7 @@ The complete list:
 | [`issue file`](#nen-issue-file), [`issue comment`](#nen-issue-comment), [`issue edit-body`](#nen-issue-edit-body), [`issue consolidate-close`](#nen-issue-consolidate-close), [`idea file`](#nen-idea-file), [`pr open`](#nen-pr-open), [`pr edit-body`](#nen-pr-edit-body), [`pr threads reply\|settle`](#nen-pr-threads), [`pr ledger`](#nen-pr-ledger) (post), [`wake fire`](#nen-wake-fire), [`wake verify`](#nen-wake-verify), `release-publish` | `4` | a private repository named in text bound for a PUBLIC target; nothing written ([private-name guard](#the-private-name-guard), [#329](https://github.com/zheref/nen/issues/329), [#363](https://github.com/zheref/nen/issues/363)). A check that could not run is `1`, never `4` and never `0`. On `pr threads` `4` is shared (no such thread / the pull request is not visible): `privateNameCheck` tells the two apart |
 | [`wc swap`](#nen-wc-swap) | `3` | a tree is dirty; nothing moved |
 | [`wc catch-up`](#nen-wc-catch-up) | `3` | stopped on a conflict whose **every** path is in `nen/contract.json`'s declared `mechanical` set (manifest, changelog, mirror); nothing resolved, the commands printed. Any `other` path is still `1`. Exit `1` no longer covers every conflict: a caller that treats `1` as "conflict" must also treat `3` as one ([#326](https://github.com/zheref/nen/issues/326)) |
+| [`wc ahead`](#nen-wc-ahead) | `2` / `3` | its own meaning of 2, beside usage: **unreadable** -- the clone does not hold `--of` or `--head` as a commit, or git could not answer; the verdict is still printed and never read as zero / **even** -- the head is the reviewed head: nothing new to review. Its `1` is **diverged** (the reviewed head is not an ancestor; no count) and its `0` is **ahead**, so the code alone tells the four verdicts apart ([#551](https://github.com/zheref/nen/issues/551)) |
 | [`surface mirror check --plugin`](#nen-surface-mirror-check---plugin) | `3` / `4` / `5` | not installed (no `<name>@` entry and no `skills/<name>`) / not comparable (the copy is the source given and no independent source exists) / broken install (an unusable record entry, a gone path, a dangling or looping link, a recorded path that is not a directory, a control character in an `installPath`, an install record that is not JSON or is itself a dangling link, a recorded copy holding another plugin). Its `2` is **wiring**, which includes a copy that could not be read, with the `--json` report still printed ([#339](https://github.com/zheref/nen/issues/339)) |
 | [`surface install`](#nen-surface-install) | `3` / `4` / `5` | refused: the destination, an installed copy or a Codex marketplace is not this verb's to replace, nothing written / owed: installed and read back, and a `settings.json` declaration the caller must clear (never edited) / the surface's CLI could not be started. Its `1` is a CLI step or the read-back failing ([#298](https://github.com/zheref/nen/issues/298)) |
 | [`surface status`](#nen-surface-status) | `3` / `5` | not installed / the surface's CLI could not be started, so nothing is known to be served. Its `1` is a mismatch (served, but not `--root` at its version). With `--trees` the exit is the judgement's, [`check --plugin`](#nen-surface-mirror-check---plugin)'s table -- or the worse of it and the status's own `2`/`5` when the surface could not be read ([#298](https://github.com/zheref/nen/issues/298)) |
@@ -495,7 +496,7 @@ verb does by default:
 | [`pr cascade-main`](#nen-pr-cascade-main) | no | `--dry-run` | prints `git fetch`, `git merge --no-edit` and (unless `--no-push`) `git push` as `would run:` and spawns **nothing**, so whether the merge would conflict is not known. `--no-push` alone is not a preview: it still merges. izanami keeps the verb **mutating** in every spelling, the dry form included |
 | [`spec index`](#nen-spec-index) | yes | `--write` | then `--dry-run` with it. Without `--write` nothing is written and the verb reports whether `<root>/INDEX.md` is current; `--write --dry-run` reports the regeneration and writes nothing. izanami's table classifies `--write` **mutating** and the other forms **read-only** |
 | [`run start`](#nen-run-start), [`run append`](#nen-run-append), [`run park`](#nen-run-park), [`run import`](#nen-run-import) | no | `--dry-run` | write the run manifest under the git common dir (at `0600` in a `0700` directory); the dry form reads it (and asks git for the common dir; `append` also reads the PR) and reports the outcome and the modes it would write, writing nothing -- no file, no directory, no mode change, no move of a legacy-path manifest. izanami's table classifies the bare forms **mutating** and the dry forms **read-only** |
-| [`run verify`](#nen-run-verify), [`run budget`](#nen-run-budget) | no | `--dry-run` | read the run manifest, and write only the **one-time move** of a manifest still at the legacy `<git-common-dir>/hatsu/runs/<id>.json` ([#522](https://github.com/zheref/nen/issues/522)); the dry form prints that move on stderr and reads the file in place, moving nothing. izanami's table classifies the bare forms **mutating** and the dry forms **read-only**; [`wc overlap`](#nen-wc-overlap), [`stage check`](#nen-stage-check) and `loop slots --from-run` (which reads a legacy manifest in place and never moves it) are **read-only** |
+| [`run verify`](#nen-run-verify), [`run budget`](#nen-run-budget) | no | `--dry-run` | read the run manifest, and write only the **one-time move** of a manifest still at the legacy `<git-common-dir>/hatsu/runs/<id>.json` ([#522](https://github.com/zheref/nen/issues/522)); the dry form prints that move on stderr and reads the file in place, moving nothing. izanami's table classifies the bare forms **mutating** and the dry forms **read-only**; [`wc overlap`](#nen-wc-overlap), [`wc ahead`](#nen-wc-ahead), [`stage check`](#nen-stage-check) and `loop slots --from-run` (which reads a legacy manifest in place and never moves it) are **read-only** |
 | [`pr edit-body`](#nen-pr-edit-body) | no | `--dry-run` | **still reads GitHub** to certify the number reads as a pull request, and runs the [private-name guard](#the-private-name-guard) ([#363](https://github.com/zheref/nen/issues/363)), before printing the byte count and first/last line |
 | [`pr ledger`](#nen-pr-ledger) | no | `--dry-run` | `post` **still reads GitHub** (the PR head, the login, every comment) and the durable ledgers, checks the findings and runs the private-name guard, then prints the `gh api` call and the body and posts nothing. `read` writes nothing unless `--restore`, which writes only a phase ledger that does not exist yet |
 | [`pr mark-ready`](#nen-pr-mark-ready) | no | `--dry-run` | **still reads GitHub** — the one GraphQL read that certifies the number, its state and its head — so every refusal (not a PR, closed/merged, head mismatch, already ready) answers exactly as the real run would; prints the `markPullRequestReadyForReview` argv and sends nothing |
@@ -999,7 +1000,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 173 verbs, grouped as the README groups them. **Reads** is what a
+All 174 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -1035,6 +1036,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`wc`](#family-wc) | [`nen wc swap`](#nen-wc-swap) | bring a worktree's committed tree into the core checkout (view: HEAD detached; `--take`: the branch), `--return` it with core's parked work restored, `--status`; core's work parked in a pinned commit, never stashed; exit 3 on a dirty tree | git (worktree list, status, read-tree/add/write-tree/commit-tree through a temporary index, update-ref, reset --hard, clean -fd, checkout, diff) | yes |
 | [`wc`](#family-wc) | [`nen wc worktree`](#nen-wc-worktree) | keep ONE detached worktree at `<core>/.nen/worktrees/<name>` at `origin/<base>`'s fetched tip -- created, reused, moved, or (its registration outliving its directory) that one registration dropped and recreated; refused, never discarded, when dirty, and refused for a stray directory, a symlink or a sibling registration; `--copy-from-core` copies gitignored, untracked regular files from core after proving the source in core and the destination at the tip and in the worktree, through a temp file and a rename | git (rev-parse --git-common-dir/--git-dir, check-ref-format, fetch, ls-remote, rev-parse, ls-files, check-ignore, ls-tree, worktree list/add/remove, status -z, diff --name-only, checkout --detach), the files named by --copy-from-core in core, the copy record in the worktree's git dir | yes |
 | [`wc`](#family-wc) | [`nen wc overlap`](#nen-wc-overlap) | file disjointness of parallel efforts, computed: each effort's merge-base diff against `--base` (default `origin/<branch.base>`), plus an always-overlapping list counted as every effort's; verdict `disjoint` / `stack(<order>)` (git's chain when the branches chain, else the `--efforts` order) / `unknown`; `--declared` paths stand in before authoring | git (diff --name-only -z `<base>...<effort>`, merge-base --is-ancestor), nen/workflow.json under --repo (alwaysOverlaps; branch.base without --base), the `--declared` file | yes |
+| [`wc`](#family-wc) | [`nen wc ahead`](#nen-wc-ahead) | the commits and diff stat beyond a NAMED reviewed head, read from the clone with no fetch; verdict `ahead <n>` (exit 0) / `even` (exit 3) / `diverged` -- the reviewed head is not an ancestor, never a count (exit 1) / `unreadable` -- a ref the clone does not hold, never zero (exit 2) | git (rev-parse --verify `<ref>^{commit}`, merge-base --is-ancestor, rev-list --count `<of>..<head>`, diff --numstat -z --no-renames `<of> <head>`) | yes |
 | [`stage`](#family-stage) | [`nen stage triage`](#nen-stage-triage) | flag secret-shaped, binary, out-of-scope and unmentioned-deletion files before staging; report git-ignored paths separately, never counted toward the exit code; `--range <base>..<head>` triages a committed range instead of the working copy — names and blob sizes over every change any commit made (`in-history` for a finding not in the net change), deletions and mentions over the net diff from the merge base — an unresolved, malformed or unrelated range exit 2 and never a fall back | git status --porcelain; with --range: git rev-parse, merge-base, rev-list --count, log --raw, diff --raw, cat-file --batch-check | yes |
 | [`stage`](#family-stage) | [`nen stage list`](#nen-stage-list) | the exact add list — every modified, added, renamed, deleted and untracked path triage called clean, minus flagged and git-ignored ones, each exclusion named with its reasons, unmerged paths, embedded repositories and undecodable names held off with the list withheld, a worktree rename's original included; `--repo` must be the top; newline (C-quoted where needed) or `--nul` form to feed `git add --pathspec-from-file=-` verbatim, withheld on a flag (exit 1), exit 3 when empty | git status --porcelain | yes |
 | [`stage`](#family-stage) | [`nen stage check`](#nen-stage-check) | `--exclusive`: exit 1 when an issue (or any of `--issues`) carries two stage-family labels at once, the family read from `nen/labels.json` (`<namespace>:stage/<leaf>`), exit 2 when it declares none; names both, picks neither | nen/labels.json under --repo, github (gh issue view --json labels) | yes |
@@ -4447,7 +4449,10 @@ own residue); catches it up with its base (`catch-up`) and publishes it
 (`publish`); lists every checkout of the project (`worktrees`) and swaps
 one worktree's committed tree into the core checkout and back (`swap`); and
 keeps one detached worktree at a fixed path at the trunk's fetched tip, with
-the maintainer's gitignored files copied in from core (`worktree`).
+the maintainer's gitignored files copied in from core (`worktree`); removes
+what an explicit cleanup plan names (`prune`); computes whether parallel
+efforts touch disjoint files (`overlap`, read-only); and counts the commits
+and diff stat beyond a named reviewed head (`ahead`, read-only).
 
 
 `--json`: the full `VerifyResult` — `{ ok, error, missing[], duplicated[], altered[], extra[], filesInOriginal, filesInBranches }`, where each entry of the four arrays carries `{ path, header }` and `duplicated` adds `branches[]`, `altered` adds `branch` and `diff`.
@@ -5451,6 +5456,101 @@ worktree:        /work/app/.nen/worktrees/kagutsuchi (created)
 head:            4f5c11a2b9e0d6c1a7f3e2b8d4c6a0f1e3b5d7c9
 copied:          Kro/Config.xcconfig (from core, gitignored)
 ```
+
+### `nen wc ahead`
+
+How far a branch has moved beyond a **named** reviewed head ([#551](https://github.com/zheref/nen/issues/551)).
+Hatsu's `en` and `sharingan` guard every re-request of a bot review round with "count the commits ahead
+of the last reviewed head", so a round is never re-requested on a push that changed nothing reviewable;
+[`wc classify`](#nen-wc-classify) answers only against the base. A raw `git rev-list --count
+<reviewed-head>..HEAD` has three ways to mislead that guard, and the verb closes each: a reviewed head the
+clone never fetched makes the count fail, and "no number" must never read as "nothing new"; after a
+force-push or a rebase the reviewed head is off the branch, and `rev-list --count` still prints a number
+that is not "what is new since review"; and zero is the one answer the guard acts on, so it has an exit
+code of its own.
+
+`--of` and `--head` (default `HEAD`) are each resolved to a full commit id (`git rev-parse --verify
+<ref>^{commit}`); then `git merge-base --is-ancestor <of> <head>`, `git rev-list --count <of>..<head>` and
+`git diff --numstat -z --no-renames <of> <head>` (the two trees, so a catch-up merge's incoming changes
+count as changed since review). **Read-only, and no fetch**: a reviewed head the clone does not hold is
+`unreadable`, and fetching it is the caller's.
+
+**Usage**
+
+```text
+nen wc ahead --repo <path> --of <reviewed-head> [--head <ref>] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--repo <path>` | yes | The clone whose commits are counted. | Listed unbracketed: omitted, exits 2 by name. Not a git checkout exits 2 with no verdict. Needs **git >= 2.44** (`--no-lazy-fetch`): an older git refuses the option and the verdict is `unreadable`, naming the floor. |
+| `--of <reviewed-head>` | yes | The commit the last review read -- a full or short id, or any ref the clone holds. | Missing, empty, or starting with `-` (git would read it as an option) exits 2. |
+| `--head <ref>` | no | The tip to count up to. | Default `HEAD`. Empty or starting with `-` exits 2. |
+
+Every other flag, a `wc` sibling's included, and a stray positional exit 2: a flag accepted and ignored is
+worse than one refused. `--of` and `--head` are likewise refused by every other `wc` verb.
+
+**Output and exit codes** -- four verdicts, and **the exit code alone tells them apart** (AC-4):
+
+| Verdict | Exit | When | Counts |
+|---|---|---|---|
+| `ahead <n>` | `0` | `--of` is an ancestor of `--head` and `n > 0` commits lie beyond it | `ahead`, `files`, `insertions`, `deletions` |
+| `even` | `3` | `--head` **is** `--of`: nothing new to review | all `0` |
+| `diverged` | `1` | `--of` is not an ancestor of `--head` -- a force-push, a rebase, a reset behind it | all `null`: **never a count** |
+| `unreadable` | `2` | the clone does not hold `--of` or `--head` as a commit, the short id is ambiguous, a shallow clone answers "not an ancestor", or git could not answer | all `null`: **never zero, never "nothing new"** |
+
+**Only `even` means "nothing new".** `diverged` (exit `1`) and `unreadable` (exit `2`) are not: a rebased
+branch with new content is real change, and a ref the clone could not read says nothing either way, so a
+caller gives each its own branch rather than folding them into "no request" -- what it does with each is
+its judgement, not this verb's. Exit `2` is also usage (above), with nothing on stdout; an `unreadable`
+verdict is always printed. An `ahead` with `files: 0` is commits whose net tree change is empty (a change
+and its revert); whether that is reviewable is the caller's judgement, not this verb's. A binary file
+counts as a file with no lines.
+
+**`--repo` is the repository read, offline, whatever the clone.** Every git call runs with the inherited
+repository redirects (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, the object directories,
+`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` …) scrubbed, exactly as [`wc worktree`](#nen-wc-worktree)
+scrubs them, so an ambient `GIT_DIR` never wins over `--repo` (`GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM` and
+`GIT_CONFIG_NOSYSTEM` are kept, as there: they are the user's own choice of config files, `safe.directory`
+included); and with both `--no-lazy-fetch` and `GIT_NO_LAZY_FETCH=1` (the variable is the precedent
+[`schema check`](#nen-schema-check)'s canon-mirror row sets). **The git floor is 2.44**, the first release
+that honours either: an older git would ignore the variable and fetch, but it refuses the option, so the
+verb fails closed at `unreadable` with the floor in `reason` rather than reading online. So a **partial clone** answers from what it
+holds and never fetches a missing object from its promisor remote: a `--head` it does not hold is
+`unreadable`, and one missing the blobs the line counts need keeps its `ahead` count and its `files` count
+(`git diff --name-only` reads trees only) with `insertions` and `deletions` `null` and `reason` saying why.
+That fallback is taken **only in a partial clone** (`extensions.partialClone`, or a `remote.<name>.promisor`
+set); any other `--numstat` failure, and a `--numstat` that exits 0 with output the verb cannot parse, is
+`unreadable`.
+A **shallow clone** whose cut history answers "not an ancestor" is `unreadable` naming the shallow clone,
+never `diverged`: it cannot tell a rewrite from a history it does not hold. An **ambiguous short id** is
+`unreadable` with git's own ambiguity named in `reason`, so a caller gives more of the id rather than
+fetching.
+
+The text form prints `verdict: ahead <n>` / `verdict: even (…)` / `verdict: diverged (<reason>)` /
+`verdict: unreadable (<reason>; never read as nothing new)`, then `reviewed head: <sha> (--of <as
+typed>)`, `head: <sha> (--head <as typed>)` (`(unresolved)` in place of a ref that did not resolve), and,
+for `ahead` and `even`, `diff: <files> file(s), +<insertions> -<deletions>`. `--json` top-level keys:
+`verdict` (`ahead` \| `even` \| `diverged` \| `unreadable`), `of` and `head` (as typed), `reviewedHead`
+and `headSha` (full ids, `null` when unresolved), `ahead`, `files`, `insertions`, `deletions` (numbers for
+`ahead` and `even`, `null` otherwise; `insertions`/`deletions` also `null` on an `ahead` whose line
+counts a partial clone could not read), and `reason` (why there is no count, or why an `ahead`'s line
+counts are `null`; `null` otherwise). Writes nothing.
+
+**Example**
+
+```bash
+nen wc ahead --repo . --of 4f5c11a2
+```
+```text
+verdict: ahead 2
+reviewed head: 4f5c11a2b9e0d6c1a7f3e2b8d4c6a0f1e3b5d7c9 (--of 4f5c11a2)
+head: 9d1e0b7c3a5f2e8d6c4b0a1f3e5d7c9b2a4f6e8d (--head HEAD)
+diff: 3 file(s), +41 -7
+```
+(exit 0; illustrative ids)
 
 ### `nen wc overlap`
 
