@@ -92,17 +92,19 @@ describe("hooks", () => {
     expect(() => readHooksManifest(join(PACKS, "nowhere.json"))).toThrow(/ENOENT/);
   });
 
-  it("renders the grouped shape with the row's own event names and matcher", () => {
+  it("renders native named definitions with direct lifecycle handlers and grouped tool matchers", () => {
     const text = renderHooks(must(row("antigravity").hooks), manifest, MARKER);
-    const doc = JSON.parse(text) as { $generated: string; hooks: Record<string, unknown[]> };
-    expect(doc.$generated).toBe(MARKER);
-    expect(Object.keys(doc.hooks)).toEqual(["Stop", "PreToolUse", "PreInvocation"]);
-    expect(doc.hooks["PreToolUse"]?.[0]).toEqual({
+    const doc = JSON.parse(text) as Record<string, Record<string, unknown[]>>;
+    expect(Object.keys(doc)).toEqual([MARKER]);
+    const hooks = doc[MARKER]!;
+    expect(Object.keys(hooks)).toEqual(["Stop", "PreToolUse", "SessionStart"]);
+    expect(hooks["PreToolUse"]?.[0]).toEqual({
       matcher: "run_command",
       hooks: [{ type: "command", command: "${CLAUDE_PLUGIN_ROOT}/hooks/guard.hook", timeout: 10 }],
     });
     // A command with no timeout carries none, rather than an invented default.
-    expect(doc.hooks["PreInvocation"]?.[0]).toEqual({ hooks: [{ type: "command", command: "sh -c 'echo warm'" }] });
+    expect(hooks["SessionStart"]?.[0]).toEqual({ type: "command", command: "sh -c 'echo warm'" });
+    expect(hooks["Stop"]?.[0]).toEqual({ type: "command", command: "${CLAUDE_PLUGIN_ROOT}/hooks/bell.hook", timeout: 15 });
   });
 
   it("renders cursor's flat version-1 shape: one command per entry, no matcher, no timeout", () => {

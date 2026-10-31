@@ -1,0 +1,1 @@
+- Pin `nen changelog collate`'s existing Nen-shaped dated-section behavior with a regression that preserves explicit delivery PR links from newly collated fragment bodies, the `## vX.Y.Z — YYYY-MM-DD` heading, and the existing changelog's prefix and suffix bytes (zheref/nen#446). Citations are supplied by the fragments; the renderer does not infer missing delivery PR links.

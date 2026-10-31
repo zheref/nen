@@ -312,14 +312,22 @@ function pendingConclusionUnset(
   return { ...record, conclusion: null };
 }
 
-function checkRunIdentity(record: Record<string, unknown>): { databaseId?: number; appSlug?: string } {
+function checkRunIdentity(
+  record: Record<string, unknown>,
+): { databaseId?: number; appSlug?: string; appId?: number; checkSuiteId?: number } {
   const id = record["databaseId"];
   const suite = record["checkSuite"];
   const app = typeof suite === "object" && suite !== null ? (suite as Record<string, unknown>)["app"] : undefined;
   const slug = typeof app === "object" && app !== null ? (app as Record<string, unknown>)["slug"] : undefined;
+  const appId = typeof app === "object" && app !== null ? (app as Record<string, unknown>)["databaseId"] : undefined;
+  const suiteId = typeof suite === "object" && suite !== null ? (suite as Record<string, unknown>)["databaseId"] : undefined;
   return {
     ...(typeof id === "number" && Number.isSafeInteger(id) ? { databaseId: id } : {}),
     ...(typeof slug === "string" && slug !== "" ? { appSlug: slug } : {}),
+    // zheref/nen#546's producer evidence. Unreadable reads as absent, which a
+    // constrained round treats as unverified -- never as a match.
+    ...(typeof appId === "number" && Number.isSafeInteger(appId) && appId > 0 ? { appId } : {}),
+    ...(typeof suiteId === "number" && Number.isSafeInteger(suiteId) && suiteId > 0 ? { checkSuiteId: suiteId } : {}),
   };
 }
 
@@ -329,6 +337,8 @@ function parseCheckRun(
 ): ParseResult<CheckRun> {
   const name = optionalString(record, "name", path);
   if (!name.ok) return fail(name.error.path, name.error.message);
+  const title = optionalString(record, "title", path);
+  if (!title.ok) return fail(title.error.path, title.error.message);
   const status = optionalEnum<CheckStatus>(record, "status", path, CHECK_STATUSES);
   if (!status.ok) return fail(status.error.path, status.error.message);
   const conclusion = optionalEnum<CheckConclusion>(
@@ -347,15 +357,19 @@ function parseCheckRun(
 
   return ok({
     kind: "check_run",
+    ...(title.value === null ? {} : { title: title.value }),
     name: name.value,
     status: status.value,
     conclusion: conclusion.value,
     startedAt: startedAt.value,
     completedAt: completedAt.value,
     detailsUrl: detailsUrl.value,
-    // Diagnosis-only identity (zheref/nen#224): read leniently and carried
-    // only when readable -- absent means unread -- because nothing a verdict
-    // reads depends on it, and an entry without it is byte-identical to before.
+    // Identity (zheref/nen#224, #546): read leniently and carried only when
+    // readable -- absent means unread -- so an entry without it is
+    // byte-identical to before. The runner diagnosis reads it, and so does a
+    // reviewer's declared `round_check_producer`, which treats ABSENT as
+    // unverified (owed), never as a match: unreadable evidence can only ever
+    // withhold a round, so it is still no reason to fail the parse.
     ...checkRunIdentity(record),
   });
 }

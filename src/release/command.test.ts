@@ -41,6 +41,109 @@ async function capture(argv: readonly string[], repoFlag: string | null, run: Se
   return { code, out, err };
 }
 
+describe("nen release preflight -- validates live-chore facts before tools (zheref/nen#461)", () => {
+  const liveChore = { name: "x", issueOpen: true, integrationBranchExists: true, openPrTargetsIntegrationOrMain: true };
+  const booleanFields = ["issueOpen", "integrationBranchExists", "openPrTargetsIntegrationOrMain"] as const;
+
+  async function withChores(contents: string | undefined): Promise<{ code: number; out: string[]; err: string[]; toolCalls: string[] }> {
+    const dir = mkdtempSync(join(tmpdir(), "nen-release-chores-"));
+    writeFileSync(join(dir, "CHANGELOG.md"), "No merged pull requests.\n");
+    const args = ["release", "preflight", "--repo-slug", "o/r", "--tag", "v1.1.0", "--range", "v1.0.0..main", "--changelog", "CHANGELOG.md", "--owner-repo", "o/r", "--critical-issues", ""];
+    if (contents !== undefined) {
+      writeFileSync(join(dir, "live-chores.json"), contents);
+      args.push("--live-chores-from", "live-chores.json");
+    }
+    const toolCalls: string[] = [];
+    const result = await capture(args, dir, (command, argv): CommandResult => {
+      toolCalls.push([command, ...argv].join(" "));
+      if (argv.includes("variable")) return { code: 1, stdout: "", stderr: "variable RELEASE_HOLD was not found", spawnFailed: false };
+      return { code: 0, stdout: "", stderr: "", spawnFailed: false };
+    });
+    return { ...result, toolCalls };
+  }
+
+  async function expectRefusal(contents: string, pointer: string, detail: string): Promise<void> {
+    const result = await withChores(contents);
+    expect(result.code).toBe(2);
+    const message = result.err.join("\n");
+    expect(message).toContain("--live-chores-from 'live-chores.json'");
+    expect(message).toContain(pointer);
+    expect(message).toContain(detail);
+    expect(message).toContain("expected an array of objects");
+    for (const field of ["name", ...booleanFields]) expect(message).toContain(field);
+    expect(result.out).toEqual([]);
+    expect(result.toolCalls).toEqual([]);
+  }
+
+  it.each([{}, null, true, 1, "chores"])("refuses non-array JSON %j", async (input) => {
+    await expectRefusal(JSON.stringify(input), "at $:", "not an array");
+  });
+
+  it.each([null, [], "x", true, 1].map((entry): { entry: unknown } => ({ entry })))("refuses non-object entry $entry", async ({ entry }) => {
+    await expectRefusal(JSON.stringify([entry]), "$[0] (entry 1)", "expected an object");
+  });
+
+  it("refuses the misspelled openPR field instead of treating the chore as not live", async () => {
+    await expectRefusal(JSON.stringify([{ name: "x", issueOpen: true, integrationBranchExists: true, openPRTargetsIntegrationOrMain: true }]), "$[0] (entry 1)", 'unknown field "openPRTargetsIntegrationOrMain"');
+  });
+
+  it("refuses an entry with all three boolean facts absent", async () => {
+    await expectRefusal('[{"name":"x"}]', "$[0] (entry 1).issueOpen", "expected a boolean");
+  });
+
+  for (const field of booleanFields) {
+    it(`refuses a missing ${field}`, async () => {
+      const entry: Record<string, unknown> = { ...liveChore };
+      delete entry[field];
+      await expectRefusal(JSON.stringify([entry]), `$[0] (entry 1).${field}`, "expected a boolean");
+    });
+
+    it.each([null, "true", "false", 0, 1, [], {}].map((value): { value: unknown } => ({ value })))(`refuses non-boolean ${field}=$value`, async ({ value }) => {
+      await expectRefusal(JSON.stringify([{ ...liveChore, [field]: value }]), `$[0] (entry 1).${field}`, "expected a boolean");
+    });
+  }
+
+  it.each([undefined, null, 1, true, [], {}].map((name): { name: unknown } => ({ name })))("refuses missing or non-string name $name", async ({ name }) => {
+    await expectRefusal(JSON.stringify([{ ...liveChore, name }]), "$[0] (entry 1).name", "expected a string");
+  });
+
+  it("names an unknown key on a later entry even after a valid non-live entry", async () => {
+    await expectRefusal(JSON.stringify([{ ...liveChore, issueOpen: false }, { ...liveChore, extra: false }]), "$[1] (entry 2)", 'unknown field "extra"');
+  });
+
+  it("still refuses malformed JSON before running any tool", async () => {
+    const result = await withChores("[");
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("not valid JSON");
+    expect(result.out).toEqual([]);
+    expect(result.toolCalls).toEqual([]);
+  });
+
+  it("accepts an explicitly empty array", async () => {
+    const result = await withChores("[]");
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toMatch(/ok\s+CON-36 live chores -- none live/);
+  });
+
+  it.each(booleanFields)("retains a valid non-live chore with %s=false", async (field) => {
+    const result = await withChores(JSON.stringify([{ ...liveChore, [field]: false }]));
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toMatch(/ok\s+CON-36 live chores -- none live/);
+  });
+
+  it("retains a valid live chore as a failing CON-36 row", async () => {
+    const result = await withChores(JSON.stringify([liveChore]));
+    expect(result.code).toBe(1);
+    expect(result.out.join("\n")).toContain("FAIL  CON-36 live chores -- LIVE: x");
+  });
+
+  it("retains omitted live-chore facts as not checked and fails the table", async () => {
+    const result = await withChores(undefined);
+    expect(result.code).toBe(1);
+    expect(result.out.join("\n")).toContain("FAIL  CON-36 live chores -- not supplied -- not checked");
+  });
+});
+
 describe("nen release preflight", () => {
   it("passes every check on a clean cut point", async () => {
     const dir = mkdtempSync(join(tmpdir(), "nen-release-"));

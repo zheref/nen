@@ -80,6 +80,8 @@ export type StatusContextState =
 // it is `null` and the compiler remembers instead.
 export interface CheckRun {
   readonly kind: "check_run";
+  /** The reported verdict title; optional for older captured rollups (#532). */
+  readonly title?: string | null;
   // `null` when the rollup entry carried no name at all. latestChecks() keeps
   // such entries in singleton groups rather than collapsing them into one
   // another (bankai-core#558/#564).
@@ -97,15 +99,27 @@ export interface CheckRun {
   // bankai-core#708).
   readonly detailsUrl: string | null;
   // The check run's REST id (GraphQL `databaseId`) and the slug of the app
-  // that created its suite (`checkSuite.app.slug`). Read ONLY by `nen pr
-  // ready`'s runner diagnosis (zheref/nen#224, Feitan round-3 R1) to bind an
-  // Actions job to THIS entry: an Actions check run's id IS its job's id and
-  // its app is `github-actions`, so a third-party check whose `detailsUrl`
-  // merely names some Actions job is not that job. OPTIONAL: absent (or null)
-  // when unread -- never part of a verdict, so an unreadable value never fails
-  // the rollup parse.
+  // that created its suite (`checkSuite.app.slug`). Read by `nen pr ready`'s
+  // runner diagnosis (zheref/nen#224, Feitan round-3 R1) to bind an Actions
+  // job to THIS entry: an Actions check run's id IS its job's id and its app
+  // is `github-actions`, so a third-party check whose `detailsUrl` merely
+  // names some Actions job is not that job. The slug is ALSO producer
+  // evidence for a declared `round_check_producer` (zheref/nen#546), which
+  // reads it fail-closed. OPTIONAL: absent (or null) when unread, so an
+  // unreadable value never fails the rollup parse -- it can only leave a
+  // constrained round unverified.
   readonly databaseId?: number | null;
   readonly appSlug?: string | null;
+  // The App's numeric id (`checkSuite.app.databaseId`) and the check suite's
+  // own id (`checkSuite.databaseId`) -- the PRODUCER evidence a declared
+  // `round_check_producer` is compared against (zheref/nen#546): GitHub
+  // records who created a check suite, and a check run cannot choose it, as
+  // it can choose its name. The suite id is how a GitHub Actions run's
+  // workflow file, repository and event are found. OPTIONAL like the two
+  // above: absent evidence never fails the parse, and a constrained round
+  // reads it as UNVERIFIED -- owed -- never as a match.
+  readonly appId?: number | null;
+  readonly checkSuiteId?: number | null;
 }
 
 // A legacy commit status ("StatusContext") in the same rollup.

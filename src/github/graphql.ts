@@ -126,6 +126,14 @@ function isAbsent(value: unknown): boolean {
 //     whether it enforces anything at all.
 //   - `contexts(first:100)`: WAS the defect. Fixed below -- see
 //     CHECK_ROLLUP_PAGE_QUERY and its own comment.
+//
+// A CheckRun's `checkSuite { databaseId app { slug databaseId } }` is its
+// PRODUCER evidence (zheref/nen#546): the App GitHub records as having created
+// the suite, which a check cannot choose the way it chooses its name, and the
+// suite id by which a GitHub Actions run's workflow file and event are looked
+// up. All of it is `checks:read`; `workflowRun` is deliberately NOT selected
+// here, so a token without `actions:read` reads the rollup as before and only
+// a declared `workflow` producer makes the separate Actions read.
 export const PULL_REQUEST_QUERY = `
   query($owner:String!, $name:String!, $pr:Int!) {
     repository(owner:$owner, name:$name) {
@@ -153,7 +161,7 @@ export const PULL_REQUEST_QUERY = `
                 contexts(first:100) {
                   nodes {
                     __typename
-                    ... on CheckRun { name status conclusion startedAt completedAt detailsUrl databaseId checkSuite { app { slug } } }
+                    ... on CheckRun { name title status conclusion startedAt completedAt detailsUrl databaseId checkSuite { databaseId app { slug databaseId } } }
                     ... on StatusContext { context state targetUrl }
                   }
                   pageInfo { hasNextPage endCursor }
@@ -201,7 +209,7 @@ export const CHECK_ROLLUP_PAGE_QUERY = `
                 contexts(first:100, after:$cursor) {
                   nodes {
                     __typename
-                    ... on CheckRun { name status conclusion startedAt completedAt detailsUrl databaseId checkSuite { app { slug } } }
+                    ... on CheckRun { name title status conclusion startedAt completedAt detailsUrl databaseId checkSuite { databaseId app { slug databaseId } } }
                     ... on StatusContext { context state targetUrl }
                   }
                   pageInfo { hasNextPage endCursor }

@@ -635,3 +635,62 @@ it.each([false, true])("schema check validates severity against the target's lab
   writeFileSync(join(root, "nen/labels.json"), JSON.stringify({ labels: [{ name: "other", color: "aaaaaa", description: "other" }] }));
   expect(row().ok).toBe(false); expect(row().detail).toContain("severity.order"); expect(row().detail).toContain("not declared");
 });
+
+describe("checkTaxonomy -- the round_check_producer opt-in warning (zheref/nen#546, Nobunaga N12)", () => {
+  function repoWithGates(gates: unknown): string {
+    const root = mkdtempSync(join(tmpdir(), "nen-taxonomy-"));
+    mkdirSync(join(root, "nen"), { recursive: true });
+    for (const file of ["labels.json", "repos.json", "colors.yml"]) {
+      copyFileSync(join(BANKAI_REPO, "nen", file), join(root, "nen", file));
+    }
+    writeFileSync(join(root, "nen", "gates.json"), JSON.stringify(gates));
+    return root;
+  }
+  const raw = JSON.parse(readFileSync(join(BANKAI_REPO, "nen", "gates.json"), "utf8")) as {
+    reviewers: Record<string, unknown>[];
+  } & Record<string, unknown>;
+  const withProducer = (producer: unknown): unknown => ({
+    ...raw,
+    reviewers: raw.reviewers.map((reviewer): Record<string, unknown> =>
+      reviewer["name"] === "bugbot" ? { ...reviewer, round_check_producer: producer } : reviewer,
+    ),
+  });
+
+  it("the gates.json row stays ok and its detail carries the warning while the opt-in is in force", () => {
+    const root = repoWithGates(
+      withProducer({
+        workflow: {
+          path: ".github/workflows/bugbot.yml",
+          repository: "o/r",
+          events: ["pull_request_target"],
+          trusts_pull_request_revision: true,
+        },
+      }),
+    );
+    try {
+      const row = checkTaxonomy({ repoFlag: root }).checks.find((c): boolean => c.file === "nen/gates.json");
+      expect(row?.ok).toBe(true);
+      expect(row?.detail).toContain(
+        "; warning: round_check_producer of 'bugbot' trusts a revision the default branch did not define (trusts_pull_request_revision: true, events pull_request_target)",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("an app producer, or a workflow producer on an allowlisted event, carries no warning", () => {
+    for (const producer of [
+      { app: { slug: "cursor", id: 1210556 } },
+      { workflow: { path: ".github/workflows/bugbot.yml", repository: "o/r", events: ["workflow_run"] } },
+    ]) {
+      const root = repoWithGates(withProducer(producer));
+      try {
+        const row = checkTaxonomy({ repoFlag: root }).checks.find((c): boolean => c.file === "nen/gates.json");
+        expect(row?.ok).toBe(true);
+        expect(row?.detail).not.toContain("warning");
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+});
