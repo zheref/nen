@@ -25,9 +25,13 @@ export function checkRef(ref: string): string {
   return ref;
 }
 
-/** The argv that prints nen/labels.json as `ref` holds it. */
+/**
+ * The argv that prints nen/labels.json as `ref` holds it. Plumbing, as every
+ * other file-at-a-ref read in nen: `cat-file blob` reads no porcelain config
+ * and refuses a range such as `a..b`, which `git show` would print as a log.
+ */
 export function showLabelsArgv(root: string, ref: string): readonly string[] {
-  return ["-C", root, "show", `${ref}:${LABELS_FILE}`];
+  return ["-C", root, "cat-file", "blob", `${ref}:${LABELS_FILE}`];
 }
 
 /** nen/labels.json at `ref` of the checkout at `root`, through the same validating parser a disk read uses. */

@@ -120,6 +120,14 @@ function syncSource(context: CommandContext): SyncSource {
 }
 
 function rename(context: CommandContext): number {
+  // Flags are declared per family, so `rename` must refuse sync's own: a
+  // `--ref` or `--working-tree` typed here would otherwise be ignored while
+  // rename mutates by default (Nobunaga N-1 on zheref/nen#591).
+  for (const flag of ["ref", "working-tree", "apply"]) {
+    if (context.args.values[flag] !== undefined || context.args.booleans.has(flag)) {
+      throw new VerbUsageError(`--${flag} applies to 'labels sync' only; 'labels rename' mutates unless --dry-run.`);
+    }
+  }
   const target = requireTarget(context);
   const mapRaw = context.args.values["map"];
   if (mapRaw === undefined) throw new VerbUsageError("--map from=to,from2=to2 is required.");

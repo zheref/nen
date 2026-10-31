@@ -5,6 +5,7 @@ import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import type { Seams } from "../seam/exec.js";
 import { createArgv, listLabelsArgv } from "./sync.js";
 import { showLabelsArgv } from "./source.js";
+import { loadLabelTaxonomy } from "../schema/labels.js";
 import { labelsCommand } from "./command.js";
 import { listLabelNamesArgv, renameArgv } from "./rename.js";
 
@@ -112,6 +113,18 @@ describe("nen labels sync --ref / --working-tree -- preview by default, --apply 
     expect(result.seams.calls).toHaveLength(1);
   });
 
+  it("--working-tree --apply syncs the checkout's labels", async () => {
+    const declared = loadLabelTaxonomy(BANKAI_REPO).labels;
+    const result = await capture(["labels", "sync", "--target", "zheref/nen", "--working-tree", "--apply", "--json"], [
+      readRemote, ...declared.map((label): ScriptedCall => ({ match: `gh ${createArgv(TARGET, label).join(" ")}`, result: {} })),
+    ]);
+    expect(result.code).toBe(0);
+    expect(result.err[0]).toMatch(/^source: .*nen\/labels\.json$/);
+    expect(JSON.parse(result.out[0]!).entries.every((entry: { status: string }): boolean => entry.status === "created")).toBe(true);
+    expect(result.seams.calls.length).toBe(declared.length + 1);
+    expect(result.seams.calls.slice(1).every((call): boolean => call.args[0] === "label" && call.args[1] === "create")).toBe(true);
+  });
+
   it("an unreadable ref refuses at exit 1 before reading GitHub", async () => {
     const result = await capture(["labels", "sync", "--target", "zheref/nen", "--ref", "nope"], [showRef("nope", "", 128)]);
     expect(result.code).toBe(1);
@@ -145,6 +158,13 @@ describe("nen labels sync --ref / --working-tree -- preview by default, --apply 
 });
 
 describe("nen labels rename -- CLI wiring", () => {
+  it.each([[["--ref", "x"]], [["--working-tree"]], [["--apply"]]])("refuses sync's %j at exit 2 before any read (Nobunaga N-1)", async (flags) => {
+    const result = await capture(["labels", "rename", "--target", "zheref/nen", "--map", "a=b", ...flags]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/applies to 'labels sync' only/);
+    expect(result.seams.calls).toHaveLength(0);
+  });
+
   const TARGET = { owner: "zheref", repo: "nen", slug: "zheref/nen" };
 
   it("renames per --map and exits 0 on success", async () => {

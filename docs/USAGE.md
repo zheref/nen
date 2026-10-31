@@ -7403,7 +7403,7 @@ A failed or malformed remote read refuses before any mutation.
 
 **Reading the file from a branch, before it merges** ([#591](https://github.com/zheref/nen/issues/591)).
 `--ref <ref>` reads `nen/labels.json` as a branch, tag or commit in the `--repo` checkout has it
-(`git show <ref>:nen/labels.json`, no fetch), so a pull request that adds or changes the labels file
+(`git cat-file blob <ref>:nen/labels.json`, no fetch), so a pull request that adds or changes the labels file
 can diff — and, on purpose, sync — its labels while it is still open. `--working-tree` names the
 checkout's own file explicitly, the file the plain form reads. **Both modes preview by default**:
 nothing is mutated unless `--apply` is given, and stderr opens with `source: <where> (dry run;
