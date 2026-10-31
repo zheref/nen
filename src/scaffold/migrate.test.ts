@@ -28,7 +28,7 @@ import { checkTaxonomy } from "../schema/taxonomy.js";
 import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 import { scaffoldCommand } from "./command.js";
 import { scaffoldMigrate } from "./migrate.js";
-import { migrateCommand, SEEDS } from "./seeds.js";
+import { migrateCommand, SEEDS, shellWord } from "./seeds.js";
 
 const COLORS_SEED = SEEDS[0]?.text ?? "";
 const GATES_SEED = SEEDS[1]?.text ?? "";
@@ -147,7 +147,8 @@ describe("scaffoldMigrate", () => {
     const result = scaffoldMigrate({ root, dryRun: false });
     expect(result.files[0]).toMatchObject({ file: "nen/colors.yml", action: "kept" });
     expect(lstatSync(join(root, "nen", "colors.yml")).isSymbolicLink()).toBe(true);
-    expect(readlinkSync(join(root, "nen", "colors.yml"))).toBe("../nowhere.yml");
+    // Windows reads the link back with its own separator.
+    expect(readlinkSync(join(root, "nen", "colors.yml")).replace(/\\/g, "/")).toBe("../nowhere.yml");
     expect(existsSync(join(root, "nowhere.yml"))).toBe(false);
   });
 
@@ -220,7 +221,7 @@ describe("nen scaffold migrate -- CLI wiring", () => {
     expect(result.out.join("\n")).toMatch(/^created: nen\/colors\.yml -- /m);
     expect(result.out.join("\n")).toMatch(/^created: nen\/gates\.json -- /m);
     // The next step names THIS repository, not whatever the shell stands in.
-    expect(result.out.at(-1)).toBe(`next: review the seeded file(s), commit them, then run: nen schema check --repo ${root}`);
+    expect(result.out.at(-1)).toBe(`next: review the seeded file(s), commit them, then run: nen schema check --repo ${shellWord(root)}`);
     const again = await capture(["scaffold", "migrate"], root);
     expect(again.code).toBe(0);
     expect(again.out).toEqual([
