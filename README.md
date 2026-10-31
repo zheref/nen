@@ -149,11 +149,13 @@ nen scaffold init --repo /path/to/repo --accept-detected --directories src,tests
 **`--marker-env <VAR>` is required on `init` and has no default.** It names the
 environment variable the generated commit-msg hook reads to tell an automated
 commit from a human one: when that variable is set, the hook requires the
-`--agent-trailer` key (and `--run-trailer`'s, when given); when it is unset, the
-commit is a human's and only the refused-trailer list applies. Nen ships no
-marker variable, so pick the one your automation already sets (`NEN_AUTOMATED`
-above is an example). Leave it off and `init` refuses at exit 2 before writing
-anything, naming the flag. `--agent-trailer` and `--run-trailer` are optional.
+`--agent-trailer` key (omitted, it defaults to `Akatsuki-Agent`), plus the run
+trailer when the policy states one — `--run-trailer` writes it into a new
+`nen/workflow.json`, while an existing file's own `commits.runTrailer` wins over
+the flag. When the variable is unset, the commit is a human's and only the
+refused-trailer list applies. Nen ships no marker variable, so pick the one your
+automation already sets (`NEN_AUTOMATED` above is an example). Leave it off and
+`init` refuses at exit 2 before writing anything, naming the flag.
 
 It ends by running `nen shu tools` in **check** mode and printing what this
 machine is missing, without installing anything. Run it yourself for the host
