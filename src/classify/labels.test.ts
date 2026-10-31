@@ -24,11 +24,12 @@ describe("nen classify labels", () => {
       contract: "nen.classify.labels/v0.1",
       taxonomy: MINI,
       axes: { lang: { prefix: "lang/", count: 2 }, job: { prefix: "job/", count: 2 } },
+      families: {},
       labels: [
-        { name: "lang/alpha", color: "1d76db", description: "Needs alpha", axis: "lang", key: "alpha" },
-        { name: "lang/beta", color: "1d76db", description: "Needs beta", axis: "lang", key: "beta" },
-        { name: "job/build", color: "5319e7", description: "Building the thing", axis: "job", key: "build" },
-        { name: "job/test", color: "5319e7", description: "Testing the thing", axis: "job", key: "test" },
+        { name: "lang/alpha", color: "1d76db", description: "Needs alpha", axis: "lang", family: "lang", key: "alpha" },
+        { name: "lang/beta", color: "1d76db", description: "Needs beta", axis: "lang", family: "lang", key: "beta" },
+        { name: "job/build", color: "5319e7", description: "Building the thing", axis: "job", family: "job", key: "build" },
+        { name: "job/test", color: "5319e7", description: "Testing the thing", axis: "job", family: "job", key: "test" },
       ],
     });
   });

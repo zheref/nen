@@ -30,6 +30,16 @@
 // valid classification vocabulary; `nen direct resolve` is the verb that
 // refuses a file that lacks what it derives from.
 //
+// INSTALL-ONLY LABEL FAMILIES (zheref/nen#590). hatsu:direct writes its verdict
+// as one `model/<line>` label, a family a consumer installs beside the two axes
+// but that no classification ever decides: the ruling keeps exactly two axes, so
+// the family rides an OPTIONAL root `families` block, never `axes`. Each family
+// has the axis shape (prefix, colour, keys with title and description) and
+// nothing else; `nen classify install` declares and syncs it with the axes, and
+// `status`/`apply` never read it as an axis -- an issue missing a family label
+// is not unclassified, and a plan cannot apply one. Its keys and colour are data
+// like every other key here.
+//
 // A BAD FILE IS A LOUD, POINTED REFUSAL (../schema/errors.ts): the path, the
 // pointer into the file and what was found. No fallback and no built-in copy --
 // a binary that guessed the vocabulary would label issues with names the
@@ -117,6 +127,15 @@ export interface Axis {
   readonly keys: readonly AxisKey[];
 }
 
+/** An install-only label family (`families.<name>`): the axis shape, never classified on. */
+export interface LabelFamily {
+  readonly name: string;
+  /** Ends in `/`; a label of this family is `prefix + key`. */
+  readonly prefix: string;
+  readonly color: string;
+  readonly keys: readonly AxisKey[];
+}
+
 export interface ConfidencePolicy {
   readonly levels: readonly string[];
   /** Levels a sweep applies after its one confirmation. */
@@ -137,6 +156,8 @@ export interface ClassifyTaxonomy {
   readonly confidence: ConfidencePolicy;
   /** The `domains` block, or null when the file carries none. */
   readonly domains: DomainPolicy | null;
+  /** The install-only label families, in file order; empty when the file carries none. */
+  readonly families: readonly LabelFamily[];
 }
 
 function requireStringList(path: string, pointer: string, value: unknown): string[] {
@@ -175,7 +196,20 @@ function parsePhases(path: string, pointer: string, value: unknown): Record<stri
 }
 
 function parseAxis(path: string, name: AxisName, value: unknown): Axis {
-  const pointer = `axes.${name}`;
+  return { name, ...parseKeyedShape(path, `axes.${name}`, name, value) };
+}
+
+/**
+ * The shape an axis and an install-only family share: a prefix, a colour and
+ * keys with a title and a description. `axis` names the axis whose optional
+ * facts the keys may carry, or null for a family, whose keys carry none.
+ */
+function parseKeyedShape(
+  path: string,
+  pointer: string,
+  axis: AxisName | null,
+  value: unknown,
+): { prefix: string; color: string; keys: AxisKey[] } {
   const record = requireRecord(path, pointer, value);
 
   const prefix = requireString(path, `${pointer}.prefix`, record["prefix"]);
@@ -197,7 +231,7 @@ function parseAxis(path: string, name: AxisName, value: unknown): Axis {
 
   const rawKeys = requireArray(path, `${pointer}.keys`, record["keys"]);
   if (rawKeys.length === 0) {
-    throw new SchemaError(path, `${pointer}.keys`, "is empty. An axis with no keys can label nothing.");
+    throw new SchemaError(path, `${pointer}.keys`, `is empty. ${axis === null ? "A family" : "An axis"} with no keys can label nothing.`);
   }
   const seen = new Map<string, number>();
   const keys = rawKeys.map((entry, index): AxisKey => {
@@ -239,13 +273,33 @@ function parseAxis(path: string, name: AxisName, value: unknown): Axis {
       // job, or a `weight`/`phases` on a language, is an unrelated field this parser
       // ignored before these facts existed and ignores still (Copilot review on
       // zheref/nen#380) -- so a job is always code, a language never weighs.
-      code: name === "lang" ? optionalBoolean(path, `${keyPointer}.code`, keyRecord["code"], true) : true,
-      weight: name === "job" ? parseWeight(path, `${keyPointer}.weight`, keyRecord["weight"]) : null,
-      phases: name === "job" ? parsePhases(path, `${keyPointer}.phases`, keyRecord["phases"]) : null,
+      code: axis === "lang" ? optionalBoolean(path, `${keyPointer}.code`, keyRecord["code"], true) : true,
+      weight: axis === "job" ? parseWeight(path, `${keyPointer}.weight`, keyRecord["weight"]) : null,
+      phases: axis === "job" ? parsePhases(path, `${keyPointer}.phases`, keyRecord["phases"]) : null,
     };
   });
 
-  return { name, prefix, color, keys };
+  return { prefix, color, keys };
+}
+
+function parseFamilies(path: string, value: unknown): LabelFamily[] {
+  if (value === undefined) return [];
+  const record = requireRecord(path, "families", value);
+  return Object.entries(record)
+    .filter(([name]): boolean => !name.startsWith("$"))
+    .map(([name, entry]): LabelFamily => {
+      if (!KEBAB_KEY.test(name)) {
+        throw new SchemaError(path, `families.${name}`, `expected a kebab-case family name matching ${String(KEBAB_KEY)}`);
+      }
+      if ((AXES as readonly string[]).includes(name)) {
+        throw new SchemaError(
+          path,
+          `families.${name}`,
+          `names an axis. An axis is classified on and lives under 'axes'; a family is installed only.`,
+        );
+      }
+      return { name, ...parseKeyedShape(path, `families.${name}`, null, entry) };
+    });
 }
 
 function parseConfidence(path: string, value: unknown): ConfidencePolicy {
@@ -469,6 +523,26 @@ export function parseClassifyTaxonomy(path: string, value: unknown): ClassifyTax
     }
   });
 
+  // A family's prefix is held to the same rule against every axis and every
+  // other family: a label read back off an issue must belong to one namespace.
+  const families = parseFamilies(path, root["families"]);
+  const spaces = [
+    ...parsed.map((axis): { pointer: string; prefix: string } => ({ pointer: `axes.${axis.name}`, prefix: axis.prefix })),
+    ...families.map((family): { pointer: string; prefix: string } => ({ pointer: `families.${family.name}`, prefix: family.prefix })),
+  ];
+  spaces.forEach((space, index): void => {
+    if (!space.pointer.startsWith("families.")) return;
+    for (const other of spaces.slice(0, index)) {
+      if (space.prefix.startsWith(other.prefix) || other.prefix.startsWith(space.prefix)) {
+        throw new SchemaError(
+          path,
+          `${space.pointer}.prefix`,
+          `${describeValue(space.prefix)} overlaps ${other.pointer}.prefix ${describeValue(other.prefix)}; a label's family is read from its prefix and must be unambiguous`,
+        );
+      }
+    }
+  });
+
   const classification = requireRecord(path, "classification", root["classification"]);
   const confidence = parseConfidence(path, classification["confidence"]);
 
@@ -495,7 +569,7 @@ export function parseClassifyTaxonomy(path: string, value: unknown): ClassifyTax
     AxisName,
     Axis
   >;
-  return { path, axes, confidence, domains };
+  return { path, axes, confidence, domains, families };
 }
 
 /**
@@ -534,6 +608,51 @@ export function taxonomyLabels(taxonomy: ClassifyTaxonomy): ClassifyLabel[] {
       }),
     );
   });
+}
+
+/** One label `nen classify install` declares: an axis label or an install-only family's. */
+export interface InstallLabel extends Label {
+  /** The axis or family name the label belongs to. */
+  readonly family: string;
+  readonly key: string;
+  /** The axis, or null for a family label. */
+  readonly axis: AxisName | null;
+}
+
+/**
+ * Every label `nen classify install` declares and syncs: the axes' labels in
+ * `taxonomyLabels` order, then each family's, keys in file order.
+ */
+export function installLabels(taxonomy: ClassifyTaxonomy): InstallLabel[] {
+  const axes = taxonomyLabels(taxonomy).map((label): InstallLabel => ({ ...label, family: label.axis }));
+  const families = taxonomy.families.flatMap((family): InstallLabel[] =>
+    family.keys.map(
+      (entry): InstallLabel => ({
+        name: family.prefix + entry.key,
+        color: family.color,
+        description: entry.description,
+        family: family.name,
+        key: entry.key,
+        axis: null,
+      }),
+    ),
+  );
+  return [...axes, ...families];
+}
+
+/**
+ * A label wearing an axis or family prefix whose key that axis or family does
+ * not carry -- `foreign` to `nen classify install`. False for every other name.
+ */
+export function isForeignLabel(taxonomy: ClassifyTaxonomy, name: string): boolean {
+  const spaces = [...AXES.map((axis): { prefix: string; keys: readonly AxisKey[] } => taxonomy.axes[axis]), ...taxonomy.families];
+  for (const space of spaces) {
+    if (name.startsWith(space.prefix) && name.length > space.prefix.length) {
+      const key = name.slice(space.prefix.length);
+      return !space.keys.some((entry): boolean => entry.key === key);
+    }
+  }
+  return false;
 }
 
 export interface AxisLabel {
