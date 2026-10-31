@@ -575,7 +575,10 @@ anything ever reads a taxonomy file from. A repository that still carries a
 file only under `schemas/` is, from every verb's point of view, the SAME as one
 carrying it nowhere — the refusal it gets is the ordinary "no such file" one,
 with one addition: it names the legacy copy it found and the way out, **run
-`nen scaffold init --accept-detected`** (or copy the file by hand). The
+`nen scaffold init --repo <path> --marker-env <VAR> --accept-detected`** (or
+copy the file by hand). The refusal itself abbreviates the command to
+`nen scaffold init --accept-detected`; `--repo` and `--marker-env` are still
+required, as [`scaffold init`](#nen-scaffold-init) says. The
 migration path is a verb, not a fallback — see [`scaffold
 init`](#nen-scaffold-init) below.
 
@@ -7770,8 +7773,9 @@ It is also where the `schemas/` → `nen/` migration is reported, in the shape v
 the only directory anything reads, so the report distinguishes two, unrelated findings instead of the
 four the fallback needed. A REQUIRED file present only under `schemas/` FAILS the report exactly as an
 absent file always has — its `detail` is the ordinary "no such file" refusal, with one addition: it
-names the legacy copy it found and the migration (`nen scaffold init --accept-detected`, or copy it by
-hand). A file that DID load from `nen/`, with a `schemas/` copy still sitting beside it, is a
+names the legacy copy it found and the migration (`nen scaffold init --repo <path> --marker-env <VAR>
+--accept-detected` — the refusal abbreviates it to `--accept-detected`, but `init` still requires
+`--repo` and [`--marker-env`](#nen-scaffold-init) — or copy it by hand). A file that DID load from `nen/`, with a `schemas/` copy still sitting beside it, is a
 **leftover**: a `warn` row, never a `FAIL`, with an indented `^ a legacy '<path>' copy is still
 there…` line naming the `git rm` that clears it. It is a `warn` because `nen/` is the only file anything
 reads now — a stale duplicate is clutter to delete, not a correctness risk, so whether its bytes still
@@ -11226,6 +11230,8 @@ tools:         (none declared)
 ```
 (run for real against a scratch copy of this repository's own `gatsby-site` marker fixture; the absolute paths are elided to `/tmp/site`)
 
+`--marker-env NEN_AUTOMATED` in that example is required, not decoration: `init` without `--marker-env` refuses at exit 2 before any write. `NEN_AUTOMATED` is only an example name — nen ships no marker variable, so state the one your automation sets. With it set in a commit's environment the hook requires `Agent-Name:` and `Run-Id:` trailers; without it the commit is treated as a human's.
+
 ### `nen scaffold new`
 
 A **fresh** tree: the stack template's files with `{{name}}` substituted, the CI workflow, `.gitignore` (ignoring `.nen/` and `Reports/`), the commit-msg hook when a trailer convention is stated, the trunk-guarding `pre-commit` hook **always**, [`nen/workflow.json`](#nenworkflowjson)'s policy, and `nen/contract.json` — **proposed by `shu detect` off the marker this verb just wrote**, so "scaffolded a project" and "declared a stack" stop being two chores with two chances to disagree.
@@ -11285,6 +11291,8 @@ post-steps (nen does NOT run these):
   7. nen shu build --repo ./kro-site --dry-run  # confirm the declaration
 ```
 (run for real, `dist/nen-darwin-arm64 scaffold new --stack nextjs --name kro-site --dir ./kro-site --dry-run`)
+
+That example leaves `--marker-env` out on purpose: on `new` it is optional, and omitting it is what skips the commit-msg hook (the `skipped:` line) and adds post-step 4, the `scaffold init` line that installs the hook once you have chosen a marker variable. To write the hook in the same run, add `--marker-env <VAR>` (and, if wanted, `--agent-trailer`/`--run-trailer`).
 
 **What the generated workflow does.** `.github/workflows/nen-shu.yml` declares `permissions: contents: read`, fetches nen's bootstrap at a pinned ref, runs `nen shu tools --repo .`, then `build`, `test` and `lint` — **`--dry-run` first, then for real** — treating exit 4 (this lane declares no such verb) as a fact rather than a failure.
 
@@ -19995,7 +20003,8 @@ against it.
 
 ```bash
 # 1. Directory skeleton, the trailer-enforcing commit-msg hook, a canon-values template.
-nen scaffold init --repo /path/to/new-consumer --directories src,tests,docs \
+#    --marker-env is required: the hook reads it to recognise an automated commit.
+nen scaffold init --repo /path/to/new-consumer --accept-detected --directories src,tests,docs \
   --agent-trailer Agent-Name --run-trailer Run-Id --marker-env NEN_AUTOMATED \
   --canon-values-path .claude/canon-values.yml --scenario swiftui-tca-uzf-v2
 ```
