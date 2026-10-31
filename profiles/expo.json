@@ -63,6 +63,11 @@
       "why": "Flat ESLint 9 with `eslint-config-expo/flat`, ignoring `dist/*`. `expo` is invoked through the project's own dependency, never a global install.",
       "source": "food-diary/package.json:12; eslint.config.js:5-9"
     },
+    "typecheck": {
+      "declaredOnly": "TypeScript is configured -- a tsconfig.json and a `typescript` devDependency -- and nothing in the repository ever runs `tsc`: no script, no workflow. The pack seats no command a reference does not run; the declaration states the one this repository means.",
+      "summary": "configured, never run",
+      "source": "food-diary/tsconfig.json; package.json:5-13, :53"
+    },
     "archive": {
       "unsupported": "NO `eas.json` AND NO EAS PROJECT ID in `app.json`. The pack must not propose `eas build`: nothing in the seven repositories has ever run it.",
       "summary": "no eas.json anywhere",

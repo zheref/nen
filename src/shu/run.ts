@@ -778,7 +778,7 @@ export function renderReport(report: ShuReport): readonly string[] {
     labelled("stdout to", redirects.length === 0 ? "(none declared)" : redirects.join(", ")),
   );
   // PRINTED ONLY WHERE THERE IS ONE, unlike every line above it. Ten of the
-  // eleven executing verbs can never write a proof, and a `proof: (none)` row
+  // twelve executing verbs can never write a proof, and a `proof: (none)` row
   // on all of them would be a line about a thing that verb does not do.
   if (report.proof !== null) {
     lines.push(

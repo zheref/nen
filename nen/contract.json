@@ -51,6 +51,11 @@
           "argv": ["run", "lint"],
           "why": "`eslint .`."
         },
+        "typecheck": {
+          "exe": "bun",
+          "argv": ["run", "typecheck"],
+          "why": "`tsc --noEmit` -- the same check `build` runs, stated under its own name so `nen shu typecheck` answers here as it does on any TypeScript lane (zheref/nen#588)."
+        },
         "coverage": {
           "exe": "bun",
           "argv": ["--eval", "const file = Bun.file('coverage/lcov.info'); if (!(await file.exists()) || file.size === 0) throw new Error('Missing or empty aka coverage capture');"],

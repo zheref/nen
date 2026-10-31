@@ -47,6 +47,11 @@
       "summary": "no command in the tree",
       "source": "KroAndroid/program/ (inventory sweep)"
     },
+    "typecheck": {
+      "unsupported": "The Kotlin compiler IS the type check; this lane names no command at all, and a separate checking step does not exist on this stack.",
+      "summary": "the compiler checks types",
+      "source": "KroAndroid/program/ (inventory sweep)"
+    },
     "archive": {
       "unsupported": "`targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)` is declared, so the tasks exist -- but NO COMMAND STRING FOR THEM APPEARS ANYWHERE IN THE REPOSITORY, and each format is host-locked. Proposing one would be nen inventing a release path.",
       "summary": "formats declared, never invoked",

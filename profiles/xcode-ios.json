@@ -75,6 +75,11 @@
       "summary": "two meanings, one repo",
       "source": "KroApple/.github/workflows/lint.yml:42-43; KroApple/Makefile:16-17"
     },
+    "typecheck": {
+      "unsupported": "The Swift compiler IS the type check, inside `xcodebuild build`; the repository runs no separate checking step and the stack has none.",
+      "summary": "the compiler checks types",
+      "source": "KroApple/.github/workflows/ (inventory sweep)"
+    },
     "archive": {
       "unsupported": "No repository invokes `xcodebuild archive`. KroApple's Archive actions are scheme CONFIGURATION pinned to `Release`, and heavy builds are delegated to Xcode Cloud, whose workflows live server-side and have no command line here.",
       "summary": "no xcodebuild archive",
