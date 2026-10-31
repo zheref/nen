@@ -11,6 +11,7 @@ import {
   planAppend,
   planPark,
   planStart,
+  readClaims,
   readRunManifest,
   RunManifestError,
   RUN_CONTRACT,
@@ -166,8 +167,23 @@ describe("parseRunManifest / readRunManifest", () => {
       { ...good, repo: "nope" },
       { ...good, parked: "none" },
       { ...good, parked: [{ issue: "NN#1", row: "Bad Row", at: NOW }] },
+      { ...good, parked: [{ issue: "NN#1", row: "r", at: "1" }] },
     ];
     for (const value of bad) expect(() => parseRunManifest("m.json", value)).toThrow(/is not a nen.run\/v0.1 manifest/);
+  });
+
+  it("carries a claims value verbatim, readable or not, so a rewrite never drops it (zheref/nen#521)", () => {
+    expect(Object.keys(parseRunManifest("m.json", good))).not.toContain("claims");
+    for (const claims of [[{ issue: "NN#1", branch: null, at: NOW }], "torn"]) {
+      const parsed = parseRunManifest("m.json", { ...good, claims });
+      expect(parsed.claims).toEqual(claims);
+      expect(Object.keys(planPark(parsed, "NN#2", "r", NOW).manifest)).toEqual(["contract", "id", "repo", "startedAt", "idleAnswers", "prs", "parked", "claims"]);
+    }
+    expect(readClaims(parseRunManifest("m.json", { ...good, claims: [{ issue: "NN#1", at: NOW }] }))).toEqual({ ok: true, recorded: true, claims: [{ issue: "NN#1", branch: null, at: NOW }] });
+    expect(readClaims(parseRunManifest("m.json", good))).toEqual({ ok: true, recorded: false, claims: [] });
+    expect(readClaims(parseRunManifest("m.json", { ...good, claims: "torn" })).ok).toBe(false);
+    // Date.parse reads "1" as 2001-01-01; the shape check refuses it first.
+    expect(readClaims(parseRunManifest("m.json", { ...good, claims: [{ issue: "NN#1", at: "1" }] }))).toEqual({ ok: false, reason: "claims[0].at is not an ISO-8601 instant" });
   });
 
   it("reads a missing file as no run, and an unreadable one as a refusal", () => {

@@ -11,7 +11,8 @@ import { noPortProbe } from "../seam/scripted.js";
 import { RUN_CONTRACT, type RunManifest, type RunPr } from "../run/manifest.js";
 import type { LiveRead } from "../run/verify.js";
 import { loopCommand } from "./command.js";
-import { effortsFromRun, markerForBranch, readinessInProcess, type FromRunDeps, type MarkerRead, type ReadinessRead } from "./fromrun.js";
+import { computeSlots } from "./slots.js";
+import { effortsFromRun, sameIssue, markerForBranch, readinessInProcess, type FromRunDeps, type MarkerRead, type ReadinessRead } from "./fromrun.js";
 
 const NOW = "2026-10-22T00:00:00.000Z";
 const row = (pr: number, kind: RunPr["kind"] = "delivery"): RunPr => ({ issue: `NN#${pr - 400}`, pr, base: "integration/x", branch: `branch-${pr}`, kind, head: "abcdef1", effort: null, recordedAt: NOW });
@@ -64,6 +65,94 @@ describe("effortsFromRun", () => {
     expect(report.efforts.find((e) => e.pr === 482)).toMatchObject({ prOpen: true, ready: false, prompted: false, facts: "unread -- held" });
     expect(report.efforts.find((e) => e.pr === 483)).toMatchObject({ ready: false, prompted: false });
     expect(report.unread.map((u) => u.pr)).toEqual([482, 483, 483]);
+  });
+});
+
+describe("effortsFromRun: claimed efforts with no PR yet (zheref/nen#521)", () => {
+  const withClaims = (prs: readonly RunPr[], claims: unknown, parked: RunManifest["parked"] = []): RunManifest => ({ ...manifest(prs), parked, claims });
+
+  it("AC-1: a claimed effort with no pull request occupies a slot; one with a delivery PR is that PR's, counted once", async () => {
+    const report = await effortsFromRun(
+      withClaims([row(480)], [{ issue: "NN#80", branch: "b480", at: NOW }, { issue: "NN#90", branch: "opus/x/nn-90", at: NOW }]),
+      deps({ 480: open("integration/x", "b480") }, { 480: { ok: true, ready: false } }, {}),
+    );
+    expect(report.claims).toBe("read");
+    expect(report.efforts.map((e) => [e.id, e.pr, e.prOpen])).toEqual([["NN#80 #480", 480, true], ["NN#90 (claimed)", null, false]]);
+    const slots = computeSlots(report.efforts, { ci: 2, local: 2 }, "ready+prompted");
+    expect(slots.local).toMatchObject({ occupied: 2, free: 0, binding: true });
+    expect(slots.local.holding[1]).toEqual({ id: "NN#90 (claimed)", why: "authored locally, no PR yet" });
+  });
+
+  it("AC-2: a claim the run parked frees its slot; a re-claim after the park holds again", async () => {
+    const later = "2026-10-23T00:00:00.000Z";
+    const report = await effortsFromRun(
+      withClaims([], [{ issue: "NN#90", branch: null, at: NOW }, { issue: "NN#91", branch: null, at: NOW }, { issue: "NN#91", branch: null, at: later }], [
+        { issue: "NN#90", row: "direct-mismatch", at: later },
+        { issue: "NN#91", row: "direct-mismatch", at: NOW },
+      ]),
+      deps({}, {}, {}),
+    );
+    expect(report.parkedClaims).toEqual(["NN#90"]);
+    expect(report.efforts.map((e) => e.id)).toEqual(["NN#91 (claimed)"]);
+    expect(computeSlots(report.efforts, { ci: 2, local: 2 }).local.occupied).toBe(1);
+  });
+
+  it("AC-3: claim rows that will not read are claimsUnread, and no claim is freed by a park", async () => {
+    for (const claims of ["none", null, [{ issue: "twelve", at: NOW }], [{ issue: "NN#9", at: "yesterday" }], [{ issue: "NN#9", at: "1" }], [{ issue: "NN#9", branch: 7, at: NOW }], [3]]) {
+      const report = await effortsFromRun(withClaims([], claims, [{ issue: "NN#9", row: "r", at: NOW }]), deps({}, {}, {}));
+      expect(report.claims).toBe("unread");
+      expect(report.claimsUnread).toMatch(/claims/);
+      expect(report.parkedClaims).toEqual([]);
+    }
+  });
+
+  it("never matches by number alone: NN#5 and HA#5 are two efforts, and a PR for NN#80 does not absorb HA#80", async () => {
+    const report = await effortsFromRun(
+      withClaims([row(480)], [{ issue: "NN#5", branch: null, at: NOW }, { issue: "HA#5", branch: null, at: NOW }, { issue: "HA#80", branch: null, at: NOW }]),
+      deps({ 480: open("integration/x", "b480") }, { 480: { ok: true, ready: false } }, {}),
+    );
+    expect(report.efforts.map((e) => e.id)).toEqual(["NN#80 #480", "NN#5 (claimed)", "HA#5 (claimed)", "HA#80 (claimed)"]);
+  });
+
+  it("matches a claim to its PR by branch alone, when the issue spellings differ", async () => {
+    const report = await effortsFromRun(
+      withClaims([row(480)], [{ issue: "HA#7", branch: "branch-480", at: NOW }]),
+      deps({ 480: open("integration/x", "b480") }, { 480: { ok: true, ready: false } }, {}),
+    );
+    expect(report.efforts.map((e) => e.id)).toEqual(["NN#80 #480"]);
+  });
+
+  it("matches owner/name refs case-insensitively, and a code to owner/name only through the run repository's code", async () => {
+    expect(sameIssue("Zheref/Nen#5", "zheref/nen#5", "zheref/nen", null)).toBe(true);
+    expect(sameIssue("nn#5", "NN#5", "zheref/nen", null)).toBe(true);
+    expect(sameIssue("zheref/nen#5", "zheref/hatsu#5", "zheref/nen", "NN")).toBe(false);
+    expect(sameIssue("NN#5", "zheref/nen#5", "zheref/nen", "NN")).toBe(true);
+    expect(sameIssue("zheref/nen#5", "nn#5", "Zheref/Nen", "NN")).toBe(true);
+    // No code known for the run's repository: two efforts, the over-count.
+    expect(sameIssue("NN#5", "zheref/nen#5", "zheref/nen", null)).toBe(false);
+    // The slug is not the run's repository, or the code is not its code.
+    expect(sameIssue("NN#5", "zheref/hatsu#5", "zheref/nen", "NN")).toBe(false);
+    expect(sameIssue("HA#5", "zheref/nen#5", "zheref/nen", "NN")).toBe(false);
+    expect(sameIssue("NN#5", "NN#6", "zheref/nen", "NN")).toBe(false);
+    const counted = await effortsFromRun(
+      { ...withClaims([], [{ issue: "NN#5", branch: null, at: NOW }, { issue: "zheref/nen#5", branch: null, at: NOW }]), repo: "zheref/nen" },
+      { ...deps({}, {}, {}), repoCode: "NN" },
+    );
+    expect(counted.efforts.map((e) => e.id)).toEqual(["zheref/nen#5 (claimed)"]);
+  });
+
+  it("breaks an equal-at tie toward the later row, and a park at the same instant as the claim frees it", async () => {
+    const report = await effortsFromRun(
+      withClaims([], [{ issue: "NN#5", branch: "first", at: NOW }, { issue: "NN#5", branch: "second", at: NOW }, { issue: "NN#6", branch: null, at: NOW }], [{ issue: "NN#6", row: "r", at: NOW }]),
+      deps({}, {}, {}),
+    );
+    expect(report.efforts.map((e) => e.facts)).toEqual([`claimed ${NOW}, no PR yet (branch second)`]);
+    expect(report.parkedClaims).toEqual(["NN#6"]);
+  });
+
+  it("says a manifest with no claims key recorded none, rather than reading it as nothing claimed", async () => {
+    const report = await effortsFromRun(manifest([]), deps({}, {}, {}));
+    expect(report).toMatchObject({ claims: "not-recorded", claimsUnread: null, efforts: [] });
   });
 });
 
@@ -164,6 +253,34 @@ describe("nen loop slots --from-run (CLI)", () => {
     expect(result.err.join("\n")).toMatch(/read run manifest 'r1' in place at .*hatsu.runs.r1\.json; not moved to .* -- 'nen run verify --id r1 --target zheref\/nen' moves it/);
     const other = await capture(["loop", "slots", "--from-run", "r1", "--target", "o/other", "--local-cap", "1"], common, {});
     expect(other.code).toBe(2);
+  });
+
+  it("AC-1/AC-3 at the CLI: a claim with no PR holds; unreadable claim rows exit 1 with no local slot free", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-slots-claims-"));
+    const common = join(root, ".git");
+    mkdirSync(join(common, ".nen", "runs"), { recursive: true });
+    const file = join(common, ".nen", "runs", "r1.json");
+    const argv = ["loop", "slots", "--from-run", "r1", "--target", "zheref/nen", "--local-cap", "2"];
+    writeFileSync(file, JSON.stringify({ ...manifest([]), repo: "zheref/nen", claims: [{ issue: "NN#90", branch: null, at: NOW }] }));
+    const held = await capture(argv, common, {});
+    expect(held.code).toBe(0);
+    expect(JSON.parse(held.out.join("\n")).local).toMatchObject({ occupied: 1, free: 1 });
+    writeFileSync(file, JSON.stringify({ ...manifest([]), repo: "zheref/nen", claims: "torn" }));
+    const unreadable = await capture(argv, common, {});
+    expect(unreadable.code).toBe(1);
+    const doc = JSON.parse(unreadable.out.join("\n"));
+    expect(doc.local).toMatchObject({ occupied: 0, free: 0, binding: true });
+    expect(doc.fromRun).toMatchObject({ claims: "unread", claimsUnread: "claims is string, not an array" });
+    expect(unreadable.err.join("\n")).toMatch(/claim rows could not be read/);
+    // --repo's nen/repos.json supplies the run repository's code, so NN#90 and zheref/nen#90 are one effort.
+    mkdirSync(join(root, "nen"), { recursive: true });
+    writeFileSync(join(root, "nen", "repos.json"), JSON.stringify({ consumers: [], product_codes: { NN: "zheref/nen" } }));
+    writeFileSync(file, JSON.stringify({ ...manifest([]), repo: "zheref/nen", claims: [{ issue: "NN#90", branch: null, at: NOW }, { issue: "zheref/nen#90", branch: null, at: NOW }] }));
+    const coded = await capture(argv, common, {});
+    expect(JSON.parse(coded.out.join("\n")).local).toMatchObject({ occupied: 1, free: 1 });
+    writeFileSync(file, JSON.stringify({ ...manifest([]), repo: "zheref/nen", claims: "torn" }));
+    const human = await capture(argv, common, {}, false);
+    expect(human.out.join("\n")).toMatch(/claims unread: .* -- could not look; no local slot is reported free/);
   });
 
   it.skipIf(process.platform === "win32")("refuses a runs directory that is a link, at exit 1, counting nothing through it (zheref/nen#522 N8)", async () => {
