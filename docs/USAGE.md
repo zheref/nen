@@ -7489,8 +7489,9 @@ ending in `/`, a colour that is not six hex digits, a key that is not kebab-case
 
 The taxonomy may also carry an optional root `families` block (zheref/nen#590): install-only label
 families, each with the axis shape (`prefix`, `color`, `keys` with `key`, `title` and `description`),
-keyed by a kebab-case family name that is not an axis name. hatsu:direct's `model/` family is the
-worked case. A family is **never classified on**: `classify status` and `classify apply` read the two
+keyed by a kebab-case family name that is not an axis name — for example hatsu:direct's `model/`
+family, once the taxonomy declares it (zheref/hatsu `contracts/classify.taxonomy.json` →
+`families.model`; a taxonomy without the block installs the axes only). A family is **never classified on**: `classify status` and `classify apply` read the two
 axes only, so an issue without a `model/` label is still classified. It is part of the label set
 `classify labels` prints and `classify install` declares and syncs. A family whose prefix overlaps an
 axis's or another family's, a family named like an axis, or a family with no keys is refused by
@@ -7514,7 +7515,8 @@ family's), then `<n> label(s): <a> lang, <b> job` followed by `, <c> <family>` p
 prints one document; top-level keys: `contract` (`nen.classify.labels/v0.1`), `taxonomy` (the
 resolved path), `axes` (per axis: `prefix`, `count`), `families` (per family: `prefix`, `count`; `{}`
 when the file carries none) and `labels` (an array of `{ name, color, description, axis, family, key
-}`, where `family` is the axis or family name and `axis` is `null` on a family label). Exit 0 when the file is valid; exit 1 when it is not (the
+}`, where `family` is the axis or family name and `axis` is `null` on a family label). Both are
+additive; the contract stays `v0.1`. Exit 0 when the file is valid; exit 1 when it is not (the
 refusal names the pointer) or cannot be read; exit 2 when `--taxonomy` is missing.
 
 **Example**
@@ -7535,8 +7537,8 @@ file, no `gh` call)
 ### `nen classify install`
 
 Answers "has the classification label set been installed here": it compares the taxonomy's labels —
-both axes' and every install-only family's (`families`, for example the `model/` family
-hatsu:direct applies; zheref/nen#590) — with the consumer's `nen/labels.json`. Each label is `present` (name, colour and description identical;
+both axes' and every install-only family the taxonomy declares (`families`, for example the `model/`
+family hatsu:direct applies once the taxonomy carries `families.model`; zheref/nen#590) — with the consumer's `nen/labels.json`. Each label is `present` (name, colour and description identical;
 colours compare case-insensitively), `drift` (the name is declared but the colour or description
 differs) or `absent`. Labels in `nen/labels.json` that wear an axis or family prefix but whose key the
 taxonomy does not carry are listed as `foreign` and are **never** removed or changed — a retired key may still
@@ -7619,7 +7621,9 @@ the labels already on it into the keys the taxonomy knows on each axis, `unknown
 axis prefix whose key the taxonomy lacks) and `missing` (the axes with no label at all). An issue is
 `classified` only when every axis has a label. It also reports `declared` — whether `nen/labels.json`
 carries every taxonomy label — and `github` — whether every taxonomy label exists on the repository
-(existence only; colour drift is `install`'s question).
+(existence only; colour drift is `install`'s question). `declared` and `github` cover the axes' and
+every install-only family's labels, so a declared family label missing on GitHub reads `missing <n>`;
+`unknown` and `missing` read the two axes only.
 
 Exactly one of `--issue <n>[,<n>...]` and `--open`. `--open` reads every open issue, paginated to the
 end (pull requests, which GitHub serves from the same endpoint, are filtered out) and says so when it
