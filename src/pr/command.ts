@@ -1,8 +1,8 @@
 // src/pr/command.ts -- `nen pr ready`, `nen pr staleness`, `nen pr body-check`
 // (main), and (verbs/4-remainders, zheref/nen#4) `nen pr fetch`,
 // `nen pr next-blocker`, `nen pr cascade-main`, `nen pr retarget`,
-// `nen pr request-reviews`, `nen pr edit-body`, and (zheref/nen#345)
-// `nen pr mark-ready` -- one "pr" family.
+// `nen pr request-reviews`, `nen pr edit-body`, (zheref/nen#345)
+// `nen pr mark-ready` and (zheref/nen#523) `nen pr edit-title` -- one "pr" family.
 //
 // THREE SUBCOMMANDS, ONE FAMILY. `nen pr ready` (the CON-32 readiness verdict,
 // zheref/nen#2) is the ELDER of the three: it landed on main first, as a direct
@@ -104,6 +104,8 @@ import {
   type UnrecordedBot,
 } from "./bots.js";
 import { certifyPullRequest, editBodyArgv, writePullRequestBody } from "./editbody.js";
+import { EDIT_TITLE_CONTRACT, editTitleArgv, readPullRequestTitle, refuseTitleShape, terminalQuoted, writePullRequestTitle } from "./edittitle.js";
+import { readTitleFile } from "../issue/title.js";
 import { blockingExit, blocksWrite, type CheckedText, type IgnoreList, type PrivateNameCheck } from "../issue/privacy.js";
 import { guardPrivateNames, PRIVATE_NAME_FLAGS, readIgnoreFlag } from "../issue/privacyguard.js";
 import { LEDGER_ACTION_FLAGS, ledgerVerb } from "./ledger-verb.js";
@@ -111,6 +113,7 @@ import { GITHUB_COMMENT_LIMIT, PR_LEDGER_CONTRACT } from "./ledger.js";
 import { LOGIN as OPEN_LOGIN, ME as OPEN_ME, OPEN_CONTRACT, openPullRequest } from "./open.js";
 import { sectionsCommand } from "./sections_command.js";
 import { plainLine } from "../cli/plain.js";
+import { renderArgv, shellSingleQuote } from "../shu/render.js";
 import { exitCodeFor, markReady, SHA_PREFIX as MARK_READY_SHA_PREFIX, type MarkReadyReport } from "./markready.js";
 import {
   EXIT_FOR,
@@ -170,6 +173,7 @@ nen pr cascade-main --repo <path> [--trunk main] [--no-push] [--dry-run]
 nen pr retarget --target <owner/name> --pr <n> --base <branch> [--dry-run]
 nen pr request-reviews --target <owner/name> --pr <n> [--add-reviewers a,b] [--add-bots login-or-id,...] [--dry-run]
 nen pr edit-body --target <owner/name> --pr <n> --body-file <path> [--dry-run] [PRIVATE-NAME FLAGS]
+nen pr edit-title --target <owner/name> --pr <n> --title-file <path> [--dry-run] [--json] [PRIVATE-NAME FLAGS]
 nen pr mark-ready --target <owner/name> --pr <n> [--require-head <sha>] [--dry-run] [--json]
 nen pr threads list|reply|resolve --target <owner/name> --pr <n> [--thread <id>] [--body-file <path>] [--dry-run] [--json] [PRIVATE-NAME FLAGS: reply]
 nen pr threads settle --target <owner/name> --pr <n> --from <file.json> [--dry-run] [--json] [PRIVATE-NAME FLAGS]
@@ -177,7 +181,8 @@ nen pr open --target <owner/name> --base <ref> --title-file <path> --body-file <
 
 PRIVATE-NAME FLAGS (zheref/nen#363): [--skip-private-name-check]
   [--private-names-ignore-file <path> [--allow-all-ignored]]. 'edit-body',
-  'threads reply', 'threads settle' and 'open' write caller text to GitHub,
+  'edit-title', 'threads reply', 'threads settle' and 'open' write caller
+  text to GitHub,
   and run the private-name guard 'nen issue' runs (see 'nen issue --help',
   PRIVATE REPOSITORY NAMES) before the write -- on --dry-run too: the text
   is compared against the credential's live private repository list (an
@@ -188,8 +193,8 @@ PRIVATE-NAME FLAGS (zheref/nen#363): [--skip-private-name-check]
   partial), a private target is not checked and an internal one is. The
   guard's stderr lines begin 'nen pr <subcommand>:'
   and never print the name; --json adds 'privateNameCheck'. Fields checked:
-  'open' title and body, before any other call; 'edit-body' body, after the
-  certifying read; 'threads reply' body, before the walk; 'threads settle'
+  'open' title and body, before any other call; 'edit-body' body and
+  'edit-title' title, after the certifying read; 'threads reply' body, before the walk; 'threads settle'
   every entry's body (entry[<n>], from 1), after the file's own refusals and
   before the walk. On 'threads', 4 is also 'no such thread' / 'the pull
   request is not visible': a guard refusal is told apart by its stderr lines
@@ -627,6 +632,34 @@ edit-body:
   of the body instead of writing. --json: '{ contract: "nen.pr.edit-body/v0.1",
   target, number, bytes, written, dryRun, privateNameCheck }'. Exit 4: the
   guard refused, nothing written.
+
+edit-title:
+  Replaces the pull request's title with the one line --title-file holds
+  (zheref/nen#523), through 'gh pr edit --title', then READS IT BACK. The
+  file is read verbatim: a leading byte-order mark and ONE trailing newline
+  ('\n' or '\r\n') are dropped, nothing else is trimmed. Refused at exit 2
+  BEFORE ANY CALL: no --title-file, an unreadable or non-UTF-8 one, a title
+  that still holds a line break or any other control character (U+0000-
+  U+001F, U+007F), one that begins or ends with whitespace, one over 256
+  characters, an empty or whitespace-only title, a non-numeric/non-positive
+  --pr. The number is then CERTIFIED as a pull request ('pulls/<n>' answers
+  200; 404/410 is exit 2, worded so it never claims the number IS an
+  issue), the private-name guard checks the title (PRIVATE-NAME FLAGS
+  above), the title is re-read (exit 1, nothing written, if it moved since
+  the certifying read) and the write runs. There is no etag pin: a retitle
+  landing between that re-read and the write is overwritten,
+  last-writer-wins. The read-back asks 'pulls/<n>' again and compares
+  exactly: a title GitHub stored differently, or a read-back that fails, is
+  exit 1, never a success. Titles GitHub returns are printed escaped
+  (quoted, control and invisible characters as \\uXXXX). --dry-run still
+  performs the certifying read and the guard, then prints the argv
+  (single-quoted), the target, the number, the current title and the new
+  one, and writes nothing. --json: '{ contract: "${EDIT_TITLE_CONTRACT}",
+  target, number, previous, title, written, readBack, dryRun,
+  privateNameCheck }', readBack "identical", "mismatch" (with 'stored'),
+  "failed" (with 'error'; written is true), or null when nothing was
+  written ('stored' then names a title that moved since certification). Exit 4: the guard refused, nothing written, and the report drops
+  'title'.
 
 mark-ready:
   Move ONE existing draft pull request out of draft, through GitHub's
@@ -1282,6 +1315,7 @@ export const PR_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   // writes caller text (zheref/nen#363): edit-body, threads (reply, settle)
   // and open.
   "edit-body": { values: ["target", "pr", "body-file", ...PRIVATE_NAME_FLAGS.values], booleans: ["dry-run", ...PRIVATE_NAME_FLAGS.booleans] },
+  "edit-title": { values: ["target", "pr", "title-file", ...PRIVATE_NAME_FLAGS.values], booleans: ["dry-run", ...PRIVATE_NAME_FLAGS.booleans] },
   "mark-ready": { values: ["target", "pr", "require-head"], booleans: ["dry-run"] },
   threads: { values: ["target", "pr", "thread", "body-file", "from", ...PRIVATE_NAME_FLAGS.values], booleans: ["dry-run", ...PRIVATE_NAME_FLAGS.booleans] },
   open: {
@@ -1393,6 +1427,7 @@ const TOKEN_ENV_ADVICE: Readonly<Record<string, string>> = {
   retarget: `retarget ${GH_RESOLVES}`,
   "request-reviews": `request-reviews ${GH_RESOLVES}`,
   "edit-body": `edit-body ${GH_RESOLVES}`,
+  "edit-title": `edit-title ${GH_RESOLVES}`,
   "mark-ready": `mark-ready ${GH_RESOLVES}`,
   threads: `threads ${GH_RESOLVES}`,
   open: `open ${GH_RESOLVES}`,
@@ -1476,6 +1511,7 @@ export const prCommand: Command = {
   exits: [
     { verb: "pr open", code: 4, meaning: "a private repository named in text bound for a PUBLIC target; nothing written (the private-name guard)" },
     { verb: "pr edit-body", code: 4, meaning: "a private repository named in text bound for a PUBLIC target; nothing written (the private-name guard)" },
+    { verb: "pr edit-title", code: 4, meaning: "a private repository named in the title bound for a PUBLIC target; nothing written (the private-name guard)" },
     { verb: "pr threads", code: 3, meaning: "the thread is already resolved (settle: every other entry settled)" },
     { verb: "pr threads", code: 4, meaning: "no thread with that id, the pull request is not visible, or (reply/settle) the private-name guard" },
     { verb: "pr threads", code: 5, meaning: "the credential could not authenticate" },
@@ -1492,7 +1528,7 @@ export const prCommand: Command = {
   name: "pr",
   subcommands: PR_SUBCOMMANDS,
   summary:
-    "CON-32 readiness, staleness, body-check, fetch, next-blocker, cascade-main, retarget, request-reviews, edit-body, mark-ready, threads, open, merge, ledger.",
+    "CON-32 readiness, staleness, body-check, fetch, next-blocker, cascade-main, retarget, request-reviews, edit-body, edit-title, mark-ready, threads, open, merge, ledger.",
   usage: USAGE,
   flags: PR_FLAGS,
   run(context: CommandContext): number | Promise<number> {
@@ -1534,6 +1570,8 @@ export const prCommand: Command = {
         return doMarkReady(context);
       case "ledger":
         return ledgerVerb(context, requireTarget(context), requirePr(context));
+      case "edit-title":
+        return editTitle(context);
       default:
         return editBody(context);
     }
@@ -2463,6 +2501,116 @@ function editBody(context: CommandContext): number {
     return 0;
   }
   context.io.out(`replaced ${target.slug}#${pr}'s body (${bytes} byte(s))`);
+  return 0;
+}
+
+// ── edit-title (zheref/nen#523) ─────────────────────────────────────────────
+
+/**
+ * `nen pr edit-title`. Every refusal of the caller's own input (the title
+ * file, the number) comes before the first `gh` call; the certifying read
+ * comes before the guard, as edit-body's does, and the read-back after the
+ * write -- see ./edittitle.ts's header.
+ */
+function editTitle(context: CommandContext): number {
+  const target = requireTarget(context);
+  const pr = requirePrStrict(context, "edit-title");
+  const ignore = readIgnoreFlag(context);
+  // Resolved against the process's directory, as edit-body's --body-file is.
+  const title = readTitleFile(context, process.cwd(), "--title-file names the title this verb sets on the pull request, read verbatim so no shell ever expands it.");
+  if (title === undefined) {
+    throw new VerbUsageError(
+      "edit-title takes --title-file <path>: a title typed on the command line is shell source, and this verb REPLACES the pull request's title.",
+    );
+  }
+  // Every refusal of the title itself, before any call (zheref/nen#523 round 1).
+  const shapeRefusal = refuseTitleShape(title);
+  if (shapeRefusal !== null) {
+    throw new VerbUsageError(`--title-file '${context.args.values["title-file"] ?? ""}' ${shapeRefusal}`);
+  }
+
+  const previous = readPullRequestTitle(context.seams, target, pr, "certify");
+  const argv = editTitleArgv(target, pr, title);
+  const dryRun = context.args.booleans.has("dry-run");
+  // THE PRIVATE-NAME GUARD, after the certifying read and before the write --
+  // on a dry run too, so its verdict is the real run's.
+  const privateNameCheck = guardPrivateNames(context, target, [{ field: "title", text: title }], ignore, "nen pr edit-title");
+  // A guard refusal's report never carries the refused text (USAGE, the
+  // private-name guard), so `refused` drops the title.
+  type ReadBack = "identical" | "mismatch" | "failed" | null;
+  const report = (fields: { written: boolean; readBack: ReadBack; stored?: string; error?: string; refused?: true }): string =>
+    JSON.stringify(
+      {
+        contract: EDIT_TITLE_CONTRACT,
+        target: target.slug,
+        number: pr,
+        previous,
+        ...(fields.refused === true ? {} : { title }),
+        written: fields.written,
+        readBack: fields.readBack,
+        ...(fields.stored === undefined ? {} : { stored: fields.stored }),
+        ...(fields.error === undefined ? {} : { error: fields.error }),
+        dryRun,
+        privateNameCheck,
+      },
+      null,
+      2,
+    );
+
+  if (blocksWrite(privateNameCheck)) {
+    if (context.json) context.io.out(report({ written: false, readBack: null, refused: true }));
+    return blockingExit(privateNameCheck);
+  }
+
+  if (dryRun) {
+    if (context.json) {
+      context.io.out(report({ written: false, readBack: null }));
+      return 0;
+    }
+    // Single-quoted, the family's argv renderer: a pasted line expands nothing.
+    context.io.out(`would run: ${renderArgv({ exe: "gh", argv: argv.slice(0, -1) })} ${shellSingleQuote(title)}`);
+    context.io.out(`target: ${target.slug}`);
+    context.io.out(`number: ${pr}`);
+    // GitHub's title is anyone-with-write's text: escaped, never raw (SEC-15).
+    context.io.out(`current title: ${terminalQuoted(previous)}`);
+    context.io.out(`new title: ${terminalQuoted(title)}`);
+    return 0;
+  }
+
+  // RE-READ RIGHT BEFORE THE WRITE. GitHub's PR edit takes no etag, so this
+  // only narrows the window a concurrent retitle can be overwritten in; the
+  // write itself is last-writer-wins (USAGE).
+  const current = readPullRequestTitle(context.seams, target, pr, "re-read");
+  if (current !== previous) {
+    if (context.json) context.io.out(report({ written: false, readBack: null, stored: current }));
+    context.io.err(
+      `nen pr edit-title: ${target.slug}#${pr}'s title changed since it was certified (${terminalQuoted(previous)} -> ${terminalQuoted(current)}); nothing written. Run again on the new title.`,
+    );
+    return 1;
+  }
+  writePullRequestTitle(context.seams, target, pr, title);
+  let stored: string;
+  try {
+    stored = readPullRequestTitle(context.seams, target, pr, "read back");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // The write happened: a --json consumer must still see written: true.
+    if (context.json) context.io.out(report({ written: true, readBack: "failed", error: message }));
+    context.io.err(`nen pr edit-title: ${plainLine(message)} -- the title WAS written; the read-back did not finish.`);
+    return 1;
+  }
+  if (stored !== title) {
+    if (context.json) context.io.out(report({ written: true, readBack: "mismatch", stored }));
+    context.io.err(
+      `nen pr edit-title: ${target.slug}#${pr}'s title reads back as ${terminalQuoted(stored)}, not the file's ${terminalQuoted(title)} -- GitHub stored a different title.`,
+    );
+    return 1;
+  }
+  if (context.json) {
+    context.io.out(report({ written: true, readBack: "identical" }));
+    return 0;
+  }
+  context.io.out(`replaced ${target.slug}#${pr}'s title, read back identical: ${terminalQuoted(title)}`);
   return 0;
 }
 
