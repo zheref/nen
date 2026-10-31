@@ -26,19 +26,18 @@
     },
     {
       "file": "nen/gates.json",
-      "what": "the readiness gate, owing one Copilot round",
+      "what": "the readiness gate, owing a Copilot round on every pull request",
       "document": {
         "version": 1,
-        "$comment": "Seeded by 'nen scaffold migrate' (zheref/nen#592). A seed, not a ruling: it owes one review round to Copilot and nothing else, approves nothing separately, and its delivery carve-out matches no author. Name the reviewers this repository actually requests, and the author and branch prefix its delivery pull requests use, then re-run 'nen schema check --repo .'.",
+        "$comment": "Seeded by 'nen scaffold migrate' (zheref/nen#592). A seed, not a ruling, and it FAILS CLOSED: Copilot owes a review round at head on every pull request, requested or not, and no other reviewer or approval stands in for it, so nothing reads ready until Copilot has reviewed. Name the reviewers this repository actually uses (and mark one bounded_policy_exempt only if a pending request is the round you want), and the author and branch prefix its delivery pull requests use, then re-run 'nen schema check --repo .'.",
         "reviewers": [
           {
-            "$comment": "Posts as copilot-pull-request-reviewer[bot]; a request reads Copilot. Exempt under the default bounded round policy: owed only while a request for it is pending.",
+            "$comment": "Posts as copilot-pull-request-reviewer[bot]; a request reads Copilot. NOT bounded_policy_exempt: its round is owed at head whether or not it was requested, so a pull request nobody asked it to review is not ready.",
             "name": "copilot",
             "login_pattern": {
               "pattern": "^(copilot|copilot-pull-request-reviewer(\\[bot\\])?)$",
               "ignoreCase": true
-            },
-            "bounded_policy_exempt": true
+            }
           }
         ],
         "approval_policy": "review-round-only",

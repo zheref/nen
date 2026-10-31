@@ -191,8 +191,9 @@ reported as "would check" rather than run.
 'migrate' works on an EXISTING repository scaffolded before nen/colors.yml
 and nen/gates.json existed (zheref/nen#592). It writes each of those two
 files that is ABSENT from a seed that widens nothing -- colors.yml with no
-category declared, gates.json owing one bot review round with a delivery
-carve-out that matches no author -- reads each one back through the loader
+category declared, gates.json failing closed (a bot review round owed at
+head on every pull request, requested or not) with a delivery carve-out that
+matches no author -- reads each one back through the loader
 'schema check' uses, and touches nothing else: a file already there, in any
 form, is reported 'kept' and is never opened. It is idempotent (a second run
 reports every row 'kept' and exits 0). A legacy schemas/ copy is refused with

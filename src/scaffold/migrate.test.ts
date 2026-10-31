@@ -12,6 +12,7 @@ import {
   mkdtempSync,
   readFileSync,
   readlinkSync,
+  chmodSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -22,6 +23,7 @@ import type { CommandResult, Seams } from "../seam/exec.js";
 import { noPortProbe } from "../seam/scripted.js";
 import { parseColorsText } from "../schema/colors.js";
 import { parseGateIdentities, parseGatesText } from "../schema/gates.js";
+import { pendingRounds } from "../gates/predicates.js";
 import { checkTaxonomy } from "../schema/taxonomy.js";
 import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 import { scaffoldCommand } from "./command.js";
@@ -74,9 +76,20 @@ describe("the seeds", () => {
     expect(gates.reviewers.map((reviewer): string => reviewer.name)).toEqual(["copilot"]);
     expect(gates.baseReviewers).toEqual(["copilot"]);
     expect(gates.defaultApprovers).toEqual([]);
+    // FAILS CLOSED (Feitan F1): not bounded-exempt, so its round is owed.
+    expect(gates.reviewer("copilot")?.boundedPolicyExempt).not.toBe(true);
     // The delivery carve-out matches no GitHub login: logins carry no space.
     for (const login of ["zheref", "copilot", "dependabot[bot]", "a-b"]) {
       expect(gates.delivery.authorPattern.test(login)).toBe(false);
+    }
+  });
+
+  it("the seeded gate owes Copilot a round on a PR nobody reviewed or requested, under both policies", () => {
+    const gates = parseGateIdentities("nen/gates.json", parseGatesText("nen/gates.json", GATES_SEED));
+    const inputs = { reviewRequests: [], checks: [], reviews: [] };
+    for (const policy of ["bounded", "strict"] as const) {
+      const owed = pendingRounds(gates, inputs, "headsha", gates.baseReviewers, policy);
+      expect(owed.map((round) => round.reviewer), policy).toEqual(["copilot"]);
     }
   });
 
@@ -178,7 +191,24 @@ describe("scaffoldMigrate", () => {
     });
     expect(result.exitCode).toBe(1);
     expect(result.files[0]?.action).toBe("refused");
-    expect(result.files[0]?.why).toContain("written, but does not load");
+    expect(result.files[0]?.why).toContain("written, but does not load, so it was removed again");
+    // Removed, so the refusal survives a re-run instead of turning into `kept`.
+    expect(existsSync(join(root, "nen", "gates.json"))).toBe(false);
+  });
+
+  it("refuses, rather than calling it kept, a path it cannot inspect", () => {
+    if (process.getuid?.() === 0 || process.platform === "win32") return;
+    const root = repo();
+    mkdirSync(join(root, "nen"));
+    chmodSync(join(root, "nen"), 0o000);
+    try {
+      const result = scaffoldMigrate({ root, dryRun: false });
+      expect(result.exitCode).toBe(1);
+      expect(result.files[0]).toMatchObject({ action: "refused" });
+      expect(result.files[0]?.why).toContain("could not be inspected (EACCES)");
+    } finally {
+      chmodSync(join(root, "nen"), 0o755);
+    }
   });
 });
 
@@ -189,6 +219,8 @@ describe("nen scaffold migrate -- CLI wiring", () => {
     expect(result.code).toBe(0);
     expect(result.out.join("\n")).toMatch(/^created: nen\/colors\.yml -- /m);
     expect(result.out.join("\n")).toMatch(/^created: nen\/gates\.json -- /m);
+    // The next step names THIS repository, not whatever the shell stands in.
+    expect(result.out.at(-1)).toBe(`next: review the seeded file(s), commit them, then run: nen schema check --repo ${root}`);
     const again = await capture(["scaffold", "migrate"], root);
     expect(again.code).toBe(0);
     expect(again.out).toEqual([
@@ -254,6 +286,17 @@ describe("schema check names the command for each missing seeded file (AC-1)", (
     const gates = checkTaxonomy({ repoFlag: root }).checks.find((row) => row.file === "nen/gates.json");
     expect(gates?.ok).toBe(false);
     expect(gates?.detail).not.toContain("scaffold migrate");
+  });
+
+  it("names no command for a dangling symlink -- migrate would keep it, not create it", () => {
+    const root = repo();
+    mkdirSync(join(root, "nen"));
+    symlinkSync("missing-target", join(root, "nen", "gates.json"));
+    symlinkSync("missing-target", join(root, "nen", "colors.yml"));
+    const rows = checkTaxonomy({ repoFlag: root }).checks;
+    expect(rows.find((row) => row.file === "nen/gates.json")?.detail).not.toContain("scaffold migrate");
+    expect(rows.find((row) => row.file === "nen/colors.yml")?.detail).not.toContain("scaffold migrate");
+    expect(scaffoldMigrate({ root, dryRun: true }).files.map((row) => row.action)).toEqual(["kept", "kept"]);
   });
 
   it("names no command on a repository that carries both files", () => {

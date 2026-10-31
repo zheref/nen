@@ -25,13 +25,14 @@
 // before anything is written through it: following it would put a file
 // outside the repository under a taxonomy name.
 
-import { lstatSync, mkdirSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { loadColorVocabulary } from "../schema/colors.js";
 import { SchemaError } from "../schema/errors.js";
 import { loadGateIdentities } from "../schema/gates.js";
 import { COLORS_FILE, GATES_FILE, resolveSchemaFile } from "../schema/source.js";
-import { SEEDS, type Seed } from "./seeds.js";
+import { PROGRAM } from "../version.js";
+import { probePath, SEEDS, shellWord, type Seed } from "./seeds.js";
 
 export const SCAFFOLD_MIGRATE_CONTRACT = "nen.scaffold.migrate/v0.1";
 
@@ -74,19 +75,6 @@ const READ_BACK: Readonly<Record<string, (root: string) => string>> = {
   [GATES_FILE]: (root): string => `${loadGateIdentities(root).reviewers.length} reviewer(s)`,
 };
 
-// `lstat`, never `stat` or `existsSync`: a dangling symlink is SOMETHING THERE,
-// and an entry this process cannot stat (EACCES on a parent) is too. Only a
-// clean ENOENT/ENOTDIR is absence.
-function isAbsent(path: string): boolean {
-  try {
-    lstatSync(path);
-    return false;
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    return code === "ENOENT" || code === "ENOTDIR";
-  }
-}
-
 function nenDirectoryRefusal(root: string): string | null {
   const dir = join(root, "nen");
   try {
@@ -111,8 +99,16 @@ export function scaffoldMigrate(options: ScaffoldMigrateOptions): ScaffoldMigrat
 
   for (const seed of seeds) {
     const resolved = resolveSchemaFile(root, seed.file);
-    if (!isAbsent(resolved.path)) {
+    const state = probePath(resolved.path);
+    if (state.kind === "present") {
       files.push({ file: seed.file, action: "kept", why: "already there; left untouched and unread" });
+      continue;
+    }
+    // NOT KNOWN IS NOT "ALREADY THERE". An errno other than ENOENT (EACCES on
+    // a parent, say) means this process cannot tell; claiming the file exists
+    // would be a guess, and writing would be a worse one.
+    if (state.kind === "unknown") {
+      files.push({ file: seed.file, action: "refused", why: `could not be inspected (${state.code}); nothing was written` });
       continue;
     }
     // A LEGACY COPY IS THE REPOSITORY'S OWN CONFIG, sitting where nen no longer
@@ -122,7 +118,7 @@ export function scaffoldMigrate(options: ScaffoldMigrateOptions): ScaffoldMigrat
       files.push({
         file: seed.file,
         action: "refused",
-        why: `a legacy '${resolved.legacy.relative}' is there and holds this repository's own config. Run 'nen scaffold init --accept-detected' (or copy it) to migrate it; a seed would shadow it.`,
+        why: `a legacy '${resolved.legacy.relative}' is there and holds this repository's own config. Run '${PROGRAM} scaffold init --accept-detected' (or copy it) to migrate it; a seed would shadow it.`,
       });
       continue;
     }
@@ -136,6 +132,16 @@ export function scaffoldMigrate(options: ScaffoldMigrateOptions): ScaffoldMigrat
     }
     try {
       mkdirSync(dirname(resolved.path), { recursive: true });
+      // RE-CHECKED AFTER THE mkdir, RIGHT BEFORE THE WRITE (Feitan F3 on
+      // #592). The first check ran before the loop; `mkdirSync` accepts an
+      // existing symlink-to-directory and `writeFileSync` follows one, so a
+      // `nen/` swapped for a link in between would land the seed wherever it
+      // points. This narrows that window to the one syscall pair.
+      const lateRefusal = nenDirectoryRefusal(root);
+      if (lateRefusal !== null) {
+        files.push({ file: seed.file, action: "refused", why: lateRefusal });
+        continue;
+      }
       writeFileSync(resolved.path, seed.text, { encoding: "utf8", flag: "wx" });
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
@@ -154,10 +160,19 @@ export function scaffoldMigrate(options: ScaffoldMigrateOptions): ScaffoldMigrat
       const summary = readBack === undefined ? "written" : readBack(root);
       files.push({ file: seed.file, action: "created", why: `wrote ${seed.what}; read back: ${summary}` });
     } catch (error) {
+      // THE FILE IS REMOVED, so the refusal survives a re-run: left in place,
+      // a second run would find it present and report `kept`, exit 0. It is
+      // this process's own `wx` create, so nothing anyone else wrote goes.
+      let removed = "removed again";
+      try {
+        unlinkSync(resolved.path);
+      } catch (unlinkError) {
+        removed = `NOT removed (${(unlinkError as NodeJS.ErrnoException).code ?? String(unlinkError)}) -- delete it before re-running`;
+      }
       files.push({
         file: seed.file,
         action: "refused",
-        why: `written, but does not load: ${error instanceof SchemaError ? error.message : String(error)}`,
+        why: `written, but does not load, so it was ${removed}: ${error instanceof SchemaError ? error.message : String(error)}`,
       });
     }
   }
@@ -175,7 +190,7 @@ export function renderMigrate(result: ScaffoldMigrateResult): readonly string[] 
   const lines = result.files.map((row): string => `${row.action}: ${row.file} -- ${row.why}`);
   const written = result.files.filter((row): boolean => row.action === "created").length;
   if (written > 0) {
-    lines.push(`next: review the seeded file(s), commit them, then run 'nen schema check --repo .'`);
+    lines.push(`next: review the seeded file(s), commit them, then run: ${PROGRAM} schema check --repo ${shellWord(result.repo)}`);
   }
   return lines;
 }

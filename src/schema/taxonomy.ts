@@ -47,7 +47,7 @@ import { describeDecisions, loadDecisions } from "./decisions.js";
 import { canonMirrorCheck } from "./canonmirror.js";
 import { insideRoot, LintWiringError, parseBaseline, parseLintContract, PROSE_LINT_SCHEMA } from "../canon/lint.js";
 import type { Runner } from "../seam/exec.js";
-import { isSeeded, migrateCommand } from "../scaffold/seeds.js";
+import { isSeeded, migrateCommand, probePath } from "../scaffold/seeds.js";
 import {
   COLORS_FILE,
   DECISIONS_FILE,
@@ -215,9 +215,15 @@ function run(
     // A SEEDED FILE'S ABSENCE NAMES THE VERB THAT CREATES IT (zheref/nen#592
     // AC-1). Only absence, and only with no legacy copy: a present-but-broken
     // file is the repository's to fix, and a legacy copy's own sentence
-    // already names `scaffold init`'s migration, which keeps its config.
+    // already names `scaffold init`'s migration, which keeps its config. And
+    // only when the path is absent BY `lstat`, the probe `migrate` uses: a
+    // dangling symlink reads as ENOENT here but is `kept` there, and naming a
+    // command that would not create the file sends the caller round a loop.
     const message = error instanceof SchemaError ? error.message : String(error);
-    const hint = isAbsentFileError(error) && !legacy && isSeeded(relative) ? ` ${createHint(root)}` : "";
+    const hint =
+      isAbsentFileError(error) && !legacy && isSeeded(relative) && probePath(path).kind === "absent"
+        ? ` ${createHint(root)}`
+        : "";
     return {
       file,
       path,
@@ -311,7 +317,8 @@ function colorsCheck(root: string): SchemaCheck {
   // Still `absent (optional)` first, so a caller matching that spelling keeps
   // matching; the command follows (zheref/nen#592 AC-1), unless a legacy copy
   // is what is there -- `run` kept that sentence out for its own reason.
-  return { ...check, ok: true, detail: check.legacy ? "absent (optional)" : `absent (optional) -- ${createHint(root)}` };
+  const seedable = !check.legacy && probePath(check.path).kind === "absent";
+  return { ...check, ok: true, detail: seedable ? `absent (optional) -- ${createHint(root)}` : "absent (optional)" };
 }
 
 // The decision-matrix row (zheref/nen#216). Absent is `ok` because the loader

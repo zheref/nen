@@ -19,8 +19,13 @@
 //   * colors.yml declares NO category. An absent file and an empty vocabulary
 //     answer every colour verb the same way (a refusal naming the category),
 //     and neither invents a status or a severity the repository never chose.
-//   * gates.json owes one round to the reviewer every GitHub repository can
-//     request, and its delivery carve-out matches no author: its pattern
+//   * gates.json FAILS CLOSED: the reviewer every GitHub repository can
+//     request owes a round at head on every pull request -- it is not
+//     `bounded_policy_exempt`, which would excuse it whenever no request is
+//     pending and let a pull request nobody reviewed read ready (Feitan F1 on
+//     #592) -- and no approval or quorum stands in for it. With no gates file
+//     at the base the readiness verbs refuse; with this one they wait for a
+//     review. Its delivery carve-out matches no author: its pattern
 //     carries spaces, which no GitHub login can, so the carve-out the loader
 //     requires to exist reaches no pull request until the repository names its
 //     own. (`^$` would read as "nobody" and mean "everybody": the loader
@@ -31,6 +36,7 @@
 // and ./migrate.test.ts parses each one too, so a seed this build would refuse
 // cannot ship.
 
+import { lstatSync } from "node:fs";
 import seedPack from "../../templates/seeds.json";
 import { shellSingleQuote } from "../shu/render.js";
 import { PROGRAM } from "../version.js";
@@ -77,6 +83,29 @@ export function isSeeded(file: string): boolean {
  * a shell would read it as more than one word.
  */
 export function migrateCommand(root: string): string {
-  const repo = /^[A-Za-z0-9_./:@+,-]+$/.test(root) ? root : shellSingleQuote(root);
-  return `${PROGRAM} scaffold migrate --repo ${repo}`;
+  return `${PROGRAM} scaffold migrate --repo ${shellWord(root)}`;
+}
+
+/**
+ * What is at a seeded path, by `lstat` -- never `stat`, so a dangling symlink
+ * is `present` (something is there, and `migrate` will not write through it)
+ * rather than absent. Only a clean ENOENT/ENOTDIR is `absent`; any other
+ * errno is `unknown`, carried so neither `migrate` nor `schema check` claims
+ * to know what is there.
+ */
+export type PathState = { readonly kind: "absent" } | { readonly kind: "present" } | { readonly kind: "unknown"; readonly code: string };
+
+export function probePath(path: string): PathState {
+  try {
+    lstatSync(path);
+    return { kind: "present" };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code ?? String(error);
+    return code === "ENOENT" || code === "ENOTDIR" ? { kind: "absent" } : { kind: "unknown", code };
+  }
+}
+
+/** A root, quoted only when a shell would read it as more than one word. */
+export function shellWord(text: string): string {
+  return /^[A-Za-z0-9_./:@+,-]+$/.test(text) ? text : shellSingleQuote(text);
 }
