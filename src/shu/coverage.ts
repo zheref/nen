@@ -6,7 +6,7 @@
 // here unchanged, in the same order, with the same codes: an undeclared verb is
 // still 4, a wrong host still 3, an unsatisfied precondition still 2, a tool
 // that could not start still 5. This module adds exactly one thing the other
-// nine executing verbs do not have -- a SECOND step after the tool exits, which
+// eleven executing verbs do not have -- a SECOND step after the tool exits, which
 // reads a file the declaration named and turns it into numbers.
 //
 // WHERE THE REPORT COMES FROM, AND WHY IT IS `artifacts`. The declaration

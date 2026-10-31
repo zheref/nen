@@ -130,6 +130,7 @@ export const STALL_GUARDED_VERBS: readonly string[] = [
   "build",
   "ui-test",
   "lint",
+  "typecheck",
   "archive",
   "coverage",
   "test-report",
@@ -708,7 +709,7 @@ export function renderInvocation(
         declaredVerbs.length === 0
           ? "It declares no verbs at all."
           : `It declares: ${declaredVerbs.join(", ")}.`
-      } A verb this repository has is a verb this repository states, in nen/contract.json under project.verbs.${lane} -- nen never substitutes a plausible command for a declared one.`,
+      } A verb this repository has is a verb this repository states: declare it in nen/contract.json at project.verbs.${lane}.${request.verb} -- nen never substitutes a plausible command for a declared one.`,
     );
   }
   if (invocation.kind === "unsupported") {

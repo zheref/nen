@@ -96,6 +96,11 @@
       "why": "The repository's own lint workflow step, verbatim. `:app` is the Android convention for the application module, not a product name, so it is carried literally.",
       "source": "KroAndroid/.github/workflows/lint.yml:79"
     },
+    "typecheck": {
+      "unsupported": "The Kotlin compiler IS the type check, inside `build`'s own task graph; the repository runs no separate checking step and the stack has none.",
+      "summary": "the compiler checks types",
+      "source": "KroAndroid/.github/workflows/ (inventory sweep)"
+    },
     "archive": {
       "unsupported": "A `release` buildType is declared with NO signingConfig, and no `assembleRelease` / `bundleRelease` is invoked anywhere. An archive nen proposed would be an unsigned artifact nobody asked for.",
       "summary": "release type, no signing",

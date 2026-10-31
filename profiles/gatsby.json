@@ -48,6 +48,11 @@
       "summary": "no linter at all",
       "source": "zheref.io (inventory sweep)"
     },
+    "typecheck": {
+      "unsupported": "No TypeScript anywhere in the repository: no tsconfig.json, no `typescript` dependency, no checker of any kind.",
+      "summary": "no types to check",
+      "source": "zheref.io (inventory sweep)"
+    },
     "archive": {
       "exe": "node",
       "argv": ["{archiveScript}"],

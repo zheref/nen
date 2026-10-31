@@ -1388,8 +1388,8 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
   //
   // AND THERE IS NO `"*"` KEY. NenFamilyEntry's own doc comment says the
   // wildcard covers a family whose flags select the behaviour or whose every
-  // subcommand shares one policy; this family's emphatically do not -- six
-  // of the fifteen are not `DRY` -- and a `"*"` row would swallow them.
+  // subcommand shares one policy; this family's emphatically do not -- five
+  // of the sixteen are not `DRY` -- and a `"*"` row would swallow them.
   // ../parse/izanami.test.ts asserts exactly which keys are here, and which
   // policy each carries, so a row's kind cannot change by accident.
   shu: {
@@ -1426,6 +1426,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       test: DRY("spawns the lane's declared test command unless --dry-run is given -- and a declared test task may write (a golden-image recorder, a coverage tree), so the bare form is never certified"),
       "ui-test": DRY("spawns the lane's declared UI/E2E command unless --dry-run is given -- commonly a multi-step form that also downloads a browser"),
       lint: DRY("spawns the lane's declared lint command unless --dry-run is given -- a check mode and its --write twin differ by one flag in the declaration, not here"),
+      typecheck: DRY("spawns the lane's declared static type check unless --dry-run is given"),
       archive: DRY("spawns the lane's declared packaging step unless --dry-run is given"),
       release: DRY("spawns the lane's declared publication step unless --dry-run is given"),
       // THE ONE EXECUTING VERB THAT IS NOT `DRY`, and the difference is a

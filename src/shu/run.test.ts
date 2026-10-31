@@ -4079,7 +4079,7 @@ describe("a stall guard: BOTH budgets, the repository's own remedy, and no kill"
     const result = await withDeclaration(project, ["dev", "--dry-run"]);
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toContain("nen cannot honour one on this verb");
-    expect(result.err.join("\n")).toContain("build, ui-test, lint, archive, coverage, test-report");
+    expect(result.err.join("\n")).toContain("build, ui-test, lint, typecheck, archive, coverage, test-report");
   });
 
   it("refuses a budget that is not a positive whole number, by pointer, at load", async () => {
