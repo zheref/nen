@@ -22,7 +22,7 @@ import { ISTANBUL } from "./formats/istanbul.js";
 import { JACOCO } from "./formats/jacoco.js";
 import { LCOV } from "./formats/lcov.js";
 import { parseXccovFiles, XCCOV } from "./formats/xccov.js";
-import { decodeEntities, parentOf, scanXml } from "./formats/xml.js";
+import { decodeEntities, MAX_XML_DEPTH, parentOf, scanXml } from "./formats/xml.js";
 import {
   detectFormat,
   fileNameOf,
@@ -795,5 +795,28 @@ describe("cobertura: round 3 of the #296 review", () => {
         "r.xml",
       ),
     ).toThrow(/^r\.xml: class 'Anon', an unnumbered line: states 3 of 1 conditions covered/);
+  });
+});
+
+describe("the XML reader's bounds (zheref/nen#556 review F1, F2)", () => {
+  it("leaves an entity named for an Object.prototype key as text", () => {
+    expect(decodeEntities("&constructor; &toString; &__proto__; &amp;")).toBe("&constructor; &toString; &__proto__; &");
+  });
+
+  it("shares the ancestor chain rather than copying it, and still reads it back", () => {
+    const elements = scanXml(`${"<a>".repeat(MAX_XML_DEPTH)}<leaf/>`);
+    const leaf = elements[elements.length - 1];
+    expect(leaf?.ancestors).toHaveLength(MAX_XML_DEPTH);
+    expect(leaf === undefined ? null : parentOf(leaf)).toBe("a");
+  });
+
+  it("refuses nesting past MAX_XML_DEPTH through the caller's own error", () => {
+    expect(() => scanXml("<a>".repeat(MAX_XML_DEPTH + 1))).toThrow(/nest deeper than 256 levels/);
+    expect(() => COBERTURA.parse(`<coverage>${"<a>".repeat(MAX_XML_DEPTH + 1)}`, "deep.xml")).toThrow(CoverageReportError);
+  });
+
+  it("reads a self-closed sibling after a close tag with the right parent", () => {
+    const elements = scanXml("<r><a><b></b><c/></a><d/></r>");
+    expect(elements.map((element) => `${element.name}:${element.ancestors.join("/")}`)).toEqual(["r:", "a:r", "b:r/a", "c:r/a", "d:r"]);
   });
 });

@@ -1301,8 +1301,8 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       // zheref/nen#486 AC-5: reads the consumer's run manifest (never writes it)
       // and every PR over gh pr view; writes nen's manifest unless --dry-run.
       import: DRY("reads the consumer's run manifest and every PR over gh pr view, and writes the run manifest under the git common dir unless --dry-run is given"),
-      verify: RO("reads the run manifest and every recorded PR over gh pr view"),
-      budget: RO("reads the run manifest and the usage ledgers; a claim is a question and writes nothing"),
+      verify: DRY("reads the run manifest and every recorded PR over gh pr view; moves a legacy-path manifest to the common-dir root once unless --dry-run is given (zheref/nen#522)"),
+      budget: DRY("reads the run manifest and the usage ledgers, a claim writing nothing; moves a legacy-path manifest to the common-dir root once unless --dry-run is given (zheref/nen#522)"),
       // zheref/nen#493: a caller's run record under its XDG state directory.
       "record read": RO("reads and validates the run record; writes nothing"),
       "record write": DRY("writes the run record (0600, in a 0700 directory) unless --dry-run is given"),
@@ -1569,6 +1569,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
     },
   },
   tag: { subcommands: { cut: MUT("creates a tag locally even without --push") } },
+  tests: { subcommands: { map: RO("reads an issue body and test reports from disk; runs, fetches and writes nothing") } },
   wake: {
     subcommands: {
       fire: GATED(["--run"], "removes/re-applies a label and comments once --run is given"),
@@ -1604,6 +1605,11 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       // --dry-run fetches nothing and writes nothing, so it alone is a read.
       worktree: DRY("fetches origin/<base>, adds, moves or recreates one worktree at <core>/.nen/worktrees/<name> and copies files from core into it, unless --dry-run is given"),
       overlap: RO("compares the efforts' git diff --name-only against a base; writes nothing"),
+      // zheref/nen#551: rev-parse, merge-base --is-ancestor, rev-list --count, diff --numstat, all
+      // under GIT_NO_LAZY_FETCH=1, so not even a partial clone fetches. READ-ONLY HOLDS ONLY BECAUSE
+      // ../wc/command.ts doAhead refuses every other wc flag (--dry-run, --run, ...) at exit 2;
+      // izanami.test.ts drives wc's whole FlagSpec through that refusal to keep this row honest.
+      ahead: RO("counts the commits and diff stat beyond a named reviewed head over local git reads; fetches and writes nothing"),
     },
   },
 };

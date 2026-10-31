@@ -48,6 +48,17 @@ function expectError<T>(result: ParseResult<T>): { path: string; message: string
 // --- check rollup ------------------------------------------------------------
 
 describe("parseCheckRollup", () => {
+  it("carries a verdict title so a SUCCESS placeholder cannot pass readiness (#532)", () => {
+    const title = "readiness undetermined — the verdict step did not report";
+    const entries = expectOk(parseCheckRollup([{ name: "readiness", title, status: "COMPLETED", conclusion: "SUCCESS" }]));
+    expect(entries[0]).toMatchObject({ title });
+    expect(checksAllGreen(entries)).toBe(false);
+  });
+
+  it("refuses an unreadable title rather than silently losing verdict evidence (#532)", () => {
+    expect(expectError(parseCheckRollup([{ name: "readiness", title: 42, conclusion: "SUCCESS" }])).path)
+      .toBe("$.statusCheckRollup[0].title");
+  });
   it("passes every supported conclusion on a COMPLETED run through unchanged (#304 AC4)", () => {
     const all = ["ACTION_REQUIRED", "CANCELLED", "FAILURE", "NEUTRAL", "SKIPPED", "STALE", "STARTUP_FAILURE", "SUCCESS", "TIMED_OUT"];
     for (const conclusion of all) {

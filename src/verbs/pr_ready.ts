@@ -435,6 +435,8 @@ export const CONTRACT = "nen.pr.ready/v0.1";
 export type Verdict = "ready" | "not-ready" | "unevaluated";
 
 export interface ReadyReport {
+  /** #532: caller-supplied inputs without a base gate produce a judgement. */
+  readonly authority?: "caller-supplied";
   readonly contract: string;
   readonly verdict: Verdict;
   /** The line to quote verbatim. */
@@ -1975,10 +1977,15 @@ export async function readReady(
     },
   );
 
+  const callerJudgement = baseRead?.read.kind === "absent" &&
+    (applied.source === "flags" || input.values["gates"] !== undefined);
   let report: ReadyReport = {
+    ...(callerJudgement ? { authority: "caller-supplied" as const } : {}),
     contract: CONTRACT,
     verdict: evaluation.ready ? "ready" : "not-ready",
-    gateLine: evaluation.line,
+    gateLine: callerJudgement
+      ? `caller-supplied judgement (not an authoritative verdict): ${evaluation.line}`
+      : evaluation.line,
     firstFailing: evaluation.firstFailing,
     failing: evaluation.failing,
     judgedHead: evaluation.context.headSha === "" ? null : evaluation.context.headSha,
@@ -2311,6 +2318,9 @@ function emit(io: Io, json: boolean, explain: boolean, report: ReadyReport): num
     for (const id of report.failing.slice(1)) {
       const row = report.conjuncts.find((conjunct): boolean => conjunct.id === id);
       if (row !== undefined) io.out(plainLine(`  also FAILED ${row.clause}: ${row.reason ?? row.title}`));
+    }
+    for (const row of report.conjuncts) {
+      if (row.status === "unevaluated") io.out(plainLine(`  unknown ${row.clause}: ${row.missing ?? row.title}`));
     }
     for (const warning of report.meta.warnings) {
       if (!isDeclarationNotice(warning)) io.out(plainLine(`  warning: ${warning}`));

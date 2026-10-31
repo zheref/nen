@@ -78,7 +78,9 @@ slot too; one the run parked at or after its latest claim frees it. A manifest
 with no 'claims' key counts its PRs only and says 'claims: not recorded'; claim
 rows that will not read are exit 1 with no local slot reported free -- could
 not look, never nothing claimed. --from-run and --efforts are refused
-together: during a run no field is caller-typed.
+together: during a run no field is caller-typed. A manifest still at the
+legacy path is read in place, never moved; stderr names the 'nen run verify'
+line that moves it (zheref/nen#522).
 
 --local-cap is REQUIRED. It used to default to 7, and that default was removed
 (issue #52): a concurrency guard must be chosen, not inherited -- every real
@@ -310,10 +312,16 @@ async function slotsFromRun(context: CommandContext, root: string, id: string, c
   }
   let manifest;
   try {
-    const path = locateRunManifest(gitCommonDir(context.seams, root), id).path;
-    manifest = readRunManifest(path);
+    // A COUNTER NEVER MOVES A FILE (zheref/nen#522 AC-2): a manifest still at a
+    // legacy path is read where it is and the move left to a 'nen run' verb,
+    // which prints it under --dry-run and makes it, at 0600, without.
+    const located = locateRunManifest(gitCommonDir(context.seams, root), id, { dryRun: true });
+    if (located.migratedFrom !== null) {
+      context.io.err(`nen: read run manifest '${id}' in place at ${located.migratedFrom}; not moved to ${located.path} -- 'nen run verify --id ${id} --target ${target.slug}' moves it (--dry-run prints the move).`);
+    }
+    manifest = readRunManifest(located.readPath);
     if (manifest === null) {
-      context.io.err(`nen: no run '${id}' at ${path} -- nothing to count from. A run nobody started is not a run with every slot free.`);
+      context.io.err(`nen: no run '${id}' at ${located.path} -- nothing to count from. A run nobody started is not a run with every slot free.`);
       return 1;
     }
   } catch (error) {

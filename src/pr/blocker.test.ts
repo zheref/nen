@@ -411,3 +411,41 @@ it("#440: next-blocker keeps event quorum states consistent with readiness", () 
   expect(blocker.detail).toContain("lane-b");
   expect(nextBlocker(identities, { ...partial, reviews: [...partial.reviews, posted("lane-b[bot]")] }).kind).toBe("none");
 });
+
+describe("nextBlocker -- a producer-constrained round check (zheref/nen#546, Nobunaga N6)", () => {
+  const RAW = JSON.parse(readFileSync(join(process.cwd(), "nen", "gates.json"), "utf8")) as {
+    reviewers: Record<string, unknown>[];
+  } & Record<string, unknown>;
+  const APP = parseGateIdentities("/fixture/nen/gates.json", {
+    ...RAW,
+    reviewers: RAW.reviewers.map((reviewer): Record<string, unknown> =>
+      reviewer["name"] === "bugbot" ? { ...reviewer, round_check_producer: { app: { slug: "cursor", id: 1210556 } } } : reviewer,
+    ),
+  });
+  const bugbot = (fields: Partial<CheckRun> = {}): CheckRun => ({
+    kind: "check_run",
+    name: "Cursor Bugbot",
+    status: "COMPLETED",
+    conclusion: "SUCCESS",
+    startedAt: null,
+    completedAt: null,
+    detailsUrl: null,
+    ...fields,
+  });
+  const build: CheckRun = { ...bugbot(), name: "build" };
+
+  it("a gh-pr-view rollup carries no App, so the constrained round reads unverified -- stricter than pr ready, and named", () => {
+    const result = nextBlocker(APP, snapshot({ checks: [build, bugbot()] }));
+    expect(result.kind).toBe("owed-round");
+    expect(result.detail).toMatch(
+      /^bugbot \(round-check-producer-unverified: 'Cursor Bugbot' at head no producing App was read for the check, so it cannot be shown to be app 'cursor' \(id 1210556\)\)/,
+    );
+  });
+
+  it("the declared App's SUCCESS is the round there too; another App's is a mismatch, named", () => {
+    expect(nextBlocker(APP, snapshot({ checks: [build, bugbot({ appSlug: "cursor", appId: 1210556 })] })).kind).not.toBe("owed-round");
+    const impostor = nextBlocker(APP, snapshot({ checks: [build, bugbot({ appSlug: "github-actions", appId: 15368 })] }));
+    expect(impostor.kind).toBe("owed-round");
+    expect(impostor.detail).toMatch(/^bugbot \(round-check-producer-mismatch: 'Cursor Bugbot' at head produced by app 'github-actions'/);
+  });
+});

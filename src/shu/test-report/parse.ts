@@ -27,8 +27,8 @@
 // keeps three copies of the same "no such file" sentence from existing. There
 // is exactly one place in this family that opens a test report, and this is it.
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync, statSync } from "node:fs";
+import { join, sep } from "node:path";
 // ONE PATH-SPLITTING RULE FOR BOTH VERBS. `fileNameOf` cuts on both separators
 // on every platform, for the reason its own comment gives -- a declaration is a
 // file in somebody else's repository and may state a backslash -- and a second
@@ -122,7 +122,16 @@ export interface ParsedReport {
  * and edit. The absolute path is what is opened and never what is printed: a
  * refusal naming a temporary directory teaches nobody anything.
  */
-export function readTestReport(absolute: string, display: string): ParsedReport {
+export interface ReadOptions {
+  /**
+   * The repository root the caller resolved `absolute` against. Only with it
+   * is a symlinked report followed, and only when the link resolves inside
+   * this root to a regular file or a directory (zheref/nen#556 review F4).
+   */
+  readonly root?: string;
+}
+
+export function readTestReport(absolute: string, display: string, options: ReadOptions = {}): ParsedReport {
   // `throwIfNoEntry: false` SUPPRESSES ONLY ENOENT. Every other filesystem
   // answer -- a permission this account has not got, a path whose parent is a
   // file, a mount that went away -- still throws, and a raw Node error escaping
@@ -140,12 +149,52 @@ export function readTestReport(absolute: string, display: string): ParsedReport 
       `no test report at ${display}. The declaration names it under the lane's 'test' verb 'artifacts' and it is not there: either the runner writes its report somewhere else -- correct the path -- or no run has produced one.${globNote(display)}`,
     );
   }
-  if (stats.isDirectory()) return readDirectory(absolute, display);
-  return readFile(absolute, display);
+  const target = followable(absolute, display, options.root);
+  if (statSync(target).isDirectory()) return readDirectory(target, display);
+  return readFile(target, display);
+}
+
+/**
+ * The path to open: `absolute` itself when it is a regular file or a
+ * directory, its real path when it is a symlink the caller's root contains,
+ * else a refusal (zheref/nen#556 review F4). A FIFO, a device or a socket is
+ * never a report -- `/dev/zero` reported size 0 and was read without end -- and
+ * a link is followed only where it stays inside the tree the caller named.
+ */
+function followable(absolute: string, display: string, root: string | undefined): string {
+  let link: ReturnType<typeof lstatSync>;
+  try {
+    link = lstatSync(absolute);
+  } catch (error) {
+    throw fsRefusal(error, display, "looked at");
+  }
+  if (link.isFile() || link.isDirectory()) return absolute;
+  if (!link.isSymbolicLink()) {
+    throw new TestReportError(`${display} is not a regular file or a directory (a FIFO, a device or a socket); a test report is a file a run wrote, so it is refused rather than read.`);
+  }
+  if (root === undefined) {
+    throw new TestReportError(`${display} is a symlink, and this caller names no repository root to contain it; nen reads a report only where the run wrote it, so the link is refused rather than followed.`);
+  }
+  let real: string;
+  let realRoot: string;
+  try {
+    real = realpathSync(absolute);
+    realRoot = realpathSync(root);
+  } catch (error) {
+    throw fsRefusal(error, display, "resolved");
+  }
+  if (real !== realRoot && !real.startsWith(realRoot.endsWith(sep) ? realRoot : `${realRoot}${sep}`)) {
+    throw new TestReportError(`${display} is a symlink resolving to '${real}', outside the repository at ${root}; it is refused rather than followed.`);
+  }
+  const resolved = lstatSync(real);
+  if (!resolved.isFile() && !resolved.isDirectory()) {
+    throw new TestReportError(`${display} is a symlink to something that is not a regular file or a directory; it is refused rather than read.`);
+  }
+  return real;
 }
 
 function readFile(absolute: string, display: string): ParsedReport {
-  const text = readText(absolute, display);
+  const text = readText(absolute, display, { left: MAX_REPORT_BYTES });
   const format = detectFormat(display, text);
   if (format === null) {
     throw new TestReportError(
@@ -187,9 +236,12 @@ function readDirectory(absolute: string, display: string): ParsedReport {
       `${display} is a directory with no *.xml file anywhere under it. nen reads a directory artifact as a tree of ${JUNIT.label} -- which is what a runner that writes one file per suite produces -- so either the run wrote nothing, or this names a directory above (or beside) the one it writes into.`,
     );
   }
+  // ONE BUDGET FOR THE WHOLE TREE (review F4): a directory of reports is one
+  // report across several files, so the cap is on their total, not each.
+  const budget = { left: MAX_REPORT_BYTES };
   const parts = files.map((file): ParsedTests => {
     const shown = `${display}/${file.relative}`;
-    const text = readText(file.absolute, shown);
+    const text = readText(file.absolute, shown, budget);
     if (!JUNIT.sniff(text)) {
       throw new TestReportError(
         `${shown} is an XML file that is not ${JUNIT.label}. Every *.xml under a directory artifact is read as a test report and this one carries no <testsuite> element: name the directory the runner writes its results into rather than one that also holds other XML, or name the single file to parse.`,
@@ -238,11 +290,52 @@ function xmlFilesUnder(root: string, prefix = "", found: Found[] = []): readonly
   return found;
 }
 
-function readText(absolute: string, display: string): string {
+/**
+ * The most a test report may hold, in bytes -- one file, or every file of a
+ * directory artifact together (zheref/nen#556 review F2, F4). A report is a
+ * file somebody else's run wrote, so it is read at most this much plus one
+ * byte and refused past it, rather than sized by a stat that a FIFO or a
+ * device answers with 0. 64 MiB is several times the largest whole-suite
+ * report this repository's own runs write.
+ */
+export const MAX_REPORT_BYTES = 64 * 1024 * 1024;
+
+/**
+ * One regular file's text, read through a descriptor that is checked to be a
+ * regular file and never read past what `budget` has left plus one byte.
+ */
+function readText(absolute: string, display: string, budget: { left: number }): string {
+  let fd: number;
   try {
-    return readFileSync(absolute, "utf8");
+    fd = openSync(absolute, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
   } catch (error) {
     throw fsRefusal(error, display, "read");
+  }
+  try {
+    if (!fstatSync(fd).isFile()) {
+      throw new TestReportError(`${display} is not a regular file (a FIFO, a device or a socket); a test report is a file a run wrote, so it is refused rather than read.`);
+    }
+    const limit = budget.left + 1;
+    const buffer = Buffer.alloc(Math.min(limit, 1024 * 1024));
+    const chunks: Buffer[] = [];
+    let total = 0;
+    for (;;) {
+      if (total >= limit) break;
+      const read = readSync(fd, buffer, 0, Math.min(buffer.length, limit - total), null);
+      if (read === 0) break;
+      chunks.push(Buffer.from(buffer.subarray(0, read)));
+      total += read;
+    }
+    if (total > budget.left) {
+      throw new TestReportError(`${display} holds more than the ${MAX_REPORT_BYTES}-byte limit nen reads a test report up to (one file, or a directory's files together); it is refused rather than read.`);
+    }
+    budget.left -= total;
+    return Buffer.concat(chunks, total).toString("utf8");
+  } catch (error) {
+    if (error instanceof TestReportError) throw error;
+    throw fsRefusal(error, display, "read");
+  } finally {
+    closeSync(fd);
   }
 }
 

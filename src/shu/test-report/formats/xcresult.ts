@@ -30,6 +30,7 @@ import {
   milliseconds,
   millisecondsFromSeconds,
   optionalName,
+  ownEntry,
   requireCount,
   requireName,
   statedCounts,
@@ -177,7 +178,7 @@ function nodeRows(
 }
 
 function resultOf(value: unknown, path: string, pointer: string): TestStatus {
-  const mapped = typeof value === "string" ? RESULT[value] : undefined;
+  const mapped = typeof value === "string" ? ownEntry(RESULT, value) : undefined;
   if (mapped === undefined) {
     throw new TestReportError(
       `${path}: ${pointer} is ${JSON.stringify(value)}, which is not an outcome nen reads. It reads: ${Object.keys(RESULT).join(", ")}. nen will not guess which of passed, failed or skipped an unfamiliar word meant -- guessing wrong in one direction makes a red suite look green.`,

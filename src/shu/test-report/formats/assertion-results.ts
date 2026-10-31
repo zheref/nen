@@ -27,6 +27,7 @@
 import {
   milliseconds,
   optionalName,
+  ownEntry,
   requireName,
   tally,
   TestReportError,
@@ -87,7 +88,7 @@ function requireArray(value: unknown, path: string, pointer: string): readonly u
  * costs one join and answers the question the refusal produces.
  */
 function statusOf(value: unknown, path: string, pointer: string): TestStatus {
-  const mapped = typeof value === "string" ? STATUS[value] : undefined;
+  const mapped = typeof value === "string" ? ownEntry(STATUS, value) : undefined;
   if (mapped === undefined) {
     throw new TestReportError(
       `${path}: ${pointer} is ${JSON.stringify(value)}, which is not an outcome nen reads. It reads: ${Object.keys(STATUS).join(", ")}. nen will not guess which of passed, failed or skipped an unfamiliar word meant -- guessing wrong in one direction makes a red suite look green.`,
@@ -148,6 +149,17 @@ export const ASSERTION_RESULTS: TestReportFormat = {
         path,
         `testResults[${fileIndex}].assertionResults`,
       );
+      // A FILE THAT FAILED WITH NO ASSERTIONS IS A FAILED ROW, never nothing
+      // (zheref/nen#556 review N2). A test file that fails to load -- the
+      // module under test does not exist yet -- is written as
+      // `status: "failed"` with an empty `assertionResults`, and dropping it
+      // read a red suite as a run with no tests. It is one row named for the
+      // file, the same row the XML format writes for a file-level failure.
+      if (rows.length === 0 && file["status"] === "failed") {
+        const name = suite ?? `testResults[${fileIndex}]`;
+        tests.push({ name, suite: name, status: "failed", durationMs: null });
+        return;
+      }
       rows.forEach((row, rowIndex): void => {
         const pointer = `testResults[${fileIndex}].assertionResults[${rowIndex}]`;
         const assertion = asRecord(row);

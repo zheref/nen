@@ -16,6 +16,9 @@ import {
   visibleKey,
   pointerSegment,
   type GatesKeyLevel,
+  type RoundCheckProducer,
+  DEFAULT_BRANCH_DEFINITION_EVENTS,
+  producerOptInWarnings,
 } from "./gates.js";
 import { SchemaError } from "./errors.js";
 import { VERSION } from "../version.js";
@@ -1136,5 +1139,158 @@ describe("reviewer wake (#440)", () => {
     expect(() => parseGateIdentities("gates.json", {
       version: 1, reviewers: [{ name: "lane", wake }],
     })).toThrow(/reviewers\[0\]\.wake/);
+  });
+});
+
+describe("round_check_producer (zheref/nen#546) -- optional, refused by pointer when malformed", () => {
+  const at = "/fake/nen/gates.json";
+  const roundCheck = { pattern: "^Cursor Bugbot$", ignoreCase: false };
+  const file = (producer: unknown, reviewer: Record<string, unknown> = {}): unknown => ({
+    version: 1,
+    reviewers: [
+      { name: "a", login_pattern: { pattern: "a", ignoreCase: true } },
+      {
+        name: "bugbot",
+        login_pattern: { pattern: "^cursor\\[bot\\]$", ignoreCase: false },
+        round_check_pattern: roundCheck,
+        round_check_producer: producer,
+        ...reviewer,
+      },
+    ],
+    default_approvers: ["a"],
+    base_reviewers: ["a"],
+    delivery: { author_pattern: { pattern: "bot", ignoreCase: true }, head_ref_prefixes: ["x/"] },
+  });
+  const read = (producer: unknown, reviewer: Record<string, unknown> = {}): RoundCheckProducer | null | undefined =>
+    parseGateIdentities(at, file(producer, reviewer)).reviewer("bugbot")?.roundCheckProducer;
+
+  it("is tabled as a key of the next release, with both producer shapes", () => {
+    const spec = GATES_KNOWN_KEYS.reviewers?.items?.round_check_producer;
+    expect(spec?.introducedIn).toBe(NEXT_RELEASE);
+    expect(Object.keys(spec?.object ?? {})).toEqual(["app", "workflow"]);
+  });
+
+  it("ABSENT is the pre-#546 reading: no producer, the name alone (AC-5)", () => {
+    expect(read(undefined)).toBeNull();
+    expect(loadGateIdentities(BANKAI_REPO).reviewers.every((entry): boolean => entry.roundCheckProducer === null)).toBe(true);
+  });
+
+  it("reads an App producer: slug and id", () => {
+    expect(read({ app: { slug: "cursor", id: 1210556 } })).toEqual({ kind: "app", slug: "cursor", id: 1210556 });
+  });
+
+  it("reads a workflow producer: path, repository and the trusted events", () => {
+    expect(
+      read({ workflow: { path: ".github/workflows/review.yml", repository: "zheref/hatsu", events: ["workflow_run"] } }),
+    ).toEqual({
+      kind: "workflow",
+      path: ".github/workflows/review.yml",
+      repository: "zheref/hatsu",
+      events: ["workflow_run"],
+      trustsPullRequestRevision: false,
+    });
+  });
+
+  it.each([
+    ["neither shape", {}, /reviewers\[1\]\.round_check_producer, must declare exactly one of 'app' or 'workflow', got neither/],
+    ["both shapes", { app: { slug: "cursor", id: 1 }, workflow: { path: ".github/workflows/a.yml", repository: "o/r", events: ["workflow_run"] } }, /got both/],
+    ["an explicit null (F6)", null, /reviewers\[1\]\.round_check_producer, is null/],
+    ["a null sibling (F6)", { app: null, workflow: { path: ".github/workflows/a.yml", repository: "o/r", events: ["workflow_run"] } }, /reviewers\[1\]\.round_check_producer\.app, is null/],
+    ["a slug with no id (F4)", { app: { slug: "cursor" } }, /\.app\.id, expected a positive integer GitHub App id, got nothing.*The id is required/],
+    ["a non-boolean opt-in", { workflow: { path: ".github/workflows/a.yml", repository: "o/r", events: ["workflow_run"], trusts_pull_request_revision: "yes" } }, /\.workflow\.trusts_pull_request_revision, expected a boolean/],
+    ["a non-object", "cursor", /reviewers\[1\]\.round_check_producer, expected an object/],
+    ["an empty slug", { app: { slug: "" } }, /reviewers\[1\]\.round_check_producer\.app\.slug, expected a non-empty string/],
+    ["an upper-case slug", { app: { slug: "Cursor", id: 1 } }, /\.app\.slug, expected a GitHub App slug/],
+    ["a zero id", { app: { slug: "cursor", id: 0 } }, /\.app\.id, expected a positive integer/],
+    ["a string id", { app: { slug: "cursor", id: "1" } }, /\.app\.id, expected a positive integer/],
+    ["a path outside .github/workflows", { workflow: { path: "scripts/review.yml", repository: "o/r", events: ["workflow_run"] } }, /\.workflow\.path, expected a workflow file path/],
+    ["a nested workflow path", { workflow: { path: ".github/workflows/a/b.yml", repository: "o/r", events: ["workflow_run"] } }, /\.workflow\.path/],
+    ["a repository with no owner", { workflow: { path: ".github/workflows/a.yml", repository: "nen", events: ["workflow_run"] } }, /\.workflow\.repository, expected 'owner\/name'/],
+    ["no events", { workflow: { path: ".github/workflows/a.yml", repository: "o/r" } }, /\.workflow\.events, expected an array/],
+    ["an empty event list", { workflow: { path: ".github/workflows/a.yml", repository: "o/r", events: [] } }, /\.workflow\.events, is empty/],
+    ["a malformed event", { workflow: { path: ".github/workflows/a.yml", repository: "o/r", events: ["Pull Request"] } }, /\.workflow\.events\[0\], expected a GitHub Actions event name/],
+    ["a duplicate event", { workflow: { path: ".github/workflows/a.yml", repository: "o/r", events: ["workflow_run", "workflow_run"] } }, /\.workflow\.events, names 'workflow_run' twice/],
+  ])("refuses %s, naming its configuration location", (_label, producer, message) => {
+    expect(() => parseGateIdentities(at, file(producer))).toThrow(message);
+    expect(() => parseGateIdentities(at, file(producer))).toThrow(SchemaError);
+  });
+
+  it("refuses a producer on a reviewer with no round_check_pattern -- it would constrain nothing", () => {
+    expect(() => parseGateIdentities(at, file({ app: { slug: "cursor", id: 1 } }, { round_check_pattern: undefined }))).toThrow(
+      /reviewers\[1\]\.round_check_producer, is declared on a reviewer with no round_check_pattern/,
+    );
+  });
+
+  it("refuses an unknown key inside the producer, as every other block does (zheref/nen#310)", () => {
+    expect(() => parseGateIdentities(at, file({ app: { slug: "cursor", id: 1, name: "Cursor" } }))).toThrow(GatesUnknownKeyError);
+    expect(() => parseGateIdentities(at, file({ app: { slug: "cursor", id: 1 }, url: "https://example.test" }))).toThrow(GatesUnknownKeyError);
+  });
+
+  const workflowOf = (events: unknown, extra: Record<string, unknown> = {}): unknown => ({
+    workflow: { path: ".github/workflows/a.yml", repository: "o/r", events, ...extra },
+  });
+
+  it.each(DEFAULT_BRANCH_DEFINITION_EVENTS.map((event) => [event]))(
+    "F7/F9 allowlist: admits '%s', which runs the default branch's definition, with no opt-in and no warning",
+    (event) => {
+      const identities = parseGateIdentities(at, file(workflowOf([event])));
+      expect(identities.reviewer("bugbot")?.roundCheckProducer).toMatchObject({ events: [event], trustsPullRequestRevision: false });
+      expect(producerOptInWarnings(identities)).toEqual([]);
+    },
+  );
+
+  it.each([
+    "pull_request_target",
+    "pull_request",
+    "push",
+    "merge_group",
+    "pull_request_review",
+    "pull_request_review_comment",
+    "workflow_dispatch",
+    "create",
+    "release",
+    "deployment",
+    "deployment_status",
+    "some_future_event",
+  ].map((event) => [event]))(
+    "F7/F9 allowlist: refuses '%s' without the opt-in, naming its index",
+    (event) => {
+      expect(() => parseGateIdentities(at, file(workflowOf(["workflow_run", event])))).toThrow(
+        new RegExp(`reviewers\\[1\\]\\.round_check_producer\\.workflow\\.events\\[1\\], is '${event}', which is not one of the events that run the default branch's definition`),
+      );
+    },
+  );
+
+  it("F7: refusing pull_request_target says that any branch writer can produce the round", () => {
+    expect(() => parseGateIdentities(at, file(workflowOf(["pull_request_target"])))).toThrow(
+      /on pull_request_target the base is whichever branch a writer names, so any branch writer can produce this round/,
+    );
+  });
+
+  it("F3/F7: admits such an event only behind trusts_pull_request_revision: true, and every read then warns naming it", () => {
+    const identities = parseGateIdentities(at, file(workflowOf(["workflow_run", "pull_request_target"], { trusts_pull_request_revision: true })));
+    expect(identities.reviewer("bugbot")?.roundCheckProducer).toMatchObject({
+      events: ["workflow_run", "pull_request_target"],
+      trustsPullRequestRevision: true,
+    });
+    expect(producerOptInWarnings(identities)).toEqual([
+      "round_check_producer of 'bugbot' trusts a revision the default branch did not define (trusts_pull_request_revision: true, events pull_request_target): on those events the workflow file is the one the pull request, an actor or the named base carries -- on pull_request_target the base is whichever branch a writer names -- so any branch writer can produce this round; prefer an app producer (zheref/nen#546)",
+    ]);
+    expect(producerOptInWarnings(parseGateIdentities(at, file({ app: { slug: "cursor", id: 1 } })))).toEqual([]);
+    expect(GATES_KNOWN_KEYS.reviewers?.items?.round_check_producer?.object?.workflow?.object?.trusts_pull_request_revision?.introducedIn).toBe(NEXT_RELEASE);
+  });
+
+  it("N11: refuses the opt-in where no listed event needs it, so it never warns about nothing", () => {
+    expect(() => parseGateIdentities(at, file(workflowOf(["workflow_run"], { trusts_pull_request_revision: true })))).toThrow(
+      /reviewers\[1\]\.round_check_producer\.workflow\.trusts_pull_request_revision, is true, but every listed event runs the default branch's definition/,
+    );
+    // An empty list is refused as empty, not as an idle opt-in.
+    expect(() => parseGateIdentities(at, file(workflowOf([], { trusts_pull_request_revision: true })))).toThrow(/\.workflow\.events, is empty/);
+  });
+
+  it("N7: refuses a producer on a wake: 'event' reviewer, whose round is never its round check", () => {
+    expect(() => parseGateIdentities(at, file({ app: { slug: "cursor", id: 1 } }, { wake: "event" }))).toThrow(
+      /reviewers\[1\]\.round_check_producer, is declared on a wake: 'event' reviewer/,
+    );
   });
 });

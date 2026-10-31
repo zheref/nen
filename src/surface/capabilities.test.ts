@@ -53,7 +53,7 @@ describe("nen surface capabilities (zheref/nen#216)", () => {
     const doc = JSON.parse(result.out.join("\n")) as {
       hookEvents: string[]; rulesFile: string | null; rulesLimit: number | null; descriptionBudget: number | null; permissionsShape: string | null;
     };
-    expect(doc.hookEvents).toEqual(["PreToolUse", "PostToolUse", "PreInvocation", "PostInvocation", "Stop"]);
+    expect(doc.hookEvents).toEqual(["SessionStart", "PreToolUse", "PostToolUse", "PreInvocation", "PostInvocation", "Stop"]);
     expect(doc.rulesFile).toBe(".agents/rules/<name>.md");
     expect(doc.rulesLimit).toBe(24_000);
     expect(doc.permissionsShape).toBeNull();

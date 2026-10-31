@@ -74,7 +74,10 @@ export function decodeEntities(text: string): string {
         ? String.fromCodePoint(code)
         : whole;
     }
-    return ENTITIES[body.toLowerCase()] ?? whole;
+    // OWN KEYS ONLY: `&constructor;` must stay text, not decode to a function
+    // read off Object.prototype (zheref/nen#556 review F1).
+    const key = body.toLowerCase();
+    return Object.hasOwn(ENTITIES, key) ? (ENTITIES[key] as string) : whole;
   });
 }
 
@@ -92,15 +95,42 @@ function readAttributes(source: string): Record<string, string> {
 }
 
 /**
+ * How deep elements may nest before the document is refused (zheref/nen#556
+ * review F2). No test or coverage report nen reads nests past a handful of
+ * levels; a file that does is not one, and refusing it bounds the work.
+ */
+export const MAX_XML_DEPTH = 256;
+
+/** One open element on the chain: its name and the one enclosing it. Shared, never copied. */
+interface Frame {
+  readonly name: string;
+  readonly parent: Frame | null;
+  readonly depth: number;
+}
+
+function namesOf(frame: Frame | null): string[] {
+  const names: string[] = new Array<string>(frame?.depth ?? 0);
+  for (let at = frame; at !== null; at = at.parent) names[at.depth - 1] = at.name;
+  return names;
+}
+
+/**
  * Every start tag in document order, each carrying its ancestor chain.
  *
  * A self-closing tag appears once and encloses nothing, which is what makes
  * `<counter .../>` a child of the element it is written inside rather than of
  * the counter before it.
+ *
+ * THE CHAIN IS SHARED, NOT COPIED (review F2). Each element keeps a pointer to
+ * the open frame it was written inside, and `ancestors` is read off that chain
+ * when asked for, so memory is linear in the document rather than in the
+ * square of its depth (a 120 KB file of unclosed tags reached 3.8 GB copying
+ * the chain per element). Nesting past MAX_XML_DEPTH is refused through
+ * `refuse`, which the caller supplies so the refusal is its own format's error.
  */
-export function scanXml(text: string): readonly XmlElement[] {
+export function scanXml(text: string, refuse: (reason: string) => Error = (reason): Error => new Error(reason)): readonly XmlElement[] {
   const elements: XmlElement[] = [];
-  const open: string[] = [];
+  let open = null as Frame | null;
   let index = 0;
   while (index < text.length) {
     const start = text.indexOf("<", index);
@@ -130,8 +160,9 @@ export function scanXml(text: string): readonly XmlElement[] {
       // A close tag pops the matching open tag if there is one. An unbalanced
       // close is ignored: see the header -- this is a reader, not a validator.
       const name = body.slice(1).trim();
-      const at = open.lastIndexOf(name);
-      if (at !== -1) open.length = at;
+      let at: Frame | null = open;
+      while (at !== null && at.name !== name) at = at.parent;
+      if (at !== null) open = at.parent;
       continue;
     }
     const selfClosing = body.endsWith("/");
@@ -139,20 +170,28 @@ export function scanXml(text: string): readonly XmlElement[] {
     const name = /^[^\s/>]+/.exec(inner)?.[0];
     if (name === undefined) continue;
     const next = text.indexOf("<", index);
+    const frame = open;
     elements.push({
       name,
       attributes: readAttributes(inner.slice(name.length)),
-      ancestors: [...open],
+      get ancestors(): readonly string[] {
+        return namesOf(frame);
+      },
       text: selfClosing ? "" : decodeEntities(text.slice(index, next === -1 ? text.length : next)),
     });
-    if (!selfClosing) open.push(name);
+    if (!selfClosing) {
+      const depth = (open?.depth ?? 0) + 1;
+      if (depth > MAX_XML_DEPTH) throw refuse(`elements nest deeper than ${MAX_XML_DEPTH} levels (at <${name}>); no report nen reads nests that deep, so the file is refused rather than read`);
+      open = { name, parent: open, depth };
+    }
   }
   return elements;
 }
 
 /** The tag one element is written inside, or null at the root. */
 export function parentOf(element: XmlElement): string | null {
-  return element.ancestors[element.ancestors.length - 1] ?? null;
+  const ancestors = element.ancestors;
+  return ancestors[ancestors.length - 1] ?? null;
 }
 
 /** An attribute read as a number, or null when it is absent or not one. */
