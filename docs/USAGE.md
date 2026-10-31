@@ -12,7 +12,7 @@ repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
 what each version changed: 49 command
-families, 174 verbs, every flag checked against that binary.
+families, 175 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -257,7 +257,7 @@ including every refusal reason. The raw NUL-delimited stream
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **104 shapes** and **108 ids** (`nen.runner.plan`
+binary carries**, writing or reading — **105 shapes** and **109 ids** (`nen.runner.plan`
 and `nen.wc.worktree.copies` each have two versions, `nen.stop.mark` three, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -314,7 +314,7 @@ file formats).
 - **`review`** — `nen.review.scopes/v0.1`
 - **`run`** — `nen.run.record/v0.1` · `nen.run/v0.1`
 - **`runner`** — `nen.runner.plan/v0.1` · `nen.runner.plan/v0.2`
-- **`scaffold`** — `nen.scaffold.init/v0.1` · `nen.scaffold.new/v0.1` · `nen.scaffold.template/v0.1`
+- **`scaffold`** — `nen.scaffold.init/v0.1` · `nen.scaffold.migrate/v0.1` · `nen.scaffold.new/v0.1` · `nen.scaffold.template/v0.1`
 - **`schema`** — `nen.schema.set/v0.1`
 - **`session`** — `nen.session.ledger/v0.1`
 - **`shu`** — `nen.shu.<verb>/v0.1` · `nen.shu.coverage-capture/v0.1` · `nen.shu.coverage/v0.1` · `nen.shu.detect/v0.1` · `nen.shu.evidence/v0.1` · `nen.shu.proof/v0.1` · `nen.shu.test-report/v0.1` · `nen.shu.tools/v0.1` · `nen.shu.warmup/v0.1`
@@ -492,6 +492,7 @@ verb does by default:
 | [`schema set`](#nen-schema-set) | no | `--dry-run` | writes one value into a `nen/` JSON declaration, no other byte; the dry form reads the file, validates the edited text through its loader and prints before → after, writing nothing. In izanami's table `schema` is keyed by subcommand from [#338](https://github.com/zheref/nen/issues/338): `schema check` **read-only**, `schema set` **mutating** and `schema set --dry-run` **read-only**; a bare `nen schema` or another subcommand classifies **unknown** |
 | [`scaffold init`](#nen-scaffold-init) | no | `--dry-run` | prints every write, every migration and every refusal, and performs none. It spawns **nothing**, probes included — the closing [`shu tools`](#nen-shu-tools) check is reported as `would check` rather than run, which is why the dry form classifies **read-only** in izanami's table while the bare form classifies **mutating**. `--dry-run --install-tools` is refused at exit 2: one says nothing happens, the other changes the HOST |
 | [`scaffold new`](#nen-scaffold-new) | no | `--dry-run` | prints the tree it would write. Even the bare form spawns nothing at all: **every post-step is printed and none is run**, the toolchain check included |
+| [`scaffold migrate`](#nen-scaffold-migrate) | no | `--dry-run` | prints `would-create` for each absent seeded file and writes nothing; neither form spawns anything. The bare form writes only into absence, so a second run is `kept` on every row |
 | [`pr retarget`](#nen-pr-retarget), [`run rerun-failed`](#nen-run-rerun-failed) | no | `--dry-run` | print the one `gh` call as `would run:` and spawn **nothing** — not even a read, so the preview needs no token (Hatsu SDD plan N6). izanami still classifies both **mutating** in every spelling, fail-closed |
 | [`pr cascade-main`](#nen-pr-cascade-main) | no | `--dry-run` | prints `git fetch`, `git merge --no-edit` and (unless `--no-push`) `git push` as `would run:` and spawns **nothing**, so whether the merge would conflict is not known. `--no-push` alone is not a preview: it still merges. izanami keeps the verb **mutating** in every spelling, the dry form included |
 | [`spec index`](#nen-spec-index) | yes | `--write` | then `--dry-run` with it. Without `--write` nothing is written and the verb reports whether `<root>/INDEX.md` is current; `--write --dry-run` reports the regeneration and writes nothing. izanami's table classifies `--write` **mutating** and the other forms **read-only** |
@@ -525,8 +526,8 @@ repository's `nen/` directory, at the path `--repo` names:
 |---|---|---|
 | `nen/labels.json` | the label set — names, colours, descriptions | [`labels sync`](#nen-labels-sync), [`label apply`](#nen-label-apply), [`issue file`](#nen-issue-file), [`issue consolidate-close`](#nen-issue-consolidate-close), [`idea file`](#nen-idea-file), [`schema check`](#nen-schema-check) |
 | `nen/repos.json` | the registry — consumers, product codes, per-consumer pins, recorded scenarios, and the **canon pin**: the `pinned` tag on the canonical handbooks repository's `maintained_tools` entry (`CON-13`), plus where that repository's checkout is found on a machine (`checkout_env`, `checkout` -- [#294](https://github.com/zheref/nen/issues/294)), and **product families** (`families[]`, [#453](https://github.com/zheref/nen/issues/453); see [Product families](#product-families-families)) | [`repo resolve`](#nen-repo-resolve), [`repo scenario`](#nen-repo-scenario), [`ref format`](#nen-ref-format), [`fanout compute`](#nen-fanout-compute), [`fanout record`](#nen-fanout-record), [`warmup`](#nen-warmup), [`canon resolve`](#nen-canon-resolve), [`canon pin`](#nen-canon-pin), [`canon checkout`](#nen-canon-checkout) (the pin and the checkout declaration), [`canon mirror generate`](#nen-canon-mirror-generate) and [`canon mirror check`](#nen-canon-mirror-check) (the pin, when `--source`/`--ref` are omitted; the checkout declaration, when `--rules-dir` is), [`parse futon`](#nen-parse-futon), [`pr ready`](#nen-pr-ready) (ref resolution), [`schema check`](#nen-schema-check) (reports the pin) |
-| `nen/colors.yml` | the status-colour precedence for board rendering | [`color status`](#nen-color-status), [`schema check`](#nen-schema-check) |
-| `nen/gates.json` | reviewer identities for the readiness check, and optional declared check exclusions (`checks.excluded`, the intersection at pinned base and default-tip commits) | [`pr ready`](#nen-pr-ready), [`pr next-blocker`](#nen-pr-next-blocker), [`schema check`](#nen-schema-check) |
+| `nen/colors.yml` | the status-colour precedence for board rendering | [`color status`](#nen-color-status), [`schema check`](#nen-schema-check), [`scaffold migrate`](#nen-scaffold-migrate) (seeds it into absence) |
+| `nen/gates.json` | reviewer identities for the readiness check, and optional declared check exclusions (`checks.excluded`, the intersection at pinned base and default-tip commits) | [`pr ready`](#nen-pr-ready), [`pr next-blocker`](#nen-pr-next-blocker), [`schema check`](#nen-schema-check), [`scaffold migrate`](#nen-scaffold-migrate) (seeds it into absence) |
 | `nen/contract.json` | optional — `dependency` (what this repository needs *from* nen: the version floor, the pinned ref, the bootstrap), `project` (its stack declaration: lanes, per-lane verbs, toolchain pins) and `mechanical` (the conflict set [`wc catch-up`](#nen-wc-catch-up) classifies: version manifests, changelog, generated mirrors and their regenerate argv — [#326](https://github.com/zheref/nen/issues/326)), and `precedence` (the repository's canon precedence, first wins — see [Canon precedence](#canon-precedence-precedence)) | [`wc catch-up`](#nen-wc-catch-up) (the `mechanical` block, read only on a conflict), [`shu detect`](#nen-shu-detect) (proposes the `project` block), [`shu build`/`test`/`lint`/…](#family-shu) (every argv they run comes from it), [`shu tools`](#nen-shu-tools) (the `toolchain` pins), [`scaffold init`](#nen-scaffold-init) and [`scaffold new`](#nen-scaffold-new) (write it into absence; `init` also reads `dependency.pinned_ref` for the CI file's ref), [`schema check`](#nen-schema-check) |
 | `nen/workflow.json` | optional — the delivery loop's **policy**: the branch template and trunk, the iteration checks, the coverage ladder, the attribution trailers a commit may carry, the declared subject-case rule and body width, the reports directory, the model matrix, the self-hosted runner pools. See [`nen/workflow.json`](#nenworkflowjson) | [`runner`](#family-runner) (the `runners` block), [`commit format`](#nen-commit-format) and [`commit write`](#nen-commit-write) (the trailer policy, `commits.subjectCase` and `commits.bodyMaxLineLength`), [`shu coverage`](#nen-shu-coverage) (the ladder, under `--touched` with no `--threshold`), [`scaffold init`](#nen-scaffold-init) and [`scaffold new`](#nen-scaffold-new) (write it into absence, and generate both git hooks out of it), [`schema check`](#nen-schema-check) |
 
@@ -1000,7 +1001,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 174 verbs, grouped as the README groups them. **Reads** is what a
+All 175 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -1128,6 +1129,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`idea`](#family-idea) | [`nen idea file`](#nen-idea-file) | file an idea issue (reusing issue file's own choreography), then read it back over the API and diff title/body/labels against what was submitted | nen/labels.json; gh (issue create + api read) | yes |
 | [`scaffold`](#family-scaffold) | [`nen scaffold init`](#nen-scaffold-init) | stand an EXISTING repository up: the directory skeleton, the trailer-enforcing commit-msg hook, the trunk-guarding pre-commit hook, a canon-values.yml template, nen/contract.json's project block, nen/workflow.json's policy, the schemas/-&gt;nen/ copy migration, the stack's CI workflow, .gitignore upkeep, and a closing `shu tools` CHECK that installs nothing | nen/contract.json + nen/workflow.json (both hooks are generated FROM the policy) + the legacy schemas/ copies; the bundled profiles pack and templates/; writes to disk under --repo; spawns the version probes the target declares (never on --dry-run) | yes |
 | [`scaffold`](#family-scaffold) | [`nen scaffold new`](#nen-scaffold-new) | write a FRESH tree for one stack into an empty --dir: the template's files with {{name}} substituted, the CI workflow, .gitignore, both git hooks, nen/workflow.json's policy, and nen/contract.json as `shu detect` proposes it off the marker just written -- every post-step PRINTED, none run | the bundled profiles pack and templates/; writes to disk under --dir; spawns nothing at all | yes |
+| [`scaffold`](#family-scaffold) | [`nen scaffold migrate`](#nen-scaffold-migrate) | write each ABSENT nen/colors.yml and nen/gates.json from a seed that widens nothing (no colour category; a Copilot round owed at head on every PR, a delivery carve-out matching no author), read each back through its loader, and never open an existing file -- idempotent; the command schema check names for each missing one | writes to disk under --repo; spawns nothing | yes |
 | [`canon`](#family-canon) | [`nen canon resolve`](#nen-canon-resolve) | resolve a target repo's always-load handbook set plus its ONE stack handbook, from the scenario nen/repos.json records for it | nen/repos.json | yes |
 | [`canon`](#family-canon) | [`nen canon pin`](#nen-canon-pin) | read the canonical handbooks repository a consumer mirrors and the TAG it is pinned to, from the `pinned` field on that repository's maintained_tools entry -- data a sync checks the canon out at, and a drift check holds the mirror to; with `--write <tag>`, MOVE that pin -- one value, every other byte kept -- only to a tag the canon checkout carries | nen/repos.json; with --write, the canon checkout `canon checkout` resolves (read-only, isolated git; fetches nothing) and an atomic write of nen/repos.json unless --dry-run | yes |
 | [`canon`](#family-canon) | [`nen canon checkout`](#nen-canon-checkout) | resolve WHERE the canon checkout is on this machine -- `--canon-checkout`, then the variable the pinned entry's `checkout_env` names, then its `checkout` path template -- and verify it is a clean checkout of the pinned source at the pinned tag, reporting every step | nen/repos.json + the environment; read-only, isolated git (rev-parse, remote get-url on the checkout and the consumer, status, ls-files); fetches nothing | yes |
@@ -7778,6 +7780,8 @@ reads now — a stale duplicate is clutter to delete, not a correctness risk, so
 agree with `nen/`'s no longer changes the verdict, and detecting the leftover is a stat, never a read: an
 unopenable `schemas/` copy (a directory, a broken symlink) is still reported as a leftover to delete.
 
+**A missing `nen/colors.yml` or `nen/gates.json` names the command that creates it** ([#592](https://github.com/zheref/nen/issues/592)): the colors row reads `absent (optional) -- To create it (…), run: nen scaffold migrate --repo <path>`, and the gates `warn` row ends its "no such file" refusal with the same sentence. The command is last on the line and the path is shell-quoted only when it needs to be, so it pastes as written. [`scaffold migrate`](#nen-scaffold-migrate) writes only the absent seeded files and leaves existing config untouched. No command is named for a file that is present but malformed (that config is the repository's to fix), for one whose only copy is a legacy `schemas/` one (the `scaffold init` migration is named instead), or for `nen/labels.json` and `nen/repos.json`, which have no seed.
+
 **Usage**
 
 ```text
@@ -11289,6 +11293,40 @@ post-steps (nen does NOT run these):
 **What the generated workflow does.** `.github/workflows/nen-shu.yml` declares `permissions: contents: read`, fetches nen's bootstrap at a pinned ref, runs `nen shu tools --repo .`, then `build`, `test` and `lint` — **`--dry-run` first, then for real** — treating exit 4 (this lane declares no such verb) as a fact rather than a failure.
 
 **Which ref it pins, and why it needs a published release.** The ref is `--nen-ref` when given; otherwise the repository's own `dependency.pinned_ref` (for `init`) or this binary's own version, and then **the greater of that and the minimum `templates/index.json` declares** — which is the first release carrying the `nen shu` verbs the workflow runs. That floor exists because the failure without it is silent at scaffold time and total at CI time: a workflow pinned at a release with no `shu` family is red on the first push, and one pinned at a tag with no *release* never gets a binary at all — `bash nen-bootstrap.sh --ref <tag>` refuses at **exit 6**, because [a tag is not a release](#getting-the-binary) and there is no `SHA256SUMS` to verify against. nen cannot check either fact offline, so whenever the written ref is not this binary's own version it prints the ref, that caveat, and the releases page. It names no build tool, no package manager and no test runner: every argv it runs comes from the scaffolded repository's own `nen/contract.json`, so changing what CI runs means changing the declaration.
+
+### `nen scaffold migrate`
+
+**For a repository scaffolded before `nen/colors.yml` and `nen/gates.json` existed** ([#592](https://github.com/zheref/nen/issues/592)). It writes each of those two files that is **absent**, from a seed, reads each one back through the loader [`schema check`](#nen-schema-check) uses, and touches nothing else. `schema check` names this verb, with the repository's own `--repo`, on the row of each of the two files that is missing.
+
+**Only absence is written, and a second run writes nothing.** A path that exists in any form — a file, a directory, a symlink dangling or not, a file this process cannot read — is reported `kept` and is never opened, read or compared: the repository's existing config is not this verb's to judge, and `schema check` judges it. The write is an exclusive create, so a file that appears between the check and the write is left alone and reported `refused`. A second run finds every seeded file present and reports every row `kept`, exit 0. A legacy `schemas/` copy of a seeded file is `refused`, naming [`scaffold init --accept-detected`](#nen-scaffold-init)'s copy, which keeps that config — a seed would shadow it. A `nen/` that is a symlink is refused before anything is written through it.
+
+**Each seed widens nothing.** `nen/colors.yml` declares **no category**: an empty vocabulary and an absent file answer every colour verb the same way, and nen invents no status or severity names. `nen/gates.json` **fails closed**: Copilot (`base_reviewers: ["copilot"]`, `review-round-only`, no separate approver) owes a round **at head on every pull request, requested or not** — it is deliberately not `bounded_policy_exempt`, which would excuse it whenever no request is pending and let a pull request nobody reviewed read ready — so where the readiness verbs refused for want of a gate, they now wait for a review. Its required `delivery` carve-out matches no author — its pattern carries a space, which no GitHub login can. Both are seeds, not rulings: tune them, commit them, then re-run `schema check`. **`nen/labels.json` and `nen/repos.json` are never seeded** — a label set and a registry are names only the repository can choose.
+
+**Usage**
+
+```text
+nen scaffold migrate --repo <path> [--dry-run] [--json]
+```
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--repo <path>` | yes | The repository whose missing `nen/` files are written. | Omitted, refused at exit 2 — a default to the cwd would write into whatever repository the process stands in. |
+| `--dry-run` | no | Print `would-create` for each absent file, and write nothing. | Spawns nothing either way. |
+
+Every other `scaffold` flag is **refused at exit 2 naming it**: no flag changes what this verb writes, and one accepted and ignored would be a change the caller asked for and did not get.
+
+**Output and exit codes** — one line per seeded file, `<action>: <file> -- <why>`, where the action is `created` (with the read-back summary), `would-create`, `kept` or `refused`, then a `next:` line when anything was created. `--json` publishes `{ contract: "nen.scaffold.migrate/v0.1", repo, dryRun, files: [{ file, action, why }], exitCode }`. Exit **0** when nothing was refused, **1** when a row was (a legacy copy, a symlinked `nen/`, a write the filesystem rejected, or a written seed that did not load), **2** on usage.
+
+**Example**
+
+```bash
+nen scaffold migrate --repo .
+```
+```text
+created: nen/colors.yml -- wrote the colour vocabulary, with no category declared; read back: 0 categories
+created: nen/gates.json -- wrote the readiness gate, owing a Copilot round on every pull request; read back: 1 reviewer(s)
+next: review the seeded file(s), commit them, then run 'nen schema check --repo .'
+```
 
 <a id="family-canon"></a>
 

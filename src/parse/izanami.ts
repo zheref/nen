@@ -1346,6 +1346,9 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       new: DRY(
         "writes a fresh project tree, its declaration and its CI workflow unless --dry-run is given; every post-step it names is printed and none is run",
       ),
+      migrate: DRY(
+        "writes each absent nen/colors.yml and nen/gates.json from its seed, never an existing file, unless --dry-run is given, which writes nothing and spawns nothing",
+      ),
     },
   },
   // THE `shu` FAMILY'S ROWS, AND WHY EVERY EXECUTING VERB IS `dry-run-gated`.
