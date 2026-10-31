@@ -1,4 +1,5 @@
-// src/scaffold/command.ts -- `nen scaffold init` and `nen scaffold new`.
+// src/scaffold/command.ts -- `nen scaffold init`, `nen scaffold new` and
+// `nen scaffold migrate`.
 //
 // WHY THE JOIN IS HERE. ./templates.ts reads the profiles pack and spawns
 // nothing; the closing toolchain check spawns the version probes the target
@@ -35,6 +36,7 @@ import { shuCommand } from "../shu/command.js";
 import { renderToolsReport, type ToolsReport } from "../shu/tools.js";
 import { PROGRAM } from "../version.js";
 import { scaffoldInit, type ScaffoldInitResult, type ToolsOutcome } from "./init.js";
+import { renderMigrate, scaffoldMigrate } from "./migrate.js";
 import { scaffoldNew, type ScaffoldNewResult } from "./new.js";
 import { defaultAgentTrailer, freshTreeSupport, resolveStackId } from "./templates.js";
 
@@ -91,6 +93,8 @@ usage:
   nen scaffold new --stack <id> --name <project> --dir <path>
                    [--marker-env <VAR> [--agent-trailer <key>] [--run-trailer <key>]]
                    [--nen-ref vX.Y.Z] [--dry-run] [--json]
+
+  nen scaffold migrate --repo <path> [--dry-run] [--json]
 
 'init' works on an EXISTING repository. It creates every --directories entry
 that does not exist, installs the trailer-enforcing commit-msg hook (a NEW
@@ -183,6 +187,20 @@ reports.dir beside '.nen/'.
 --dry-run prints every write, every migration and every post-step, and
 performs none. It spawns NOTHING, probes included: the toolchain check is
 reported as "would check" rather than run.
+
+'migrate' works on an EXISTING repository scaffolded before nen/colors.yml
+and nen/gates.json existed (zheref/nen#592). It writes each of those two
+files that is ABSENT from a seed that widens nothing -- colors.yml with no
+category declared, gates.json owing one bot review round with a delivery
+carve-out that matches no author -- reads each one back through the loader
+'schema check' uses, and touches nothing else: a file already there, in any
+form, is reported 'kept' and is never opened. It is idempotent (a second run
+reports every row 'kept' and exits 0). A legacy schemas/ copy is refused with
+the 'init' migration named, and a 'nen/' that is a symlink is refused before
+anything is written. nen/labels.json and nen/repos.json are never seeded:
+their names are the repository's to choose. 'schema check' names this verb on
+the row of each file it can create. Exits 0 when nothing was refused, 1
+otherwise, 2 on usage.
 
 SCOPE: scenario-specific project GENERATION (a framework's own source tree) is
 still not ported. What is here is the slice every project needs whatever its
@@ -497,10 +515,62 @@ function runNew(context: CommandContext): number {
   return result.exitCode;
 }
 
+/**
+ * `scaffold migrate` takes `--repo`, `--dry-run` and `--json`, and REFUSES BY
+ * NAME every other flag the shared spec accepts, for `runNew`'s reason: a flag
+ * accepted and ignored is a change the caller asked for and did not get.
+ */
+const MIGRATE_REFUSED_VALUES: readonly string[] = [
+  "directories",
+  "agent-trailer",
+  "run-trailer",
+  "marker-env",
+  "hook-path",
+  "canon-values-path",
+  "scenario",
+  "stack",
+  "name",
+  "dir",
+  "nen-ref",
+];
+const MIGRATE_REFUSED_BOOLEANS: readonly string[] = ["force", "accept-detected", "install-tools"];
+
+function runMigrate(context: CommandContext): number {
+  const offending = [
+    ...MIGRATE_REFUSED_VALUES.filter((flag): boolean => context.args.values[flag] !== undefined),
+    ...MIGRATE_REFUSED_BOOLEANS.filter((flag): boolean => context.args.booleans.has(flag)),
+  ].sort();
+  if (offending.length > 0) {
+    throw new VerbUsageError(
+      `'scaffold migrate' does not take ${offending.map((flag): string => `--${flag}`).join(", ")}. It writes only the absent nen/colors.yml and nen/gates.json from their seeds, so no flag changes what it writes; '${PROGRAM} scaffold init' is the verb that takes ${offending.length === 1 ? "that flag" : "those flags"}.`,
+    );
+  }
+  const root = assertRepoRoot({
+    repoFlag: requireRepoFlag(context, "It is the repository whose missing nen/ files are written."),
+  });
+  const result = scaffoldMigrate({ root, dryRun: context.args.booleans.has("dry-run") });
+  emit(
+    context.io,
+    context.json,
+    {
+      contract: result.contract,
+      repo: result.repo,
+      dryRun: result.dryRun,
+      files: result.files,
+      exitCode: result.exitCode,
+    },
+    renderMigrate(result),
+  );
+  if (result.exitCode !== 0) {
+    context.io.err("nen: a seed was refused -- see the report above");
+  }
+  return result.exitCode;
+}
+
 export const scaffoldCommand: Command = {
   name: "scaffold",
-  subcommands: ["init", "new"],
-  summary: "Stand a repository up: taxonomy layer, declaration, CI file -- existing tree or fresh.",
+  subcommands: ["init", "new", "migrate"],
+  summary: "Stand a repository up: taxonomy layer, declaration, CI file -- existing tree or fresh; seed missing nen/ files.",
   // A GETTER, so the packs are read when `--help` is printed rather than when
   // this module is imported: ../cli/registry.ts imports every family on every
   // invocation, and a malformed template must fail the verb that needs it, not
@@ -525,7 +595,8 @@ export const scaffoldCommand: Command = {
     booleans: ["force", "accept-detected", "install-tools", "dry-run"],
   },
   run(context: CommandContext): number {
-    const subcommand = requireSubcommand("scaffold", context.args, ["init", "new"]);
+    const subcommand = requireSubcommand("scaffold", context.args, ["init", "new", "migrate"]);
+    if (subcommand === "migrate") return runMigrate(context);
     return subcommand === "init" ? runInit(context) : runNew(context);
   },
 };

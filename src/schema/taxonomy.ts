@@ -47,6 +47,7 @@ import { describeDecisions, loadDecisions } from "./decisions.js";
 import { canonMirrorCheck } from "./canonmirror.js";
 import { insideRoot, LintWiringError, parseBaseline, parseLintContract, PROSE_LINT_SCHEMA } from "../canon/lint.js";
 import type { Runner } from "../seam/exec.js";
+import { isSeeded, migrateCommand } from "../scaffold/seeds.js";
 import {
   COLORS_FILE,
   DECISIONS_FILE,
@@ -211,11 +212,17 @@ function run(
         : null;
     return { file, path, ok: true, detail, required, legacy, note };
   } catch (error) {
+    // A SEEDED FILE'S ABSENCE NAMES THE VERB THAT CREATES IT (zheref/nen#592
+    // AC-1). Only absence, and only with no legacy copy: a present-but-broken
+    // file is the repository's to fix, and a legacy copy's own sentence
+    // already names `scaffold init`'s migration, which keeps its config.
+    const message = error instanceof SchemaError ? error.message : String(error);
+    const hint = isAbsentFileError(error) && !legacy && isSeeded(relative) ? ` ${createHint(root)}` : "";
     return {
       file,
       path,
       ok: false,
-      detail: error instanceof SchemaError ? error.message : String(error),
+      detail: `${message}${hint}`,
       // ABSENT AND CORRUPT ARE NOT THE SAME FINDING, and conflating them was a
       // real hole. `required` is what decides whether the overall report fails,
       // and gates.json is declared optional because only the readiness verbs
@@ -243,6 +250,13 @@ function run(
       note: null,
     };
   }
+}
+
+// The sentence a seeded file's absent row ends with: what the verb promises,
+// then the command LAST and unwrapped, so a root that needs its own quotes is
+// never nested inside a second pair and the line can be copied from the colon.
+function createHint(root: string): string {
+  return `To create it (only absent seeded files are written; existing config is left untouched), run: ${migrateCommand(root)}`;
 }
 
 // Whether a failure is "the file is not there" as opposed to "the file is
@@ -294,7 +308,10 @@ function colorsCheck(root: string): SchemaCheck {
     return `${colors.categories.length} categories, ${total} values`;
   });
   if (check.ok || !check.detail.includes(ABSENT_FILE_MARKER)) return check;
-  return { ...check, ok: true, detail: "absent (optional)" };
+  // Still `absent (optional)` first, so a caller matching that spelling keeps
+  // matching; the command follows (zheref/nen#592 AC-1), unless a legacy copy
+  // is what is there -- `run` kept that sentence out for its own reason.
+  return { ...check, ok: true, detail: check.legacy ? "absent (optional)" : `absent (optional) -- ${createHint(root)}` };
 }
 
 // The decision-matrix row (zheref/nen#216). Absent is `ok` because the loader
