@@ -1057,7 +1057,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`label`](#family-label) | [`nen label apply`](#nen-label-apply) | applies one label or a batch of ref/label pairs and appends an after-the-fact ledger line | nen/labels.json; gh only with --run | yes |
 | [`labels`](#family-labels) | [`nen labels sync`](#nen-labels-sync) | creates missing labels and updates only differing taxonomy labels | nen/labels.json; gh read even with --dry-run | yes |
 | [`labels`](#family-labels) | [`nen labels rename`](#nen-labels-rename) | renames labels in place, preserving every issue association, idempotently | gh label list (always), gh label edit unless --dry-run | yes |
-| [`classify`](#family-classify) | [`nen classify labels`](#nen-classify-labels) | validates a classification taxonomy file and prints the label set it defines (axis prefix + key, colour, description) | local file (--taxonomy) | yes |
+| [`classify`](#family-classify) | [`nen classify labels`](#nen-classify-labels) | validates a classification taxonomy file and prints the label set it defines (axis or family prefix + key, colour, description) | local file (--taxonomy) | yes |
 | [`classify`](#family-classify) | [`nen classify install`](#nen-classify-install) | compares the taxonomy's labels with nen/labels.json (present, drift, absent, foreign), rewrites the declaration with --write, or syncs only those labels to GitHub with --sync once the declaration is landed | local file (--taxonomy), nen/labels.json; gh only with --sync | yes |
 | [`classify`](#family-classify) | [`nen classify status`](#nen-classify-status) | which issues carry a label on every axis, which are missing one, which carry an unknown key, and whether the declaration and GitHub both hold the taxonomy's labels | local file (--taxonomy), nen/labels.json, gh (issue reads, label list) | yes |
 | [`classify`](#family-classify) | [`nen classify apply`](#nen-classify-apply) | validates a classification plan whole, then applies it as labels (listing low-confidence rows, skipping labels already present), one ledger line per application | local file (--taxonomy, --plan), nen/labels.json, gh (issue reads; gh issue edit only with --run) | yes |
@@ -7487,6 +7487,16 @@ prints one line per label (`name  #colour  description`). A bad file is refused 
 pointer into it — a missing axis, a duplicate key, a description over 100 characters, a prefix not
 ending in `/`, a colour that is not six hex digits, a key that is not kebab-case.
 
+The taxonomy may also carry an optional root `families` block (zheref/nen#590): install-only label
+families, each with the axis shape (`prefix`, `color`, `keys` with `key`, `title` and `description`),
+keyed by a kebab-case family name that is not an axis name — for example hatsu:direct's `model/`
+family, once the taxonomy declares it (zheref/hatsu `contracts/classify.taxonomy.json` →
+`families.model`; a taxonomy without the block installs the axes only). A family is **never classified on**: `classify status` and `classify apply` read the two
+axes only, so an issue without a `model/` label is still classified. It is part of the label set
+`classify labels` prints and `classify install` declares and syncs. A family whose prefix overlaps an
+axis's or another family's, a family named like an axis, or a family with no keys is refused by
+pointer.
+
 **Usage**
 
 ```text
@@ -7500,10 +7510,13 @@ nen classify labels --taxonomy <path> [--repo <path>] [--json]
 | `--taxonomy <path>` | yes | The classification taxonomy file. | Relative paths resolve against `--repo`'s root. Missing -> exit 2. |
 | `--repo <path>` | no | Anchors a relative `--taxonomy`. | Defaults to cwd. The only `classify` verb where it is optional: this one reads one file and nothing else. |
 
-**Output and exit codes** — human rendering is one line per label, then `<n> label(s): <a> lang, <b>
-job`. `--json` prints one document; top-level keys: `contract` (`nen.classify.labels/v0.1`),
-`taxonomy` (the resolved path), `axes` (per axis: `prefix`, `count`) and `labels` (an array of
-`{ name, color, description, axis, key }`). Exit 0 when the file is valid; exit 1 when it is not (the
+**Output and exit codes** — human rendering is one line per label (the axes' first, then each
+family's), then `<n> label(s): <a> lang, <b> job` followed by `, <c> <family>` per family. `--json`
+prints one document; top-level keys: `contract` (`nen.classify.labels/v0.1`), `taxonomy` (the
+resolved path), `axes` (per axis: `prefix`, `count`), `families` (per family: `prefix`, `count`; `{}`
+when the file carries none) and `labels` (an array of `{ name, color, description, axis, family, key
+}`, where `family` is the axis or family name and `axis` is `null` on a family label). Both are
+additive; the contract stays `v0.1`. Exit 0 when the file is valid; exit 1 when it is not (the
 refusal names the pointer) or cannot be read; exit 2 when `--taxonomy` is missing.
 
 **Example**
@@ -7523,11 +7536,12 @@ file, no `gh` call)
 
 ### `nen classify install`
 
-Answers "has the classification label set been installed here": it compares the taxonomy's labels with
-the consumer's `nen/labels.json`. Each label is `present` (name, colour and description identical;
+Answers "has the classification label set been installed here": it compares the taxonomy's labels —
+both axes' and every install-only family the taxonomy declares (`families`, for example the `model/`
+family hatsu:direct applies once the taxonomy carries `families.model`; zheref/nen#590) — with the consumer's `nen/labels.json`. Each label is `present` (name, colour and description identical;
 colours compare case-insensitively), `drift` (the name is declared but the colour or description
-differs) or `absent`. Labels in `nen/labels.json` that wear an axis prefix but whose key the taxonomy
-does not carry are listed as `foreign` and are **never** removed or changed — a retired key may still
+differs) or `absent`. Labels in `nen/labels.json` that wear an axis or family prefix but whose key the
+taxonomy does not carry are listed as `foreign` and are **never** removed or changed — a retired key may still
 sit on issues.
 
 Three forms, and the third is the second step of a deliberate two:
@@ -7607,7 +7621,9 @@ the labels already on it into the keys the taxonomy knows on each axis, `unknown
 axis prefix whose key the taxonomy lacks) and `missing` (the axes with no label at all). An issue is
 `classified` only when every axis has a label. It also reports `declared` — whether `nen/labels.json`
 carries every taxonomy label — and `github` — whether every taxonomy label exists on the repository
-(existence only; colour drift is `install`'s question).
+(existence only; colour drift is `install`'s question). `declared` and `github` cover the axes' and
+every install-only family's labels, so a declared family label missing on GitHub reads `missing <n>`;
+`unknown` and `missing` read the two axes only.
 
 Exactly one of `--issue <n>[,<n>...]` and `--open`. `--open` reads every open issue, paginated to the
 end (pull requests, which GitHub serves from the same endpoint, are filtered out) and says so when it
