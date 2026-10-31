@@ -26,13 +26,13 @@
     },
     "gradle-android": {
       "runner": "ubuntu-latest",
-      "noFreshTree": "this stack's marker is a wrapper SCRIPT PLUS A DOWNLOADED JAR, and a jar is not something nen can write or verify. Create the project with its own generator, then run `nen scaffold init --repo <path> --stack gradle-android`, which adds every file this template carries except the tree itself.",
+      "noFreshTree": "this stack's marker is a wrapper SCRIPT PLUS A DOWNLOADED JAR, and a jar is not something nen can write or verify. Create the project with its own generator, then run `nen scaffold init --repo <path> --stack gradle-android --marker-env <VAR>`, which adds every file this template carries except the tree itself.",
       "files": {},
       "postSteps": []
     },
     "xcode-ios": {
       "runner": "macos-latest",
-      "noFreshTree": "nen never generates an IDE project document. Create the project in the IDE (or with a generator of your own), then run `nen scaffold init --repo <path> --stack xcode-ios`, which adds every file this template carries except the tree itself.",
+      "noFreshTree": "nen never generates an IDE project document. Create the project in the IDE (or with a generator of your own), then run `nen scaffold init --repo <path> --stack xcode-ios --marker-env <VAR>`, which adds every file this template carries except the tree itself.",
       "files": {},
       "postSteps": []
     }
