@@ -132,7 +132,7 @@ describe("each verb owns its flags", () => {
 });
 
 describe("the help text", () => {
-  it("documents all fifteen verbs", async () => {
+  it("documents all sixteen verbs", async () => {
     const result = await capture(["--help"]);
     expect(result.code).toBe(0);
     const help = result.out.join("\n");

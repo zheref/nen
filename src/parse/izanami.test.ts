@@ -1842,9 +1842,9 @@ describe("NEN_VERB_TABLE -- exhaustive over the real verb registry", () => {
 // THE EXHAUSTIVENESS TEST ABOVE IS REGISTRY-KEYED, NOT SUBCOMMAND-KEYED, and
 // that asymmetry is the reason this block exists. A new FAMILY missing from the
 // table goes red; a new SUBCOMMAND on an existing family falls through to
-// `unknown` and refuses -- fail-closed, but INVISIBLE. So `shu`'s thirteen are
+// `unknown` and refuses -- fail-closed, but INVISIBLE. So `shu`'s sixteen are
 // enumerated here with the policy each one carries, and the reason the
-// executing ten carry `dry-run-gated` rather than `read-only`: the argv they
+// executing eleven carry `dry-run-gated` rather than `read-only`: the argv they
 // run comes out of a file in the TARGET repository, and a read-only row would
 // certify it sight unseen.
 //
@@ -1858,7 +1858,7 @@ describe("NEN_VERB_TABLE -- exhaustive over the real verb registry", () => {
 describe("NEN_VERB_TABLE -- the shu family, every verb classified", () => {
   const shu = NEN_VERB_TABLE["shu"];
 
-  it("classifies exactly the thirteen subcommands the family has, and no others", () => {
+  it("classifies exactly the sixteen subcommands the family has, and no others", () => {
     expect(Object.keys(shu?.subcommands ?? {}).sort()).toEqual([...SHU_SUBCOMMANDS].sort());
   });
 

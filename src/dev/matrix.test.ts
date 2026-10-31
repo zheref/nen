@@ -69,7 +69,7 @@ describe("renderStackMatrix", () => {
       .split("\n")
       .find((line): boolean => line.startsWith("| stack |"));
     expect(header).toBeDefined();
-    // `| stack | host | template |` plus the thirteen verbs.
+    // `| stack | host | template |` plus the fourteen verbs.
     expect((header ?? "").split("|").filter((cell): boolean => cell.trim() !== "").length).toBe(
       pack.verbs.length + 3,
     );
@@ -199,7 +199,7 @@ describe("renderStackMatrix", () => {
 
   it("counts the grid honestly, over the COMMAND verbs only", () => {
     // THE HEADLINE'S DENOMINATOR IS THE FINDING THIS TEST EXISTS FOR. Three of
-    // the thirteen rows are not a spawned command -- a marker match, a
+    // the fourteen rows are not a spawned command -- a marker match, a
     // toolchain report, a delegation -- and folding them in moved the ratio in
     // both directions at once: their declared-only cells read as "stacks with
     // no answer" and their command cells read as builds. Neither is true.

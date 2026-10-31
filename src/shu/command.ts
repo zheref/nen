@@ -1,6 +1,6 @@
 // src/shu/command.ts -- `nen shu ...`, the stack-aware developer verbs.
 //
-// FIFTEEN VERBS, AND ALL FIFTEEN DO SOMETHING NOW. The family was declared
+// SIXTEEN VERBS, AND ALL SIXTEEN DO SOMETHING NOW. The family was declared
 // whole from day one -- `detect` proposing a declaration, ten verbs executing
 // one, and `tools` and `warmup` refusing by name with the release they arrived
 // in -- for ../cli/registry.ts's reason: a verb that is absent today and
@@ -192,8 +192,9 @@ verbs:
   ui-test     Run the lane's UI/E2E suite.
   lint        Run the lane's linter and format check.
   typecheck   Run the lane's static type check (a TypeScript lane's
-              'tsc --noEmit', say) and exit with its status. A lane that
-              declares none is exit 4, naming the missing
+              'tsc --noEmit', say): exit 0 when it passes, 1 when a step
+              fails, the checker's own code reported on the step line. A
+              lane that declares none is exit 4, naming the missing
               nen/contract.json pointer project.verbs.<lane>.typecheck.
   archive     Produce the lane's distributable artifact.
   release     Publish it, where the lane declares a publication step.

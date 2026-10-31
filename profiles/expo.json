@@ -64,7 +64,7 @@
       "source": "food-diary/package.json:12; eslint.config.js:5-9"
     },
     "typecheck": {
-      "declaredOnly": "TypeScript is configured -- a tsconfig.json and a `typescript` devDependency -- and nothing in the repository ever runs `tsc`: no script, no workflow. The pack seats no command a reference does not run; the declaration states the one this repository means.",
+      "unsupported": "TypeScript is configured -- a tsconfig.json and a `typescript` devDependency -- and nothing in the repository ever runs `tsc`: no script, no workflow. The pack seats no command a reference does not run; a repository that does check its types states that command here.",
       "summary": "configured, never run",
       "source": "food-diary/tsconfig.json; package.json:5-13, :53"
     },

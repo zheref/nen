@@ -543,7 +543,7 @@ top-level `nen warmup`, which sweeps a **registry** for stale pins and reads
 only.
 
 What each verb can run **per stack** is written down in
-[`docs/STACK-MATRIX.md`](docs/STACK-MATRIX.md) — seven stacks × thirteen
+[`docs/STACK-MATRIX.md`](docs/STACK-MATRIX.md) — seven stacks × fourteen
 verbs, each cell either a reference command cited to the repository it came
 from, a `declared-only` (real for the stack, and the observed repositories
 disagree about what it means), or an `unsupported` with the reason. It is

@@ -37,7 +37,7 @@
 // `profiles/index.json`. That is what lets this module and the matrix renderer
 // contain zero stack ids and zero toolchain names -- the property
 // ../taxonomy-purity.test.ts exists to keep -- and it is what makes "exactly
-// these thirteen verbs, in every profile" a check rather than a hope.
+// these fourteen verbs, in every profile" a check rather than a hope.
 //
 // VALIDATION IS BORROWED, NOT RESTATED. The verb forms this pack uses are the
 // declaration's own forms, so the declaration's own reader validates them
@@ -805,7 +805,7 @@ export interface StackProfile {
 export interface ProfilesPack {
   /** Profile ids, in `profiles/index.json`'s order (sorted). */
   readonly ids: readonly string[];
-  /** The thirteen verbs, in the family's own declared order -- NOT sorted. */
+  /** The fourteen verbs, in the family's own declared order -- NOT sorted. */
   readonly verbs: readonly string[];
   /**
    * The subset of `verbs` that names a command a repository RUNS.

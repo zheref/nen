@@ -1388,7 +1388,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
   //
   // AND THERE IS NO `"*"` KEY. NenFamilyEntry's own doc comment says the
   // wildcard covers a family whose flags select the behaviour or whose every
-  // subcommand shares one policy; this family's emphatically do not -- six
+  // subcommand shares one policy; this family's emphatically do not -- five
   // of the sixteen are not `DRY` -- and a `"*"` row would swallow them.
   // ../parse/izanami.test.ts asserts exactly which keys are here, and which
   // policy each carries, so a row's kind cannot change by accident.
