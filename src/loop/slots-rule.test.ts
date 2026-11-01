@@ -44,6 +44,14 @@ describe("occupancy under each local rule", () => {
     expect(report.local.binding).toBe(true);
   });
 
+  it("frees a local effort with no PR once it is merged locally, under every rule, and holds an unmerged one (zheref/nen#521)", () => {
+    for (const rule of ["ready+prompted", "stacked-open", "merged"] as const) {
+      expect(occupancy(local({ prOpen: false, merged: true }), rule).occupied).toBe(false);
+      expect(occupancy(local({ prOpen: false }), rule)).toEqual({ occupied: true, why: "authored locally, no PR yet" });
+    }
+    expect(occupancy(local({ prOpen: false, merged: true }), "ready+prompted").why).toMatch(/merged locally with no PR/);
+  });
+
   it("parseEfforts reads merged and stacked, absent as false", () => {
     const parsed = parseEfforts(JSON.stringify([{ id: "a", plane: "local", merged: true }, { id: "b", plane: "local", stacked: true }, { id: "c", plane: "local" }]));
     expect(parsed.efforts.map((e) => [e.merged, e.stacked])).toEqual([[true, false], [false, true], [false, false]]);
