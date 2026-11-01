@@ -253,7 +253,9 @@ cwd, installer, bootstrap, select or pinned_ref segment anywhere; workflow.json
 branch/**, review/**, coverage/**, tests/**, iteration/**, deploy/**. The
 named exceptions are prose: a decision row's 'why', and a 'note' anywhere. An
 added, appended or replacing object or array is matched at every key path
-inside it, and so is the object or array a replace removes. With the flag,
+inside it, and so is the object or array a replace removes; for an object
+or array --value that check, and --gate-change given for no gate change, run
+after the file is read (still exit 2, after any refusal of the edit itself). With the flag,
 a 'security-relevant:' line is printed and --json carries gateChange: true;
 the flag on an edit that is no gate change is exit 2. The canon pin
 (repos.json maintained_tools/*/pinned) is exit 2 either way: 'nen canon pin

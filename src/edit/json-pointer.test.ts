@@ -225,7 +225,7 @@ describe("setJsonPointer -- append an item to an array (#587 AC-1)", () => {
     expect(setJsonPointer('{"m":[[1],[2]]}', ["m", "1", "-"], 3).text).toBe('{"m":[[1],[2,3]]}');
   });
 
-  it("refuses appending to an object or a scalar: '-' there is a member name, and a scalar has none", () => {
+  it("'-' under an object adds a member named '-'; under a scalar it is refused", () => {
     expect(setJsonPointer('{"a":{}}', ["a", "-"], 1).op).toBe("add");
     expect((): unknown => setJsonPointer('{"a":1}', ["a", "-"], 1)).toThrow(/not an object or an array/);
   });
@@ -247,6 +247,9 @@ describe("setJsonPointer -- replace an object or an array whole (#587 AC-2)", ()
     expect(setJsonPointer('{"a":[1,2]}', ["a"], ["x"]).text).toBe('{"a":["x"]}');
     expect(setJsonPointer('{"a":{"b":1}}', ["a"], {}).text).toBe('{"a":{}}');
     expect(setJsonPointer('{\n  "a": [\n    1\n  ]\n}', ["a"], []).text).toBe('{\n  "a": []\n}');
+    // An empty old structure takes the document's layout: expanded in a multi-line file, inline in a one-line one (N2).
+    expect(setJsonPointer('{\n  "m": {}\n}\n', ["m"], { a: 1 }).text).toBe('{\n  "m": {\n    "a": 1\n  }\n}\n');
+    expect(setJsonPointer('{"m":{}}', ["m"], { a: 1 }).text).toBe('{"m":{"a":1}}');
   });
 
   it("an equal structure is unchanged and keeps the text byte for byte", () => {

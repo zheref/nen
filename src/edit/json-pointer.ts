@@ -174,7 +174,9 @@ export function setJsonPointer(text: string, segments: readonly string[], value:
     span = locateJsonValue(text, steps);
     if (structure) {
       const old = text.slice(span.start, span.end);
-      const expanded = old.includes("\n");
+      // An EMPTY old structure has no layout of its own: it takes the document's, as an added member or appended item does.
+      const empty = old.replace(/\s/g, "").length === 2;
+      const expanded = old.includes("\n") || (empty && text.trimEnd().includes("\n"));
       after = renderJson(value, layoutAt(text, span.start, expanded, Array.isArray(node) ? [] : objectMembers(text, span.start)));
       // AN INLINE STRUCTURE KEEPS ITS BRACKETS' INNER SPACE (`{ "a": 1 }`), as an added member does.
       const pad = expanded ? "" : (/^[[{]([ \t]*)/.exec(old)?.[1] ?? "");

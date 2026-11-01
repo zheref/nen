@@ -8204,8 +8204,9 @@ in a multi-line file), and `--json`'s `at` names the index it took. **Replace a 
 ([#587](https://github.com/zheref/nen/issues/587)): an existing **object** is replaced whole by an
 object from `--value`, and an existing **array** by an array, written in the layout the old value had —
 expanded one member per line, one indentation unit past its line, when it spanned lines; inline, with
-its own `key: value` separator and its brackets' inner space, when it did not — and every byte outside
-it kept. Refused, each at exit `1` naming why: changing a value's **kind** (a scalar for an object or an
+its own `key: value` separator and its brackets' inner space, when it did not; an empty `{}` or `[]`,
+which has no layout of its own, is expanded in a multi-line file as an added member is — and every byte
+outside it kept. Refused, each at exit `1` naming why: changing a value's **kind** (a scalar for an object or an
 array, an object for an array, or back), an index past the end (the refusal names the `-` pointer),
 a `-` before the last step, a missing member before the last step (no object is created on the
 way), and a path through an object that **repeats** the member it names — `JSON.parse` keeps only the
@@ -8259,8 +8260,9 @@ path inside the value, so `{"exe": "sh", …}` added under an ungated parent is 
 the refusal names the inner pointer. An appended or replacing value is matched the same way, and a
 **replaced** object or array is matched on what it **removes** as well — a gated key cannot leave
 under an ungated parent either; the refusal says *inside the value it replaces*. That second match
-needs the file, so it, and `--gate-change` given for a structure replace that turns out to be no gate
-change, are the exit-`2` refusals made after the file is read. With `--gate-change` the edit proceeds, the human output adds
+needs the file, so for any object or array `--value` both it and *--gate-change was given, but … is not
+a gate change* are decided after the file is read and the edit made: they are still exit `2`, but a
+refusal of the edit itself (exit `1`, e.g. a change of kind) is reported first. With `--gate-change` the edit proceeds, the human output adds
 `security-relevant: <pointer> is a gate change -- <why>`, and `--json` carries `gateChange: true`.
 The flag on an edit that is **no** gate change is exit `2` too: *--gate-change was given, but
 `<pointer>` is not a gate change; drop the flag, or report the missing rule*.
@@ -8328,8 +8330,8 @@ prints `{ contract, ok: false, file, pointer, written: false, failure: { code, m
 `--json` and the message on stderr; `written` is `true` only on a `read-back-mismatch`. Exit `0` set, already that value, or a dry run; `1` refused —
 `failure.code` one of `no-file`, `symlink`, `outside-repo`, `file-changed`, `not-json`, `refused-edit`, `invalid`
 (the loader refused the result), `write-failed`, `read-back-mismatch` — with nothing written except on
-`read-back-mismatch`, which says so; `2` usage, nothing read — save the two gate refusals a
-structure replace can only make after reading the file (above), which write nothing either.
+`read-back-mismatch`, which says so; `2` usage, nothing read — save the two gate refusals an
+object or array `--value` can only get after the file is read (above), which write nothing either.
 
 **Example**
 
