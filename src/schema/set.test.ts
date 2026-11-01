@@ -432,7 +432,7 @@ describe("nen schema set -- what the loader reads (N2, R2) and what was already 
     expect((await capture(set(root, "--file", "nen/workflow.json", "--pointer", "/coverage//minimum", "--value", "1"))).code).toBe(2);
     const object = await capture(set(root, "--file", "nen/workflow.json", "--pointer", "/monitor/maxCycles", "--value", '{"a":1}', "--json"));
     expect(object.code).toBe(1);
-    expect(JSON.parse(object.out.join("\n"))).toMatchObject({ failure: { code: "refused-edit", message: expect.stringContaining("not supported in v1") as unknown } });
+    expect(JSON.parse(object.out.join("\n"))).toMatchObject({ failure: { code: "refused-edit", message: expect.stringContaining("changes its kind") as unknown } });
     expect(read(root)).toBe(WORKFLOW);
   });
 });
@@ -454,5 +454,83 @@ describe("nen schema set -- the subcommand after flags (N4)", () => {
     const result = await capture(["schema", "set", "--bogus\u001b[2J"]);
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).not.toContain("\u001b");
+  });
+});
+
+describe("nen schema set -- append to a list (#587 AC-1)", () => {
+  it("appends one item, validates it, writes it and reads it back at its resolved index", async () => {
+    const root = site();
+    const result = await capture(set(root, "--file", "nen/workflow.json", "--pointer", "/commits/forbiddenTrailers/-", "--value", '"Reviewed-by"', "--json"));
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.out.join("\n"))).toMatchObject({ op: "append", pointer: "/commits/forbiddenTrailers/-", at: "/commits/forbiddenTrailers/3", before: null, after: "Reviewed-by", written: true, read: true });
+    const lines = read(root).split("\n");
+    const changed = lines.filter((line, index): boolean => line !== WORKFLOW.split("\n")[index]);
+    expect(changed).toEqual(['    "forbiddenTrailers": ["Co-Authored-By", "Claude-Session", "Signed-off-by", "Reviewed-by"]']);
+    const text = await capture(set(root, "--file", "nen/workflow.json", "--pointer", "/commits/forbiddenTrailers/-", "--value", '"Acked-by"', "--dry-run"));
+    expect(text.out.join("\n")).toContain("pointer: /commits/forbiddenTrailers/- -> /commits/forbiddenTrailers/4");
+    expect(text.out.join("\n")).toContain('change: (absent) -> "Acked-by" (appended)');
+    expect(read(root).split("\n")).toEqual(lines);
+  });
+
+  it("refuses an item the loader refuses, exit 1, naming where it would have gone, the file byte-identical", async () => {
+    const root = site();
+    const result = await capture(set(root, "--file", "nen/workflow.json", "--pointer", "/commits/forbiddenTrailers/-", "--value", "7", "--json"));
+    expect(result.code).toBe(1);
+    expect(JSON.parse(result.out.join("\n"))).toMatchObject({ written: false, failure: { code: "invalid", message: expect.stringContaining("7 appended at /commits/forbiddenTrailers/3") as unknown } });
+    expect(read(root)).toBe(WORKFLOW);
+  });
+
+  it("keeps the examiner-persona refusal: an excluded persona a scope names is refused, appended or set", async () => {
+    const root = site();
+    expect((await capture(set(root, "--file", "nen/workflow.json", "--pointer", "/review/excludedPersonas", "--value", "[]", "--gate-change"))).code).toBe(0);
+    const before = read(root);
+    const appended = await capture(set(root, "--file", "nen/workflow.json", "--pointer", "/review/excludedPersonas/-", "--value", '"Nobunaga"', "--gate-change"));
+    expect(appended.code).toBe(1);
+    expect(appended.err.join("\n")).toContain("never a code reviewer");
+    expect(read(root)).toBe(before);
+    expect((await capture(set(root, "--file", "nen/workflow.json", "--pointer", "/review/excludedPersonas/-", "--value", '"Nobunaga"'))).code).toBe(2);
+  });
+});
+
+describe("nen schema set -- replace an object from JSON (#587 AC-2)", () => {
+  it("replaces an object whole, in its own layout, validated and read back", async () => {
+    const root = site();
+    const result = await capture(set(root, "--file", "nen/workflow.json", "--pointer", "/monitor", "--value", '{"maxCycles": 10, "pollSeconds": 120}', "--json"));
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.out.join("\n"))).toMatchObject({ op: "replace", at: "/monitor", before: { maxCycles: 20, pollSeconds: 300 }, after: { maxCycles: 10, pollSeconds: 120 }, written: true, read: true });
+    expect(read(root)).toBe(WORKFLOW.replace('"monitor": { "maxCycles": 20, "pollSeconds": 300 }', '"monitor": { "maxCycles": 10, "pollSeconds": 120 }'));
+  });
+
+  it("refuses an object the loader refuses, and a change of kind, the file byte-identical", async () => {
+    const root = site();
+    const invalid = await capture(set(root, "--file", "nen/workflow.json", "--pointer", "/monitor", "--value", '{"maxCycles": -1}', "--json"));
+    expect(invalid.code).toBe(1);
+    expect(JSON.parse(invalid.out.join("\n"))).toMatchObject({ failure: { code: "invalid" } });
+    const kind = await capture(set(root, "--file", "nen/workflow.json", "--pointer", "/monitor", "--value", "[1]", "--json"));
+    expect(kind.code).toBe(1);
+    expect(JSON.parse(kind.out.join("\n"))).toMatchObject({ failure: { code: "refused-edit", message: expect.stringContaining("changes its kind") as unknown } });
+    expect(read(root)).toBe(WORKFLOW);
+  });
+
+  it("a gated key LEAVING under a replaced parent is a gate change too, and --gate-change on a structure that is none is exit 2", async () => {
+    const root = site();
+    writeFileSync(join(root, "nen", "contract.json"), '{\n  "schema_version": "0.1",\n  "project": { "notes": { "args": ["x"] } }\n}\n');
+    expect(gateChange("nen/contract.json", ["project", "notes"], {})).toBeNull();
+    const leaving = await capture(set(root, "--file", "nen/contract.json", "--pointer", "/project/notes", "--value", "{}"));
+    expect(leaving.code).toBe(2);
+    expect(leaving.err.join("\n")).toContain("(through /project/notes/args inside the value it replaces)");
+    const flagged = await capture(set(root, "--file", "nen/workflow.json", "--pointer", "/monitor", "--value", '{"maxCycles": 5, "pollSeconds": 300}', "--gate-change"));
+    expect(flagged.code).toBe(2);
+    expect(flagged.err.join("\n")).toContain("is not a gate change");
+    expect(read(root)).toBe(WORKFLOW);
+  });
+
+  it("the canon pin cannot move by replacing the row that holds it", async () => {
+    const root = site(METADATA_REPO);
+    const repos = read(root, "nen/repos.json");
+    writeFileSync(join(root, "nen", "repos.json"), repos.replace('"role": "scaffolder (Stack Matrix generator)"', '"role": "scaffolder (Stack Matrix generator)", "pinned": "v1.0.0"'));
+    const result = await capture(set(root, "--file", "nen/repos.json", "--pointer", "/maintained_tools/0", "--value", '{"repo": "zheref/bankai-scaffold", "role": "r"}', "--gate-change"));
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("canon pin --write");
   });
 });

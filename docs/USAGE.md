@@ -1069,7 +1069,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`direct`](#family-direct) | [`nen direct matrix`](#nen-direct-matrix) | enumerates every (job, domain, language) answer `resolve` gives, for a consumer that renders the whole table: per job and domain the witness issue that derives it (or `unreachable`), the route, fallback and phase, and per language column (`*` the shared one) the pair, the aggregate, the winner and runner-up resolved and the effort -- computed by `resolve`'s own functions, owning no rule | local files (--registry, --taxonomy), nen/workflow.json under --repo | yes |
 | [`direct`](#family-direct) | [`nen direct answer`](#nen-direct-answer) | writes the maintainer's picker answer (continue or stop) and its time into the record `direct resolve --record` filed, replacing an earlier answer and leaving every other field unchanged; a missing record is a failure | `<git-common-dir>/.nen/direct/<encoded id>.json` (under --repo outside git; reads and rewrites); git rev-parse/worktree list to find it, no gh | yes |
 | [`schema`](#family-schema) | [`nen schema check`](#nen-schema-check) | loads and validates the files a repository is expected to carry under nen/, reporting each one's verdict and any legacy schemas/ leftover, and a consumer's `.claude/rules/` canon mirror against its bindings | nen/labels.json, repos.json, colors.yml, gates.json, contract.json (optional), workflow.json (optional), .claude/canon-values.yml (optional) and its git history | yes |
-| [`schema`](#family-schema) | [`nen schema set`](#nen-schema-set) | writes ONE value into a nen/ JSON declaration by RFC 6901 pointer -- an existing scalar replaced, or a member added to an existing object -- every other byte kept, the result validated by that file's own loader before anything is written, then written atomically and read back; a [gate-change](#gate-changes) pointer needs `--gate-change`; `--dry-run` writes nothing | the named nen/ declaration under --repo (reads and rewrites); no git/gh | yes |
+| [`schema`](#family-schema) | [`nen schema set`](#nen-schema-set) | writes ONE value into a nen/ JSON declaration by RFC 6901 pointer -- an existing scalar replaced, a member added to an existing object, an item appended to an array (`/-`), or an object or array replaced whole by one of its kind -- every other byte kept, the result validated by that file's own loader before anything is written, then written atomically and read back; a [gate-change](#gate-changes) pointer needs `--gate-change`; `--dry-run` writes nothing | the named nen/ declaration under --repo (reads and rewrites); no git/gh | yes |
 | [`color`](#family-color) | [`nen color status`](#nen-color-status) | resolves one row's colour token by the repository's own nen/colors.yml precedence | nen/colors.yml | yes |
 | [`repo`](#family-repo) | [`nen repo resolve`](#nen-repo-resolve) | resolves a repository token (code, slug, short name, or 'all') against the registry, or the cwd's own origin | nen/repos.json; git (no-token form) | yes |
 | [`repo`](#family-repo) | [`nen repo inventory`](#nen-repo-inventory) | senkei's live enumeration: epics + children, integration branches, open PRs | gh (issue list, api sub_issues/branches/compare, pr list) | yes |
@@ -8191,14 +8191,23 @@ notes](#metadata-keys) and trailing newline stay exactly as they were. It is the
 form of a hand edit followed by [`schema check`](#nen-schema-check), with the check moved **before**
 the write ([#338](https://github.com/zheref/nen/issues/338)).
 
-**Two edits, and only two.** An existing **scalar** (a string, a number, a boolean or `null`) is
+**Four edits, and only four.** An existing **scalar** (a string, a number, a boolean or `null`) is
 replaced in place by a scalar; a member an existing **object** does not carry is added as its **last**
 member, written in that object's own style (the whitespace around the comma before its last member,
 its own `key: value` separator, and a `{ }`'s inner space on both sides; an empty `{}` is expanded one
-indentation unit past its line in a multi-line file). Refused, each at exit `1` naming why: replacing
-an object or an array, replacing a scalar **with** an object or an array (not supported in v1),
-appending to an array
-(`-` or an index past the end), a missing member before the last step (no object is created on the
+indentation unit past its line in a multi-line file). **Append** ([#587](https://github.com/zheref/nen/issues/587)):
+a pointer whose last step is `-` — RFC 6901's "past the end", as JSON Patch's `add` reads it — adds
+`--value` as the **last item** of the existing array before it, in that array's own style (the
+whitespace around the comma before its last item, so an array kept one item per line gets one more
+line; `[ ]` keeps its inner space; an empty `[]` takes a scalar inline and an object or array expanded
+in a multi-line file), and `--json`'s `at` names the index it took. **Replace a structure**
+([#587](https://github.com/zheref/nen/issues/587)): an existing **object** is replaced whole by an
+object from `--value`, and an existing **array** by an array, written in the layout the old value had —
+expanded one member per line, one indentation unit past its line, when it spanned lines; inline, with
+its own `key: value` separator and its brackets' inner space, when it did not — and every byte outside
+it kept. Refused, each at exit `1` naming why: changing a value's **kind** (a scalar for an object or an
+array, an object for an array, or back), an index past the end (the refusal names the `-` pointer),
+a `-` before the last step, a missing member before the last step (no object is created on the
 way), and a path through an object that **repeats** the member it names — `JSON.parse` keeps only the
 last of two equal keys, so the value a reader sees and the one a reviewer reads could differ. A
 pointer through a `$`-prefixed segment, or through an **empty** one (`//`, a trailing `/`), is refused
@@ -8247,14 +8256,19 @@ is ever settable.
 
 **An added object or array is matched key path by key path**: the pointer is joined with every key
 path inside the value, so `{"exe": "sh", …}` added under an ungated parent is still a gate change, and
-the refusal names the inner pointer. With `--gate-change` the edit proceeds, the human output adds
+the refusal names the inner pointer. An appended or replacing value is matched the same way, and a
+**replaced** object or array is matched on what it **removes** as well — a gated key cannot leave
+under an ungated parent either; the refusal says *inside the value it replaces*. That second match
+needs the file, so it, and `--gate-change` given for a structure replace that turns out to be no gate
+change, are the exit-`2` refusals made after the file is read. With `--gate-change` the edit proceeds, the human output adds
 `security-relevant: <pointer> is a gate change -- <why>`, and `--json` carries `gateChange: true`.
 The flag on an edit that is **no** gate change is exit `2` too: *--gate-change was given, but
 `<pointer>` is not a gate change; drop the flag, or report the missing rule*.
 
 **The canon pin is never this verb's.** `nen/repos.json` `/maintained_tools/*/pinned` is refused at
 exit `2` with or without the flag, naming [`nen canon pin --write`](#nen-canon-pin), which moves it
-after resolving the tag in the canon checkout.
+after resolving the tag in the canon checkout — and so is replacing a `maintained_tools` row, or the
+list, whose old value carries one.
 
 **The write is the one [`canon pin --write`](#nen-canon-pin) uses** (`src/edit/atomic.ts`). The
 declaration must be a **regular file directly in a real `nen/`**: a symbolic link — at the file or at
@@ -8285,33 +8299,37 @@ The subcommand is the first positional after `schema`, so `nen schema --repo <pa
 | `--repo <path>` | no | The target repository's working-tree root. | Defaults to cwd. |
 | `--file <nen/…json>` | yes | The declaration, repo-relative, spelled as listed above. | Anything else, including `nen/colors.yml`, is exit `2` naming the list. |
 | `--pointer <pointer>` | yes | An RFC 6901 pointer: `/coverage/minimum`, `/reviewers/0/name`. | `~1` is `/` and `~0` is `~` in a segment. `''` (the whole document), an empty segment, a segment starting with `$`, and a stray `~` are exit `2`. |
-| `--value <JSON>` | yes | The value, as JSON. | `--value 85`, `--value true`, `--value null`, `--value '"main"'`; a negative number is `--value=-1`. A number is written in JSON's normalised spelling (`1.0` is written `1`, `1e2` is `100`). Not JSON, a number JSON cannot write back, or an integer past 2^53 is exit `2`. An object or array is accepted, and is refused by the edit unless it is being added as a new member. |
+| `--value <JSON>` | yes | The value, as JSON. | `--value 85`, `--value true`, `--value null`, `--value '"main"'`, `--value '{"maxCycles": 10}'`; a negative number is `--value=-1`. A number is written in JSON's normalised spelling (`1.0` is written `1`, `1e2` is `100`). Not JSON, a number JSON cannot write back, or an integer past 2^53 is exit `2`. An object or array is added as a new member, appended as an item, or replaces an object or array; over a scalar it is refused. |
 | `--gate-change` | for a [gate change](#gate-changes) | The edit is meant to change a gate. | Without it a gate-change pointer is exit `2`. |
 | `--dry-run` | no (boolean) | Validate and print `before -> after`; write nothing. | The file is still read, and the result still validated. |
 | `--json` | no (boolean) | Machine-readable output. | Below. |
 
 **Output and exit codes** — human rendering, five lines through `plainLine`: `file: <file> (<real
-path>)`, `pointer: <pointer> (line <n>)`, `change: <before> -> <after>` (`(absent) -> …  (added)` for a
-new member, `(unchanged)` when the value is already that), `security-relevant: …` for a gate change,
+path>)`, `pointer: <pointer> (line <n>)` — `pointer: <pointer> -> <resolved> (line <n>)` for an append —,
+`change: <before> -> <after>` (`(absent) -> …  (added)` for a new member, `(absent) -> … (appended)`
+for an appended item, `(unchanged)` when the value is already that), `security-relevant: …` for a gate change,
 `repaired: …` when the file failed its loader before the edit, `validated: <file>'s loader accepts the
-result` — or `validated, and the loader's typed model is unchanged -- <pointer> is kept verbatim` — and `written: <real path>, read back: <pointer> is <after>` — or `written: nothing (--dry-run)`
+result` — or `validated, and the loader's typed model is unchanged -- <pointer> is kept verbatim` — and `written: <real path>, read back: <resolved pointer> is <after>` — or `written: nothing (--dry-run)`
 / `written: nothing (<pointer> is already <after>)`. `--json` (`nen.schema.set/v0.1`):
 
 ```json
 { "contract": "nen.schema.set/v0.1", "ok": true, "file": "nen/workflow.json",
-  "pointer": "/coverage/minimum", "op": "replace", "before": 80, "after": 85,
+  "pointer": "/coverage/minimum", "at": "/coverage/minimum", "op": "replace", "before": 80, "after": 85,
   "changed": true, "read": true, "gateChange": false, "repaired": false,
   "dryRun": false, "written": true,
   "target": "/path/to/repo/nen/workflow.json", "line": 8, "failure": null }
 ```
 
-`op` is `replace` or `add`; `before` is `null` for an `add` (the member was absent — `op` says so).
-`line` is where the replaced literal sat, or where the added member now sits. A refusal at exit `1`
+`op` is `replace`, `add` or `append`; `before` is `null` for an `add` or an `append` (nothing was
+there — `op` says so), and the old object or array for a structure replace. `at` is the pointer of the
+value written: `pointer` itself, except that an append's `-` is resolved to the index the item took.
+`line` is where the replaced value sat, or where the added member or appended item now sits. A refusal at exit `1`
 prints `{ contract, ok: false, file, pointer, written: false, failure: { code, message } }` under
 `--json` and the message on stderr; `written` is `true` only on a `read-back-mismatch`. Exit `0` set, already that value, or a dry run; `1` refused —
 `failure.code` one of `no-file`, `symlink`, `outside-repo`, `file-changed`, `not-json`, `refused-edit`, `invalid`
 (the loader refused the result), `write-failed`, `read-back-mismatch` — with nothing written except on
-`read-back-mismatch`, which says so; `2` usage, nothing read.
+`read-back-mismatch`, which says so; `2` usage, nothing read — save the two gate refusals a
+structure replace can only make after reading the file (above), which write nothing either.
 
 **Example**
 
@@ -8336,6 +8354,28 @@ exit 1. Without `--gate-change` the same pointer is exit 2:
 
 ```text
 nen schema set: nen/workflow.json /coverage/minimum is a gate change: coverage is the ladder a change must meet. Setting it needs --gate-change, so the change is made on purpose and read as one.
+```
+Appending one item to a list, and replacing an object whole from JSON ([#587](https://github.com/zheref/nen/issues/587)):
+
+```bash
+nen schema set --repo /tmp/site --file nen/workflow.json --pointer /commits/forbiddenTrailers/- --value '"Reviewed-by"' --dry-run
+```
+```text
+file: nen/workflow.json (/tmp/site/nen/workflow.json)
+pointer: /commits/forbiddenTrailers/- -> /commits/forbiddenTrailers/3 (line 34)
+change: (absent) -> "Reviewed-by" (appended)
+validated: nen/workflow.json's loader accepts the result
+written: nothing (--dry-run); would write /tmp/site/nen/workflow.json
+```
+```bash
+nen schema set --repo /tmp/site --file nen/workflow.json --pointer /monitor --value '{"maxCycles": 10, "pollSeconds": 120}' --dry-run
+```
+```text
+file: nen/workflow.json (/tmp/site/nen/workflow.json)
+pointer: /monitor (line 36)
+change: {"maxCycles":20,"pollSeconds":300} -> {"maxCycles":10,"pollSeconds":120}
+validated: nen/workflow.json's loader accepts the result
+written: nothing (--dry-run); would write /tmp/site/nen/workflow.json
 ```
 (all from real runs against a scratch copy of this repository's own `nen/workflow.json`; the
 absolute path is elided to `/tmp/site`)
