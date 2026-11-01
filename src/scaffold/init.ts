@@ -57,8 +57,10 @@ import {
   defaultWorkflowDocument,
   minimumNenRef,
   stackHosts,
+  laneWorkflow,
   substitute,
   templateForStack,
+  type WorkflowLane,
 } from "./templates.js";
 
 /** `nen.scaffold.init/v0.1` -- this verb's own versioned contract string. */
@@ -324,6 +326,24 @@ function proposeProject(
     stack: named,
     notes,
   };
+}
+
+/**
+ * Every lane the proposal declares, with its stack, for the per-lane workflow.
+ * A lane with no string stack is passed on with an empty one, so the workflow
+ * reports it uncovered rather than leaving it out without a word.
+ */
+function proposedLanes(document: Record<string, unknown>): readonly WorkflowLane[] {
+  const project = document["project"];
+  const lanes =
+    typeof project === "object" && project !== null ? (project as Record<string, unknown>)["lanes"] : undefined;
+  if (typeof lanes !== "object" || lanes === null) return [];
+  const out: WorkflowLane[] = [];
+  for (const [lane, entry] of Object.entries(lanes as Record<string, unknown>)) {
+    const stack = typeof entry === "object" && entry !== null ? (entry as Record<string, unknown>)["stack"] : undefined;
+    out.push({ lane, stack: typeof stack === "string" ? stack : "" });
+  }
+  return out;
 }
 
 /**
@@ -945,22 +965,49 @@ export function scaffoldInit(options: ScaffoldInitOptions): ScaffoldInitResult {
   }
 
   // ── 5. the stack's CI workflow ─────────────────────────────────────────────
-  const template = stack === null ? null : templateForStack(stack);
-  if (stack === null) {
-    notes.push(
-      "no single stack: this proposal declares lanes for more than one, so no CI workflow is added. Re-run per stack with --stack <id> if you want one.",
-    );
-  } else if (template === null) {
-    notes.push(
-      `no CI workflow: the catalogue proposes no template for '${stack}', so nen has none to add. Write the workflow yourself; every step in it is 'nen shu <verb> --repo .'.`,
-    );
+  //
+  // ONE LANE, its stack template's workflow. SEVERAL (zheref/nen#586) -- more
+  // than one stack, or one stack in several directories, where defaultLane is
+  // null and a verb with no --lane refuses -- one job per lane from
+  // templates/ci-lanes.json; or, when a lane cannot have a job, no file and a
+  // note naming the step, never a workflow that skips a lane.
+  let ci: { path: string; body: string; what: string } | null = null;
+  const lanes = proposedLanes(proposed.document);
+  if (stack === null || lanes.length > 1) {
+    const lanesCi = laneWorkflow(lanes, bootstrap.ref);
+    if (lanesCi.kind === "written") {
+      ci = {
+        path: lanesCi.path,
+        body: lanesCi.body,
+        what: `one job per lane (${lanes.map((lane): string => `${lane.lane}: ${lane.stack}`).sort().join(", ")})`,
+      };
+    } else {
+      const each = lanesCi.lanes.map((lane): string => `'${lane.lane}' (${lane.stack}): ${lane.why}`).join("; ");
+      notes.push(
+        `no CI workflow: this proposal declares ${stack === null ? "lanes for more than one stack" : `${lanes.length} lanes`}, and ${lanesCi.lanes.length === 1 ? "one lane" : `${lanesCi.lanes.length} lanes`} cannot have a job -- ${each}. nen writes the per-lane workflow only when it covers every lane, so ${lanesCi.path} is not written. The manual step: write ${lanesCi.path} with one job per lane, each running 'nen shu tools', then 'nen shu build', 'nen shu test' and 'nen shu lint', every one with '--repo . --lane <lane>' on a runner that carries that lane's toolchain.`,
+      );
+    }
   } else {
-    const ciPath = join(root, ...template.ci.path.split("/"));
-    const body = substitute(
-      template.ci.body,
-      { runner: template.runner, nenRef: bootstrap.ref },
-      `the '${template.template}' CI template`,
-    );
+    const template = templateForStack(stack);
+    if (template === null) {
+      notes.push(
+        `no CI workflow: the catalogue proposes no template for '${stack}', so nen has none to add. Write the workflow yourself; every step in it is 'nen shu <verb> --repo .'.`,
+      );
+    } else {
+      ci = {
+        path: template.ci.path,
+        body: substitute(
+          template.ci.body,
+          { runner: template.runner, nenRef: bootstrap.ref },
+          `the '${template.template}' CI template`,
+        ),
+        what: `the '${template.template}' template's workflow for ${stack}`,
+      };
+    }
+  }
+  if (ci !== null) {
+    const ciPath = join(root, ...ci.path.split("/"));
+    const { body, what } = ci;
     const existing = existingText(ciPath);
     if (existing === body) {
       record(ciPath, "skipped", "the same workflow is already there");
@@ -968,22 +1015,22 @@ export function scaffoldInit(options: ScaffoldInitOptions): ScaffoldInitResult {
       record(
         ciPath,
         "refused",
-        `a DIFFERENT file already exists at '${template.ci.path}' -- refusing to overwrite it, the same rule the commit-msg hook follows. Diff it against the template and keep the one you mean.`,
+        `a DIFFERENT file already exists at '${ci.path}' -- refusing to overwrite it, the same rule the commit-msg hook follows. Diff it against the template and keep the one you mean.`,
       );
     } else if (dry) {
-      record(ciPath, "would-create", `the '${template.template}' template's workflow for ${stack}`);
+      record(ciPath, "would-create", what);
       notes.push(...bootstrap.notes);
     } else {
       // `.github/workflows/` is the second directory this verb creates, and is
       // held to the same real-path rule as `nen/` for the same reason.
-      const escape = symlinkEscape(root, ciPath, template.ci.path);
+      const escape = symlinkEscape(root, ciPath, ci.path);
       if (escape !== null) {
         record(ciPath, "refused", escape);
       } else {
         step(ciPath, (): void => {
           mkdirSync(dirname(ciPath), { recursive: true });
           writeFileSync(ciPath, body, "utf8");
-          record(ciPath, "created", `the '${template.template}' template's workflow for ${stack}`);
+          record(ciPath, "created", what);
           notes.push(...bootstrap.notes);
         });
       }

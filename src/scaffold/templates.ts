@@ -37,6 +37,7 @@
 // `templates/` in both directions and against `templates/index.json`, so the
 // list cannot fall behind the data quietly.
 
+import laneWorkflowPack from "../../templates/ci-lanes.json";
 import fullTemplate from "../../templates/full/template.json";
 import minimalTemplate from "../../templates/minimal/template.json";
 import templateIndex from "../../templates/index.json";
@@ -53,6 +54,9 @@ export const TEMPLATE_INDEX_FILE = "index.json";
 
 /** The one document each template directory holds. */
 export const TEMPLATE_FILE = "template.json";
+
+/** The one-job-per-lane CI workflow, beside the index for the same reason. */
+export const LANE_WORKFLOW_TEMPLATE_FILE = "ci-lanes.json";
 
 /** The default policy document, beside the index rather than in a directory. */
 export const WORKFLOW_TEMPLATE_FILE = "workflow.json";
@@ -486,6 +490,92 @@ export function templateForStack(stack: string): StackTemplate | null {
     freshTree: [...shared, ...own].sort((a, b): number => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)),
     postSteps: postSteps as readonly string[],
   };
+}
+
+/** One lane of a multi-stack proposal, as the lane workflow needs it. */
+export interface WorkflowLane {
+  readonly lane: string;
+  readonly stack: string;
+}
+
+/** A lane the lane workflow cannot give a job, and why, in one clause. */
+export interface UncoveredLane {
+  readonly lane: string;
+  readonly stack: string;
+  readonly why: string;
+}
+
+/** The lane workflow, or every lane that stopped it being written. */
+export type LaneWorkflow =
+  | { readonly kind: "written"; readonly path: string; readonly body: string }
+  | { readonly kind: "uncovered"; readonly path: string; readonly lanes: readonly UncoveredLane[] };
+
+/**
+ * The shape a lane name must have to be printed into a generated workflow.
+ *
+ * STACK_ID's allowlist, for STACK_ID's reason. A lane name is a directory name
+ * (../shu/detect.ts `laneName`), so it can carry a space, a quote or a `$`, and
+ * it lands in a YAML scalar and a job id. A name that would need escaping in
+ * either is refused by name rather than escaped: the caller types it into
+ * `--lane`, and a name that survives YAML but not a shell is no better.
+ */
+const LANE_TOKEN = STACK_ID;
+
+/**
+ * The CI workflow for a proposal that declares lanes for MORE THAN ONE stack
+ * (zheref/nen#586): `templates/ci-lanes.json`'s header once, then its `job`
+ * once per lane, each on the runner that lane's own stack template names and
+ * each verb pinned to its lane with `--lane`.
+ *
+ * ALL OR NOTHING. A lane whose stack has no template has no runner nen can
+ * name, and a lane whose name is not a plain token cannot be printed safely;
+ * either way that lane would get no job, and a workflow that quietly skips a
+ * lane is a green check over code nothing built -- the defect this exists to
+ * end. So any uncovered lane returns every uncovered lane, and the caller
+ * writes no file and names the manual step.
+ */
+export function laneWorkflow(lanes: readonly WorkflowLane[], nenRef: string): LaneWorkflow {
+  const path = `${TEMPLATE_DIRECTORY}/${LANE_WORKFLOW_TEMPLATE_FILE}`;
+  const pack = laneWorkflowPack as Record<string, unknown>;
+  const ciPath = assertWritablePath(stringAt(pack, path, "path"), path, "path");
+  const header = stringAt(pack, path, "header");
+  const job = stringAt(pack, path, "job");
+  const uncovered: UncoveredLane[] = [];
+  const jobs: string[] = [];
+  const ids = new Set<string>();
+  const sorted = [...lanes].sort((a, b): number => (a.lane < b.lane ? -1 : a.lane > b.lane ? 1 : 0));
+  for (const { lane, stack } of sorted) {
+    if (!LANE_TOKEN.test(lane)) {
+      uncovered.push({
+        lane,
+        stack,
+        why: "its name is not a plain token (letters, digits, '.', '_', '-'), so nen will not print it into a job id or a YAML scalar",
+      });
+      continue;
+    }
+    const template = knownStacks().includes(stack) ? templateForStack(stack) : null;
+    if (template === null) {
+      uncovered.push({ lane, stack, why: `the catalogue proposes no template for '${stack}', so nen has no runner to name` });
+      continue;
+    }
+    // A job id takes no '.', so a dot becomes '_' -- and two lanes that differ
+    // only there would share an id, which GitHub refuses at parse time.
+    const id = `shu-${lane.replace(/\./g, "_")}`;
+    if (ids.has(id)) {
+      uncovered.push({ lane, stack, why: `its job id '${id}' is already another lane's` });
+      continue;
+    }
+    ids.add(id);
+    jobs.push(
+      substitute(
+        job,
+        { job: id, lane: `'${lane}'`, runner: template.runner, nenRef },
+        `the lane CI template (${path})`,
+      ),
+    );
+  }
+  if (uncovered.length > 0) return { kind: "uncovered", path: ciPath, lanes: uncovered };
+  return { kind: "written", path: ciPath, body: `${header}${jobs.join("\n")}` };
 }
 
 /** Which stacks `scaffold new` can write a tree for, and which it cannot. */

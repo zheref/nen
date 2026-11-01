@@ -98,7 +98,9 @@ mechanism -- see ../scaffold/hook.ts), writes a canon-values.yml template when
 --canon-values-path is given and nothing is there yet, COPIES any of the four
 taxonomy files still under 'schemas/' into 'nen/' (never a move, never a
 delete -- the removal command is printed), writes nen/contract.json's project
-block into absence, adds the stack's CI workflow, appends '.nen/' to
+block into absence, adds the stack's CI workflow (one job per lane when the
+proposal declares several, or a note naming the manual step when a lane's stack
+has no template -- zheref/nen#586), appends '.nen/' to
 .gitignore, and ends by running 'nen shu tools' in CHECK mode -- printing what
 this host is missing and the --install command, rather than installing
 anything. --install-tools is the explicit flag that runs the install.

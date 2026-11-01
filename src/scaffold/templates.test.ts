@@ -31,6 +31,7 @@ import {
   freshTreeSupport,
   indexedTemplateNames,
   knownStacks,
+  laneWorkflow,
   minimumNenRef,
   resolveStackId,
   stackHosts,
@@ -892,6 +893,16 @@ describe("freshTreeSupport", () => {
 
 // ── the generated workflow's own shape ──────────────────────────────────────
 
+/** The per-lane workflow over one lane of every templated stack. */
+function laneBody(): string {
+  const lanes = knownStacks()
+    .filter((stack): boolean => templateForStack(stack) !== null)
+    .map((stack): { lane: string; stack: string } => ({ lane: `lane-${stack}`, stack }));
+  const result = laneWorkflow(lanes, "v1.2.3");
+  if (result.kind !== "written") throw new Error("every templated stack must get a job");
+  return result.body;
+}
+
 describe("every bundled CI body", () => {
   const bodies = (): readonly string[] =>
     bundledTemplateNames().map((name): string => {
@@ -899,7 +910,7 @@ describe("every bundled CI body", () => {
         (id): boolean => profileById(loadProfilesPack(), id).scaffoldTemplate === name,
       );
       return templateForStack(stack as string)?.ci.body ?? "";
-    });
+    }).concat(laneBody());
 
   it("declares a read-only token", () => {
     // A generated workflow that declares no `permissions:` inherits whatever
@@ -921,5 +932,76 @@ describe("every bundled CI body", () => {
     // looking at. So every bundled body spells the GitHub Actions expression
     // with spaces (`${{ env.X }}`) to keep the two grammars visually apart.
     for (const body of bodies()) expect(body).not.toMatch(/\$\{\{[A-Za-z]/);
+  });
+});
+
+// ── the per-lane workflow (zheref/nen#586) ──────────────────────────────────
+
+describe("laneWorkflow", () => {
+  const templated = (): readonly string[] =>
+    knownStacks().filter((stack): boolean => templateForStack(stack) !== null);
+  const untemplated = (): readonly string[] =>
+    knownStacks().filter((stack): boolean => templateForStack(stack) === null);
+
+  it("writes one job per lane, in lane order, on each lane's own stack runner", () => {
+    const [first, second] = templated();
+    const result = laneWorkflow(
+      [
+        { lane: "zeta", stack: first as string },
+        { lane: "alpha", stack: second as string },
+      ],
+      "v1.2.3",
+    );
+    expect(result.kind).toBe("written");
+    if (result.kind !== "written") return;
+    expect(result.path).toBe(".github/workflows/nen-shu.yml");
+    const jobs = [...result.body.matchAll(/^ {2}(shu-[^\s:]+):\n {4}runs-on: (\S+)$/gm)].map(
+      (match): [string, string] => [match[1] as string, match[2] as string],
+    );
+    expect(jobs).toEqual([
+      ["shu-alpha", templateForStack(second as string)?.runner as string],
+      ["shu-zeta", templateForStack(first as string)?.runner as string],
+    ]);
+    expect(result.body.match(/NEN_REF: v1\.2\.3$/gm)).toHaveLength(2);
+  });
+
+  it("covers nothing when one lane's stack has no template, and names every such lane", () => {
+    const missing = untemplated()[0] as string;
+    expect(missing, "the pack must hold a stack with no template").toBeDefined();
+    const result = laneWorkflow(
+      [
+        { lane: "web", stack: templated()[0] as string },
+        { lane: "desk", stack: missing },
+        { lane: "ghost", stack: "" },
+      ],
+      "v1.2.3",
+    );
+    expect(result).toMatchObject({ kind: "uncovered", path: ".github/workflows/nen-shu.yml" });
+    if (result.kind !== "uncovered") return;
+    expect(result.lanes.map((lane): string => lane.lane)).toEqual(["desk", "ghost"]);
+    expect(result.lanes[0]?.why).toContain(`no template for '${missing}'`);
+  });
+
+  it("refuses a lane name that is not a plain token rather than escaping it", () => {
+    const stack = templated()[0] as string;
+    for (const lane of ["my app", "it's", "$(id)", "-x", "a:b"]) {
+      const result = laneWorkflow([{ lane, stack }], "v1.2.3");
+      expect(result.kind, lane).toBe("uncovered");
+    }
+  });
+
+  it("refuses two lanes that would share a job id", () => {
+    const stack = templated()[0] as string;
+    const result = laneWorkflow(
+      [
+        { lane: "a.b", stack },
+        { lane: "a_b", stack },
+      ],
+      "v1.2.3",
+    );
+    expect(result.kind).toBe("uncovered");
+    if (result.kind !== "uncovered") return;
+    expect(result.lanes.map((lane): string => lane.lane)).toEqual(["a_b"]);
+    expect(result.lanes[0]?.why).toContain("'shu-a_b' is already another lane's");
   });
 });
