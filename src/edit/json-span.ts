@@ -2,7 +2,9 @@
 // re-serialising the text (zheref/nen#338; shared by `canon pin --write` and
 // `schema set`). The locator -- `locateJsonValue`, `memberCount` and the scan
 // under them -- is moved from ../canon/pin-write.ts without a behavioural
-// change; `objectMembers`, `indentUnit` and `insertMember` are new here.
+// change; `objectMembers`, `indentUnit` and `insertMember` are new here, and
+// `arrayItems`, `insertItem` and `renderJson` arrived with the append and
+// structure-replace edits (zheref/nen#587).
 //
 // A DECLARATION IS A HAND-MAINTAINED FILE: its indentation, its key order, its
 // other members, its `$`-prefixed notes and its trailing newline are the
@@ -188,6 +190,22 @@ export function objectMembers(text: string, at: number): JsonMember[] {
   }
 }
 
+/** Every item of the array whose value starts at `at`, as spans, in text order. */
+export function arrayItems(text: string, at: number): Span[] {
+  if (text.charAt(at) !== "[") throw new JsonSpanError(`expected an array at offset ${at}`);
+  const items: Span[] = [];
+  let index = skipWs(text, at + 1);
+  if (text.charAt(index) === "]") return items;
+  for (;;) {
+    const end = scanValue(text, index);
+    items.push({ start: index, end });
+    index = skipWs(text, end);
+    if (text.charAt(index) === "]") return items;
+    if (text.charAt(index) !== ",") throw new JsonSpanError(`expected ',' or ']' at offset ${index}`);
+    index = skipWs(text, index + 1);
+  }
+}
+
 /** The line break the text already uses: CRLF when it carries one, else LF. */
 function lineBreak(text: string): string {
   return text.includes("\r\n") ? "\r\n" : "\n";
@@ -216,13 +234,13 @@ export function indentUnit(text: string): string {
 }
 
 /** The leading whitespace of the line `at` sits on. */
-function lineIndent(text: string, at: number): string {
+export function lineIndent(text: string, at: number): string {
   const lineStart = text.lastIndexOf("\n", at - 1) + 1;
   return /^[ \t]*/.exec(text.slice(lineStart, at))?.[0] ?? "";
 }
 
 /** How the text separates a key from its value: the first member's own spelling, else `": "`'s tail. */
-function colonStyle(text: string, members: readonly JsonMember[]): string {
+export function colonStyle(text: string, members: readonly JsonMember[]): string {
   const sample = members[0];
   if (sample !== undefined) return text.slice(sample.keySpan.end, sample.valueSpan.start);
   const root = skipWs(text, 0);
@@ -293,4 +311,95 @@ export function insertMember(text: string, at: number, key: string, literal: str
     text: `${text.slice(0, at + 1)}${lead}${entry}${br}${base}${text.slice(close)}`,
     span: { start, end: start + entry.length },
   };
+}
+
+/** How `renderJson` lays a structure out. */
+export interface JsonLayout {
+  /** One member or item per line, or all on the line the value opens on. */
+  readonly expanded: boolean;
+  /** The indentation of the line the value opens on. */
+  readonly base: string;
+  readonly unit: string;
+  readonly br: string;
+  /** The key/value separator, e.g. `": "`. */
+  readonly colon: string;
+}
+
+/** The layout a value written into `text` at `at` takes: the text's own unit, break and colon. */
+export function layoutAt(text: string, at: number, expanded: boolean, members: readonly JsonMember[] = []): JsonLayout {
+  return { expanded, base: lineIndent(text, at), unit: indentUnit(text), br: lineBreak(text), colon: colonStyle(text, members) };
+}
+
+/**
+ * `value` as JSON text in `layout`: expanded, every member or item on its own
+ * line one unit past `base`; inline, separated by `, ` after a spaced colon and
+ * `,` after a tight one. An empty object or array is `{}` or `[]` either way;
+ * a scalar is `JSON.stringify`'s. The caller proves the result by parsing it.
+ */
+export function renderJson(value: unknown, layout: JsonLayout): string {
+  if (value === null || typeof value !== "object") {
+    const literal = JSON.stringify(value);
+    if (literal === undefined) throw new JsonSpanError("the value is not JSON");
+    return literal;
+  }
+  const array = Array.isArray(value);
+  const entries: [string | null, unknown][] = array
+    ? (value as unknown[]).map((item): [null, unknown] => [null, item])
+    : Object.entries(value as Record<string, unknown>);
+  const [open, close] = array ? ["[", "]"] : ["{", "}"];
+  if (entries.length === 0) return `${open}${close}`;
+  const inner: JsonLayout = { ...layout, base: layout.expanded ? `${layout.base}${layout.unit}` : layout.base };
+  const parts = entries.map(([key, item]): string => `${key === null ? "" : `${JSON.stringify(key)}${layout.colon}`}${renderJson(item, inner)}`);
+  if (layout.expanded) return `${open}${layout.br}${parts.map((part): string => `${inner.base}${part}`).join(`,${layout.br}`)}${layout.br}${layout.base}${close}`;
+  return `${open}${parts.join(/[ \t]$/.test(layout.colon) ? ", " : ",")}${close}`;
+}
+
+/** An appended item: the whole new text, and the span the new item occupies in it. */
+export type ItemInsertion = MemberInsertion;
+
+/**
+ * Add an item as the LAST item of the array whose value starts at `at`, in
+ * the array's own style and touching no other byte; `render` spells the item
+ * for the layout chosen here. A NON-EMPTY ARRAY lends the whitespace around
+ * the comma before its last item (after its bracket, with one item; `[1]`
+ * takes `, ` after a spaced colon in the document and `,` otherwise), and is
+ * expanded when that whitespace breaks the line. AN EMPTY ONE keeps `[ ]`'s
+ * inner space; an empty `[]` takes a scalar inline, and is expanded for a
+ * non-empty structure in a multi-line document or when its brackets already
+ * hold a line break.
+ */
+export function insertItem(text: string, at: number, render: (layout: JsonLayout) => string, structure: boolean): ItemInsertion {
+  const items = arrayItems(text, at);
+  const close = scanValue(text, at) - 1;
+  const colon = colonStyle(text, []);
+  const last = items[items.length - 1];
+  if (last !== undefined) {
+    const previous = items[items.length - 2];
+    const comma = previous === undefined ? -1 : text.indexOf(",", previous.end);
+    const before = previous === undefined ? "" : text.slice(previous.end, comma);
+    const opened = text.slice(at + 1, last.start);
+    const lead = previous === undefined ? (opened === "" && /:[ \t]+$/.test(colon) ? " " : opened) : text.slice(comma + 1, last.start);
+    const offset = last.end;
+    const start = offset + before.length + 1 + lead.length;
+    const item = render(layoutAt(text, last.start, lead.includes("\n")));
+    return { text: `${text.slice(0, offset)}${before},${lead}${item}${text.slice(offset)}`, span: { start, end: start + item.length } };
+  }
+  const interior = text.slice(at + 1, close);
+  if (interior !== "" && !interior.includes("\n")) {
+    const start = at + 1 + interior.length;
+    const item = render(layoutAt(text, at, false));
+    return { text: `${text.slice(0, at + 1)}${interior}${item}${interior}${text.slice(close)}`, span: { start, end: start + item.length } };
+  }
+  const expanded = interior.includes("\n") || (structure && text.trimEnd().includes("\n"));
+  if (!expanded) {
+    const start = at + 1;
+    const item = render(layoutAt(text, at, false));
+    return { text: `${text.slice(0, at + 1)}${item}${text.slice(close)}`, span: { start, end: start + item.length } };
+  }
+  const br = lineBreak(text);
+  const base = lineIndent(text, at);
+  const lead = `${br}${base}${indentUnit(text)}`;
+  const start = at + 1 + lead.length;
+  const item = render({ ...layoutAt(text, at, true), base: `${base}${indentUnit(text)}` });
+  return { text: `${text.slice(0, at + 1)}${lead}${item}${br}${base}${text.slice(close)}`, span: { start, end: start + item.length } };
 }

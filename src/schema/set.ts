@@ -3,10 +3,12 @@
 // (zheref/nen#338).
 //
 // THE EDIT IS ../edit/json-pointer.ts's: an existing scalar replaced in place
-// by a scalar, or a member added to an existing object in that object's own
-// style, every other byte of the file -- its formatting, its key order, its
-// other members, its `$`-prefixed notes -- left as it was, and the splice
-// proved by a parse. A pointer through a `$`-prefixed segment, or through an
+// by a scalar, a member added to an existing object in that object's own
+// style, an item appended to an existing array by a final `-`, or an existing
+// object or array replaced whole by one of its kind in the layout it had
+// (zheref/nen#587) -- every other byte of the file -- its formatting, its key
+// order, its other members, its `$`-prefixed notes -- left as it was, and the
+// splice proved by a parse. A pointer through a `$`-prefixed segment, or through an
 // empty one, is refused: a `$` key is metadata (./declarations.ts), and
 // metadata is the author's, never this verb's.
 //
@@ -25,7 +27,9 @@
 // widen who approves a pull request or change what nen executes, so whole
 // files and blocks are gated (`GATE_SCOPES`) and only named prose keys are
 // let through (`GATE_EXCEPTIONS`). An added object or array is matched key
-// path by key path. A gated edit needs `--gate-change` (exit 2 without it);
+// path by key path -- and so is a REPLACED one's old value, so a gated key
+// cannot leave under an ungated parent either (#587); that second match needs
+// the file, so it runs after the read. A gated edit needs `--gate-change` (exit 2 without it);
 // the flag on an edit that is no gate change is exit 2 too. The canon pin is
 // never this verb's: `nen canon pin --write` moves it.
 //
@@ -279,6 +283,15 @@ export function parseSetPointer(pointer: string): string[] {
   return segments;
 }
 
+/** The first pointer inside `value` (joined to `segments`) whose last step is a '$'-prefixed key, or null. */
+export function metadataIn(segments: readonly string[], value: unknown): string[] | null {
+  return touchedPointers(segments, value).find((touched): boolean => touched.length > segments.length && isMetadataKey(touched[touched.length - 1] ?? "")) ?? null;
+}
+
+function flagWithoutGate(pointer: string, fail: (text: string) => number): number {
+  return fail(`--gate-change was given, but ${pointer} is not a gate change; drop the flag, or report the missing rule.`);
+}
+
 function show(value: unknown): string {
   return value === undefined ? "(absent)" : JSON.stringify(value);
 }
@@ -322,18 +335,23 @@ export function runSchemaSet(args: ParsedArgs, repoFlag: string | null, json: bo
     throw error;
   }
   const canonicalPointer = formatPointer(segments);
+  // METADATA IS THE AUTHOR'S (Copilot round 1 on #601): a value carrying a '$' key would write a note.
+  const note = metadataIn(segments, value);
+  if (note !== null) {
+    return fail(`--value carries ${formatPointer(note)}: a '${METADATA_PREFIX}'-prefixed key is metadata, which this verb never writes. Drop it from --value and add the note by hand.`);
+  }
   if (touchesCanonPin(file, segments, value)) {
     return fail(`${file} ${canonicalPointer} is the canon pin. schema set never moves it, with or without --gate-change: 'nen canon pin --write <tag>' does, after resolving the tag in the canon checkout.`);
   }
-  const gate = gateChange(file, segments, value);
   const flagged = args.booleans.has("gate-change");
-  if (gate !== null && !flagged) {
-    const via = formatPointer(gate.segments) === canonicalPointer ? "" : ` (through ${formatPointer(gate.segments)} inside the value)`;
-    return fail(`${file} ${canonicalPointer} is a gate change${via}: ${gate.scope.reason}. Setting it needs --gate-change, so the change is made on purpose and read as one.`);
-  }
-  if (gate === null && flagged) {
-    return fail(`--gate-change was given, but ${canonicalPointer} is not a gate change; drop the flag, or report the missing rule.`);
-  }
+  const ungated = (hit: GateHit, where: string): number => {
+    const via = formatPointer(hit.segments) === canonicalPointer ? "" : ` (through ${formatPointer(hit.segments)} inside the ${where})`;
+    return fail(`${file} ${canonicalPointer} is a gate change${via}: ${hit.scope.reason}. Setting it needs --gate-change, so the change is made on purpose and read as one.`);
+  };
+  let gate = gateChange(file, segments, value);
+  if (gate !== null && !flagged) return ungated(gate, "value");
+  // A STRUCTURE'S OLD VALUE can still make it one, so `--gate-change` without a hit waits for the read.
+  if (gate === null && flagged && (value === null || typeof value !== "object")) return flagWithoutGate(canonicalPointer, fail);
   const root = assertRepoRoot({ repoFlag });
 
   const refuse = (code: SchemaSetFailureCode, text: string, written = false): number => {
@@ -391,21 +409,44 @@ export function runSchemaSet(args: ParsedArgs, repoFlag: string | null, json: bo
     return refuse("refused-edit", `${resolved.path}: ${error.message}. Nothing was written.`);
   }
 
+  // THE REPLACED STRUCTURE, KEY PATH BY KEY PATH: what leaves is gated as what arrives is.
+  if (edit.op === "replace" && edit.before !== null && typeof edit.before === "object") {
+    if (touchesCanonPin(file, segments, edit.before)) {
+      return fail(`${file} ${canonicalPointer} holds the canon pin, and replacing it would move it. schema set never moves it, with or without --gate-change: 'nen canon pin --write <tag>' does.`);
+    }
+    gate ??= gateChange(file, segments, edit.before);
+    if (gate !== null && !flagged) return ungated(gate, "value it replaces");
+  }
+  if (gate === null && flagged) return flagWithoutGate(canonicalPointer, fail);
+  if (edit.op === "replace") {
+    // A '$' NOTE INSIDE A REPLACED STRUCTURE would be deleted -- as much an edit of metadata as writing one (Copilot round 1 on #601).
+    const kept = metadataIn(segments, edit.before);
+    if (kept !== null) {
+      return refuse(
+        "refused-edit",
+        `${resolved.path}: ${canonicalPointer} carries ${formatPointer(kept)}, a '${METADATA_PREFIX}'-prefixed note, and replacing it whole would delete that note; this verb never edits metadata. Set its members one by one, or edit the note by hand first. Nothing was written.`,
+      );
+    }
+  }
+
   // VALIDATED BY THE LOADER BEFORE THE DISK IS TOUCHED.
+  const writtenAt = formatPointer(edit.segments);
+  const edited = edit.op === "append" ? `${show(edit.after)} appended at ${writtenAt}` : `${canonicalPointer} set to ${show(edit.after)}`;
   let afterModel: unknown;
   try {
     afterModel = row.validate(resolved.path, edit.text);
   } catch (error) {
     if (alreadyFailing !== null) {
-      return refuse("invalid", `the file already fails its loader: ${alreadyFailing} -- and with ${canonicalPointer} set to ${show(edit.after)} it still does: ${messageOf(error)}; nothing was written.`);
+      return refuse("invalid", `the file already fails its loader: ${alreadyFailing} -- and with ${edited} it still does: ${messageOf(error)}; nothing was written.`);
     }
-    return refuse("invalid", `${messageOf(error)} -- that is ${file} with ${canonicalPointer} set to ${show(edit.after)}, as its loader reads it; nothing was written.`);
+    return refuse("invalid", `${messageOf(error)} -- that is ${file} with ${edited}, as its loader reads it; nothing was written.`);
   }
   // READ: whether the loader's typed model changes, or the edit touches a key
   // a command reads from the raw form (`RAW_READ`). Unread is reported, never refused.
   const read =
     alreadyFailing !== null ||
     readFromRaw(file, segments, value) ||
+    (edit.op === "replace" && readFromRaw(file, segments, edit.before)) ||
     JSON.stringify(canonicalModel(beforeModel, file)) !== JSON.stringify(canonicalModel(afterModel, file));
 
   let written = false;
@@ -424,7 +465,7 @@ export function runSchemaSet(args: ParsedArgs, repoFlag: string | null, json: bo
     let readBack: unknown;
     try {
       row.load(root);
-      readBack = segments.reduce<unknown>(
+      readBack = edit.segments.reduce<unknown>(
         (node, segment): unknown => (Array.isArray(node) ? node[Number(segment)] : (node as Record<string, unknown>)[segment]),
         JSON.parse(readSchemaFile(root, file).text) as unknown,
       );
@@ -445,8 +486,10 @@ export function runSchemaSet(args: ParsedArgs, repoFlag: string | null, json: bo
           ok: true,
           file,
           pointer: canonicalPointer,
+          // The pointer of the value written: `pointer`, with an append's `-` resolved to the new item's index.
+          at: writtenAt,
           op: edit.op,
-          // `before` is null for an `add` -- `op` says the member was absent.
+          // `before` is null for an `add` or an `append` -- `op` says nothing was there.
           before: edit.before ?? null,
           after: edit.after,
           changed: edit.changed,
@@ -467,8 +510,8 @@ export function runSchemaSet(args: ParsedArgs, repoFlag: string | null, json: bo
   }
   const lines = [
     `file: ${file} (${realFile})`,
-    `pointer: ${canonicalPointer} (line ${edit.line})`,
-    `change: ${show(edit.before)} -> ${show(edit.after)}${edit.op === "add" ? " (added)" : edit.changed ? "" : " (unchanged)"}`,
+    `pointer: ${canonicalPointer}${writtenAt === canonicalPointer ? "" : ` -> ${writtenAt}`} (line ${edit.line})`,
+    `change: ${show(edit.before)} -> ${show(edit.after)}${edit.op === "add" ? " (added)" : edit.op === "append" ? " (appended)" : edit.changed ? "" : " (unchanged)"}`,
     ...(gate === null ? [] : [`security-relevant: ${canonicalPointer} is a gate change -- ${gate.scope.reason}`]),
     ...(alreadyFailing === null ? [] : [`repaired: the file failed its loader before this edit: ${alreadyFailing}`]),
     read ? `validated: ${file}'s loader accepts the result` : `validated, and the loader's typed model is unchanged -- ${canonicalPointer} is kept verbatim`,
@@ -476,7 +519,7 @@ export function runSchemaSet(args: ParsedArgs, repoFlag: string | null, json: bo
       ? `written: nothing (${canonicalPointer} is already ${show(edit.after)})`
       : dryRun
         ? `written: nothing (--dry-run); would write ${realFile}`
-        : `written: ${realFile}, read back: ${canonicalPointer} is ${show(edit.after)}`,
+        : `written: ${realFile}, read back: ${writtenAt} is ${show(edit.after)}`,
   ];
   for (const line of lines) io.out(plainLine(line));
   return 0;
