@@ -1485,6 +1485,27 @@ describe("a proposal with more than one lane gets one CI job per lane", () => {
     for (const lane of lanes) expect(body).toContain(`NEN_LANE: '${lane.lane}'`);
   });
 
+  it("takes the jobs from a declaration already on disk, not from the refused proposal", async () => {
+    const root = twoStacks();
+    mkdirSync(join(root, "nen"), { recursive: true });
+    const theirs = {
+      $schema: "nen.contract/v0.1",
+      project: {
+        lanes: { site: { stack: "nextjs", cwd: "apps/web" }, app: { stack: "expo", cwd: "apps/mobile" } },
+        defaultLane: null,
+        verbs: { site: {}, app: {} },
+      },
+    };
+    writeFileSync(join(root, "nen", "contract.json"), `${JSON.stringify(theirs)}\n`, "utf8");
+    // `--stack nextjs` alone would have meant the single-lane body, no --lane.
+    const result = await capture(["scaffold", "init", "--stack", "nextjs", ...TRAILERS], root);
+    expect(result.out.join("\n")).toMatch(/refused: nen\/contract\.json/);
+    const body = readFileSync(join(root, WORKFLOW), "utf8");
+    expect(body).toContain("NEN_LANE: 'app'");
+    expect(body).toContain("NEN_LANE: 'site'");
+    expect(body).not.toContain("NEN_LANE: 'web'");
+  });
+
   it("writes NO workflow when a lane's stack has no CI template, and names the manual step", async () => {
     const root = twoStacks((tree): void => {
       cpSync(markerTree("compose-desktop"), join(tree, "apps", "desk"), { recursive: true });
@@ -1498,6 +1519,7 @@ describe("a proposal with more than one lane gets one CI job per lane", () => {
     // a green check over a lane nothing built.
     expect(existsSync(join(root, WORKFLOW))).toBe(false);
     const out = result.out.join("\n");
+    expect(out).toMatch(/the declaration has 3 lanes across 3 stacks/);
     expect(out).toContain(`'${desk?.lane}' (compose-desktop): the catalogue proposes no template for 'compose-desktop'`);
     expect(out).toMatch(/The manual step: write \.github\/workflows\/nen-shu\.yml with one job per lane/);
     expect(out).toContain("'--repo . --lane <lane>'");

@@ -1004,4 +1004,18 @@ describe("laneWorkflow", () => {
     expect(result.lanes.map((lane): string => lane.lane)).toEqual(["a_b"]);
     expect(result.lanes[0]?.why).toContain("'shu-a_b' is already another lane's");
   });
+
+  it("refuses two lanes whose job ids differ only in case, since GitHub ignores it", () => {
+    const stack = templated()[0] as string;
+    const result = laneWorkflow(
+      [
+        { lane: "Web", stack },
+        { lane: "web", stack },
+      ],
+      "v1.2.3",
+    );
+    expect(result.kind).toBe("uncovered");
+    if (result.kind !== "uncovered") return;
+    expect(result.lanes.map((lane): string => lane.lane)).toEqual(["web"]);
+  });
 });

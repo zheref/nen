@@ -492,7 +492,7 @@ export function templateForStack(stack: string): StackTemplate | null {
   };
 }
 
-/** One lane of a multi-stack proposal, as the lane workflow needs it. */
+/** One lane of a multi-lane declaration, as the lane workflow needs it. */
 export interface WorkflowLane {
   readonly lane: string;
   readonly stack: string;
@@ -522,8 +522,8 @@ export type LaneWorkflow =
 const LANE_TOKEN = STACK_ID;
 
 /**
- * The CI workflow for a proposal that declares lanes for MORE THAN ONE stack
- * (zheref/nen#586): `templates/ci-lanes.json`'s header once, then its `job`
+ * The CI workflow for a declaration with MORE THAN ONE lane -- several stacks,
+ * or one stack in several directories (zheref/nen#586): `templates/ci-lanes.json`'s header once, then its `job`
  * once per lane, each on the runner that lane's own stack template names and
  * each verb pinned to its lane with `--lane`.
  *
@@ -558,14 +558,15 @@ export function laneWorkflow(lanes: readonly WorkflowLane[], nenRef: string): La
       uncovered.push({ lane, stack, why: `the catalogue proposes no template for '${stack}', so nen has no runner to name` });
       continue;
     }
-    // A job id takes no '.', so a dot becomes '_' -- and two lanes that differ
-    // only there would share an id, which GitHub refuses at parse time.
+    // A job id takes no '.', so a dot becomes '_', and GitHub compares job ids
+    // case-insensitively -- so two lanes that differ only in a dot or in case
+    // would share an id, which GitHub refuses at parse time.
     const id = `shu-${lane.replace(/\./g, "_")}`;
-    if (ids.has(id)) {
-      uncovered.push({ lane, stack, why: `its job id '${id}' is already another lane's` });
+    if (ids.has(id.toLowerCase())) {
+      uncovered.push({ lane, stack, why: `its job id '${id}' is already another lane's (job ids ignore case)` });
       continue;
     }
-    ids.add(id);
+    ids.add(id.toLowerCase());
     jobs.push(
       substitute(
         job,

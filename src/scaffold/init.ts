@@ -971,8 +971,27 @@ export function scaffoldInit(options: ScaffoldInitOptions): ScaffoldInitResult {
   // null and a verb with no --lane refuses -- one job per lane from
   // templates/ci-lanes.json; or, when a lane cannot have a job, no file and a
   // note naming the step, never a workflow that skips a lane.
+  //
+  // THE LANES ARE THE DECLARATION'S. A declaration already on disk that is not
+  // this run's proposal was refused above and stands, and it is the file CI's
+  // verbs will read -- so a workflow written from the proposal would name
+  // lanes it does not declare, or omit `--lane` where it has no default.
   let ci: { path: string; body: string; what: string } | null = null;
-  const lanes = proposedLanes(proposed.document);
+  const lanes = ((): readonly WorkflowLane[] => {
+    if (existingContract === null || existingContract === contractBody) return proposedLanes(proposed.document);
+    try {
+      const declared = JSON.parse(existingContract) as unknown;
+      if (typeof declared === "object" && declared !== null && !Array.isArray(declared)) {
+        const own = proposedLanes(declared as Record<string, unknown>);
+        if (own.length > 0) return own;
+      }
+    } catch {
+      // Fall through: an unreadable declaration is reported by its own row.
+    }
+    // A declaration that states no lane (a `dependency` block alone, say) has
+    // not decided this, so the proposal's lanes stand.
+    return proposedLanes(proposed.document);
+  })();
   if (stack === null || lanes.length > 1) {
     const lanesCi = laneWorkflow(lanes, bootstrap.ref);
     if (lanesCi.kind === "written") {
@@ -984,7 +1003,7 @@ export function scaffoldInit(options: ScaffoldInitOptions): ScaffoldInitResult {
     } else {
       const each = lanesCi.lanes.map((lane): string => `'${lane.lane}' (${lane.stack}): ${lane.why}`).join("; ");
       notes.push(
-        `no CI workflow: this proposal declares ${stack === null ? "lanes for more than one stack" : `${lanes.length} lanes`}, and ${lanesCi.lanes.length === 1 ? "one lane" : `${lanesCi.lanes.length} lanes`} cannot have a job -- ${each}. nen writes the per-lane workflow only when it covers every lane, so ${lanesCi.path} is not written. The manual step: write ${lanesCi.path} with one job per lane, each running 'nen shu tools', then 'nen shu build', 'nen shu test' and 'nen shu lint', every one with '--repo . --lane <lane>' on a runner that carries that lane's toolchain.`,
+        `no CI workflow: the declaration has ${lanes.length} lanes across ${new Set(lanes.map((lane): string => lane.stack)).size === 1 ? "one stack" : `${new Set(lanes.map((lane): string => lane.stack)).size} stacks`}, and ${lanesCi.lanes.length === 1 ? "one lane" : `${lanesCi.lanes.length} lanes`} cannot have a job -- ${each}. nen writes the per-lane workflow only when it covers every lane, so ${lanesCi.path} is not written. The manual step: write ${lanesCi.path} with one job per lane, each running 'nen shu tools', then 'nen shu build', 'nen shu test' and 'nen shu lint', every one with '--repo . --lane <lane>' on a runner that carries that lane's toolchain.`,
       );
     }
   } else {
