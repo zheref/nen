@@ -525,6 +525,24 @@ describe("nen schema set -- replace an object from JSON (#587 AC-2)", () => {
     expect(read(root)).toBe(WORKFLOW);
   });
 
+  it("never deletes or writes a '$' note: a replace over one is refused at exit 1, a --value carrying one at exit 2 (Copilot round 1)", async () => {
+    const root = site(METADATA_REPO);
+    const before = read(root);
+    const replace = await capture(set(root, "--file", "nen/workflow.json", "--pointer", "/monitor", "--value", '{"maxCycles": 10, "pollSeconds": 120}', "--json"));
+    expect(replace.code).toBe(1);
+    expect(JSON.parse(replace.out.join("\n"))).toMatchObject({ failure: { code: "refused-edit", message: expect.stringContaining("would delete that note") as unknown } });
+    for (const [pointer, value] of [
+      ["/monitor", '{"maxCycles": 10, "$note": "x"}'],
+      ["/notifications/rungs/-", '{"$note": "x"}'],
+      ["/monitor/extra", '{"a": {"$b": 1}}'],
+    ] as const) {
+      const result = await capture(set(root, "--file", "nen/workflow.json", "--pointer", pointer, "--value", value));
+      expect(result.code, pointer).toBe(2);
+      expect(result.err.join("\n"), pointer).toContain("is metadata, which this verb never writes");
+    }
+    expect(read(root)).toBe(before);
+  });
+
   it("the canon pin cannot move by replacing the row that holds it", async () => {
     const root = site(METADATA_REPO);
     const repos = read(root, "nen/repos.json");

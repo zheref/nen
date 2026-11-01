@@ -283,6 +283,11 @@ export function parseSetPointer(pointer: string): string[] {
   return segments;
 }
 
+/** The first pointer inside `value` (joined to `segments`) whose last step is a '$'-prefixed key, or null. */
+export function metadataIn(segments: readonly string[], value: unknown): string[] | null {
+  return touchedPointers(segments, value).find((touched): boolean => touched.length > segments.length && isMetadataKey(touched[touched.length - 1] ?? "")) ?? null;
+}
+
 function flagWithoutGate(pointer: string, fail: (text: string) => number): number {
   return fail(`--gate-change was given, but ${pointer} is not a gate change; drop the flag, or report the missing rule.`);
 }
@@ -330,6 +335,11 @@ export function runSchemaSet(args: ParsedArgs, repoFlag: string | null, json: bo
     throw error;
   }
   const canonicalPointer = formatPointer(segments);
+  // METADATA IS THE AUTHOR'S (Copilot round 1 on #601): a value carrying a '$' key would write a note.
+  const note = metadataIn(segments, value);
+  if (note !== null) {
+    return fail(`--value carries ${formatPointer(note)}: a '${METADATA_PREFIX}'-prefixed key is metadata, which this verb never writes. Drop it from --value and add the note by hand.`);
+  }
   if (touchesCanonPin(file, segments, value)) {
     return fail(`${file} ${canonicalPointer} is the canon pin. schema set never moves it, with or without --gate-change: 'nen canon pin --write <tag>' does, after resolving the tag in the canon checkout.`);
   }
@@ -408,6 +418,16 @@ export function runSchemaSet(args: ParsedArgs, repoFlag: string | null, json: bo
     if (gate !== null && !flagged) return ungated(gate, "value it replaces");
   }
   if (gate === null && flagged) return flagWithoutGate(canonicalPointer, fail);
+  if (edit.op === "replace") {
+    // A '$' NOTE INSIDE A REPLACED STRUCTURE would be deleted -- as much an edit of metadata as writing one (Copilot round 1 on #601).
+    const kept = metadataIn(segments, edit.before);
+    if (kept !== null) {
+      return refuse(
+        "refused-edit",
+        `${resolved.path}: ${canonicalPointer} carries ${formatPointer(kept)}, a '${METADATA_PREFIX}'-prefixed note, and replacing it whole would delete that note; this verb never edits metadata. Set its members one by one, or edit the note by hand first. Nothing was written.`,
+      );
+    }
+  }
 
   // VALIDATED BY THE LOADER BEFORE THE DISK IS TOUCHED.
   const writtenAt = formatPointer(edit.segments);

@@ -233,8 +233,10 @@ object or array is REPLACED WHOLE by an object or an array from --value, in
 the layout it had (expanded or inline) and the file's own indentation.
 Changing a value's kind (a scalar for a structure, an object for an array,
 or back) and creating an object on the way are refused; so is a pointer
-through a '$'-prefixed or an empty segment, and a path through an object
-that repeats the member it names. The file must exist (scaffold init writes
+through a '$'-prefixed or an empty segment, a --value carrying a '$' key
+(exit 2), a replace over an object or array carrying one -- which would
+delete the note (exit 1) -- and a path through an object that repeats the
+member it names. The file must exist (scaffold init writes
 them).
 
 The original text and then the edited text go through that file's own loader

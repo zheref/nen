@@ -8212,7 +8212,10 @@ a `-` before the last step, a missing member before the last step (no object is 
 way), and a path through an object that **repeats** the member it names — `JSON.parse` keeps only the
 last of two equal keys, so the value a reader sees and the one a reviewer reads could differ. A
 pointer through a `$`-prefixed segment, or through an **empty** one (`//`, a trailing `/`), is refused
-at exit `2`: `$` keys are metadata, and the author's, and no declaration has a key called `""`. `nen/colors.yml` is refused at exit `2` too — it is YAML, and this is a JSON text edit.
+at exit `2`: `$` keys are metadata, and the author's, and no declaration has a key called `""`. For the
+same reason a `--value` that carries a `$`-prefixed key at any depth is exit `2`, and replacing an object
+or array that carries one at any depth — which would delete the note — is exit `1` (`refused-edit`):
+set its members one by one instead. `nen/colors.yml` is refused at exit `2` too — it is YAML, and this is a JSON text edit.
 The file must exist; `schema set` never creates one ([`scaffold init`](#nen-scaffold-init) does).
 
 **Validated by the loader before the write.** The original text, then the edited text, is passed to
