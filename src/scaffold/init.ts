@@ -340,6 +340,9 @@ function proposedLanes(document: Record<string, unknown>): readonly WorkflowLane
   if (typeof lanes !== "object" || lanes === null) return [];
   const out: WorkflowLane[] = [];
   for (const [lane, entry] of Object.entries(lanes as Record<string, unknown>)) {
+    // `$`-prefixed keys are metadata (`$comment`), which the contract reader
+    // skips too (../schema/contract.ts `parseLanes`) -- never a lane.
+    if (lane.startsWith("$")) continue;
     const stack = typeof entry === "object" && entry !== null ? (entry as Record<string, unknown>)["stack"] : undefined;
     out.push({ lane, stack: typeof stack === "string" ? stack : "" });
   }

@@ -1451,6 +1451,9 @@ describe("a proposal with more than one lane gets one CI job per lane", () => {
     }
     expect(body.match(/^ {2}shu-[^\s:]+:$/gm)).toHaveLength(lanes.length);
     expect(body).toContain(`shu tools --repo . --lane "\${NEN_LANE}"`);
+    // project.toolchain is repository-wide, so a missing pin (exit 5) on this
+    // lane's runner is a warning, never the job's failure (Copilot, #602).
+    expect(body).toMatch(/if \[ "\$\{status\}" -eq 5 \]; then\n\s+echo "::warning title=pinned tool missing on this runner::/);
     expect(body).toContain(`shu "\${verb}" --repo . --lane "\${NEN_LANE}"`);
     expect(body).not.toMatch(/\{\{[A-Za-z]/);
     expect(result.out.join("\n")).toMatch(/created: \.github\/workflows\/nen-shu\.yml -- one job per lane \(mobile: expo, web: nextjs\)/);
@@ -1491,7 +1494,11 @@ describe("a proposal with more than one lane gets one CI job per lane", () => {
     const theirs = {
       $schema: "nen.contract/v0.1",
       project: {
-        lanes: { site: { stack: "nextjs", cwd: "apps/web" }, app: { stack: "expo", cwd: "apps/mobile" } },
+        lanes: {
+          $comment: "metadata, never a lane",
+          site: { stack: "nextjs", cwd: "apps/web" },
+          app: { stack: "expo", cwd: "apps/mobile" },
+        },
         defaultLane: null,
         verbs: { site: {}, app: {} },
       },
@@ -1504,6 +1511,7 @@ describe("a proposal with more than one lane gets one CI job per lane", () => {
     expect(body).toContain("NEN_LANE: 'app'");
     expect(body).toContain("NEN_LANE: 'site'");
     expect(body).not.toContain("NEN_LANE: 'web'");
+    expect(body).not.toContain("$comment");
   });
 
   it("writes NO workflow when a lane's stack has no CI template, and names the manual step", async () => {
