@@ -23,7 +23,11 @@ import { readVerbatimTextFile, resolveAgainstRepo } from "../cli/inputs.js";
  * file, and a title that still holds a line break once its one trailing
  * newline is stripped.
  */
-export function readTitleFile(context: CommandContext, root: string): string | undefined {
+export function readTitleFile(
+  context: CommandContext,
+  root: string,
+  why: string = "--title-file names the title this verb files, read verbatim so no shell ever expands it.",
+): string | undefined {
   const path = context.args.values["title-file"];
   if (path === undefined) return undefined;
   if (context.args.values["title"] !== undefined) {
@@ -33,7 +37,7 @@ export function readTitleFile(context: CommandContext, root: string): string | u
   const raw = readVerbatimTextFile(
     resolveAgainstRepo(root, path),
     process.cwd(),
-    "--title-file names the title this verb files, read verbatim so no shell ever expands it.",
+    why,
     true,
   );
   // A leading BOM is the file's encoding mark, never a character of the title.

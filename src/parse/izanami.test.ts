@@ -489,6 +489,13 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     expect(classifyCommand("nen pr ready o/r#1").classification).toBe("read-only");
   });
 
+  // zheref/nen#523: edit-title WRITES the title (and reads it back) unless
+  // --dry-run is given; its certifying read never writes.
+  it("pr edit-title is dry-run-gated, like edit-body in the same family", () => {
+    expect(classifyCommand("nen pr edit-title --target o/r --pr 1 --title-file t.txt").classification).toBe("mutating");
+    expect(classifyCommand("nen pr edit-title --target o/r --pr 1 --title-file t.txt --dry-run").classification).toBe("read-only");
+  });
+
   // zheref/nen#29's new verb. It POSTS to a public timeline, so it is gated
   // exactly like its issue-family siblings -- read-only only in the explicit
   // --dry-run form, never inferred from "it only comments".
