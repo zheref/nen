@@ -38,8 +38,11 @@ usage:
 
 The taxonomy file (--taxonomy) is the single source of the vocabulary: each
 axis declares a label prefix, a colour and its keys, and the label set an axis
-defines is prefix + key with the key's description. This binary carries none of
-it. A relative --taxonomy, --plan or --ledger resolves against --repo's root.
+defines is prefix + key with the key's description. An optional root
+'families' block adds install-only label families of the same shape (a model
+direction verdict's family, say): labels and install include them, status and
+apply never classify on them. This binary carries none of it. A relative --taxonomy, --plan or
+--ledger resolves against --repo's root.
 
   nen classify labels
       Validates the taxonomy file and prints the label set it defines, one line
@@ -48,8 +51,8 @@ it. A relative --taxonomy, --plan or --ledger resolves against --repo's root.
   nen classify install
       Compares the taxonomy's labels with the consumer's nen/labels.json: each
       is present, drift (colour or description differs) or absent; labels that
-      wear an axis prefix but whose key the taxonomy lacks are listed as
-      foreign and never touched.
+      wear an axis or family prefix but whose key the taxonomy lacks are listed
+      as foreign and never touched.
         (no flag, or --dry-run)  report only. Exit 0 when every label is
                                   present, 1 otherwise.
         --write                   rewrite nen/labels.json so every taxonomy

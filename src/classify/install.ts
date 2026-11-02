@@ -22,7 +22,11 @@
 // spelling is promised. When nothing differs the file is not rewritten at all,
 // so a re-run leaves the working tree clean.
 //
-// A LABEL THE TAXONOMY DOES NOT CARRY BUT WHOSE NAME WEARS AN AXIS PREFIX is
+// THE LABEL SET is the two axes' labels plus every install-only family's
+// (`families` in the taxonomy, zheref/nen#590: the `model/` family hatsu:direct
+// applies), so one install declares and syncs everything a consumer needs.
+//
+// A LABEL THE TAXONOMY DOES NOT CARRY BUT WHOSE NAME WEARS AN AXIS OR FAMILY PREFIX is
 // `foreign`: reported, never removed or changed. It may be a key the taxonomy
 // retired; deleting a label that still sits on issues is not this verb's call.
 
@@ -36,12 +40,7 @@ import { loadLabelTaxonomy, parseLabelTaxonomy, type Label, type LabelTaxonomy }
 import { LABELS_FILE, readSchemaJson } from "../schema/source.js";
 import { syncLabels, type SyncReport } from "../labels/sync.js";
 import { loadRequiringRepo, requireTarget } from "./common.js";
-import {
-  axisOfLabel,
-  taxonomyLabels,
-  type ClassifyLabel,
-  type ClassifyTaxonomy,
-} from "./taxonomy.js";
+import { installLabels, isForeignLabel, type ClassifyTaxonomy, type InstallLabel } from "./taxonomy.js";
 
 export type InstallStatus = "present" | "drift" | "absent";
 
@@ -52,7 +51,7 @@ export interface InstallEntry {
 
 export interface InstallReport {
   readonly entries: readonly InstallEntry[];
-  /** Declared labels wearing an axis prefix whose key the taxonomy does not carry. */
+  /** Declared labels wearing an axis or family prefix whose key the taxonomy does not carry. */
   readonly foreign: readonly string[];
 }
 
@@ -62,17 +61,14 @@ function sameColor(a: string, b: string): boolean {
 }
 
 export function compareDeclaration(taxonomy: ClassifyTaxonomy, declared: LabelTaxonomy): InstallReport {
-  const entries = taxonomyLabels(taxonomy).map((want): InstallEntry => {
+  const entries = installLabels(taxonomy).map((want): InstallEntry => {
     const have = declared.get(want.name);
     if (have === undefined) return { name: want.name, status: "absent" };
     const same = sameColor(have.color, want.color) && have.description === want.description;
     return { name: want.name, status: same ? "present" : "drift" };
   });
   const foreign = declared.labels
-    .filter((label): boolean => {
-      const found = axisOfLabel(taxonomy, label.name);
-      return found !== null && !taxonomy.axes[found.axis].keys.some((entry): boolean => entry.key === found.key);
-    })
+    .filter((label): boolean => isForeignLabel(taxonomy, label.name))
     .map((label): string => label.name);
   return { entries, foreign };
 }
@@ -121,7 +117,7 @@ export function writeDeclaration(
   const { path, value } = readSchemaJson(root, LABELS_FILE);
   const record = requireRecord(path, "$", value);
   const labels = requireArray(path, "labels", record["labels"]);
-  const wanted = new Map(taxonomyLabels(taxonomy).map((label): [string, ClassifyLabel] => [label.name, label]));
+  const wanted = new Map(installLabels(taxonomy).map((label): [string, InstallLabel] => [label.name, label]));
   const order = entryKeyOrder(labels);
 
   let added = 0;
@@ -153,7 +149,7 @@ export function writeDeclaration(
 /** The taxonomy's labels as the plain taxonomy `syncLabels` takes -- NEVER the whole declaration. */
 function filteredTaxonomy(path: string, taxonomy: ClassifyTaxonomy): LabelTaxonomy {
   return parseLabelTaxonomy(path, {
-    labels: taxonomyLabels(taxonomy).map((label): Label => ({
+    labels: installLabels(taxonomy).map((label): Label => ({
       name: label.name,
       color: label.color,
       description: label.description,
@@ -216,7 +212,7 @@ export function runInstall(context: CommandContext): number {
   // text nen did not write. The --json document carries the raw data.
   const out = (line: string): void => context.io.out(plainLine(line));
   const err = (line: string): void => context.io.err(plainLine(line));
-  const wanted = new Map(taxonomyLabels(taxonomy).map((label): [string, ClassifyLabel] => [label.name, label]));
+  const wanted = new Map(installLabels(taxonomy).map((label): [string, InstallLabel] => [label.name, label]));
 
   let landedState: LandedState | null = null;
   const body = (written: WriteResult | null, synced: SyncReport | null): unknown => ({
