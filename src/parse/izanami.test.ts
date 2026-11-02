@@ -409,6 +409,11 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     ).toBe("read-only");
   });
 
+  it("scaffold migrate is dry-run-gated: the bare form WRITES the absent seeds (#592)", () => {
+    expect(classifyCommand("nen scaffold migrate --repo .").classification).toBe("mutating");
+    expect(classifyCommand("nen scaffold migrate --repo . --dry-run").classification).toBe("read-only");
+  });
+
   it("scaffold init is dry-run-gated, and --install-tools is never read-only", () => {
     expect(classifyCommand("nen scaffold init --repo . --stack nextjs").classification).toBe("mutating");
     expect(classifyCommand("nen scaffold init --repo . --stack nextjs --dry-run").classification).toBe(

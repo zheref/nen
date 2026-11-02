@@ -175,6 +175,10 @@ nen/decisions.json -- and report each one's verdict: ok, or FAIL naming what
 is wrong. An absent nen/colors.yml is an ok row reading 'absent (optional)'
 from v0.11.0: the verbs that resolve a colour refuse by name when asked, and
 the aggregate no longer fails a repository that never adopted the file. An
+absent nen/colors.yml row, and the warn row of an absent nen/gates.json, end
+with the command that creates the file -- 'nen scaffold migrate --repo
+<path>', which writes only absent seeded files (#592); a present-but-broken
+file, a legacy-only copy or a dangling symlink gets no such command. An
 absent nen/decisions.json is 'absent (none declared)': every stop is then
 decided by prose. An absent nen/workflow.json is an ok row reading
 'absent (defaults apply)': every parameter of that file has a default, so a
