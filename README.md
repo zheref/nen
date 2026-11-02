@@ -501,7 +501,7 @@ they compose into. The families group roughly as:
   caller-owned rules contract and its clause ids unique, and `ref resolve`
   says where one citation lands
 - **Stack-aware developer verbs** — `shu` (`detect`, `build`, `test`,
-  `ui-test`, `lint`, `archive`, `release`, `dev`, `run`, `deploy`, `coverage`,
+  `ui-test`, `lint`, `typecheck`, `archive`, `release`, `dev`, `run`, `deploy`, `coverage`,
   `test-report`, `evidence`, `tools`, `warmup`). Most of them run what a
   *target project* declares in its own `nen/contract.json` — never a command Nen
   decided; the exceptions are `evidence`, which reads only `git diff`, and
@@ -536,7 +536,7 @@ root — never an owner/name slug) and `--json` where the verb has a
 machine-readable form.
 
 `nen shu` runs those verbs today, against any repository that declares them.
-Fourteen of the fifteen execute a *declared* invocation in some form —
+Fifteen of the sixteen execute a *declared* invocation in some form —
 `nen shu build --dry-run` prints the exact argv, cwd and
 environment *names* it would spawn and spawns nothing; `nen shu detect` proposes
 a `nen/contract.json` project block from the markers on disk and never writes
@@ -547,7 +547,7 @@ through the closed `corepack`, Bashcov-only lane-local `gem`, and general user-l
 run a lane's declared command and then **parse what it wrote** — a coverage
 report, a results file or a whole directory of JUnit XML — into one shape, and
 refuse a damaged report by name rather than printing a plausible number for it.
-The fifteenth, `nen shu evidence`, is the one verb that runs no declared
+The sixteenth, `nen shu evidence`, is the one verb that runs no declared
 invocation at all: it matches `git diff --name-status <base>...HEAD` — a command
 Nen itself chose — against `project.evidence.globs`. `nen shu warmup` is the one
 verb in the family that mutates git state: it warms a **working copy** (clean →
@@ -561,7 +561,7 @@ top-level `nen warmup`, which sweeps a **registry** for stale pins and reads
 only.
 
 What each verb can run **per stack** is written down in
-[`docs/STACK-MATRIX.md`](docs/STACK-MATRIX.md) — seven stacks × thirteen
+[`docs/STACK-MATRIX.md`](docs/STACK-MATRIX.md) — seven stacks × fourteen
 verbs, each cell either a reference command cited to the repository it came
 from, a `declared-only` (real for the stack, and the observed repositories
 disagree about what it means), or an `unsupported` with the reason. It is

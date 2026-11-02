@@ -57,6 +57,12 @@
       "why": "TWO STEPS, IN ORDER, in both repositories: the formatter/linter pass over the whole tree first, then the per-workspace lint fan-out. Running only the second is a weaker check than either repository's own CI performs.",
       "source": "kro-pwa/Makefile:46-47; GymKai/Makefile:39-40"
     },
+    "typecheck": {
+      "exe": "{pm}",
+      "argv": ["-r", "exec", "tsc", "--noEmit"],
+      "why": "The same line in both repositories, and the one their CI runs (`make typecheck`): `tsc --noEmit` across every workspace member, recursively. It is a check apart from `build` -- `next build` type-checks only what the app imports, and the recursive form covers packages no app reaches.",
+      "source": "kro-pwa/Makefile:54-55 (CI: .github/workflows/pr.yml:59-60); GymKai/Makefile:45-46 (CI: .github/workflows/ci.yml:46-47)"
+    },
     "archive": {
       "declaredOnly": "kro-pwa has none. GymKai's nearest is `build-storybook` writing `packages/app/storybook-static`, uploaded as a 14-day CI artifact -- that is EVIDENCE, not a shippable app, and calling it this stack's archive would be the pack deciding what an archive is.",
       "summary": "evidence, not an artifact",
@@ -135,7 +141,7 @@
   },
   "notes": [
     "PRECONDITIONS: `corepack enable` BEFORE the cached dependency install, as its own step; a frozen-lockfile install in CI (kro-pwa/.github/workflows/pr.yml); and an optional `cp .env.example apps/web/.env.local` (kro-pwa/TOOLCHAIN.md:23).",
-    "TWO EXTRA VERBS THE INVENTORY EVIDENCES BUT THE THIRTEEN DO NOT COVER, carried here so they are not lost: `typecheck` -- `{pm} -r exec tsc --noEmit` (kro-pwa/Makefile:55; GymKai/Makefile:46); and `analyze` -- `{pm} turbo run analyze`, resolving to `ANALYZE=true next build` (kro-pwa/Makefile:59, apps/web/package.json:13). A declaration may carry any verb name it likes; the pack's thirteen are the ones the matrix compares across stacks.",
+    "ONE EXTRA VERB THE INVENTORY EVIDENCES BUT THE PACK'S VERBS DO NOT COVER, carried here so it is not lost: `analyze` -- `{pm} turbo run analyze`, resolving to `ANALYZE=true next build` (kro-pwa/Makefile:59, apps/web/package.json:13). `typecheck` was the other, and is now a verb of its own (zheref/nen#588). A declaration may carry any verb name it likes; the pack's verbs are the ones the matrix compares across stacks.",
     "ON `make`: both repositories route every verb through a Makefile and both make it authoritative -- \"If a command here disagrees with something you read elsewhere, this file wins\" (kro-pwa/TOOLCHAIN.md:3-4), and CI runs the Makefile targets rather than the tools. The pack still proposes the LEAF commands, because a Makefile is a repository's own indirection and not this stack's."
   ]
 }

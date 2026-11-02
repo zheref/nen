@@ -5709,7 +5709,7 @@ function appleReason(row: AppleRow): string {
  * a note for every row that was withheld and the reason it was.
  *
  * ONLY THE PACK'S `commandVerbs` ARE CONSIDERED, which is the index's own name
- * for "the subset of the thirteen that names a command a repository RUNS". The
+ * for "the subset of the fourteen that names a command a repository RUNS". The
  * other three are not gaps in a proposal: `detect` is this verb, `tools` is a
  * host-toolchain report read out of `project.toolchain`, and `warmup` is
  * version-control work plus a delegation to `build` and `test`. None of the
@@ -6260,7 +6260,7 @@ function proposeVerbs(
   //
   // They were being dropped, and what was dropped was the half of the pack a
   // proposal cannot express as a row: the preconditions this stack asserts and
-  // never performs, the extra verbs an inventory found that the thirteen do not
+  // never performs, the extra verbs an inventory found that the fourteen do not
   // cover, and -- the one that made this a defect rather than a tidiness --
   // a CONFLICT the catalogue records between two sources that disagree about
   // what a verb should run. A conflict is exactly the thing that must never be
