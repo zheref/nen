@@ -109,7 +109,7 @@ describe("nen labels sync --ref / --working-tree -- preview by default, --apply 
     const report = JSON.parse(result.out[0]!);
     expect(report.entries.length).toBeGreaterThan(0);
     expect(report.entries.every((entry: { status: string }): boolean => entry.status === "would-sync")).toBe(true);
-    expect(result.err[0]).toMatch(/^source: .*nen\/labels\.json \(dry run; --apply syncs\)$/);
+    expect(result.err[0]).toMatch(/^source: .*nen[\\/]labels\.json \(dry run; --apply syncs\)$/);
     expect(result.seams.calls).toHaveLength(1);
   });
 
@@ -119,7 +119,7 @@ describe("nen labels sync --ref / --working-tree -- preview by default, --apply 
       readRemote, ...declared.map((label): ScriptedCall => ({ match: `gh ${createArgv(TARGET, label).join(" ")}`, result: {} })),
     ]);
     expect(result.code).toBe(0);
-    expect(result.err[0]).toMatch(/^source: .*nen\/labels\.json$/);
+    expect(result.err[0]).toMatch(/^source: .*nen[\\/]labels\.json$/);
     expect(JSON.parse(result.out[0]!).entries.every((entry: { status: string }): boolean => entry.status === "created")).toBe(true);
     expect(result.seams.calls.length).toBe(declared.length + 1);
     expect(result.seams.calls.slice(1).every((call): boolean => call.args[0] === "label" && call.args[1] === "create")).toBe(true);
