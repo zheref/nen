@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { dirname } from "node:path";
 import { runFamily, type Io } from "../index.js";
 import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import type { Seams } from "../seam/exec.js";
 import { createArgv, listLabelsArgv } from "./sync.js";
-import { showLabelsArgv } from "./source.js";
+import { showLabelsArgv, topLevelArgv } from "./source.js";
 import { loadLabelTaxonomy } from "../schema/labels.js";
 import { labelsCommand } from "./command.js";
 import { listLabelNamesArgv, renameArgv } from "./rename.js";
@@ -84,23 +85,27 @@ describe("nen labels sync --ref / --working-tree -- preview by default, --apply 
     result: { stdout, code, stderr: code === 0 ? "" : `fatal: invalid object name '${ref}'.` },
   });
   const branchFile = JSON.stringify({ labels: [LABEL] });
+  const topLevel = (stdout: string = BANKAI_REPO, code = 0): ScriptedCall => ({
+    match: `git ${topLevelArgv(BANKAI_REPO).join(" ")}`,
+    result: { stdout: code === 0 ? `${stdout}\n` : "", code, stderr: code === 0 ? "" : "fatal: not a git repository (or any of the parent directories): .git" },
+  });
 
   it("--ref reads nen/labels.json at the ref and diffs it without mutating", async () => {
-    const result = await capture(["labels", "sync", "--target", "zheref/nen", "--ref", "feature/labels"], [showRef("feature/labels", branchFile), readRemote]);
+    const result = await capture(["labels", "sync", "--target", "zheref/nen", "--ref", "feature/labels"], [topLevel(), showRef("feature/labels", branchFile), readRemote]);
     expect(result.code).toBe(0);
     expect(result.out).toEqual(["would create: from-branch (#abcdef) -- declared on the branch only"]);
     expect(result.err[0]).toBe("source: feature/labels:nen/labels.json (dry run; --apply syncs)");
-    expect(result.seams.calls).toHaveLength(2);
+    expect(result.seams.calls).toHaveLength(3);
   });
 
   it("--ref --apply syncs the ref's labels", async () => {
     const result = await capture(["labels", "sync", "--target", "zheref/nen", "--ref", "feature/labels", "--apply"], [
-      showRef("feature/labels", branchFile), readRemote, { match: `gh ${createArgv(TARGET, LABEL).join(" ")}`, result: {} },
+      topLevel(), showRef("feature/labels", branchFile), readRemote, { match: `gh ${createArgv(TARGET, LABEL).join(" ")}`, result: {} },
     ]);
     expect(result.code).toBe(0);
     expect(result.out).toEqual(["created: from-branch"]);
     expect(result.err[0]).toBe("source: feature/labels:nen/labels.json");
-    expect(result.seams.calls).toHaveLength(3);
+    expect(result.seams.calls).toHaveLength(4);
   });
 
   it("--working-tree reads the checkout's file and previews by default", async () => {
@@ -126,20 +131,34 @@ describe("nen labels sync --ref / --working-tree -- preview by default, --apply 
   });
 
   it("an unreadable ref refuses at exit 1 before reading GitHub", async () => {
-    const result = await capture(["labels", "sync", "--target", "zheref/nen", "--ref", "nope"], [showRef("nope", "", 128)]);
+    const result = await capture(["labels", "sync", "--target", "zheref/nen", "--ref", "nope"], [topLevel(), showRef("nope", "", 128)]);
     expect(result.code).toBe(1);
     expect(result.err.join("\n")).toMatch(/could not read nope:nen\/labels\.json .*invalid object name 'nope'.*nothing was synced/);
+    expect(result.seams.calls).toHaveLength(2);
+  });
+
+  it("--repo below a work tree's top refuses before reading the ref (no upward walk)", async () => {
+    const result = await capture(["labels", "sync", "--target", "zheref/nen", "--ref", "HEAD", "--apply"], [topLevel(dirname(BANKAI_REPO))]);
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/is inside the work tree at .* but is not its top; nothing was synced/);
+    expect(result.seams.calls).toHaveLength(1);
+  });
+
+  it("--repo outside any work tree refuses before reading the ref", async () => {
+    const result = await capture(["labels", "sync", "--target", "zheref/nen", "--ref", "HEAD"], [topLevel("", 128)]);
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/is not inside a git work tree; nothing was synced/);
     expect(result.seams.calls).toHaveLength(1);
   });
 
   it("a ref whose file is not a valid taxonomy refuses at exit 1", async () => {
-    const notJson = await capture(["labels", "sync", "--target", "zheref/nen", "--ref", "main"], [showRef("main", "{")]);
+    const notJson = await capture(["labels", "sync", "--target", "zheref/nen", "--ref", "main"], [topLevel(), showRef("main", "{")]);
     expect(notJson.code).toBe(1);
     expect(notJson.err.join("\n")).toMatch(/main:nen\/labels\.json is not valid JSON/);
-    const bad = await capture(["labels", "sync", "--target", "zheref/nen", "--ref", "main"], [showRef("main", JSON.stringify({ labels: [{ name: "x" }] }))]);
+    const bad = await capture(["labels", "sync", "--target", "zheref/nen", "--ref", "main"], [topLevel(), showRef("main", JSON.stringify({ labels: [{ name: "x" }] }))]);
     expect(bad.code).toBe(1);
     expect(bad.err.join("\n")).toMatch(/main:nen\/labels\.json/);
-    expect(bad.seams.calls).toHaveLength(1);
+    expect(bad.seams.calls).toHaveLength(2);
   });
 
   it.each([

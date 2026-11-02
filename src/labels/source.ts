@@ -11,6 +11,7 @@ import { GIT, outputLines, type Seams } from "../seam/exec.js";
 import { LABELS_FILE } from "../schema/source.js";
 import { parseLabelTaxonomy, type LabelTaxonomy } from "../schema/labels.js";
 import { VerbUsageError } from "../cli/command.js";
+import { samePath } from "../canon/paths.js";
 
 /**
  * A ref is the caller's text and goes into git's argv: one that opens with `-`
@@ -34,8 +35,32 @@ export function showLabelsArgv(root: string, ref: string): readonly string[] {
   return ["-C", root, "cat-file", "blob", `${ref}:${LABELS_FILE}`];
 }
 
+/** The argv that names the top of the work tree `git -C root` would act on. */
+export function topLevelArgv(root: string): readonly string[] {
+  return ["-C", root, "rev-parse", "--show-toplevel"];
+}
+
+/**
+ * `git -C` walks UP to the nearest repository, and src/repo/root.ts promises
+ * that `--repo` never does: a `--repo ./vendor/project` with no repository of
+ * its own would otherwise read, and with --apply sync, the ENCLOSING
+ * repository's labels. So `root` must be the top of a work tree -- a linked
+ * worktree's top is its own -- compared resolved, as canon/checkout.ts does.
+ */
+function assertWorkTreeTop(seams: Seams, root: string): void {
+  const top = seams.run(GIT, [...topLevelArgv(root)]);
+  const topLine = outputLines(top.stdout)[0];
+  if (top.spawnFailed || top.code !== 0 || topLine === undefined) {
+    throw new Error(`--ref needs a git checkout, and ${root} is not inside a git work tree; nothing was synced.`);
+  }
+  if (!samePath(topLine, root, process.platform)) {
+    throw new Error(`${root} is inside the work tree at ${topLine} but is not its top; nothing was synced. Name the checkout's root with --repo -- nen does not walk up to find one.`);
+  }
+}
+
 /** nen/labels.json at `ref` of the checkout at `root`, through the same validating parser a disk read uses. */
 export function loadLabelTaxonomyAtRef(seams: Seams, root: string, ref: string): LabelTaxonomy {
+  assertWorkTreeTop(seams, root);
   const result = seams.run(GIT, [...showLabelsArgv(root, ref)]);
   const where = `${ref}:${LABELS_FILE}`;
   if (result.spawnFailed || result.code !== 0) {

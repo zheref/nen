@@ -7410,7 +7410,8 @@ nothing is mutated unless `--apply` is given, and stderr opens with `source: <wh
 --apply syncs)`. The plain form keeps its behaviour (it syncs unless `--dry-run`). Refused as usage
 errors (exit 2) before any read: `--ref` beside `--working-tree`, `--apply` beside `--dry-run`,
 `--apply` without either mode, and a ref that opens with `-` or carries `:` or whitespace. A ref the
-checkout cannot show, or a file there that is not a valid taxonomy, refuses at exit 1 before GitHub
+checkout cannot show, a `--repo` that is not the top of a git work tree (nen never walks up to an
+enclosing repository), or a file there that is not a valid taxonomy, refuses at exit 1 before GitHub
 is read. [`parse izanami`](#nen-parse-izanami) still classifies `labels sync` without `--dry-run` as mutating,
 the conservative reading of the preview modes. `classify install --sync`'s default-branch refusal
 names this mode.
