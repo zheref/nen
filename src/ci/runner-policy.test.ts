@@ -154,6 +154,13 @@ describe("GitHub Actions runner policy", () => {
   // which refused it on the first live run (ci run 36802734735, 2026-10-01: "running
   // scripts is disabled on this system"). The pool's declared toolchain is git, bash, gh.
   expect(windows.defaults).toEqual({ run: { shell: "bash" } });
+    // Temp files land in the job's runner.temp, which the runner empties per job, so
+    // temp dirs the suite leaves behind cannot pile up in the service account's %TEMP%.
+    expect(windows.env).toEqual({
+      TMP: "${{ runner.temp }}",
+      TEMP: "${{ runner.temp }}",
+      TMPDIR: "${{ runner.temp }}",
+    });
     expect(windows.name).toBe("check");
     expect(rows("check-windows").map((row) => (row as Row).runner)).toEqual(['["self-hosted","Windows","X64","pool-windows-x64"]']);
   });
