@@ -1,3 +1,5 @@
+import { runReportCheck } from "./check.js";
+import { readAgentSpecs } from "./agents.js";
 import { refuseExtraPositionals } from "../cli/command.js";
 // src/report/command.ts -- `nen report data` and `nen report render`: the two
 // halves of a rich effort report, split at the line every other pair in this
@@ -44,7 +46,10 @@ import { codeFor as productCodeFor, recordedRepoFor } from "../repo/resolve.js";
 import { graphInjection, graphToMermaid, parseGraph, type GraphDocument } from "./graph.js";
 import { renderReport } from "./render.js";
 
-const USAGE = `render --out - prints only the filled document on stdout; --json conflicts.
+const USAGE = `check --repo <path> [--variant <name>] [--json] checks declared Markdown/HTML examples.
+data --agents-dir <path> reads explicit regular agent-spec metadata; absent means no scan.
+
+render --out - prints only the filled document on stdout; --json conflicts.
 render --language html|markdown selects ordinary-token escaping (default html).
 Raw triple-brace tokens remain raw; file output containment is unchanged.
 
@@ -241,15 +246,16 @@ has not got.`;
 /** Per-subcommand flags, so a flag meant for the other verb is refused, not ignored. */
 const SUBCOMMAND_FLAGS: Readonly<Record<string, { values: readonly string[]; booleans: readonly string[]; lists?: readonly string[] }>> = {
   data: {
-    values: ["base", "lane", "tiers", "target", "prs", "issues", "objects-from", "register", "tz", ...FILTER_VALUE_FLAGS],
+    values: ["agents-dir", "base", "lane", "tiers", "target", "prs", "issues", "objects-from", "register", "tz", ...FILTER_VALUE_FLAGS],
     booleans: ["backlog", "open-stop"],
     lists: [...FILTER_LIST_FLAGS, "effort"],
   },
   render: { values: ["template", "data", "out", "variant", "graph", "language"], booleans: ["dry-run"] },
+  check: { values: ["variant"], booleans: [] },
   mermaid: { values: ["graph"], booleans: [] },
 };
 
-const SUBCOMMANDS: readonly string[] = ["data", "render", "mermaid"];
+const SUBCOMMANDS: readonly string[] = ["data", "render", "mermaid", "check"];
 
 const FAMILY_VALUES = [
   ...new Set(Object.values(SUBCOMMAND_FLAGS).flatMap((spec): readonly string[] => spec.values)),
@@ -502,7 +508,8 @@ async function runData(context: CommandContext): Promise<number> {
   });
   const warn = (line: string): void => context.io.err(line);
   const tz = readTz(context);
-  const document = assembleData(
+  if (context.args.values["agents-dir"] !== undefined && !context.args.values["agents-dir"]!.trim()) throw new VerbUsageError("--agents-dir must name an explicit nonempty directory.");
+  const baseDocument = assembleData(
     context.seams,
     root,
     {
@@ -517,6 +524,7 @@ async function runData(context: CommandContext): Promise<number> {
     },
     warn,
   );
+  const document = { ...baseDocument, ...(context.args.values["agents-dir"] ? { agentSpecs: readAgentSpecs(root, context.args.values["agents-dir"]!) } : {}) };
   // THE DESK BEFORE THE CLOCK (Copilot, NN-PR-#375): whether the desk sets
   // the page's clock decides which clock fields the document carries, and
   // stderr must describe the document returned -- so a desk that owns the
@@ -857,6 +865,7 @@ export const reportCommand: Command = {
   run(context: CommandContext): number | Promise<number> {
     const subcommand = requireSubcommand("report", context.args, SUBCOMMANDS);
     refuseForeignFlags(subcommand, context);
+    if (subcommand === "check") return runReportCheck(context);
     if (subcommand === "data") return runData(context);
     if (subcommand === "mermaid") return runMermaid(context);
     return runRender(context);

@@ -14,3 +14,9 @@
 - #407 item 18: published updates support a six-gate, proof-pinned `wc publish --gated` with explicit persona and no force or first-publish route; ancestry and the push source use the proved object even if the branch moves after the final HEAD read.
 - #407 item 19: `canon check` composes registry, phase-aware classification and bidirectional dry-run label parity with one read-only verdict.
 Read archive tag identities through `nen tag announce --repo`: two CR-stripped lines, explicit no-declaration exit 3, bounded nonsymlink regular-file reads and distinct declaration/wiring faults; no tag is created (item 20).
+- #407 item 8 wiring: companion https://github.com/zheref/hatsu/pull/554 renders the trusted script and Linux binary digests beside the selected pin and verifies the script before execution; release/adoption remains explicit.
+- #407 item 11: report data gains explicit `--agents-dir` metadata, allowing `claude/agents/` without an inferred directory or publishing spec contents; absent flag preserves legacy output.
+- #407 item 12: maintainer withdrew the requested refusal decision class; existing classes remain unchanged.
+- #407 item 14: report check validates declared Markdown/HTML variants through the actual renderer, including block/order parity, desk stars, remaining tokens and visible escaping, with named refusal fixtures; richer consumer guard adoption remains NN406.
+- #407 item 15 addendum: collation keeps the target release heading level and coalesces repeated subsections in fixed order, preserving fenced examples and meaningful indentation.
+- #407 item 17 reconciliation: maintained-tool scenario resolution already reads `scenario`; current Hatsu declares `bankai-machinery`, with scenario regression retained. No duplicate resolver is introduced.

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 // src/shu/command.test.ts -- the family's surface: which verbs exist, which
@@ -273,6 +273,21 @@ describe("explicit multi-lane test envelope", () => {
     const seams = new ScriptedSeams([{ match: "fixture-test one", result: { code: 1 } }, { match: "fixture-test two", result: { code: 0 } }], { platform: "linux" });
     const code = await runFamily(shuCommand, ["shu", "test", "--lanes", "one,two", "--json"], root, false, { out: (line) => void out.push(line), err: (line) => void err.push(line) }, seams);
     expect(code).toBe(1); const report = JSON.parse(out.join("\n")); expect(report.preflightPassed).toBe(true); expect(report.lanes.every((row: { executed: boolean }) => row.executed)).toBe(true); expect(report.lanes.map((row: { lane: string; exitCode: number }) => [row.lane, row.exitCode])).toEqual([["one", 1], ["two", 0]]); expect(seams.calls).toHaveLength(2);
+  });
+  it("does not claim execution when a later lane loses its precondition after preview", async () => {
+    const root = fixture(), file = join(root, "nen/contract.json");
+    const doc = JSON.parse(readFileSync(file, "utf8")); doc.project.preconditions = { two: [{ kind: "path", value: "deps" }] };
+    writeFileSync(file, JSON.stringify(doc)); writeFileSync(join(root, "deps"), "present");
+    const base = new ScriptedSeams([{ match: "fixture-test one", result: { code: 0 } }], { platform: "linux" });
+    const seams = new Proxy(base, { get(target, key): unknown {
+      const value = Reflect.get(target, key);
+      if ((key === "run" || key === "runStreamed") && typeof value === "function") return (...args: unknown[]): unknown => { if (args[0] === "fixture-test") rmSync(join(root, "deps"), { force: true }); return value.apply(target, args); };
+      return typeof value === "function" ? value.bind(target) : value;
+    } });
+    const out: string[] = [];
+    expect(await runFamily(shuCommand, ["shu", "test", "--lanes", "one,two", "--json"], root, false, { out: line => out.push(line), err: () => {} }, seams)).toBe(2);
+    const report = JSON.parse(out.join("\n")); expect(report.preflightPassed).toBe(true);
+    expect(report.lanes.map((row: { executed: boolean }) => row.executed)).toEqual([true, false]); expect(base.calls).toHaveLength(1);
   });
   it("preflights all lanes and spawns nothing for an unknown lane, malformed set or preview", async () => {
     const root = fixture();

@@ -2937,12 +2937,12 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
     const home = mkdtempSync(join(tmpdir(), "nen-owner-home-")); const config = join(home, ".config", "hatsu"); mkdirSync(config, { recursive: true });
     writeFileSync(join(config, "redaction-ignore"), "vault\n");
     const options = { ...guarded, env: { HOME: home }, json: true };
-    const result = await capture(commentArgs("the vault", "--dry-run"), [PUBLIC, LIST], options);
-    expect(result.code).toBe(0); expect(writes(result.calls)).toEqual([]);
+    const result = await capture(commentArgs("the vault", "--dry-run"), [PUBLIC, REACH, LIST], options);
+    expect(result.code).toBe(0); expect(result.err.join("\n")).toContain("ignored"); expect(writes(result.calls)).toEqual([]);
     const explicit = tempFile("ignore", "other\n");
-    expect((await capture(commentArgs("the vault", "--dry-run", "--private-names-ignore-file", explicit), [PUBLIC, LIST], options)).code).toBe(4);
+    expect((await capture(commentArgs("the vault", "--dry-run", "--private-names-ignore-file", explicit), [PUBLIC, REACH, LIST], options)).code).toBe(4);
     const broaderHome = mkdtempSync(join(tmpdir(), "nen-no-default-")); writeFileSync(join(broaderHome, "redaction-ignore"), "vault\n");
-    expect((await capture(commentArgs("the vault", "--dry-run"), [PUBLIC, LIST], { ...options, env: { HOME: broaderHome } })).code).toBe(4);
+    expect((await capture(commentArgs("the vault", "--dry-run"), [PUBLIC, REACH, LIST], { ...options, env: { HOME: broaderHome } })).code).toBe(4);
   });
   it("comment: a bare name on a PUBLIC target refuses with exit 4, posts nothing, and never prints the name", async () => {
     const result = await capture(commentArgs("ported from vault last week"), [PUBLIC, REACH, LIST], guarded);

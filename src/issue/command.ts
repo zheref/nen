@@ -11,7 +11,6 @@
 // first. A dry run prints the exact call it would have made, so the thing the
 // caller approves is the thing that runs.
 
-import { isAbsolute, join } from "node:path";
 import redactionDefaults from "./redaction-defaults.json";
 import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
 import { decomposeLabelName, loadLabelTaxonomy, type LabelTaxonomy } from "../schema/labels.js";

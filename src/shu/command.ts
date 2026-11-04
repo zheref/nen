@@ -1446,7 +1446,8 @@ async function runTestLanes(context: CommandContext): Promise<number> {
     const exitCode = await shuCommand.run({ ...context, json: true, args: { ...context.args, values, booleans }, io: { out: (line) => void stdout.push(line), err: (line) => void stderr.push(line) } });
     let report: unknown = null;
     try { report = JSON.parse(stdout.join("\n")) as unknown; } catch { /* retain non-JSON diagnostics below */ }
-    return { lane, executed: !dry, exitCode, report, stdout, stderr };
+    const steps = report && typeof report === "object" && Array.isArray((report as { steps?: unknown }).steps) ? (report as { steps: { exitCode?: unknown }[] }).steps : [];
+    return { lane, executed: !dry && steps.some(step => typeof step.exitCode === "number"), exitCode, report, stdout, stderr };
   };
   const preview = [];
   for (const lane of lanes) preview.push(await once(lane, true));

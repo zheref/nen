@@ -12,7 +12,7 @@ repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
 what each version changed: 49 command
-families, 178 verbs, every flag checked against that binary.
+families, 181 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -258,7 +258,7 @@ including every refusal reason. The raw NUL-delimited stream
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **107 shapes** and **111 ids** (`nen.runner.plan`
+binary carries**, writing or reading — **112 shapes** and **116 ids** (`nen.runner.plan`
 and `nen.wc.worktree.copies` each have two versions, `nen.stop.mark` three, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -294,7 +294,7 @@ file formats).
 
 <!-- contract-ids:begin -->
 - **`audit`** — `nen.audit.deps/v0.1`
-- **`canon`** — `nen.canon.checkout/v0.1` · `nen.canon.clause-check/v0.1` · `nen.canon.clause-cites/v0.1` · `nen.canon.lint/v0.1` · `nen.canon.mirror.check/v0.1` · `nen.canon.mirror.generate/v0.1` · `nen.canon.pin.write/v0.1` · `nen.canon.pin/v0.1`
+- **`canon`** — `nen.canon.checkout/v0.1` · `nen.canon.clause-check/v0.1` · `nen.canon.clause-cites/v0.1` · `nen.canon.lint/v0.1` · `nen.canon.mirror.check/v0.1` · `nen.canon.mirror.generate/v0.1` · `nen.canon.pin.write/v0.1` · `nen.canon.pin/v0.1` · `nen.canon.check/v0.1`
 - **`classify`** — `nen.classify.apply/v0.1` · `nen.classify.install/v0.1` · `nen.classify.labels/v0.1` · `nen.classify.status/v0.1`
 - **`commit`** — `nen.commit.check/v0.1` · `nen.commit.write/v0.1`
 - **`contract`** — `nen.contract/v0.1`
@@ -318,14 +318,15 @@ file formats).
 - **`scaffold`** — `nen.scaffold.init/v0.1` · `nen.scaffold.migrate/v0.1` · `nen.scaffold.new/v0.1` · `nen.scaffold.template/v0.1`
 - **`schema`** — `nen.schema.set/v0.1`
 - **`session`** — `nen.session.ledger/v0.1`
-- **`shu`** — `nen.shu.<verb>/v0.1` · `nen.shu.coverage-capture/v0.1` · `nen.shu.coverage/v0.1` · `nen.shu.detect/v0.1` · `nen.shu.evidence/v0.1` · `nen.shu.proof/v0.1` · `nen.shu.test-report/v0.1` · `nen.shu.tools/v0.1` · `nen.shu.warmup/v0.1`
+- **`shu`** — `nen.shu.<verb>/v0.1` · `nen.shu.coverage-capture/v0.1` · `nen.shu.coverage/v0.1` · `nen.shu.detect/v0.1` · `nen.shu.evidence/v0.1` · `nen.shu.proof/v0.1` · `nen.shu.test-report/v0.1` · `nen.shu.tools/v0.1` · `nen.shu.warmup/v0.1` · `nen.shu.test-batch/v0.1`
 - **`spec`** — `nen.spec.check/v0.1` · `nen.spec.cite-check/v0.1` · `nen.spec.converge/v0.1` · `nen.spec.coverage/v0.1` · `nen.spec.diff/v0.1` · `nen.spec.index/v0.1` · `nen.spec.inventory/v0.1` · `nen.spec.number/v0.1` · `nen.spec.parity/v0.1` · `nen.spec.tasks/v0.1` · `nen.spec.trace/v0.1`
 - **`stop`** — `nen.stop.answer/v0.1` · `nen.stop.list/v0.1` · `nen.stop.mark/v0.1` · `nen.stop.mark/v0.2` · `nen.stop.mark/v0.3` · `nen.stop.proposed-issue/v0.1`
-- **`surface`** — `nen.surface.capabilities/v0.1` · `nen.surface.install/v0.1` · `nen.surface.mirror.check-installed/v0.1` · `nen.surface.mirror.check-plugin/v0.1` · `nen.surface.mirror.check/v0.1` · `nen.surface.mirror.generate/v0.1` · `nen.surface.status/v0.1`
+- **`surface`** — `nen.surface.capabilities/v0.1` · `nen.surface.install/v0.1` · `nen.surface.mirror.check-installed/v0.1` · `nen.surface.mirror.check-plugin/v0.1` · `nen.surface.mirror.check/v0.1` · `nen.surface.mirror.generate/v0.1` · `nen.surface.status/v0.1` · `nen.surface.mirror.batch/v0.1`
 - **`tests`** — `nen.tests.map/v0.1`
 - **`usage`** — `nen.usage.ledger/v0.1`
-- **`wc`** — `nen.wc.catch-up/v0.2` · `nen.wc.prune/v0.1` · `nen.wc.publish/v0.1` · `nen.wc.squash/v0.1` · `nen.wc.swap.state/v0.1` · `nen.wc.swap/v0.1` · `nen.wc.worktree.copies/v0.1` · `nen.wc.worktree.copies/v0.2` · `nen.wc.worktree/v0.1` · `nen.wc.worktrees/v0.1`
+- **`wc`** — `nen.wc.catch-up/v0.2` · `nen.wc.prune/v0.1` · `nen.wc.publish/v0.1` · `nen.wc.squash/v0.1` · `nen.wc.swap.state/v0.1` · `nen.wc.swap/v0.1` · `nen.wc.worktree.copies/v0.1` · `nen.wc.worktree.copies/v0.2` · `nen.wc.worktree/v0.1` · `nen.wc.worktrees/v0.1` · `nen.wc.publish-gated/v0.1`
 - **`workflow`** — `nen.workflow/v0.1`
+- **`tag`** — `nen.tag.announce/v0.1`
 <!-- contract-ids:end -->
 
 Four verbs have no `--json` because they have no result of their own to
@@ -1006,7 +1007,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 178 verbs, grouped as the README groups them. **Reads** is what a
+All 181 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -1095,6 +1096,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`fanout`](#family-fanout) | [`nen fanout compute`](#nen-fanout-compute) | which registered consumers (nen/repos.json) are affected by workflows changed in a release range | nen/repos.json, git diff, .github/workflows/ | yes |
 | [`fanout`](#family-fanout) | [`nen fanout record`](#nen-fanout-record) | the same computation, appended to an audit ledger file | nen/repos.json, git diff, .github/workflows/, ledger file | yes |
 | [`report`](#family-report) | [`nen report data`](#nen-report-data) | one document describing a branch against a base: commits, changed files (with a caller-supplied tier), the evidence seam, the lane's coverage report if it is on disk, the build proof, the last recorded stop, and -- only when one of the five register flags is given -- the issues and pull requests the effort is about; then where the effort is (worktree, stage, gate, turn, local clock), derived | git (rev-parse/symbolic-ref/remote get-url/log/diff), the zoneinfo file the zone names, nen/repos.json for the gate, nen/contract.json for the lane, .nen/proof/&lt;lane&gt;.json, .nen/last-stop.json, the declared coverage artifact, a caller-supplied --tiers file; under --target/--prs/--issues/--backlog also github (gh api, gh pr view) and nen's own in-process readiness gate; under --objects-from a caller-supplied file instead | yes |
+| [`report`](#family-report) | [`nen report check`](#nen-report-check) | verify declared report variants in Markdown and HTML | workflow sections, templates and examples | yes |
 | [`report`](#family-report) | [`nen report render`](#nen-report-render) | fill a template with a data document and write the result: {{token}}, {{{token}}}, {{#each}}, {{#if}} and nothing else, refusing an unknown token by name; --variant injects a declared variant's section flags and --graph injects a validated architecture-delta graph | caller-named --template + --data (+ --graph) files, nen/workflow.json's reports.sections under --variant; writes --out, inside --repo, unless --dry-run | yes |
 | [`report`](#family-report) | [`nen report mermaid`](#nen-report-mermaid) | print the mermaid text for a graph document and nothing else | a caller-named --graph file; writes nothing; no git/gh | no |
 | [`review`](#family-review) | [`nen review scopes`](#nen-review-scopes) | which review scopes a branch diff raises, off the repository's own review.scopes block, plus the changed paths no scope claims | nen/workflow.json's review block, git diff --name-only; writes nothing; no gh | yes |
@@ -17866,6 +17868,31 @@ proof: none
 last stop: none
 ```
 (run for real, in this repository's own worktree while the family was being written — before [#258](https://github.com/zheref/nen/issues/258), so its `repo:` line shows the directory's name where today's prints `zheref/nen`; `tiers.json` was `{"tests": ["src/**/*.test.ts"], "source": ["src"], "docs": ["docs", "README.md", "CHANGELOG.md"]}`. The coverage line is this repository's OWN declaration answering: `nen/contract.json` names lane `nen`, whose `coverage` verb declares `coverage/lcov.info`, and that file was on disk from a previous [`shu coverage`](#nen-shu-coverage) run — this verb read it and spawned nothing. Before that run it printed `coverage: none read`, with `coverage: lane 'nen' declares 'coverage/lcov.info', which is not there. Run 'nen shu coverage --repo <path> --lane nen' to produce it; reported as null.` on stderr)
+
+### `nen report check`
+
+`nen report check --repo <path> [--variant <name>] [--json]` renders each
+selected `reports.sections` variant from `templates/report-examples/<variant>.data.json`
+through its declared `templates/<template>.md` and `.html`, without writing files.
+Optional graphs use the variant graph or `templates/graph.example.json`.
+It checks the actual renderer's refusals, remaining tokens, declared block
+order and cross-format parity, duplicate/unknown HTML sections, exactly one
+starred option per ask, and escaping visible in Markdown cells. Markdown blocks
+use `<!-- <namespace>:block <name> -->`; asks use `<!-- <namespace>:ask -->`.
+HTML blocks use section ids derived from block names (camelCase becomes
+kebab-case), with masthead/header.mast and tally/section.tally anchors.
+Exit 0 conformant; 1 findings named by variant, template and rule; 2 wiring
+(no variants, unknown variant, missing/nonregular/redirected template or example).
+The JSON result names `conformant`, `variants` and every `findings` row.
+This owns the requested conformance checks; richer consumer guards remain
+until their additional checks are deliberately migrated.
+
+`report data --agents-dir <directory>` additionally reads only the explicitly
+selected directory's regular `.md` agent specifications. JSON gains `agentSpecs`
+with name, repository-relative path, byte size and SHA256 metadata. No spec
+contents are published. An empty directory argument, traversal or symlink is
+refused. Omit the flag to preserve the existing output; the Hatsu layout is
+selected explicitly as `--agents-dir claude/agents/`, never inferred.
 
 ### `nen report render`
 
