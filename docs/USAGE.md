@@ -12090,7 +12090,7 @@ annotation. Whole displacement binds nothing; a part annotation leaves the
 rest binding as `part`. Cycles terminate and followed IDs remain unique. An
 explicit `--include` list lets the caller supply floor/touch-derived IDs.
 
-JSON: `nen.canon.clause-cites/v0.1`, with `clauses` (defined/dangling resolution,
+`--json`: `{ contract: "nen.canon.clause-cites/v0.1", clauses, readSet, dangling, exit }`, with `clauses` (defined/dangling resolution,
 file, line, status, binding, displacedBy, via), binding `readSet` labels,
 `dangling` and `exit`. Every referenced definition is reported even when it is
 nonbinding; `readSet` is the subset binding whole or in part. Exit 0 when all
