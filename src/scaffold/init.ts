@@ -51,6 +51,8 @@ import { PROGRAM, VERSION } from "../version.js";
 import { renderCommitMsgHook, renderPreCommitHook, writeHookFile, type HookSpec } from "./hook.js";
 import {
   NEN_REF,
+  documentationStack,
+  unsupportedDocumentationSeats,
   TEMPLATE_DIRECTORY,
   WORKFLOW_TEMPLATE_FILE,
   compareNenRefs,
@@ -182,6 +184,8 @@ export interface ScaffoldInitOptions {
   readonly stack?: string;
   /** Accept `nen shu detect`'s proposal exactly as `detect --write` writes it. */
   readonly acceptDetected?: boolean;
+  /** Explicit argv for the documentation lint seat; never inferred or executed here. */
+  readonly lintArgv?: readonly string[];
   /** The nen release the generated workflow pins. Omitted, nen chooses one. */
   readonly nenRef?: string;
   /** Print every write and perform none. Spawns nothing, not even a probe. */
@@ -296,7 +300,7 @@ function proposeProject(
         project: {
           lanes: { [named]: { stack: named, cwd: "." } },
           defaultLane: named,
-          verbs: { [named]: {} },
+          verbs: { [named]: documentationStack(named) ? unsupportedDocumentationSeats(named) : {} },
           hosts: stackHosts(named),
         },
       },
@@ -548,6 +552,19 @@ export function scaffoldInit(options: ScaffoldInitOptions): ScaffoldInitResult {
   const proposed = proposeProject(report, options.stack, accept);
   const stack = proposed.stack;
   notes.push(...proposed.notes);
+  if (options.lintArgv !== undefined) {
+    if (stack === null || !documentationStack(stack)) {
+      throw new VerbUsageError("--lint-argv requires one explicitly confirmed documentation stack.");
+    }
+    if (options.lintArgv.length < 2 || options.lintArgv.some((arg) => typeof arg !== "string" || arg.length === 0 || /[\x00-\x1f\x7f]/.test(arg))) {
+      throw new VerbUsageError("--lint-argv must name an executable and at least one argument in a JSON array, without controls.");
+    }
+    const project = proposed.document.project as { verbs: Record<string, Record<string, unknown>> };
+    for (const verbs of Object.values(project.verbs)) {
+      verbs.lint = { exe: options.lintArgv[0], argv: options.lintArgv.slice(1) };
+    }
+  }
+
 
   // ── 1b. the policy, resolved BEFORE the first write too ────────────────────
   //
@@ -1117,4 +1134,36 @@ export function scaffoldInit(options: ScaffoldInitOptions): ScaffoldInitResult {
     tools,
     exitCode: refused ? 1 : 0,
   };
+}
+
+/** Install only the trailer guard from an existing policy; no project lane is needed. */
+export function scaffoldHookOnly(options: Pick<ScaffoldInitOptions, "root" | "hook" | "hookPath" | "force" | "dryRun">): {
+  contract: string; writes: readonly ScaffoldWrite[]; exitCode: number;
+} {
+  const loaded = loadWorkflow(options.root);
+  if (!loaded.present) throw new VerbUsageError(`--hook-only requires existing ${WORKFLOW_FILE}; no policy or lane was created.`);
+  const path = containFlag(options.root, options.hookPath ?? join(".git", "hooks", "commit-msg"), "--hook-path");
+  const hookContainment = realContainment(options.root, path);
+  if (hookContainment.link !== null || !hookContainment.contained) throw new VerbUsageError("--hook-only refuses redirected hook paths; use a regular contained hook path.");
+  for (const candidate of [path, `${path}.bak`]) {
+    try { if (lstatSync(candidate).isSymbolicLink()) throw new VerbUsageError("--hook-only refuses symlink hook or backup destinations."); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  }
+  const policy = loaded.workflow.commits;
+  if (!trailerAdmitted(policy, options.hook.agentTrailer)) throw new VerbUsageError(`--agent-trailer '${options.hook.agentTrailer}' is not admitted by ${WORKFLOW_FILE}.`);
+  const desired = renderCommitMsgHook({ ...options.hook, runTrailer: policy.runTrailer }, refusedTrailerKeys(policy), true);
+  const existing = existingText(path);
+  const relativePath = relative(options.root, path).split(sep).join("/");
+  const row = (action: WriteAction, why: string, exitCode = 0): { contract: string; writes: readonly ScaffoldWrite[]; exitCode: number } => ({ contract: SCAFFOLD_INIT_CONTRACT, writes: [{ path: relativePath, action, why }], exitCode });
+  if (existing === desired) return row("skipped", "the same generated commit-msg hook is already installed");
+  if (existing !== null && !options.force) return row("refused", "a different commit-msg hook exists; pass --force to back it up and replace it", 4);
+  if (options.dryRun) return row("would-create", existing === null ? "install only commit-msg" : "back up and replace commit-msg");
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    if (existing !== null) writeFileSync(`${path}.bak`, rawText(path) ?? existing, "utf8");
+    writeHookFile(path, desired);
+    return row("created", "installed only commit-msg from existing workflow policy");
+  } catch (error) {
+    return row("refused", `hook could not be written: ${(error as NodeJS.ErrnoException).code ?? "I/O error"}`, 4);
+  }
 }

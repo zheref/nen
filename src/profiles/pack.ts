@@ -119,6 +119,7 @@ import gatsbyDocument from "../../profiles/gatsby.json";
 import gradleAndroidDocument from "../../profiles/gradle-android.json";
 import indexDocument from "../../profiles/index.json";
 import nextjsDocument from "../../profiles/nextjs.json";
+import proseDocument from "../../profiles/prose.json";
 import xcodeIosDocument from "../../profiles/xcode-ios.json";
 
 /** The pack's directory name, relative to the repository root. */
@@ -415,6 +416,7 @@ const BUNDLED: readonly BundledFile[] = [
   { file: "gatsby.json", document: gatsbyDocument },
   { file: "gradle-android.json", document: gradleAndroidDocument },
   { file: "nextjs.json", document: nextjsDocument },
+  { file: "prose.json", document: proseDocument },
   { file: "xcode-ios.json", document: xcodeIosDocument },
 ];
 

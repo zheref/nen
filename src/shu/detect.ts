@@ -48,7 +48,7 @@
 // verbs through one is that repository's call to write down; nen proposing it
 // would be nen choosing an indirection layer for somebody.
 
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { VerbUsageError } from "../cli/command.js";
 import {
@@ -66,7 +66,7 @@ import {
   type ProfileVerb,
   type StackProfile,
 } from "../profiles/pack.js";
-import { containedPath } from "../repo/contain.js";
+import { containedPath, realContainment } from "../repo/contain.js";
 import { loadContract, type DeployTarget } from "../schema/contract.js";
 import { visibleKey } from "../schema/gates.js";
 import { CONTRACT_FILE, resolveSchemaFile } from "../schema/source.js";
@@ -6458,7 +6458,20 @@ export function detect(
 ): DetectReport {
   const hostStacks = hostToolStacks(pack);
   const resolved = resolveSchemaFile(repoRoot, CONTRACT_FILE);
-  const { found, nestedBuilds, nearMisses } = scan(repoRoot, hostStacks, packMarkersOf(pack));
+  const scanned = scan(repoRoot, hostStacks, packMarkersOf(pack));
+  const { nestedBuilds, nearMisses } = scanned;
+  const found = [...scanned.found];
+  const rootEntries = readdirSync(repoRoot, { withFileTypes: true });
+  const buildMarkerPresent = Object.values(pack.profiles).filter(profile => profile.raw["documentationDetection"] !== true).some(profile =>
+    profile.markers.some(marker => rootEntries.some(entry => matchesPattern(marker.pattern, entry.name))));
+  if (found.length === 0 && !buildMarkerPresent && nearMisses.length === 0) {
+    const visibleFiles = readdirSync(repoRoot, { withFileTypes: true }).filter(entry => entry.isFile() && !entry.name.startsWith("."));
+    for (const profile of Object.values(pack.profiles).filter(profile => profile.raw["documentationDetection"] === true)) {
+      const index = join(repoRoot, "handbooks", "INDEX.md");
+      const indexed = ((): boolean => { try { return lstatSync(index).isFile() && realContainment(repoRoot, index).link === null; } catch { return false; } })();
+      if (indexed || visibleFiles.length > 0 && visibleFiles.every(entry => entry.name.endsWith(".md"))) found.push({ directory: repoRoot, matches: [{ stack: profile.id, marker: indexed ? "handbooks/INDEX.md" : "*.md", identifying: true }] });
+    }
+  }
   const lanes: DetectedLane[] = [];
   const profiles = new Map<string, StackProfile>();
   const taken = new Set<string>();

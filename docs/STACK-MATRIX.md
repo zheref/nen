@@ -53,17 +53,18 @@ The **host** column is the platform allowlist every verb of that stack shares (`
 
 | stack | host | template | `detect` | `build` | `test` | `ui-test` | `lint` | `typecheck` | `archive` | `release` | `dev` | `run` | `deploy` | `coverage` | `tools` | `warmup` |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `compose-desktop` | any | — | D declared-only (markers, no spawn) | — no command in the tree | — no command in the tree | — no command in the tree | — no command in the tree | — the compiler checks types | — formats declared, never invoked | — no command in the tree | — no command in the tree | ✓ `{gw} run` | — no command in the tree | — nothing to instrument | D declared-only (verify-only, all of it) | D declared-only (git half only) |
-| `dotnet-winui` | win32 | — | D declared-only (markers, no spawn) | ✓ `dotnet build {project} -c Debug` | ✓ `dotnet test {project}` | — no command in the repo | — no command in the repo | — the compiler checks types | — MSIX is a GUI gesture | — no command in the repo | — no command in the repo | — no command in the repo | — no command in the repo | — coverlet present, unused | D declared-only (SDK gated, IDE never) | D declared-only (git half, then what is declared) |
+| `compose-desktop` | any | `minimal` | D declared-only (markers, no spawn) | — no command in the tree | — no command in the tree | — no command in the tree | — no command in the tree | — the compiler checks types | — formats declared, never invoked | — no command in the tree | — no command in the tree | ✓ `{gw} run` | — no command in the tree | — nothing to instrument | D declared-only (verify-only, all of it) | D declared-only (git half only) |
+| `dotnet-winui` | win32 | `minimal` | D declared-only (markers, no spawn) | ✓ `dotnet build {project} -c Debug` | ✓ `dotnet test {project}` | — no command in the repo | — no command in the repo | — the compiler checks types | — MSIX is a GUI gesture | — no command in the repo | — no command in the repo | — no command in the repo | — no command in the repo | — coverlet present, unused | D declared-only (SDK gated, IDE never) | D declared-only (git half, then what is declared) |
 | `expo` | any | `minimal` | D declared-only (markers, no spawn) | — run:* builds and launches | — no test runner at all | — no UI runner at all | ✓ `expo lint` | — configured, never run | — no eas.json anywhere | — no release lane at all | ✓ `expo start` | ✓ `expo run:{platform}` | — no deploy target | — no tests to instrument | ✓ `corepack enable` then `corepack prepare {packageManager} --activate` | D declared-only (git half only) |
 | `gatsby` | any | `full` | D declared-only (markers, no spawn) | ✓ `gatsby build` | — no test runner at all | — no UI runner at all | — no linter at all | — no types to check | ✓ `node {archiveScript}` | — no release lane at all | ✓ `gatsby develop` | ✓ `gatsby serve` | ✓ `node {archiveScript}` then `gh-pages -d public -b gh-pages --dotfiles` | — no tests to instrument | D declared-only (verify-only, all of it) | ✓ delegates to `build` |
 | `gradle-android` | any | `minimal` | D declared-only (markers, no spawn) | ✓ `{gw} assembleDebug --stacktrace` | ✓ `{gw} verifyPaparazziDebug {unitTestTask} --stacktrace` | ✓ `{gw} verifyPaparazziDebug` | ✓ `{gw} :app:lintDebug --stacktrace` | — the compiler checks types | — release type, no signing | — no release lane at all | — no installDebug, no run | — no local run lane | — no deploy target | — no coverage plugin | D declared-only (components only) | ✓ delegates to `build`, `test` |
 | `nextjs` | any | `full` | D declared-only (markers, no spawn) | ✓ `{pm} turbo run build` | ✓ `{pm} turbo run test` | D declared-only (two meanings) | ✓ `{pm} exec biome check .` then `{pm} turbo run lint` | ✓ `{pm} -r exec tsc --noEmit` | D declared-only (evidence, not an artifact) | — declared n/a in the repo | ✓ `{pm} turbo run dev` | ✓ `next start` | D declared-only (three shapes, no default) | ✓ `{pm} --filter {package} test:coverage` | ✓ `corepack enable` then `corepack prepare {packageManager} --activate` | ✓ delegates to `build`, `test` |
+| `prose` | any | `prose` | — caller-declared seat | — caller-declared seat | — caller-declared seat | — caller-declared seat | — caller-declared seat | — caller-declared seat | — caller-declared seat | — caller-declared seat | — caller-declared seat | — caller-declared seat | — caller-declared seat | — caller-declared seat | — caller-declared seat | — caller-declared seat |
 | `xcode-ios` | darwin | `minimal` | D declared-only (markers, no spawn) | ✓ `xcodebuild -project {project} -scheme {scheme} -destination {destination} -configuration Debug build` | ✓ `xcodebuild -project {project} -scheme {scheme} -destination id={simUdid} -enableCodeCoverage YES -skipMacroValidation test` | — targets exist, never run | D declared-only (two meanings, one repo) | — the compiler checks types | — no xcodebuild archive | — no release lane at all | — a GUI gesture | — no simctl install/launch | — db migration, not an app | ✓ `xcodebuild -project {project} -scheme {scheme} -destination id={simUdid} -enableCodeCoverage YES -skipMacroValidation -resultBundlePath {resultBundle} test` then `xcrun xccov view --report --json {resultBundle}` | D declared-only (verify-only, all of it) | ✓ delegates to `build`, `test` |
 
-**Read it honestly, and over the right cells.** 11 of the 14 verbs name a command a repository RUNS; the other 3 describe what nen does *around* a build -- a marker match, a toolchain report, a delegation to two of these same rows -- and counting them in flatters the ratio in both directions at once. Over the **77** stack × verb cells the 11 command verbs make: **48 are unsupported**, 4 are declared-only, and 25 carry a command. That is what the ecosystem actually looks like today; a full grid would be a grid of aspirations.
+**Read it honestly, and over the right cells.** 11 of the 14 verbs name a command a repository RUNS; the other 3 describe what nen does *around* a build -- a marker match, a toolchain report, a delegation to two of these same rows -- and counting them in flatters the ratio in both directions at once. Over the **88** stack × verb cells the 11 command verbs make: **59 are unsupported**, 4 are declared-only, and 25 carry a command. That is what the ecosystem actually looks like today; a full grid would be a grid of aspirations.
 
-The remaining 21 cells are those 3 rows: 6 carry something to run, 15 are declared-only and 0 are unsupported. They are worth reading and they are not builds.
+The remaining 24 cells are those 3 rows: 6 carry something to run, 15 are declared-only and 3 are unsupported. They are worth reading and they are not builds.
 
 ---
 
@@ -71,7 +72,7 @@ The remaining 21 cells are those 3 rows: 6 carry something to run, 15 are declar
 
 **Host:** any host to `run`; PACKAGING is per-format -- `packageDmg` needs macOS, `packageMsi` needs Windows, `packageDeb` needs Linux. That is a host constraint (exit 3), not a tool nen can supply.
 
-**Scaffold template:** none -- no template is proposed: one observed lane and one observed command is not enough evidence for one.
+**Scaffold template:** `minimal` -- Existing native trees receive the standard stack CI workflow.
 
 **Coverage report (advisory, never opened):** none recorded -- No test command exists to instrument, so nothing writes a report. The JVM convention, once one does, is a JaCoCo XML under the module's own build tree -- named by the declaration, because the module layout is the repository's. (this profile's own `coverage` row (SampleDesktop/program/, inventory sweep))
 
@@ -128,7 +129,7 @@ What nen has been *tested* against, never what it installs: the pin an install w
 
 **Host:** win32 only, and specifically Windows with Visual Studio 2022 (17.10+). The target framework needs the Windows 10 SDK 22621; `<UseWinUI>true</UseWinUI>` plus `<EnableMsixTooling>true</EnableMsixTooling>` need the Windows App SDK tooling; and the solution's deploy entries and MSIX launch profile are Visual Studio DEPLOYMENT GESTURES. Not cross-compilable from macOS or Linux.
 
-**Scaffold template:** none -- no template is proposed: a skeleton for a stack with no invocable command is one nen could not then run anything against.
+**Scaffold template:** `minimal` -- Existing native trees receive the standard stack CI workflow.
 
 **Coverage report (advisory, never opened):** none recorded -- The collector this test project already references writes `TestResults/<run guid>/coverage.cobertura.xml` -- a directory named after a fresh GUID per run, so there is no fixed path to record and the declaration names the one its own run produces (or the results directory it pins). The FORMAT is Cobertura XML, which nen reads. (this profile's own `coverage` row (SampleWindows/FixtureCoreTests/FixtureCoreTests.csproj, `coverlet.collector` 6.0.2))
 
@@ -481,6 +482,54 @@ What nen has been *tested* against, never what it installs: the pin an install w
 - PRECONDITIONS: `corepack enable` BEFORE the cached dependency install, as its own step; a frozen-lockfile install in CI (kro-pwa/.github/workflows/pr.yml); and an optional `cp .env.example apps/web/.env.local` (kro-pwa/TOOLCHAIN.md:23).
 - ONE EXTRA VERB THE INVENTORY EVIDENCES BUT THE PACK'S VERBS DO NOT COVER, carried here so it is not lost: `analyze` -- `{pm} turbo run analyze`, resolving to `ANALYZE=true next build` (kro-pwa/Makefile:59, apps/web/package.json:13). `typecheck` was the other, and is now a verb of its own (zheref/nen#588). A declaration may carry any verb name it likes; the pack's verbs are the ones the matrix compares across stacks.
 - ON `make`: both repositories route every verb through a Makefile and both make it authoritative -- "If a command here disagrees with something you read elsewhere, this file wins" (kro-pwa/TOOLCHAIN.md:3-4), and CI runs the Makefile targets rather than the tools. The pack still proposes the LEAF commands, because a Makefile is a repository's own indirection and not this stack's.
+
+---
+
+## `prose` -- Prose / Markdown canon
+
+**Host:** any host; the repository supplies its own lint command
+
+**Scaffold template:** `prose` -- A single documentation lane; lint remains an explicit unsupported seat unless a command is supplied.
+
+**Coverage report (advisory, never opened):** none recorded -- No coverage is inferred for documentation. (declared prose pack)
+
+**Default deploy target (proposed only where declared nonProduction):** none recorded -- No deployment is inferred for documentation. (declared prose pack)
+
+### Verbs
+
+| verb | command | why / source |
+| --- | --- | --- |
+| `detect` | unsupported | The repository must declare its own detect command; the documentation pack chooses none. *(source: declared documentation pack)* |
+| `build` | unsupported | The repository must declare its own build command; the documentation pack chooses none. *(source: declared documentation pack)* |
+| `test` | unsupported | The repository must declare its own test command; the documentation pack chooses none. *(source: declared documentation pack)* |
+| `ui-test` | unsupported | The repository must declare its own ui-test command; the documentation pack chooses none. *(source: declared documentation pack)* |
+| `lint` | unsupported | The repository must declare its own lint command; the documentation pack chooses none. *(source: declared documentation pack)* |
+| `typecheck` | unsupported | The repository must declare its own typecheck command; the documentation pack chooses none. *(source: declared documentation pack)* |
+| `archive` | unsupported | The repository must declare its own archive command; the documentation pack chooses none. *(source: declared documentation pack)* |
+| `release` | unsupported | The repository must declare its own release command; the documentation pack chooses none. *(source: declared documentation pack)* |
+| `dev` | unsupported | The repository must declare its own dev command; the documentation pack chooses none. *(source: declared documentation pack)* |
+| `run` | unsupported | The repository must declare its own run command; the documentation pack chooses none. *(source: declared documentation pack)* |
+| `deploy` | unsupported | The repository must declare its own deploy command; the documentation pack chooses none. *(source: declared documentation pack)* |
+| `coverage` | unsupported | The repository must declare its own coverage command; the documentation pack chooses none. *(source: declared documentation pack)* |
+| `tools` | unsupported | The repository must declare its own tools command; the documentation pack chooses none. *(source: declared documentation pack)* |
+| `warmup` | unsupported | The repository must declare its own warmup command; the documentation pack chooses none. *(source: declared documentation pack)* |
+
+### Host allowlist
+
+| verb | platforms |
+| --- | --- |
+| `*` | `darwin`, `linux`, `win32` |
+
+### Detection markers
+
+| pattern | must contain | why |
+| --- | --- | --- |
+| `handbooks/INDEX.md` |  | A documentation index proposes this pack; confirmation remains explicit. |
+| `*.md` |  | Only a top-level Markdown-only tree without a build marker qualifies. |
+
+### Notes
+
+- kind: process remains the caller's declaration; no repository kind is inferred.
 
 ---
 

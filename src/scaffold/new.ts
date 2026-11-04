@@ -8,7 +8,10 @@
 // own source tree is that framework's job, and every step of it here would be
 // nen deciding a project's shape from a catalogue entry.
 //
-// EVERY POST-STEP IS PRINTED AND NONE IS RUN. No repository is initialised, no
+// TEMPLATE POST-STEPS ARE PRINTED AND NONE IS RUN. Native seats instead
+// return a declared handoff; only the command layer can execute the selected
+// generator under --run-native. This planning module never starts a process.
+// No repository is initialised here, no
 // dependency is installed, no native project is generated, and no network call
 // is made -- including the toolchain check, which `scaffold init` runs and this
 // verb only names. Writing into a fresh directory and writing to the host are
@@ -35,6 +38,8 @@ import {
   type Workflow,
 } from "../schema/workflow.js";
 import { detect } from "../shu/detect.js";
+import type { NativeExecution } from "./native-types.js";
+import { nativePlan } from "./native.js";
 import { PROGRAM } from "../version.js";
 import { renderCommitMsgHook, renderPreCommitHook, writeHookFile, type HookSpec } from "./hook.js";
 import { PRE_COMMIT_HOOK, bootstrapRef, type ScaffoldWrite, type WriteAction } from "./init.js";
@@ -62,6 +67,7 @@ export const SCAFFOLD_NEW_CONTRACT = "nen.scaffold.new/v0.1";
 const PROJECT_NAME = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
 
 export interface ScaffoldNewOptions {
+  readonly runNative?: boolean;
   readonly stack: string;
   readonly name: string;
   /** The directory to create. Must not exist, or must be empty. */
@@ -105,6 +111,8 @@ export function postStepDir(dir: string): string {
 }
 
 export interface ScaffoldNewResult {
+  readonly nativeExecution?: NativeExecution;
+  readonly path?: "template" | "native-handoff" | "refused";
   readonly contract: string;
   readonly stack: string;
   readonly name: string;
@@ -151,6 +159,12 @@ export function scaffoldNew(options: ScaffoldNewOptions): ScaffoldNewResult {
       `--name '${options.name}' is not a project name ([A-Za-z0-9][A-Za-z0-9._-]*[A-Za-z0-9]). It is written into this tree's own manifest, and a name that has to be escaped first was never one.`,
     );
   }
+  const nativeDir = postStepDir(options.dir);
+  requireEmptyDir(nativeDir);
+  if (options.nenRef !== undefined) bootstrapRef(nativeDir, options.nenRef);
+  const native = nativePlan({ ...options, dir: nativeDir });
+  if (native !== null) return { contract: SCAFFOLD_NEW_CONTRACT, stack: options.stack, name: options.name, dir: nativeDir, ...native, writes: [], migrated: [], tools: null };
+  if (options.runNative) throw new VerbUsageError("--run-native requires a declared native scaffolder seat.");
   const template = templateForStack(options.stack);
   if (template === null) {
     throw new VerbUsageError(

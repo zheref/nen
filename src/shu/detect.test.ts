@@ -271,7 +271,7 @@ describe("nen shu detect -- the nextjs lane, end to end", () => {
 
   it("answers only stacks the pack carries, and can reach every one of them", () => {
     const pack = loadProfilesPack();
-    expect([...MARKER_STACKS].sort()).toEqual([...pack.ids].sort());
+    expect([...MARKER_STACKS, ...Object.values(pack.profiles).filter(profile => profile.raw.documentationDetection === true).map(profile => profile.id)].sort()).toEqual([...pack.ids].sort());
   });
 
   it("proposes a defaultLane only because there is exactly one lane", () => {
@@ -822,12 +822,13 @@ describe("nen shu detect -- ambiguity is reported, never resolved", () => {
 
 describe("nen shu detect -- an empty tree", () => {
   it("proposes nothing and exits 1 with the reason", async () => {
-    const report = detect(EMPTY_TREE);
+    const root = mkdtempSync(join(tmpdir(), "nen-detect-truly-empty-"));
+    const report = detect(root);
     expect(report.lanes).toEqual([]);
     expect(report.proposal).toBeNull();
     expect(report.exitCode).toBe(1);
 
-    const result = await capture(["detect"], EMPTY_TREE);
+    const result = await capture(["detect"], root);
     expect(result.code).toBe(1);
     expect(result.err.join("\n")).toMatch(/no lane was detected/);
     expect(result.out.join("\n")).toMatch(/no lane detected/);

@@ -39,6 +39,7 @@
 
 import fullTemplate from "../../templates/full/template.json";
 import minimalTemplate from "../../templates/minimal/template.json";
+import proseTemplate from "../../templates/prose/template.json";
 import templateIndex from "../../templates/index.json";
 import workflowPack from "../../templates/workflow.json";
 
@@ -81,9 +82,11 @@ interface BundledTemplate {
 }
 
 // Sorted, so this list and `templates/index.json` read in the same order.
+
 const BUNDLED: readonly BundledTemplate[] = [
   { directory: "full", document: fullTemplate },
   { directory: "minimal", document: minimalTemplate },
+  { directory: "prose", document: proseTemplate },
 ];
 
 /** Every bundled template directory name, for the test that pins the list. */
@@ -556,4 +559,22 @@ export function substitute(
     );
   }
   return out;
+}
+
+/** A declared native planning seat. Execution is a separate module and explicit command opt-in. */
+export function nativeSeat(stack: string): unknown {
+  return profileById(loadProfilesPack(), stack).raw.nativeScaffolder;
+}
+
+/** Documentation-only behavior is declared by the catalogue, never inferred as project kind. */
+export function documentationStack(stack: string): boolean {
+  return profileById(loadProfilesPack(), stack).raw.documentationDetection === true;
+}
+
+export function unsupportedDocumentationSeats(stack: string): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(profileById(loadProfilesPack(), stack).verbs).map(([verb, cell]) => [verb, { unsupported: cell.kind === "unsupported" && cell.invocation.kind === "unsupported" ? cell.invocation.reason : "Declare this command explicitly." }]));
+}
+
+export function nativeHandoffStacks(): readonly string[] {
+  return knownStacks().filter(stack => nativeSeat(stack) !== undefined);
 }

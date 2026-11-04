@@ -1,0 +1,118 @@
+{
+  "$schema": "nen.profile/v0.1",
+  "$comment": "Documentation reference pack. It proposes no project kind and no executable lint tool.",
+  "id": "prose",
+  "displayName": "Prose / Markdown canon",
+  "markers": [
+    {
+      "pattern": "handbooks/INDEX.md",
+      "contains": null,
+      "why": "A documentation index proposes this pack; confirmation remains explicit."
+    },
+    {
+      "pattern": "*.md",
+      "contains": null,
+      "why": "Only a top-level Markdown-only tree without a build marker qualifies."
+    }
+  ],
+  "hosts": {
+    "*": [
+      "darwin",
+      "linux",
+      "win32"
+    ]
+  },
+  "hostNote": "any host; the repository supplies its own lint command",
+  "scaffoldTemplate": "prose",
+  "scaffoldNote": "A single documentation lane; lint remains an explicit unsupported seat unless a command is supplied.",
+  "verbs": {
+    "detect": {
+      "unsupported": "The repository must declare its own detect command; the documentation pack chooses none.",
+      "summary": "caller-declared seat",
+      "source": "declared documentation pack"
+    },
+    "build": {
+      "unsupported": "The repository must declare its own build command; the documentation pack chooses none.",
+      "summary": "caller-declared seat",
+      "source": "declared documentation pack"
+    },
+    "test": {
+      "unsupported": "The repository must declare its own test command; the documentation pack chooses none.",
+      "summary": "caller-declared seat",
+      "source": "declared documentation pack"
+    },
+    "ui-test": {
+      "unsupported": "The repository must declare its own ui-test command; the documentation pack chooses none.",
+      "summary": "caller-declared seat",
+      "source": "declared documentation pack"
+    },
+    "lint": {
+      "unsupported": "The repository must declare its own lint command; the documentation pack chooses none.",
+      "summary": "caller-declared seat",
+      "source": "declared documentation pack"
+    },
+    "typecheck": {
+      "unsupported": "The repository must declare its own typecheck command; the documentation pack chooses none.",
+      "summary": "caller-declared seat",
+      "source": "declared documentation pack"
+    },
+    "archive": {
+      "unsupported": "The repository must declare its own archive command; the documentation pack chooses none.",
+      "summary": "caller-declared seat",
+      "source": "declared documentation pack"
+    },
+    "release": {
+      "unsupported": "The repository must declare its own release command; the documentation pack chooses none.",
+      "summary": "caller-declared seat",
+      "source": "declared documentation pack"
+    },
+    "dev": {
+      "unsupported": "The repository must declare its own dev command; the documentation pack chooses none.",
+      "summary": "caller-declared seat",
+      "source": "declared documentation pack"
+    },
+    "run": {
+      "unsupported": "The repository must declare its own run command; the documentation pack chooses none.",
+      "summary": "caller-declared seat",
+      "source": "declared documentation pack"
+    },
+    "deploy": {
+      "unsupported": "The repository must declare its own deploy command; the documentation pack chooses none.",
+      "summary": "caller-declared seat",
+      "source": "declared documentation pack"
+    },
+    "coverage": {
+      "unsupported": "The repository must declare its own coverage command; the documentation pack chooses none.",
+      "summary": "caller-declared seat",
+      "source": "declared documentation pack"
+    },
+    "tools": {
+      "unsupported": "The repository must declare its own tools command; the documentation pack chooses none.",
+      "summary": "caller-declared seat",
+      "source": "declared documentation pack"
+    },
+    "warmup": {
+      "unsupported": "The repository must declare its own warmup command; the documentation pack chooses none.",
+      "summary": "caller-declared seat",
+      "source": "declared documentation pack"
+    }
+  },
+  "toolchain": {},
+  "reportDefault": {
+    "path": null,
+    "why": "No coverage is inferred for documentation.",
+    "source": "declared prose pack"
+  },
+  "deployDefault": {
+    "target": null,
+    "why": "No deployment is inferred for documentation.",
+    "source": "declared prose pack"
+  },
+  "notes": [
+    "kind: process remains the caller's declaration; no repository kind is inferred."
+  ],
+  "documentationDetection": true,
+  "crossChecks": [],
+  "answers": [],
+  "references": []
+}

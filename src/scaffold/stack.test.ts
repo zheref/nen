@@ -252,7 +252,7 @@ describe("nen never guesses a stack", () => {
   });
 
   it("refuses --accept-detected on a tree with no marker at all", async () => {
-    const root = tempCopy(EMPTY_TREE);
+    const root = tempEmpty();
     const result = await capture(["scaffold", "init", "--accept-detected", ...TRAILERS], root);
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toMatch(/nothing to accept/);
@@ -471,12 +471,11 @@ describe("the stack's CI workflow", () => {
     expect(readFileSync(join(root, ".github", "workflows", "nen-shu.yml"), "utf8")).toBe(theirs);
   });
 
-  it("adds none for a stack the catalogue proposes no template for, and says so", async () => {
+  it("adds the new Windows CI template for its declared native stack", async () => {
     const root = tempCopy(EMPTY_TREE);
     const result = await capture(["scaffold", "init", "--stack", "dotnet-winui", ...TRAILERS], root);
     expect(result.code).toBe(0);
-    expect(existsSync(join(root, ".github"))).toBe(false);
-    expect(result.out.join("\n")).toMatch(/no CI workflow/);
+    expect(readFileSync(join(root, ".github", "workflows", "nen-shu.yml"), "utf8")).toContain("windows-latest");
   });
 });
 
@@ -719,7 +718,7 @@ describe("--json", () => {
       null,
     );
     const document = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
-    expect(Object.keys(document)).toEqual(["contract", "writes", "migrated", "tools", "exitCode"]);
+    expect(Object.keys(document)).toEqual(["contract", "path", "postSteps", "notes", "writes", "migrated", "tools", "exitCode"]);
     expect(document["contract"]).toBe("nen.scaffold.new/v0.1");
     expect(document["tools"]).toBeNull();
     // Stdout is ONE document and nothing else; the post-steps -- prose the
@@ -839,26 +838,26 @@ describe("nen scaffold new", () => {
     expect(existsSync(dir)).toBe(false);
   });
 
-  it("refuses a stack whose marker nen cannot honestly write, naming the way forward", async () => {
+  it("prints native handoffs without fabricating project markers", async () => {
     for (const stack of ["gradle-android", "xcode-ios"]) {
       const dir = join(tempEmpty(), stack);
       const result = await capture(
         ["scaffold", "new", "--stack", stack, "--name", "app", "--dir", dir],
         null,
       );
-      expect(result.code, stack).toBe(2);
-      expect(result.err.join("\n")).toMatch(/scaffold init --repo/);
+      expect(result.code, stack).toBe(0);
+      expect(result.out.join("\n")).toMatch(/scaffold init --repo/);
       expect(existsSync(dir)).toBe(false);
     }
   });
 
-  it("refuses a stack the catalogue proposes no template for", async () => {
+  it("prints the Windows native handoff without writing a tree", async () => {
     const dir = join(tempEmpty(), "x");
     const result = await capture(
       ["scaffold", "new", "--stack", "dotnet-winui", "--name", "app", "--dir", dir],
       null,
     );
-    expect(result.code).toBe(2);
+    expect(result.code).toBe(0);
     expect(existsSync(dir)).toBe(false);
   });
 
