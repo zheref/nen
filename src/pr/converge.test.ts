@@ -1,3 +1,4 @@
+import { CriteriaTestSeams } from "../issue/criteria-test-seams.js";
 // The CLI half of acceptance-criterion coverage: `nen pr converge` (./converge.ts
 // reads, ../issue/criteria.ts compares) and `nen issue criteria`.
 
@@ -6,7 +7,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
-import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
+import { type ScriptedCall } from "../seam/scripted.js";
 import type { Command } from "../cli/command.js";
 import { prCommand } from "./command.js";
 import { issueCommand } from "../issue/command.js";
@@ -21,7 +22,7 @@ async function run(
   const out: string[] = [];
   const err: string[] = [];
   const io: Io = { out: (line): void => void out.push(line), err: (line): void => void err.push(line) };
-  const seams = new ScriptedSeams(script);
+  const seams = new CriteriaTestSeams(script);
   const code = await runFamily(command, argv, options.repoFlag ?? null, options.json ?? false, io, seams);
   return { code, out: out.join("\n"), err: err.join("\n"), calls: seams.calls.map((call): string => [call.command, ...call.args].join(" ")) };
 }
@@ -56,7 +57,7 @@ describe("nen pr converge", () => {
       "COVERED-WITH-EVIDENCE  o/n#12/AC-1 satisfied (line 5)",
       "COVERED-WITH-EVIDENCE  o/n#12/AC-2 partial (line 6)",
     ]);
-    expect(result.calls).toEqual([VIEW, "gh api repos/o/n/issues/12"]);
+    expect(result.calls).toEqual([VIEW, "gh api repos/o/n/issues/12", "gh api repos/o/n/issues/12/comments?per_page=100&page=1"]);
   });
 
   it("exits 1 on a criterion without evidence, unless the catalogue's coverage block makes evidence optional", async () => {
@@ -215,7 +216,7 @@ describe("nen pr converge --require-head (zheref/nen#483 AC-6)", () => {
   it("reports the verdict when both reads see the pinned head, re-reading it after the closing issues", async () => {
     const result = await run(prCommand, argv(HEAD), [pinnedView(HEAD), issueRead(12, ISSUE_BODY), reRead(HEAD)]);
     expect(result.code).toBe(0);
-    expect(result.calls).toEqual([VIEW, "gh api repos/o/n/issues/12", HEAD_VIEW]);
+    expect(result.calls).toEqual([VIEW, "gh api repos/o/n/issues/12", "gh api repos/o/n/issues/12/comments?per_page=100&page=1", HEAD_VIEW]);
   });
 
   it("refuses a first read at another head, a head that moved between reads, and an unreadable re-read -- stdout empty", async () => {

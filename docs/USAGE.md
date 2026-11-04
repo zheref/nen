@@ -20828,3 +20828,26 @@ A `severity` enumeration with `[+]` is highest-first; two severities such as
 `high+low` are corrected to `low+`. The refused input remains exit 2 and JSON carries
 `corrected`. Mixed alternatives, incomplete lines and boundary-changing rewrites keep
 the existing refusal without an invented correction; legacy scalar placeholders stay.
+
+### Criteria source and table scope
+
+`issue criteria --ref` and `pr converge` read every page of issue comments.
+One comment beginning with `<!-- nen:issue-criteria -->` overrides the issue
+body's acceptance criteria. Include the normal acceptance heading when using a
+catalogue. The result names the comment URL in `criteriaSource` and names the
+ignored body URL; remove the marker to return to body criteria. Multiple marked
+comments are an error: keep exactly one active marker. Unmarked comments do not
+change the criteria. Failed or malformed comment reads never mean no criteria.
+Local `--body-file` reads remain local and do not inspect comments.
+
+Verify tables use `Criterion | Coverage | Evidence` headers (case insensitive).
+Tables with other headers are ignored. Headerless row fragments remain accepted
+for compatibility. Paths and words containing `ac-` are not criterion cells;
+criterion-shaped invalid IDs such as `AC-x`, `HA#1/AC-`, or lowercase `ac-1`
+are malformed and block. Criterion IDs are case sensitive.
+Catalogue-admitted priority annotations are retained when reading acceptance
+rows; catalogue-resolved withdrawn rows need no coverage row.
+A marked comment must be authored by a repository OWNER, MEMBER or COLLABORATOR.
+Nen checks its GraphQL author/editor provenance and refuses a comment edited by
+someone other than its author, or one that changes between the two reads.
+An untrusted marker is an error, never an override or a silently ignored source.

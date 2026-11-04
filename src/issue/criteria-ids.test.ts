@@ -1,3 +1,4 @@
+import { CriteriaTestSeams } from "../issue/criteria-test-seams.js";
 // The criterion id grammar (zheref/nen#519): an epic-scoped `AC-{epic}-{nnn}`
 // row is a criterion with its FULL id across `issue criteria`, `issue
 // body-check` and `pr converge`, and when a catalogue is given the id shape is
@@ -8,7 +9,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
-import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
+import { type ScriptedCall } from "../seam/scripted.js";
 import type { Command } from "../cli/command.js";
 import { prCommand } from "../pr/command.js";
 import { issueCommand } from "./command.js";
@@ -25,7 +26,7 @@ async function run(
   const out: string[] = [];
   const err: string[] = [];
   const io: Io = { out: (line): void => void out.push(line), err: (line): void => void err.push(line) };
-  const code = await runFamily(command, argv, options.repoFlag ?? null, options.json ?? false, io, new ScriptedSeams(script));
+  const code = await runFamily(command, argv, options.repoFlag ?? null, options.json ?? false, io, new CriteriaTestSeams(script));
   return { code, out: out.join("\n"), err: err.join("\n") };
 }
 
@@ -253,7 +254,7 @@ describe("hanten round 1 on #519", () => {
       kinds: { k: { required: ["acceptance"] } },
       rows: { acceptance: { pattern: "^- CR-([0-9]+): .+$", prefix: "^- CR-" } },
     });
-    const seams = new ScriptedSeams([{ match: "gh api repos/o/n/issues/7", result: { stdout: JSON.stringify({ number: 7, title: "t", state: "open", labels: [], body: "## Acceptance criteria\n\n- CR-1: one\n" }) } }]);
+    const seams = new CriteriaTestSeams([{ match: "gh api repos/o/n/issues/7", result: { stdout: JSON.stringify({ number: 7, title: "t", state: "open", labels: [], body: "## Acceptance criteria\n\n- CR-1: one\n" }) } }]);
     const parsed = {
       number: 5,
       url: "u",
@@ -329,5 +330,47 @@ describe("hanten round 1 on #519", () => {
     expect(rows[0]?.criterion).toEqual({ kind: "qualified", prefix: `${owner}/${name}`, issue: 519, id: "AC-12-001" });
     const report = converge([issue(EPIC_BODY, 519, `${owner}/${name}`)], `| ${cell} | satisfied | e |\n| ${owner}/${name}#519/AC-12-002 | satisfied | e |\n`);
     expect(report.blocking).toEqual([]);
+  });
+});
+
+
+describe("catalogue annotated and withdrawn acceptance rows (#553)", () => {
+  it("admits annotations only through the catalogue and excludes resolved rows", () => {
+    const raw = {
+      contract: "test.issue-sections/v1",
+      sections: { acceptance: { heading: "Acceptance criteria", rows: "acceptance" } },
+      common: ["acceptance"], kinds: { k: { required: ["acceptance"], optional: [] } },
+      rows: { acceptance: {
+        prefix: "^- AC-",
+        pattern: "^- AC-([0-9]+(?:-[0-9]{3})?)(?: \\(P[0-9]+\\))?: Given .+ When .+ Then .+$",
+        resolvedPattern: "^- ~~AC-([0-9]+(?:-[0-9]{3})?)~~ withdrawn: .+$",
+      } },
+    };
+    const catalogue = parseCatalogue(raw);
+    const body = "## Acceptance criteria\n\n- AC-12-001 (P1): Given a When b Then c\n- ~~AC-12-002~~ withdrawn: folded (2026-10-22)";
+    const report = extractCriteria(body, catalogue);
+    expect(report.criteria.map((row) => row.id)).toEqual(["AC-12-001"]);
+    expect(report.unrecognised).toEqual([]);
+    expect(extractCriteria(body).unrecognised).toHaveLength(2);
+    expect(checkIssueBody(body, catalogue, "k").misses).toEqual([]);
+  });
+});
+
+describe("criteria comment integration (#610)", () => {
+  it("issue criteria reports the selected comment in text and JSON", async () => {
+    const body = "<!-- nen:issue-criteria -->\n- AC-2: comment criterion";
+    const url = "https://github.com/o/n/issues/7#issuecomment-9";
+    const script = [
+      { match: "gh api repos/o/n/issues/7", result: { stdout: JSON.stringify({ number: 7, title: "t", state: "open", labels: [], body: "- AC-1: ignored body" }) } },
+      { match: "gh api repos/o/n/issues/7/comments?per_page=100&page=1", result: { stdout: JSON.stringify([{ body, html_url: url, node_id: "C9" }]) } },
+      { match: "gh api graphql -f query=query($id:ID!){node(id:$id){... on IssueComment{body url authorAssociation author{login} editor{login}}}} -f id=C9", result: { stdout: JSON.stringify({ data: { node: { body, url, authorAssociation: "OWNER", author: { login: "owner" }, editor: null } } }) } },
+    ];
+    const args = ["issue", "criteria", "--ref", "7", "--target", "o/n"];
+    const text = await run(issueCommand, args, script);
+    expect(text.code).toBe(0);
+    expect(text.out).toContain(`Criteria source: ${url}; ignored: https://github.com/o/n/issues/7`);
+    const json = await run(issueCommand, [...args, "--json"], script, { json: true });
+    expect(JSON.parse(json.out).criteriaSource.url).toBe(url);
+    expect(JSON.parse(json.out).criteria.map((row: { id: string }) => row.id)).toEqual(["AC-2"]);
   });
 });

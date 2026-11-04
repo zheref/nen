@@ -161,3 +161,18 @@ describe("the one AC row grammar (delivery round on #498, readings 2 and 21)", (
     expect(report.criteria.map((row) => row.id)).toEqual(["CR-1"]);
   });
 });
+
+describe("criterion table scope (#558)", () => {
+  it("ignores other tables, words and paths but retains malformed and lowercase IDs", () => {
+    const body = [
+      "| How | Coverage | Evidence |", "|---|---|---|", "| Criterion | Coverage | Evidence |", "| AC-x | satisfied | unrelated |", "",
+      "| Criterion | Coverage | Evidence |", "|---|---|---|",
+      "| mac-os runner | satisfied | x |", "| changelog.d/a-ac-b.md | satisfied | x |",
+      "| path/ac-file | satisfied | x |", "| none: no tag is cut here | unrequested | x |",
+      "| AC-x | satisfied | x |", "| HA#1/AC- | satisfied | x |", "| ac-1 | satisfied | x |",
+    ].join("\n");
+    const rows = readVerifyRows(body);
+    expect(rows.map((row) => row.cell)).toEqual(["AC-x", "HA#1/AC-", "ac-1"]);
+    expect(rows.every((row) => row.problem !== null)).toBe(true);
+  });
+});

@@ -1660,6 +1660,7 @@ function convergeVerb(context: CommandContext): number | Promise<number> {
   const report = converge(input.issues, input.body, policy, catalogue);
   const closingIssues = input.issues.map((issue) => ({
     issue: `${issue.target}#${issue.number}`,
+    ...(issue.report.criteriaSource?.kind === "comment" ? { criteriaSource: issue.report.criteriaSource } : {}),
     criteria: issue.report.criteria.length,
     verifiable: issue.report.verifiable,
     unrecognised: issue.report.unrecognised,
@@ -1682,6 +1683,7 @@ function convergeVerb(context: CommandContext): number | Promise<number> {
         `${counts["malformed-row"]} malformed-row, ${counts["duplicate-rows"]} duplicate-rows, ${counts["not-verifiable"]} not-verifiable`;
   const lines = [
     head,
+    ...input.issues.flatMap((issue): string[] => issue.report.criteriaSource?.kind === "comment" ? [`CRITERIA SOURCE ${issue.target}#${issue.number}: ${issue.report.criteriaSource.url}; ignored: ${issue.report.criteriaSource.ignored.join(", ")}`] : []),
     ...report.criteria.map(
       (entry): string =>
         `${entry.coverage.toUpperCase()}  ${entry.issue}/${entry.id ?? "(no AC row)"}` +
