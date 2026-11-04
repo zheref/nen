@@ -6,9 +6,12 @@
 // ../release/preflight.ts's pure table, which reports every one, never
 // stopping at the first failure.
 
+import { compareTrees } from "./compare.js";
+import { plainLine } from "../cli/plain.js";
 import { readdirSync } from "node:fs";
 import {
   emit,
+  refuseExtraPositionals,
   requireRepoFlag,
   requireSubcommand,
   requireValue,
@@ -154,6 +157,9 @@ function resolveHoldState(result: CommandResult, holdVar: string): HoldState {
 const USAGE = `nen release preflight --repo-slug <owner/name> --tag <vX.Y.Z> --range <vPrev>..<cut-point> --changelog <path> --owner-repo <owner/name> [--hold-var <name>] [--critical-issues <n,n>] [--live-chores-from <path>] [--fragment-dir <dir>] [--repo <path>] [--json]
 nen release resolve-target --repo <path> --token <main|last-commit|checkout|hash|branch> [--trunk main]
 nen release self-check --repo <path> --pr-merge-sha <sha> --previous-tag <ref> --cut-point <ref>
+nen release compare --repo <path> --left <full-sha> --right <full-sha> [--json]
+  Read-only whole-tree comparison: equal exit0, different exit1, unreadable exit3.
+  Resolves both commits/trees and verifies object closure; never chooses a cut point.
 nen release unit-check --pr <n|owner/name#n|CODE#n> --repo <path> [--json]
 
 preflight:
@@ -273,11 +279,13 @@ const DEFAULT_HOLD_VAR = "RELEASE_HOLD";
 
 export const releaseCommand: Command = {
   name: "release",
-  subcommands: ["preflight", "resolve-target", "self-check", "unit-check"],
+  subcommands: ["compare", "preflight", "resolve-target", "self-check", "unit-check"],
   summary: "Preflight table, target resolution, a release PR's self-enumeration check, and release-unit membership.",
   usage: USAGE,
   flags: {
     values: [
+      "left",
+      "right",
       "repo-slug",
       "tag",
       "range",
@@ -296,7 +304,20 @@ export const releaseCommand: Command = {
     ],
   },
   run(context: CommandContext): number {
-    const subcommand = requireSubcommand("release", context.args, ["preflight", "resolve-target", "self-check", "unit-check"]);
+    const subcommand = requireSubcommand("release", context.args, ["compare", "preflight", "resolve-target", "self-check", "unit-check"]);
+    if (subcommand !== "compare" && (context.args.values["left"] !== undefined || context.args.values["right"] !== undefined)) throw new VerbUsageError("--left and --right are only read by release compare");
+    if (subcommand === "compare") {
+      refuseExtraPositionals(context.args, 2);
+      for (const key of Object.keys(context.args.values)) if (!["left", "right", "repo"].includes(key)) throw new VerbUsageError(`--${key} is not read by release compare`);
+      for (const key of context.args.booleans) if (key !== "json") throw new VerbUsageError(`--${key} is not read by release compare`);
+      if (context.args.passthrough.length > 0) throw new VerbUsageError("release compare takes nothing after '--'");
+      const root = assertRepoRoot({ repoFlag: requireRepoFlag(context, "The repository holding both immutable Git objects") });
+      const left = requireValue(context.args, "left", "full immutable commit SHA");
+      const right = requireValue(context.args, "right", "full immutable commit SHA");
+      const report = compareTrees(context.seams, root, left, right);
+      emit(context.io, context.json, report, [`${report.outcome}: whole Git tree`, `left: ${report.left?.sha ?? left} tree ${report.left?.tree ?? "(unreadable)"}`, `right: ${report.right?.sha ?? right} tree ${report.right?.tree ?? "(unreadable)"}`, ...(report.reason === null ? [] : [report.reason])].map(plainLine));
+      return report.outcome === "equal" ? 0 : report.outcome === "different" ? 1 : 3;
+    }
     if (subcommand === "resolve-target") return resolveTarget(context);
     if (subcommand === "self-check") return selfCheck(context);
     if (subcommand === "unit-check") return unitCheck(context);

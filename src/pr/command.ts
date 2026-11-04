@@ -24,6 +24,7 @@
 
 import {
   emit,
+  refuseExtraPositionals,
   GLOBAL_FLAGS,
   requireRepoFlag,
   requireSubcommand,
@@ -37,6 +38,8 @@ import {
 import { readJsonFile, readTextFile, readVerbatimTextFile, resolveAgainstRepo } from "../cli/inputs.js";
 import { mergeUnit, MergeUnitUsageError, EXIT_GH_REFUSED, EXIT_GH_NOT_RUNNABLE } from "./mergeunit.js";
 import { deliveryExit, mergeDelivery } from "./mergedelivery.js";
+import { addedLines, nextId, validateReadPath } from "./added-lines.js";
+import { compileEre } from "./ere.js";
 import { commaList } from "../cli/comma.js";
 import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
 import { loadGateIdentities, parseGateIdentities, parseGatesText, type GateIdentities } from "../schema/gates.js";
@@ -157,7 +160,13 @@ function requirePr(context: CommandContext): number {
   return number;
 }
 
-const USAGE = `nen pr ready --target <owner/name> --pr <n> [the same ready options below]
+const USAGE = `nen pr added-lines --target <owner/name> --path <file> [--pattern <ERE>] [--json]
+nen pr next-id --target <owner/name> --path <file> --prefix <PT> [--base <ref>] [--json]
+  Complete immutable merge-base/head blobs across every open PR, read with gh auth.
+  next-id refuses collisions or incomplete reads; it never reserves or writes an id.
+  ERE filter uses bounded C-locale byte semantics; POSIX classes supported,
+  backreferences/collating elements/internal group anchors explicitly refused.
+nen pr ready --target <owner/name> --pr <n> [the same ready options below]
 nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [--reviewer-login <name>=<login>]... [--approvers <a,b>] [--round-policy strict|bounded] [--exclude-run <id>] [--exclude-check <name>]... [--gates <path>] [--token-env <VAR>] [--require-head <sha>] [--require-base-gates]
 nen pr staleness --wakes-from <path> --last-activity <ISO> --now <ISO> [--ready] [--min-verified-wakes <n>] [--idle-minutes <n>]
 nen pr body-check --body-from <path> [--requirements-from <path> | --base <ref>]
@@ -1305,6 +1314,8 @@ export const PR_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   staleness: { values: ["wakes-from", "last-activity", "now", "min-verified-wakes", "idle-minutes"], booleans: ["ready"] },
   "body-check": { values: ["body-from", "requirements-from", "base", "max", "prose-budget", "criteria", "criteria-from", "criteria-issue", "catalogue"], booleans: ["exact"] },
   sections: { values: ["catalogue", "kind", "family", "with", "overrides", "taxonomy", "jobs"] },
+  "added-lines": { values: ["target", "path", "pattern"] },
+  "next-id": { values: ["target", "path", "prefix", "base"] },
   fetch: { values: ["target", "pr"] },
   converge: { values: ["target", "pr", "catalogue", "requirements-from", "require-head", "body-requirements"], booleans: ["composite"] },
   "next-blocker": { values: ["target", "pr", "reviewers", "gates", "policy", "requirements-from"], booleans: ["delivery-pr"] },
@@ -1417,6 +1428,8 @@ const GH_RESOLVES = "runs on whatever credential gh resolves (GH_TOKEN/GITHUB_TO
  * for it (command.test.ts asserts the coverage; hanten round 1).
  */
 const TOKEN_ENV_ADVICE: Readonly<Record<string, string>> = {
+  "added-lines": GH_RESOLVES,
+  "next-id": GH_RESOLVES,
   staleness: "staleness reads local files only and calls no GitHub API, so there is no credential to name.",
   sections: "sections reads local JSON files only and calls no GitHub API.",
   "body-check": "body-check reads local files and git only and calls no GitHub API, so there is no credential to name.",
@@ -1548,6 +1561,9 @@ export const prCommand: Command = {
         return bodyCheck(context);
       case "sections":
         return sectionsCommand(context);
+      case "added-lines":
+      case "next-id":
+        return readAdded(context, subcommand);
       case "fetch":
         return fetch(context);
       case "converge":
@@ -3070,4 +3086,32 @@ function readRequirements(requirementsPath: string, root: string): readonly Body
     throw error;
   }
   return rawRequirements;
+}
+
+
+function readAdded(context: CommandContext, verb: "added-lines" | "next-id"): number {
+  refuseExtraPositionals(context.args, 2);
+  const target = requireTarget(context);
+  const path = requireValue(context.args, "path", "repository-relative file whose added rows are read");
+  let pattern: ReturnType<typeof compileEre> | null = null;
+  try {
+    validateReadPath(path);
+    if (context.args.values["pattern"] !== undefined) pattern = compileEre(context.args.values["pattern"]);
+  } catch (error) { throw new VerbUsageError(error instanceof Error ? error.message : String(error)); }
+  const prefix = verb === "next-id" ? requireValue(context.args, "prefix", "stable row-id prefix") : null;
+  if (prefix !== null && !/^[A-Z][A-Z0-9]{0,15}$/.test(prefix)) throw new VerbUsageError("--prefix must be an uppercase stable-id prefix");
+  try {
+    if (verb === "added-lines") {
+      const report = addedLines(context.seams, target, path, pattern);
+      emit(context.io, context.json, report, [...report.lines.map((line) => `PR #${line.pr} ${line.headRef}@${line.headSha}:${line.line}: ${line.text}`), ...report.pulls.filter((pull) => pull.error !== null).map((pull) => `UNREAD PR #${pull.pr}: ${pull.error}`)].map(plainLine));
+      return report.complete ? 0 : 1;
+    }
+    const report = nextId(context.seams, target, path, prefix as string, context.args.values["base"] ?? null);
+    emit(context.io, context.json, report, [`next id: ${report.nextId ?? "(refused)"}`, ...report.ids.map((entry) => `${prefix}-${entry.id}: ${entry.source}:${entry.line}`), ...report.collisions.map((id) => `COLLISION ${prefix}-${id}`), ...report.errors].map(plainLine));
+    return report.complete ? 0 : 1;
+  } catch (error) {
+    const reason = plainLine(error instanceof Error ? error.message : String(error));
+    emit(context.io, context.json, { contract: verb === "added-lines" ? "nen.pr.added-lines/v0.1" : "nen.pr.next-id/v0.1", complete: false, reason }, [reason]);
+    return 1;
+  }
 }

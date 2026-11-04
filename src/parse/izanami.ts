@@ -1021,6 +1021,8 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
   },
   backlog: {
     subcommands: {
+      "added-lines": RO("reads immutable PR merge-base/head blobs through gh; writes nothing"),
+      "next-id": RO("reads base and open-PR ids through gh; reserves and writes nothing"),
       fetch: RO("fetches open issues and PRs over gh api reads"),
       order: RO("orders a pre-fetched row set -- pure computation"),
     },
@@ -1254,6 +1256,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
   },
   release: {
     subcommands: {
+      compare: RO("compares immutable whole Git trees with no lazy fetch or writes"),
       preflight: RO("gathers the precondition table over gh/git reads"),
       "resolve-target": RO("resolves a target token over git reads (its 'git fetch' is the same read the gh/git allowlist already admits)"),
       "self-check": RO("checks a release PR's self-enumeration -- git reads only"),

@@ -3091,7 +3091,7 @@ describe("the family's one flag guard (zheref/nen#351)", () => {
     const cases: readonly (readonly [readonly string[], string])[] = [
       [[...mark, "--reviewers", "a"], "--reviewers is only read by 'pr ready' and 'pr next-blocker'."],
       [[...mark, "--gates", "g.json"], "--gates is only read by 'pr ready' and 'pr next-blocker'."],
-      [[...mark, "--base", "main"], "--base is only read by 'pr body-check', 'pr retarget' and 'pr open'."],
+      [[...mark, "--base", "main"], "--base is only read by 'pr body-check', 'pr next-id', 'pr retarget' and 'pr open'."],
       [[...mark, "--body-file", BODY], "--body-file is only read by 'pr edit-body', 'pr threads reply' and 'pr open'."],
       [["pr", "fetch", "--target", "zheref/nen", "--pr", "12", "--from", SETTLE], "--from is only read by 'pr threads settle'."],
       [["pr", "fetch", "--target", "zheref/nen", "--pr", "12", "--require-head", "abcdef1"], "--require-head is only read by 'pr ready', 'pr converge', 'pr mark-ready' and 'pr merge --delivery'."],
@@ -3191,6 +3191,8 @@ describe("the family's one flag guard (zheref/nen#351)", () => {
   // must be matched by the subcommand's handler actually reading the flag.
   it("declares exactly the flags each handler reads (literal snapshot)", () => {
     expect(PR_SUBCOMMAND_FLAGS).toEqual({
+      "added-lines": { values: ["target", "path", "pattern"] },
+      "next-id": { values: ["target", "path", "prefix", "base"] },
       ready: {
         values: ["target", "pr", "gh-repo", "reviewers", "approvers", "round-policy", "exclude-run", "gates", "token-env", "require-head"],
         booleans: ["explain", "require-base-gates"],
