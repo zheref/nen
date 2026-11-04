@@ -12,7 +12,7 @@ repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
 what each version changed: 49 command
-families, 175 verbs, every flag checked against that binary.
+families, 178 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -258,7 +258,7 @@ including every refusal reason. The raw NUL-delimited stream
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **105 shapes** and **109 ids** (`nen.runner.plan`
+binary carries**, writing or reading — **107 shapes** and **111 ids** (`nen.runner.plan`
 and `nen.wc.worktree.copies` each have two versions, `nen.stop.mark` three, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -294,7 +294,7 @@ file formats).
 
 <!-- contract-ids:begin -->
 - **`audit`** — `nen.audit.deps/v0.1`
-- **`canon`** — `nen.canon.checkout/v0.1` · `nen.canon.clause-check/v0.1` · `nen.canon.lint/v0.1` · `nen.canon.mirror.check/v0.1` · `nen.canon.mirror.generate/v0.1` · `nen.canon.pin.write/v0.1` · `nen.canon.pin/v0.1`
+- **`canon`** — `nen.canon.checkout/v0.1` · `nen.canon.clause-check/v0.1` · `nen.canon.clause-cites/v0.1` · `nen.canon.lint/v0.1` · `nen.canon.mirror.check/v0.1` · `nen.canon.mirror.generate/v0.1` · `nen.canon.pin.write/v0.1` · `nen.canon.pin/v0.1`
 - **`classify`** — `nen.classify.apply/v0.1` · `nen.classify.install/v0.1` · `nen.classify.labels/v0.1` · `nen.classify.status/v0.1`
 - **`commit`** — `nen.commit.check/v0.1` · `nen.commit.write/v0.1`
 - **`contract`** — `nen.contract/v0.1`
@@ -1006,7 +1006,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 175 verbs, grouped as the README groups them. **Reads** is what a
+All 178 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -1142,6 +1142,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`canon`](#family-canon) | [`nen canon mirror generate`](#nen-canon-mirror-generate) | render every canonical rule file, {{TOKEN}}s bound, into the rules location of EACH agent surface the consumer declares (a directory of marked files, or one marked block inside AGENTS.md), writing only changed files, deleting marked orphans, refusing to touch a hand-written file | --rules-dir, or --stack-dir/--leaf inside the canon checkout `canon checkout` resolves (read-only git) + --canon-values; the surface table (src/surface/rules.ts); writes under --repo; no gh | yes |
 | [`canon`](#family-canon) | [`nen canon mirror check`](#nen-canon-mirror-check) | render the mirror in memory and diff every declared surface's committed copy against it: ok / missing / extra / stale / hand-edited per file, foreign for the consumer's own | --rules-dir, or --stack-dir/--leaf inside the resolved canon checkout (read-only git) + --canon-values; the surface table; reads under --repo; --markdown-out writes its table (and its parent directory) there; no gh | yes |
 | [`canon`](#family-canon) | [`nen canon lint`](#nen-canon-lint) | a canon repository's prose held to a caller-owned rules contract (each rule's class picks the check) behind a shrink-only baseline; fenced code and quoted words exempt; never green over a file it could not read | nen/workflow.json `canon.lint`, the --rules contract and the files it names (version source, decisions, rulings, declared values), the --baseline and --base-baseline, the Markdown its include globs match under --root; with --base, git (merge-base, diff, show) | yes |
+| [`canon`](#family-canon) | [`nen canon clause cites`](#nen-canon-clause-cites) | read cited IDs and their status/binding, following displacement chains from caller-declared homes and vocabulary | --text, --home, --status-vocabulary | yes |
 | [`canon`](#family-canon) | [`nen canon clause check`](#nen-canon-clause-check) | a clause id space (HR-{n}, CON-{n}) held unique -- definitions counted, citations never, gaps a notice -- and, with --leaves, every changed clause matched by a change in each file citing it or a `no-leaf-change:` line | --file under --repo; --base as a file or `git show <ref>:<path>`; with --leaves, git (ls-files, diff) and the --body-from file | yes |
 | [`quality`](#family-quality) | [`nen quality tooling`](#nen-quality-tooling) | look up the e2e/adversarial/perf tooling recorded for a scenario in a caller-supplied table | caller's own --table JSON (never a table shipped in nen) | yes |
 | [`quality`](#family-quality) | [`nen quality perf-compare`](#nen-quality-perf-compare) | classify a measured-vs-baseline regression at QA-13's fixed 10%/25% thresholds | none (pure arithmetic over the two numbers given) | yes |
@@ -11561,6 +11562,32 @@ always load: handbooks/uzf-core.md, handbooks/security-baseline.md, handbooks/ux
 stack handbook: handbooks/stacks/swiftui-tca-uzf-v2/architecture.md
 ```
 
+**Manifest-aware availability (#569).** The legacy path-derivation form above
+checks token shape, not membership or file existence. To prove availability,
+use the canon's governing Markdown INDEX and its checkout root explicitly:
+
+```sh
+nen canon resolve --repo /consumer --target owner/product \
+  --canon-root /handbooks-checkout --manifest handbooks/INDEX.md
+```
+
+This form reads the INDEX's `Always load` and `Load exactly ONE stack handbook`
+tables, verifies every referenced file inside the resolved root, and returns
+`availability: "verified"`, the manifest path, the authoritative always-load set
+and exactly one stack path. Unknown scenarios fail with `invalid-scenario`, the
+target and registry named. Missing/type-invalid scenario rows keep the existing
+registry refusals. Do not combine manifest authority with `--always-load`,
+`--stack-dir` or `--leaf`. Schema-only registry checks do not prove membership.
+The caller supplies the pinned, verified canon root (e.g. `canon checkout`).
+
+**Directed ports (#457).** Add `--port-from <scenario>`; `--ports-dir` defaults
+to `handbooks/ports`. The JSON includes `portHandbook` beside the target stack;
+a genuinely absent pair is `null` with a reason on stderr, not a failure.
+Self-pairs and source scenarios absent from the manifest (or legacy stack
+folder set) refuse at exit 2. The legacy form can also resolve ports when
+`--canon-root` supplies the tree in which its stack paths exist. A malformed,
+unreadable or escaping pair is refused, never read as absent.
+
 ### `nen canon pin`
 
 Answers "which canonical handbooks repository does this consumer mirror, and at which tag" from the consumer's **own** `nen/repos.json`: the `pinned` field on that repository's `maintained_tools` entry. The pin is data there for two reasons this family depends on: a sync has to know the tag **before** it can check the canon out and render, and [`canon mirror check`](#nen-canon-mirror-check) has to know it to hold the mirror to it -- a mirror that cannot name the tag it was rendered from cannot be checked for drift against it. It lives on `maintained_tools`, not `consumers[]`, because [`repo classify`](#nen-repo-classify) reads a `consumers` entry as a consumer at G2 while a canon repository stands at G4, and `maintained_tools` is the list whose entries classify as canon. [`schema check`](#nen-schema-check) reports the same pin on its `nen/repos.json` row. Where several `maintained_tools` rows name one tool, the **last** row answers for both the pin and the checkout [`canon checkout`](#nen-canon-checkout) reads, so a later unpinned row erases an earlier pin.
@@ -11631,6 +11658,19 @@ nen canon pin --repo /path/to/consumer --json
 }
 ```
 (for a registry whose `maintained_tools` carries `{ "repo": "owner/handbooks", "role": "canonical handbooks", "pinned": "v0.6.0" }`; shape from `src/canon/command.test.ts`)
+
+**Recorded commit integrity (#506).** Every `canon pin --write <tag>` now
+records the resolved full SHA as `pinnedCommit` on the same maintained-tools
+row, preserving every other existing byte. An existing field is updated; an
+unchanged tag with an unrecorded commit is upgraded on its next write. A
+same-tag move cannot overwrite a different recorded identity. Bare pin reads
+return `commit` (or `null` and `commit: unrecorded` for legacy rows). When a
+checkout is supplied with `--canon-checkout` or declared in the registry, pin
+reads verify the tag without requiring HEAD to be checked out there. With no
+checkout declaration, the read reports the recorded identity only; no live tag
+verification is claimed. `canon checkout` and both mirror forms compare the
+recorded commit before accepting the tag, naming both SHAs on a moved tag,
+including when an existing checkout's HEAD remains at the old commit.
 
 ### `nen canon checkout`
 
@@ -11779,6 +11819,16 @@ surface: codex -> AGENTS.md
   note: AGENTS.md's canon block is 158211 bytes; 'codex' documents that it stops reading project documents at 32768 bytes (project_doc_max_bytes in .codex/config.toml) ...
 ```
 (shape derived from `src/canon/mirror.ts`'s `renderSurface`/`writeSurface` and `src/canon/command.test.ts`)
+
+**Incoming port mirrors (#457).** The verified-checkout form automatically
+adds every `<from>--<consumer-scenario>.md` pair under `handbooks/ports` (or
+`--ports-dir`) to the same surface rules location, with the normal generated
+marker and drift/orphan rules. Outgoing pairs and the pair INDEX are excluded.
+For standalone `--rules-dir`, also pass `--canon-root` to identify the tree
+containing the ports. Without it Nen explicitly reports port handbooks
+unavailable rather than claiming they were included. A supplied `--ports-dir`
+without a root is refused. Source name collisions and escaping links refuse
+before writes. `--not-mirrored` applies to pair filenames as to stack rules.
 
 ### `nen canon mirror check`
 
@@ -12011,6 +12061,42 @@ canon lint: 187 files · 0 new · 0 stale · 0 grown · PL-01 189/189b · PL-02 
 (exit 0; a real run over an export of Hatsu `main` at `1243b272` with the
 `canon.lint` block above added to its `nen/workflow.json` — the guard's counts
 exactly)
+
+### `nen canon clause cites`
+
+Read a request's cited clause IDs once each, with their definition file/line,
+status and binding, then follow displaced clauses transitively. Homes and the
+status vocabulary are explicit caller data; Nen does not decide conflicts or
+infer a product's floor or skill-touch policy.
+
+```sh
+nen canon clause cites --repo /consumer --text request.md \
+  --home HR=docs/ROSTER.md,CON=/canon/CONSTITUTION.md \
+  --status-vocabulary statuses.json --include CON-4,HR-10 --json
+```
+
+`--home` is a comma-separated `PREFIX=file` list; duplicate or malformed homes
+refuse. `--status-vocabulary` is a JSON object, for example:
+
+```json
+{"whole":["ruled","constitution"],"none":["reading"],"displacement":["reversed by","superseded by"],"unannotated":{"CON":"constitution"}}
+```
+
+Status comes from a `Status` table column or balanced parenthesis after the
+anchored bold ID; conflicting or unknown statuses refuse. Bullet definitions
+can use the explicitly declared per-prefix unannotated status. Displacements
+name one or more comma-separated clause IDs, optionally followed by one part
+annotation. Whole displacement binds nothing; a part annotation leaves the
+rest binding as `part`. Cycles terminate and followed IDs remain unique. An
+explicit `--include` list lets the caller supply floor/touch-derived IDs.
+
+`--json`: `{ contract: "nen.canon.clause-cites/v0.1", clauses, readSet, dangling, exit }`, with `clauses` (defined/dangling resolution,
+file, line, status, binding, displacedBy, via), binding `readSet` labels,
+`dangling` and `exit`. Every referenced definition is reported even when it is
+nonbinding; `readSet` is the subset binding whole or in part. Exit 0 when all
+resolve, 1 naming every dangling ID (including a missing displacement target),
+2 for unreadable request/home/vocabulary, unknown or ambiguous status, a prefix
+with no definitions, or malformed inputs. No conflict verdict is implied.
 
 ### `nen canon clause check`
 
