@@ -12,7 +12,7 @@ repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
 what each version changed: 49 command
-families, 175 verbs, every flag checked against that binary.
+families, 177 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -258,7 +258,7 @@ including every refusal reason. The raw NUL-delimited stream
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **105 shapes** and **109 ids** (`nen.runner.plan`
+binary carries**, writing or reading — **106 shapes** and **110 ids** (`nen.runner.plan`
 and `nen.wc.worktree.copies` each have two versions, `nen.stop.mark` three, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -446,6 +446,7 @@ The complete list:
 | [`pr threads`](#nen-pr-threads) | `3` / `4` / `5` | the thread is already resolved / no thread with that id / the credential could not authenticate. `settle`: `3` every other entry settled and at least one was already resolved (nothing sent to it); an unknown id is `2` there, refused with the rest of the file before any write; `4` only when the pull request itself is not visible ([#230](https://github.com/zheref/nen/issues/230)) |
 | [`pr merge`](#nen-pr-merge) | `5` / `6` / `7` | `gh pr merge` refused / `gh` could not be started / `--delivery` only: **merged without authority** — GitHub reports the merge landed in a protected name or a base other than the one gated; tell the maintainer ([#286](https://github.com/zheref/nen/issues/286)). `--delivery`'s `2` is also **refused by ruling** (a protected base), told apart from usage by its stdout line and `refused: true` |
 | [`pr ready`](#nen-pr-ready) | `8` | `--require-head` did not match GitHub's head; no verdict |
+| [`pr ready`](#nen-pr-ready) | `10` | merged or closed pull request; state and merge commit are reported, no readiness verdict needed |
 | [`pr mark-ready`](#nen-pr-mark-ready) | `8` | `--require-head` did not match GitHub's head — deliberately `pr ready`'s code for the same fact, so a caller pinning a head across both verbs branches on one number |
 | [`pr request-reviews`](#nen-pr-request-reviews) | `9` | a bot request GitHub accepted but did not list in the response's pending-review page; this does not prove recording failure or allowance exhaustion. Its `2` is also **refused by the round ceiling** (`round_policy.maxRounds`, [#240](https://github.com/zheref/nen/issues/240)), told apart from usage by its `refused:` line |
 | [`pr mark-ready`](#nen-pr-mark-ready) | `3` | the pull request is CLOSED or MERGED; nothing sent |
@@ -1006,7 +1007,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 175 verbs, grouped as the README groups them. **Reads** is what a
+All 177 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -20828,3 +20829,39 @@ A `severity` enumeration with `[+]` is highest-first; two severities such as
 `high+low` are corrected to `low+`. The refused input remains exit 2 and JSON carries
 `corrected`. Mixed alternatives, incomplete lines and boundary-changing rewrites keep
 the existing refusal without an invented correction; legacy scalar placeholders stay.
+
+
+#### Readiness states and check detail (#531)
+
+`pr ready` reports each latest check on a non-green checks row in
+`conjuncts[].checks`: `{name, conclusion, excluded}`. Human output names
+conclusions alongside failures and pending checks, and prints excluded checks
+under separate `EXCLUDED` lines. Declared exclusions retain their existing
+ruling/expiry notices; diagnosed offline runners retain the separate runner
+availability report under `--explain`/`--json`. No check policy or offline-runner
+exemption is introduced.
+
+A known MERGED or CLOSED snapshot bypasses readiness-only reads and answers
+`merged` or `closed`, with `terminal: {state, mergeCommit}` in JSON and exit
+`10` rather than not-ready's `1`. MERGED requires a valid full merge commit SHA;
+CLOSED can carry `null`. Terminal answers contain no synthetic unknown gate
+rows and never imply ready-to-merge. Open `mergeable=UNKNOWN` wording is
+unchanged.
+
+#### File-load failures in red checkpoints (#559)
+
+For `tests map --require-red`, give `--names-from-report <file>[,<file>...]`
+when the red run failed before it could list individual tests. This reads
+another complete per-test report for titles and suite identities only; it
+executes nothing and makes no claim about the names report's statuses. A name
+in an exactly matching load-failed suite inherits failure. Names in other
+suites do not, and a criterion is red only if **every** mapped test is red.
+Existing test outcomes always take precedence over inferred file failures.
+JSON records the source paths as `namesReports` and the failed suites as
+`loadFailures`.
+
+Without individual names, a file-level failure returns `could-not-read`, names
+the load-failed suites, and sets criterion checkpoints to `unreadable`, rather
+than silently reporting untested criteria. A names source containing only
+file-level failure placeholders still cannot supply individual titles. The
+flag requires `--require-red`; it does not change `--before-report` semantics.

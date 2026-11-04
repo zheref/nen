@@ -1518,6 +1518,7 @@ export const prCommand: Command = {
     { verb: "pr merge", code: 5, meaning: "gh pr merge refused" },
     { verb: "pr merge", code: 6, meaning: "gh could not be started" },
     { verb: "pr merge", code: 7, meaning: "--delivery: merged without authority; GitHub reports a base other than the one gated" },
+    { verb: "pr ready", code: 10, meaning: "the pull request is merged or closed; no readiness verdict is needed" },
     { verb: "pr ready", code: 8, meaning: "--require-head did not match GitHub's head; no verdict" },
     { verb: "pr converge", code: 3, meaning: "--composite: a read did not finish, or was at another head than --require-head; no verdict" },
     { verb: "pr mark-ready", code: 3, meaning: "the pull request is CLOSED or MERGED; nothing sent" },

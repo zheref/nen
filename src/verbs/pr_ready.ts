@@ -432,9 +432,10 @@ export const defaultDeps: PrReadyDeps = {
 // printing. The report carries it; a caller that wants it reads the report.
 export const CONTRACT = "nen.pr.ready/v0.1";
 
-export type Verdict = "ready" | "not-ready" | "unevaluated";
+export type Verdict = "ready" | "not-ready" | "unevaluated" | "merged" | "closed";
 
 export interface ReadyReport {
+  readonly terminal?: { readonly state: "merged" | "closed"; readonly mergeCommit: string | null };
   /** #532: caller-supplied inputs without a base gate produce a judgement. */
   readonly authority?: "caller-supplied";
   readonly contract: string;
@@ -1372,6 +1373,9 @@ export function renderExplain(report: ReadyReport): string[] {
   if (report.meta.roundCounts !== undefined) {
     for (const line of renderRoundCounts(report.meta.roundCounts)) lines.push(line);
   }
+  for (const check of report.conjuncts.find((row) => row.id === "checks-green")?.checks ?? []) {
+    lines.push(`  ${check.excluded ? "EXCLUDED" : "CHECK"} ${check.name}: ${check.conclusion}`);
+  }
   for (const line of renderRunnerAvailability(report.meta.runnerAvailability)) lines.push(line);
   lines.push("");
   lines.push("  The gate is a CONJUNCTION. Every row is evaluated; the verdict is ready only");
@@ -1890,6 +1894,14 @@ export async function readReady(
     );
   }
 
+  const observedState = fetched.state["pr_state"];
+  if (observedState === "MERGED" || observedState === "CLOSED") {
+    const state = observedState === "MERGED" ? "merged" : "closed";
+    const mergeCommit = typeof fetched.state["merge_commit"] === "string" ? fetched.state["merge_commit"] : null;
+    const report = unevaluatedReport(ref, deps.now(), deps.executable(), applied, policy, stallMinutes, excludeRun, excludeCheckNames, [...flagWarnings(applied), ...applied.warnings], `PR is ${state}`, "No readiness decision is needed for a terminal pull request.");
+    return verdictOf({ ...report, conjuncts: [], verdict: state, gateLine: `${state}: merge commit ${mergeCommit ?? "(none recorded)"}`, terminal: { state, mergeCommit } });
+  }
+
   // ── --require-head: the head the caller asked about, or no verdict ─────────
   //
   // zheref/nen#245. Compared BEFORE the gate runs, against the head the SAME
@@ -2294,6 +2306,12 @@ function unevaluatedReport(
 }
 
 function emit(io: Io, json: boolean, explain: boolean, report: ReadyReport): number {
+  if (report.terminal !== undefined) {
+    if (json) io.out(JSON.stringify(report, null, 2));
+    else io.out(plainLine(`${report.meta.repo}#${report.meta.pr}: ${report.gateLine}`));
+    return 10;
+  }
+
   if (json) {
     // `--json` WINS over `--explain`: the JSON already carries the table and the
     // caveats `--explain` renders, so printing both would put a human report on
@@ -2315,6 +2333,7 @@ function emit(io: Io, json: boolean, explain: boolean, report: ReadyReport): num
     // What a DECLARATION removed from CON-32(a), on the default output itself
     // (zheref/nen#249, Feitan F2): no widened verdict without its ruling.
     for (const notice of declarationNotices(report)) io.out(plainLine(`  ${notice}`));
+    for (const check of report.conjuncts.find((row) => row.id === "checks-green")?.checks ?? []) io.out(plainLine(`  ${check.excluded ? "EXCLUDED" : "CHECK"} ${check.name}: ${check.conclusion}`));
     for (const id of report.failing.slice(1)) {
       const row = report.conjuncts.find((conjunct): boolean => conjunct.id === id);
       if (row !== undefined) io.out(plainLine(`  also FAILED ${row.clause}: ${row.reason ?? row.title}`));
@@ -2331,5 +2350,5 @@ function emit(io: Io, json: boolean, explain: boolean, report: ReadyReport): num
       `${PROGRAM}: this pull request could NOT be evaluated, which is a finding and never a pass. ${report.remedy ?? ""}`,
     );
   }
-  return report.verdict === "ready" ? 0 : 1;
+  return report.verdict === "merged" || report.verdict === "closed" ? 10 : report.verdict === "ready" ? 0 : 1;
 }

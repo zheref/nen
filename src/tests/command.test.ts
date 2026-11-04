@@ -180,3 +180,44 @@ describe("nen tests map", () => {
     }
   });
 });
+
+describe("file-level red checkpoint names (#559)", () => {
+  const failedFile = JSON.stringify({ testResults: [{ name: "/abs/src/x.test.ts", status: "failed", message: "Cannot load missing module", assertionResults: [] }] });
+  it("uses data-only names source to attribute every criterion in a load-failed file", async () => {
+    const root = repo({ "issue.md": BODY, "red.json": failedFile, "names.json": vitest([["AC-1 one", "passed"], ["AC-2 two", "passed"]]) });
+    const result = await map(root, ["--issue-body", "issue.md", "--test-report", "red.json", "--require-red", "--names-from-report", "names.json", "--json"], true);
+    expect(result.code, result.err).toBe(0);
+    const report = JSON.parse(result.out);
+    expect(report.criteria.map((row: { checkpoint: string }) => row.checkpoint)).toEqual(["red", "red"]);
+    expect(report.namesReports).toEqual(["names.json"]);
+    expect(report.loadFailures).toEqual(["/abs/src/x.test.ts"]);
+  });
+  it("reports an unreadable checkpoint and failed suite names without a names source", async () => {
+    const root = repo({ "issue.md": BODY, "red.json": failedFile });
+    const result = await map(root, ["--issue-body", "issue.md", "--test-report", "red.json", "--require-red"]);
+    expect(result.code).toBe(1);
+    expect(result.out).toContain("checkpoint could not be read per criterion");
+    expect(result.out).toContain("/abs/src/x.test.ts");
+    const json = await map(root, ["--issue-body", "issue.md", "--test-report", "red.json", "--require-red", "--json"], true);
+    expect(JSON.parse(json.out).criteria.every((row: { checkpoint: string }) => row.checkpoint === "unreadable")).toBe(true);
+  });
+  it("never infers red for a name in a different file or beside a real passing test", async () => {
+    const names = JSON.stringify({ testResults: [{ name: "/abs/src/other.test.ts", assertionResults: [{ fullName: "AC-1 outside", status: "passed" }] }, { name: "/abs/src/x.test.ts", assertionResults: [{ fullName: "AC-2 failedfile", status: "passed" }, { fullName: "AC-1 also in failedfile", status: "passed" }] }] });
+    const root = repo({ "issue.md": BODY, "red.json": failedFile, "names.json": names });
+    const result = await map(root, ["--issue-body", "issue.md", "--test-report", "red.json", "--require-red", "--names-from-report", "names.json", "--json"], true);
+    expect(result.code).toBe(1);
+    const report = JSON.parse(result.out);
+    expect(report.criteria.map((row: { checkpoint: string }) => row.checkpoint)).toEqual(["not-red", "red"]);
+    const red = JSON.parse(failedFile); red.testResults.push(JSON.parse(vitest([["AC-2 actual passed", "passed"]])).testResults[0]);
+    writeFileSync(join(root, "red.json"), JSON.stringify(red));
+    expect((await map(root, ["--issue-body", "issue.md", "--test-report", "red.json", "--require-red", "--names-from-report", "names.json"])).code).toBe(1);
+    expect((await map(root, ["--issue-body", "issue.md", "--test-report", "red.json", "--names-from-report", "names.json"])).code).toBe(2);
+  });
+});
+
+it("attributes a JUnit load-failed file from names without executing tests (#559)", async () => {
+  const file = "/abs/src/x.test.ts";
+  const red = `<testsuites><testsuite name="${file}"><testcase name="${file}" classname="${file}"><failure>missing import</failure></testcase></testsuite></testsuites>`;
+  const root = repo({ "issue.md": BODY, "red.xml": red, "names.json": vitest([["AC-1 title", "passed"], ["AC-2 title", "passed"]]) });
+  expect((await map(root, ["--issue-body", "issue.md", "--test-report", "red.xml", "--require-red", "--names-from-report", "names.json"])).code).toBe(0);
+});
