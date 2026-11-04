@@ -77,20 +77,24 @@ jobs:
     # own reader refuses them); src/pipeline.test.ts asserts the two lists are
     # equal, so a copy that drifts fails CI.
     steps:
-      # Temp files go to the job's own runner.temp, which the runner empties
-      # around every job. The suite leaves nen-* temp dirs behind
-      # (zheref/nen#635); in the Windows pool's service-account %TEMP% they
-      # reached 1.27 million entries and the Test step grew from ~5 to 25+
-      # minutes. A step writing $GITHUB_ENV, because job-level `env:` cannot
-      # read the `runner` context. Both jobs carry it, so the step lists stay
-      # equal; src/ci/runner-policy.test.ts pins it.
-      - name: Point temp at runner.temp
+      # Each job gets its own temp dir, removed by the job's last step. The suite
+      # leaves nen-* temp dirs behind (zheref/nen#635); in the Windows pool's
+      # service-account %TEMP% they reached 1.27 million entries and the Test
+      # step grew from ~5 to 25+ minutes. Not runner.temp: it sits under the
+      # runner root, where `nen runner script` refuses to write an elevated
+      # script, so src/runner/command.test.ts fails there. Both jobs carry these
+      # steps, so the step lists stay equal; src/ci/runner-policy.test.ts pins them.
+      - name: Give the job its own temp dir
         shell: bash
         run: |
+          d="$(mktemp -d /tmp/nen-ci-XXXXXX)"
+          w="$d"
+          if command -v cygpath >/dev/null; then w="$(cygpath -w "$d")"; fi
           {
-            echo "TMP=$RUNNER_TEMP"
-            echo "TEMP=$RUNNER_TEMP"
-            echo "TMPDIR=$RUNNER_TEMP"
+            echo "NEN_CI_TEMP=$d"
+            echo "TMP=$w"
+            echo "TEMP=$w"
+            echo "TMPDIR=$d"
           } >> "$GITHUB_ENV"
 
       - name: Check out
@@ -149,6 +153,11 @@ jobs:
             exit 1
           fi
 
+      - name: Remove the job's temp dir
+        if: always()
+        shell: bash
+        run: rm -rf "$NEN_CI_TEMP"
+
 
   # The Windows leg of `check`, split out so it runs ONLY while a Windows runner
   # is declared online. The self-hosted Windows pool went offline in September
@@ -185,20 +194,24 @@ jobs:
       run:
         shell: bash
     steps:
-      # Temp files go to the job's own runner.temp, which the runner empties
-      # around every job. The suite leaves nen-* temp dirs behind
-      # (zheref/nen#635); in the Windows pool's service-account %TEMP% they
-      # reached 1.27 million entries and the Test step grew from ~5 to 25+
-      # minutes. A step writing $GITHUB_ENV, because job-level `env:` cannot
-      # read the `runner` context. Both jobs carry it, so the step lists stay
-      # equal; src/ci/runner-policy.test.ts pins it.
-      - name: Point temp at runner.temp
+      # Each job gets its own temp dir, removed by the job's last step. The suite
+      # leaves nen-* temp dirs behind (zheref/nen#635); in the Windows pool's
+      # service-account %TEMP% they reached 1.27 million entries and the Test
+      # step grew from ~5 to 25+ minutes. Not runner.temp: it sits under the
+      # runner root, where `nen runner script` refuses to write an elevated
+      # script, so src/runner/command.test.ts fails there. Both jobs carry these
+      # steps, so the step lists stay equal; src/ci/runner-policy.test.ts pins them.
+      - name: Give the job its own temp dir
         shell: bash
         run: |
+          d="$(mktemp -d /tmp/nen-ci-XXXXXX)"
+          w="$d"
+          if command -v cygpath >/dev/null; then w="$(cygpath -w "$d")"; fi
           {
-            echo "TMP=$RUNNER_TEMP"
-            echo "TEMP=$RUNNER_TEMP"
-            echo "TMPDIR=$RUNNER_TEMP"
+            echo "NEN_CI_TEMP=$d"
+            echo "TMP=$w"
+            echo "TEMP=$w"
+            echo "TMPDIR=$d"
           } >> "$GITHUB_ENV"
 
       - name: Check out
@@ -265,6 +278,11 @@ jobs:
             echo "::error::${skipped} supply test(s) skipped on ${{ matrix.os }} — the shell coverage must never skip here"
             exit 1
           fi
+
+      - name: Remove the job's temp dir
+        if: always()
+        shell: bash
+        run: rm -rf "$NEN_CI_TEMP"
 
   # Proves the three release-target platforms still compile from ONE host on every change,
   # rather than discovering it at release time. It does NOT upload anything and

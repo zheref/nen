@@ -154,16 +154,21 @@ describe("GitHub Actions runner policy", () => {
   // which refused it on the first live run (ci run 36802734735, 2026-10-01: "running
   // scripts is disabled on this system"). The pool's declared toolchain is git, bash, gh.
   expect(windows.defaults).toEqual({ run: { shell: "bash" } });
-    // Temp files land in the job's runner.temp, which the runner empties per job, so
-    // temp dirs the suite leaves behind cannot pile up in the service account's %TEMP%
-    // (zheref/nen#635). Job-level `env:` cannot read the runner context, so the first
-    // step writes the three names to $GITHUB_ENV.
-    const first = (windows.steps as Row[])[0]!;
-    expect(first.name).toBe("Point temp at runner.temp");
-    for (const name of ["TMP", "TEMP", "TMPDIR"]) {
-      expect(String(first.run)).toContain(`echo "${name}=$RUNNER_TEMP"`);
+    // Each job gets its own temp dir and removes it last, so temp dirs the suite leaves
+    // behind cannot pile up in the service account's %TEMP% (zheref/nen#635). Not
+    // runner.temp, which sits under the runner root `nen runner script` refuses.
+    const steps = windows.steps as Row[];
+    const first = steps[0]!;
+    expect(first.name).toBe("Give the job its own temp dir");
+    for (const name of ["NEN_CI_TEMP", "TMP", "TEMP", "TMPDIR"]) {
+      expect(String(first.run)).toContain(`echo "${name}=`);
     }
     expect(String(first.run)).toContain('>> "$GITHUB_ENV"');
+    expect(String(first.run)).not.toContain("RUNNER_TEMP");
+    const last = steps[steps.length - 1]!;
+    expect(last.name).toBe("Remove the job's temp dir");
+    expect(last.if).toBe("always()");
+    expect(String(last.run)).toBe('rm -rf "$NEN_CI_TEMP"');
     expect(windows.name).toBe("check");
     expect(rows("check-windows").map((row) => (row as Row).runner)).toEqual(['["self-hosted","Windows","X64","pool-windows-x64"]']);
   });
