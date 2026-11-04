@@ -2,17 +2,22 @@
 
 import { assertRepoRoot } from "../repo/root.js";
 import { requireRepoFlag, requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
+import { plainLine } from "../cli/plain.js";
 import { cutTag } from "./cut.js";
 
 const USAGE = `nen tag cut -- cut a tag pinned at a given SHA, getsuga §4.
 
 usage:
   nen tag cut --repo <path> --name <vX.Y.Z> --at <sha>
+             --previous-tag <vPrev> [--mode release|marker]
              [--message <text>] [--trunk main] [--push]
 
   --at      REQUIRED, and never defaulted to HEAD. 'Cut from main' is not an
             instruction a script can follow -- pin the exact reconciled
             commit explicitly.
+  --mode    release (default) requires collated dated CHANGELOG, empty fragments,
+            and previous..target PR reconciliation. marker allows fragments.
+            Both check RELEASE_HOLD, previous tag, and refreshed trunk reachability.
   --push    without it, the tag is created LOCALLY ONLY. A tag is NEVER
             auto-pushed outside this explicit flag -- the same --dry-run-by-
             default discipline every other mutating verb here applies.
@@ -28,7 +33,7 @@ export const tagCommand: Command = {
   subcommands: ["cut"],
   summary: "Cut a tag pinned at an explicit SHA; never auto-pushed.",
   usage: USAGE,
-  flags: { values: ["name", "at", "message", "trunk"], booleans: ["push"] },
+  flags: { values: ["name", "at", "message", "trunk", "mode", "previous-tag", "changelog", "fragment-dir"], booleans: ["push"] },
   run(context: CommandContext): number {
     requireSubcommand("tag", context.args, ["cut"]);
     const name = context.args.values["name"];
@@ -43,21 +48,28 @@ export const tagCommand: Command = {
     const root = assertRepoRoot({
       repoFlag: requireRepoFlag(context, "It is the repository the tag is cut in."),
     });
+    const mode = context.args.values["mode"] ?? "release";
+    if (mode !== "marker" && mode !== "release") throw new VerbUsageError("--mode takes marker or release");
+    if (context.args.values["previous-tag"] === undefined) throw new VerbUsageError("--previous-tag is required for both tag modes");
     const result = cutTag(context.seams, root, {
       name,
       at,
+      mode,
+      previousTag: context.args.values["previous-tag"],
+      changelog: context.args.values["changelog"],
+      fragmentDir: context.args.values["fragment-dir"],
       message: context.args.values["message"],
       trunk: context.args.values["trunk"],
       push: context.args.booleans.has("push"),
     });
     if (context.json) {
       context.io.out(JSON.stringify(result, null, 2));
-      return result.ok ? 0 : 1;
+      return result.ok ? 0 : result.exit ?? 1;
     }
-    for (const line of result.log) context.io.out(line);
+    for (const line of result.log) context.io.out(plainLine(line));
     if (result.error !== null) {
-      context.io.err(`nen: ${result.error}`);
-      return 1;
+      context.io.err(plainLine(`nen: ${result.error}`));
+      return result.exit ?? 1;
     }
     return 0;
   },

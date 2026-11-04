@@ -61,7 +61,7 @@ import {
   type PrOnce,
 } from "./mergeunit.js";
 import type { BodyRequirement } from "./bodycheck.js";
-import { loadWorkflow, parseBranchPolicy } from "../schema/workflow.js";
+import { loadWorkflow, parseBranchPolicy, parseChildAutonomyPolicy, type ChildAutonomyPolicy } from "../schema/workflow.js";
 import { fetchChangedFiles, fetchJsonAtRef, UnitCheckTruncatedError, type JValue } from "../release/unitcheck.js";
 import { SchemaError } from "../schema/errors.js";
 import { GH, mustJson, redactRemoteCredentials, ToolError, type Seams } from "../seam/exec.js";
@@ -142,6 +142,8 @@ export interface MergeDeliveryOutcome {
 }
 
 export interface MergeDeliveryOptions {
+  readonly child?: boolean;
+  readonly beforeMerge?: (fact: { target: string; pr: number; base: string; judgedSha: string }) => void;
   readonly typedRef: string;
   readonly repoFlag: string | null;
   readonly requirements: readonly BodyRequirement[];
@@ -232,6 +234,7 @@ function fetchDefaultBranch(seams: Seams, target: Target): string | null {
 
 /** What `nen/workflow.json` at one ref says; each field `null` when UNKNOWN, never a pass. */
 interface PolicyAtRef {
+  readonly child?: ChildAutonomyPolicy;
   readonly branchBase: string | null;
   readonly template: string | null;
 }
@@ -254,7 +257,7 @@ function readPolicyAt(seams: Seams, target: Target, ref: string): PolicyAtRef {
   // a near-miss key -- any refusal there is UNREADABLE here, never a pass.
   try {
     const policy = parseBranchPolicy(`${target.slug}@${ref}:nen/workflow.json`, toPlain(root.entries.get("branch")));
-    return { branchBase: branchName(policy.base), template: policy.template };
+    return { branchBase: branchName(policy.base), template: policy.template, child: parseChildAutonomyPolicy(`${target.slug}@${ref}:nen/workflow.json`, toPlain(root.entries.get("childAutonomy"))) };
   } catch (error) {
     if (error instanceof SchemaError) return { branchBase: null, template: null };
     throw error;
@@ -519,7 +522,8 @@ export async function mergeDelivery(options: MergeDeliveryOptions): Promise<Merg
   if (baseOid !== null && baseCommitPolicy.branchBase === null) {
     unknowns.push(`could not read branch.base from nen/workflow.json at the pull request's base commit (${baseOid}) -- the configured base is unknown`);
   }
-  const defaultBranchBase = defaultBranch === null ? null : readPolicyAt(options.seams, target, defaultBranch).branchBase;
+  const defaultPolicy = defaultBranch === null ? { branchBase: null, template: null } : readPolicyAt(options.seams, target, defaultBranch);
+  const defaultBranchBase = defaultPolicy.branchBase;
   if (defaultBranch !== null && defaultBranchBase === null) {
     unknowns.push(`could not read branch.base from nen/workflow.json at the default branch ('${defaultBranch}')`);
   }
@@ -535,10 +539,13 @@ export async function mergeDelivery(options: MergeDeliveryOptions): Promise<Merg
   add(configuredBase, `this checkout's nen/workflow.json branch.base ('${configuredBase}')`);
   add(baseCommitPolicy.branchBase, `the base commit's nen/workflow.json branch.base ('${baseCommitPolicy.branchBase}')`);
   add(defaultBranchBase, `the default branch's nen/workflow.json branch.base ('${defaultBranchBase}')`);
+  const childPolicies = options.child === true ? [loadWorkflow(options.root).workflow.childAutonomy, baseCommitPolicy.child, defaultPolicy.child] : [];
+  for (const policy of childPolicies) for (const name of policy?.humanGatedBases ?? []) add(stripHeads(name), "declared human-gated base (childAutonomy)");
+
 
   const readHead = prOnce !== null && typeof prOnce.headRefOid === "string" ? prOnce.headRefOid : "<head>";
   const facts = {
-    contract: MERGE_DELIVERY_CONTRACT,
+    contract: options.child === true ? "nen.pr.merge-child/v0.1" : MERGE_DELIVERY_CONTRACT,
     target: target.slug,
     pr: ref.number,
     base,
@@ -654,7 +661,7 @@ export async function mergeDelivery(options: MergeDeliveryOptions): Promise<Merg
   const pinGate = pinWithRequiredHead(computePinGate(readyGate.judgedHead, prOnce, fetchFailure), options.requireHead, readyGate.judgedHead);
   const bodyGate = runBodyCheckGate(prOnce, fetchFailure, { requirements: options.requirements });
   const [criteriaGate, linksGate] = runConvergenceGates(options, target, ref.number, prOnce, fetchFailure, defaultBranch);
-  const ownGate = runOwnGate(options.seams, prOnce, fetchFailure, baseCommitPolicy.template);
+  const ownGate = options.child === true ? authorizeChild(options.seams, prOnce, base, childPolicies) : runOwnGate(options.seams, prOnce, fetchFailure, baseCommitPolicy.template);
   const policyGate = runPolicyFilesGate(options.seams, target, ref.number);
 
   const gates: GateOutcome[] = [baseGate, readyGate, pinGate, bodyGate, criteriaGate, linksGate, ownGate, policyGate];
@@ -702,11 +709,10 @@ export async function mergeDelivery(options: MergeDeliveryOptions): Promise<Merg
     };
   };
   let baseNow: string | null;
+  let currentChild: { baseRefName?: unknown; baseRefOid?: unknown; headRefOid?: unknown; state?: unknown } | null = null;
   try {
-    baseNow = branchName(
-      mustJson<{ readonly baseRefName?: unknown } | null>(options.seams, GH, ["pr", "view", String(ref.number), "--repo", target.slug, "--json", "baseRefName"])
-        ?.baseRefName,
-    );
+    currentChild = mustJson<{ baseRefName?: unknown; baseRefOid?: unknown; headRefOid?: unknown; state?: unknown } | null>(options.seams, GH, ["pr", "view", String(ref.number), "--repo", target.slug, "--json", options.child === true ? "baseRefName,baseRefOid,headRefOid,state" : "baseRefName"]);
+    baseNow = branchName(currentChild?.baseRefName);
   } catch (error) {
     if (error instanceof ToolError) return failReread(`could not re-read the base before merging (${redactRemoteCredentials(error.message)})`, null);
     throw error;
@@ -723,10 +729,28 @@ export async function mergeDelivery(options: MergeDeliveryOptions): Promise<Merg
   if (baseNow !== base) {
     return failReread(`the pull request was retargeted from '${base}' to '${baseNow}' after the gates above read it; run again so every gate judges the same base`, baseNow);
   }
+  if (options.child === true) {
+    if (currentChild?.headRefOid !== judgedHead || currentChild.state !== "OPEN" || typeof currentChild.baseRefOid !== "string" || !OBJECT_ID.test(currentChild.baseRefOid)) return failReread("child head/state/base identity changed after Ready judgment", baseNow);
+    const defaultNow = fetchDefaultBranch(options.seams, target);
+    if (defaultNow === null || defaultNow !== defaultBranch || defaultNow === baseNow) return failReread("repository default branch changed or now names the child base", baseNow);
+    const currentBasePolicy = readPolicyAt(options.seams, target, currentChild.baseRefOid);
+    const currentDefaultPolicy = readPolicyAt(options.seams, target, defaultNow);
+    const currentProtection = readProtection(options.seams, target, baseNow);
+    if (!currentProtection.ok || currentProtection.protected || currentProtection.rulesets > 0 || currentBasePolicy.branchBase === null || currentDefaultPolicy.branchBase === null || currentBasePolicy.branchBase === baseNow || currentDefaultPolicy.branchBase === baseNow) return failReread("current child base protection or trusted branch policy is human-gated/unreadable", baseNow);
+    for (const policy of [currentBasePolicy.child, currentDefaultPolicy.child]) for (const name of policy?.humanGatedBases ?? []) add(stripHeads(name), "current childAutonomy human-gated base");
+    if (names.has(baseNow)) return failReread("current child base is declared human-gated", baseNow);
+    const current = authorizeChild(options.seams, prOnce, baseNow, [loadWorkflow(options.root).workflow.childAutonomy, currentBasePolicy.child, currentDefaultPolicy.child]);
+    if (!current.ok) return failReread("child authorization changed before merging", baseNow);
+  }
   const rereadOk: GateOutcome = { name: "base (re-read)", ok: true, lines: [`base (re-read): still '${baseNow}'`] };
   lines.push(...rereadOk.lines);
   const rereadFacts = { ...gateFacts, rereadBase: baseNow };
 
+  if (options.beforeMerge !== undefined) {
+    if (judgedHead === null) return failReread("no judged head for the child ledger", baseNow);
+    try { options.beforeMerge({ target: target.slug, pr: ref.number, base: baseNow, judgedSha: judgedHead }); }
+    catch (error) { return failReread(`child ledger could not be prepared: ${error instanceof Error ? error.message : String(error)}`, baseNow); }
+  }
   const executed = executeMerge(options.seams, target, ref.number, mergeArgv, "state,mergedAt,baseRefName");
   lines.push(...executed.lines);
   // N1 (round 2): EVERY post-merge re-read that answers is checked, whatever
@@ -775,4 +799,20 @@ export function deliveryExit(report: MergeDeliveryReport, shared: (report: Merge
   if (report.refused) return EXIT_REFUSED_BY_RULING;
   if (report.outsideAuthority) return EXIT_MERGED_OUTSIDE_AUTHORITY;
   return shared(report);
+}
+
+
+function authorizeChild(seams: Seams, pr: DeliveryPrOnce | null, base: string | null, policies: readonly (ChildAutonomyPolicy | undefined)[]): GateOutcome {
+  const fail = (reason: string): GateOutcome => ({ name: "child authorization", ok: false, lines: [plainLine(`child authorization: ${reason} -- refused`)] });
+  if (pr === null || base === null || policies.length < 3 || policies.some((policy) => policy?.enabled !== true)) return fail("explicit childAutonomy opt-in is required in checkout, PR base commit and default-branch policy");
+  const author = pr.author !== null && typeof pr.author === "object" ? (pr.author as { login?: unknown }).login : null;
+  if (typeof author !== "string") return fail("PR author identity is unreadable");
+  const actor = seams.run(GH, ["api", "user", "--jq", ".login"]);
+  const login = actor.stdout.trim();
+  if (actor.code !== 0 || login === "") return fail("acting maintainer identity could not be read");
+  for (const policy of policies) {
+    if (policy === undefined || !policy.allowedBases.map(stripHeads).includes(base) || !policy.allowedActors.some((item) => item.toLowerCase() === login.toLowerCase()) || !policy.allowedAuthors.some((item) => item.toLowerCase() === author.toLowerCase()) || policy.humanGatedBases.map(stripHeads).includes(base)) return fail(`actor '${login}', author '${author}' and base '${base}' are not jointly authorized by every trusted policy`);
+  }
+  if (pr.isCrossRepository !== false) return fail("cross-repository child PRs are not authorized");
+  return { name: "child authorization", ok: true, lines: [`child authorization: '${login}' may merge '${author}' child into exact base '${base}' under explicit trusted opt-in`] };
 }

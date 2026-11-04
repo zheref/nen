@@ -580,7 +580,34 @@ export interface CiPolicy {
   readonly raw: Readonly<Record<string, unknown>>;
 }
 
+export interface ChildAutonomyPolicy {
+  readonly enabled: boolean;
+  readonly allowedBases: readonly string[];
+  readonly allowedActors: readonly string[];
+  readonly allowedAuthors: readonly string[];
+  readonly humanGatedBases: readonly string[];
+}
+export function parseChildAutonomyPolicy(path: string, value: unknown): ChildAutonomyPolicy {
+  if (value === undefined || value === null) return { enabled: false, allowedBases: [], allowedActors: [], allowedAuthors: [], humanGatedBases: [] };
+  const raw = requireRecord(path, "childAutonomy", value);
+  const keys = ["enabled", "allowedBases", "allowedActors", "allowedAuthors", "humanGatedBases"];
+  for (const key of Object.keys(raw)) if (!key.startsWith("$") && !keys.includes(key)) throw new SchemaError(path, `childAutonomy.${key}`, "unknown child autonomy authority key");
+  if (typeof raw["enabled"] !== "boolean") throw new SchemaError(path, "childAutonomy.enabled", "expected explicit boolean opt-in");
+  const list = (key: string): string[] => {
+    const values = raw[key] ?? (raw["enabled"] ? undefined : []);
+    if (!Array.isArray(values) || values.some((item) => typeof item !== "string" || item.trim() !== item || item === "")) throw new SchemaError(path, `childAutonomy.${key}`, "expected explicit array of nonempty strings");
+    if (raw["enabled"] && key !== "humanGatedBases" && values.length === 0) throw new SchemaError(path, `childAutonomy.${key}`, "enabled authority needs a nonempty allowlist");
+    const names = values as string[];
+    for (const name of names) {
+      if (key.endsWith("Bases") ? !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(name) || name.includes("..") || name.endsWith("/") : !/^[A-Za-z0-9][A-Za-z0-9-]{0,38}(?:\[bot\])?$/.test(name)) throw new SchemaError(path, `childAutonomy.${key}`, `invalid exact authority name '${name}' (no globs)`);
+    }
+    return [...new Set(names)];
+  };
+  return { enabled: raw["enabled"], allowedBases: list("allowedBases"), allowedActors: list("allowedActors"), allowedAuthors: list("allowedAuthors"), humanGatedBases: list("humanGatedBases") };
+}
+
 export interface Workflow {
+  readonly childAutonomy?: ChildAutonomyPolicy;
   readonly ci?: CiPolicy | null;
   readonly severity: SeverityPolicy | null;
   readonly schema: string | null;
@@ -743,6 +770,7 @@ export function defaultWorkflow(): Workflow {
 
 /** The blocks this loader reads. Everything else at the root is preserved. */
 const ROOT_KEYS: readonly string[] = [
+  "childAutonomy",
   "severity",
   "branch",
   "iteration",
@@ -2440,6 +2468,7 @@ export function parseWorkflow(path: string, value: unknown): Workflow {
     // `$schema` IS A `$`-KEY LIKE EVERY OTHER -- surfaced when it happens to be
     // a string, ignored otherwise, and preserved either way by `raw`. The same
     // rule ../schema/contract.ts states for the same field.
+    childAutonomy: parseChildAutonomyPolicy(path, raw["childAutonomy"]),
     schema: typeof raw["$schema"] === "string" && raw["$schema"] !== "" ? raw["$schema"] : null,
     severity: parseSeverity(path, raw["severity"]),
     branch: parseBranch(path, raw["branch"]),

@@ -2579,6 +2579,13 @@ describe("nen pr merge -- the bounded merge, CLI wiring", () => {
     ]);
   }
 
+  it("--child dispatches to guarded child authority and refuses the default base", async () => {
+    const seams=trunkRefusalSeams();
+    const result=await capture(["pr","merge","zheref/example#9","--child","--requirements-from",REQUIREMENTS_FILE,"--run"],unitRepo(),seams);
+    expect(result.code).toBe(2); expect(result.out.join("\n")).toContain("default branch");
+    expect(seams.calls.some(call=>call.args[0] === "pr" && call.args[1] === "merge")).toBe(false);
+    expect((await capture(["pr","merge","zheref/example#9","--child","--delivery"],unitRepo(),new ScriptedSeams([]))).code).toBe(2);
+  });
   it("--delivery refuses a pull request into the default branch at exit 2 -- refused by ruling, on stdout, not a usage error", async () => {
     const result = await capture(["pr", "merge", "zheref/example#9", "--delivery", "--requirements-from", REQUIREMENTS_FILE, "--run"], unitRepo(), trunkRefusalSeams());
     expect(result.code).toBe(2);
@@ -3210,7 +3217,7 @@ describe("the family's one flag guard (zheref/nen#351)", () => {
       "mark-ready": { values: ["target", "pr", "require-head"], booleans: ["dry-run"] },
       threads: { values: ["target", "pr", "thread", "body-file", "from", "private-names-ignore-file"], booleans: ["dry-run", "skip-private-name-check", "allow-all-ignored"] },
       open: { values: ["target", "base", "title-file", "body-file", "head", "assignee", "private-names-ignore-file"], booleans: ["draft", "dry-run", "skip-private-name-check", "allow-all-ignored"] },
-      merge: { values: ["requirements-from", "require-head", "catalogue"], booleans: ["release-unit", "delivery", "run"] },
+      merge: { values: ["requirements-from", "require-head", "catalogue"], booleans: ["release-unit", "delivery", "child", "run"] },
       ledger: { values: ["target", "pr", "effort", "findings", "findings-schema", "login", "private-names-ignore-file"], booleans: ["dry-run", "skip-private-name-check", "allow-all-ignored", "restore"], lists: ["proof"] },
     });
     const threadsRow = PR_SUBCOMMAND_FLAGS["threads"] ?? {};
