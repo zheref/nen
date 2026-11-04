@@ -1,0 +1,1 @@
+- Document and verify existing changed-only label sync/progress,136-pair dry-run/default `.nen` ledger behavior, and an actual Claude Auto-mode local loop-release invocation with the unchanged shipped default permission pack. No permission bypass or broader authority is introduced. ([#391](https://github.com/zheref/nen/issues/391))
