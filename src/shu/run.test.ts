@@ -517,19 +517,37 @@ describe("--json -- the pinned key order", () => {
 // ── (c) preconditions: asserted, never performed ───────────────────────────
 
 describe("preconditions -- asserted and never performed", () => {
+  it.each([
+    { why: "npm ci --ignore-scripts", flags: [] },
+    { why: undefined, flags: [] },
+    { why: "locked install", flags: ["--dry-run"] },
+    { why: "locked install", flags: ["--json"] },
+    { why: "touch never-execute-this; npm ci --ignore-scripts", flags: [] },
+  ])("preserves prerequisite explanation $why in $flags without spawning", async ({ why, flags }) => {
+    const result = await withDeclaration(oneLane({ preconditions: { only: [{ kind: "path", value: "missing-dependency", ...(why === undefined ? {} : { why }) }] } }), ["build", ...flags]);
+    expect(result.code).toBe(2);
+    expect(spawned(result.seams)).toEqual([]);
+    if ((flags as readonly string[]).includes("--json")) expect(JSON.parse(result.out.join("\n")).preconditions[0].why).toBe(why);
+    else {
+      expect(result.out.join("\n")).toContain("missing-dependency -- not present");
+      if (why) expect(result.out.join("\n")).toContain(why);
+    }
+  });
+
   it("reports a satisfied path and a satisfied env, and runs", async () => {
     const result = await capture(["build", "--dry-run", "--json"]);
     const report = JSON.parse(result.out.join("\n")) as {
       preconditions: readonly { kind: string; value: string; satisfied: boolean | null }[];
     };
     expect(report.preconditions).toEqual([
-      { kind: "path", value: "deps", expect: null, satisfied: true },
-      { kind: "env", value: TOKEN, expect: null, satisfied: true },
+      { kind: "path", value: "deps", expect: null, satisfied: true, why: "The dependency install has been run. Nen ASSERTS it and never performs it: an install executes this project's own postinstall scripts. (The fixture carries deps/INSTALLED so this one is satisfied.)" },
+      { kind: "env", value: TOKEN, expect: null, satisfied: true, why: "Set by this project's own shell profile. Nen checks that the NAME is set and never reads, compares or prints the value." },
     ]);
     expect(Object.keys(report.preconditions[0] ?? {})).toEqual([
       "kind",
       "value",
       "expect",
+      "why",
       "satisfied",
     ]);
   });
@@ -560,6 +578,7 @@ describe("preconditions -- asserted and never performed", () => {
     };
     expect(report.preconditions).toContainEqual({
       kind: "command",
+      why: "A kind this release cannot assert. It is reported as 'cannot assert' and refused -- never silently passed.",
       value: ["placeholder-probe", "--version"],
       expect: null,
       satisfied: null,
@@ -3725,7 +3744,7 @@ describe("a precondition of kind 'port'", () => {
       preconditions: readonly { kind: string; value: number; expect: string; satisfied: boolean }[];
     };
     expect(report.preconditions).toEqual([
-      { kind: "port", value: 3000, expect: "listening", satisfied: true },
+      { kind: "port", value: 3000, expect: "listening", satisfied: true, why: "the API" },
     ]);
   });
 

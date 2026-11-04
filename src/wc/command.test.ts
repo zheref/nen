@@ -953,6 +953,12 @@ const FETCH_WORK = { match: "git fetch --end-of-options origin refs/heads/featur
 const REMOTES_O = { match: "git remote", result: { stdout: "origin\n" } };
 
 describe("nen wc publish -- push the current branch to origin, never a force, never the trunk", () => {
+  it("sets upstream automatically on a first bare publish", async () => {
+    const result = await captureJson(["wc", "publish"], [ON_WORK, WORK_OK, NO_TRACKING, { match: PUSH_WORK_U, result: { code: 0 } }]);
+    expect(result.code).toBe(0);
+    expect(gitCalls(result.seams)).toContain(PUSH_WORK_U);
+  });
+
   it("pushes with -u on --set-upstream when there is no upstream yet, reporting the nen.wc.publish/v0.1 document", async () => {
     const result = await captureJson(["wc", "publish", "--set-upstream"], [
       ON_WORK, WORK_OK, NO_TRACKING, { match: PUSH_WORK_U, result: { code: 0 } },

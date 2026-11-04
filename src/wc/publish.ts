@@ -484,7 +484,7 @@ export function publish(seams: Seams, cwd: string, options: PublishOptions): Pub
 
   // THE REFSPEC IN FULL, behind `--`: `refs/heads/<b>:refs/heads/<b>` is a
   // plain update of that one ref whatever the name looks like.
-  const argv = ["push", ...(options.setUpstream ? ["-u"] : []), remote, "--", `refs/heads/${branch}:refs/heads/${destination}`];
+  const argv = ["push", ...(options.setUpstream || upstreamBefore === null ? ["-u"] : []), remote, "--", `refs/heads/${branch}:refs/heads/${destination}`];
   const report = (pushed: boolean): PublishReport => ({
     contract: PUBLISH_CONTRACT,
     branch,
@@ -539,6 +539,6 @@ export function publish(seams: Seams, cwd: string, options: PublishOptions): Pub
   return {
     kind: "done",
     report: report(true),
-    lines: [`pushed '${branch}' to ${remote}${options.setUpstream ? " (upstream set)" : ""}${counted}${retracked}`],
+    lines: [`pushed '${branch}' to ${remote}${options.setUpstream || upstreamBefore === null ? " (upstream set)" : ""}${counted}${retracked}`],
   };
 }

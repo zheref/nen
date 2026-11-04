@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { renderCanonValuesTemplate, scaffoldInit } from "./init.js";
+
+import { NEXTJS_MULTI } from "../shu/fixtures/paths.js";
 
 const HOOK = { agentTrailer: "X-Agent", runTrailer: "X-Run", markerEnvVar: "X_AUTOMATED" };
 
@@ -22,6 +24,11 @@ function tempRoot(): string {
 }
 
 describe("scaffoldInit", () => {
+  it("explains multiple accepted lanes and the required explicit lane selection", () => {
+    const root = tempRoot(); cpSync(NEXTJS_MULTI, root, { recursive: true });
+    const result = scaffoldInit({ root, platform: "linux", directories: [], hook: HOOK, acceptDetected: true, dryRun: true });
+    expect(result.notes.join("\n")).toContain("2 lanes were found, so defaultLane is null and --lane is required");
+  });
   it.each([false, true])("declines a linked checkout's default hook before any write (dryRun=%s)", (dryRun) => {
     const root = tempRoot();
     const gitFile = "gitdir: /shared/repo/.git/worktrees/effort\n";
