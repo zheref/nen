@@ -11,8 +11,8 @@ binary](#getting-the-binary)), or as `bun src/index.ts` from a checkout of this
 repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
-what each version changed: 49 command
-families, 175 verbs, every flag checked against that binary.
+what each version changed: 50 command
+families, 178 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -258,7 +258,7 @@ including every refusal reason. The raw NUL-delimited stream
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **105 shapes** and **109 ids** (`nen.runner.plan`
+binary carries**, writing or reading — **107 shapes** and **111 ids** (`nen.runner.plan`
 and `nen.wc.worktree.copies` each have two versions, `nen.stop.mark` three, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -326,6 +326,7 @@ file formats).
 - **`usage`** — `nen.usage.ledger/v0.1`
 - **`wc`** — `nen.wc.catch-up/v0.2` · `nen.wc.prune/v0.1` · `nen.wc.publish/v0.1` · `nen.wc.squash/v0.1` · `nen.wc.swap.state/v0.1` · `nen.wc.swap/v0.1` · `nen.wc.worktree.copies/v0.1` · `nen.wc.worktree.copies/v0.2` · `nen.wc.worktree/v0.1` · `nen.wc.worktrees/v0.1`
 - **`workflow`** — `nen.workflow/v0.1`
+- **`tool`** — `nen.tool.install/v0.1`
 <!-- contract-ids:end -->
 
 Four verbs have no `--json` because they have no result of their own to
@@ -1006,7 +1007,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 175 verbs, grouped as the README groups them. **Reads** is what a
+All 178 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -1090,6 +1091,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`changelog`](#family-changelog) | [`nen changelog fragment-required`](#nen-changelog-fragment-required) | whether a change owes a changelog.d/ fragment (CON-33(a)) | git diff/caller files, CHANGELOG.md at base+head, optional nen/repos.json-shaped --base-repos/--head-repos | yes |
 | [`changelog`](#family-changelog) | [`nen changelog collate`](#nen-changelog-collate) | collate every changelog.d/ fragment into a new dated CHANGELOG.md section (CON-33(b)) | changelog.d/, CHANGELOG.md | yes |
 | [`changelog`](#family-changelog) | [`nen changelog completeness`](#nen-changelog-completeness) | every PR merged in a range has a CHANGELOG entry or an (un)collated fragment (CON-33(c)), except the range's terminal PR when its merge introduced the dated section | git log --merges, git ls-tree/cat-file (the CHANGELOG's history, for the release-PR allowance), CHANGELOG.md, changelog.d/ | yes |
+| [`tool`](#family-tool) | [`nen tool install`](#nen-tool-install) | install a declared checksum-pinned scan tool on the existing PATH; exact-pin no-op, refusals never install | trusted contract, HTTPS manifest/archive, destination and version probe | yes |
 | [`tag`](#family-tag) | [`nen tag cut`](#nen-tag-cut) | cut an annotated git tag pinned at an explicit SHA, never auto-pushed | git (tag/ls-remote/merge-base; --push also reaches origin) | yes |
 | [`fanout`](#family-fanout) | [`nen fanout compute`](#nen-fanout-compute) | which registered consumers (nen/repos.json) are affected by workflows changed in a release range | nen/repos.json, git diff, .github/workflows/ | yes |
 | [`fanout`](#family-fanout) | [`nen fanout record`](#nen-fanout-record) | the same computation, appended to an audit ledger file | nen/repos.json, git diff, .github/workflows/, ledger file | yes |
@@ -20828,3 +20830,25 @@ A `severity` enumeration with `[+]` is highest-first; two severities such as
 `high+low` are corrected to `low+`. The refused input remains exit 2 and JSON carries
 `corrected`. Mixed alternatives, incomplete lines and boundary-changing rewrites keep
 the existing refusal without an invented correction; legacy scalar placeholders stay.
+
+
+<a id="family-tool"></a>
+### `nen tool install`
+
+```text
+nen tool install --contract /trusted/hatsu/contracts/scans.json --row secretScan --bin-dir /existing/PATH/bin [--json]
+```
+
+The caller explicitly selects the trusted declaration and existing PATH destination. The row supplies `tool`, exact semver `version`, `assets` keyed by Node platform/architecture (`darwin-arm64`, `linux-x64`, `win32-x64`, etc.), `checksumsUrl`, and `assetUrlTemplate` containing one `<asset>`. Optional `versionArgv` is a literal array, default `["version"]`. Hatsu's existing `contracts/scans.json` `secretScan` row is directly supported. Prose declaration fields are not executable instructions. No version bump, platform substitution, PATH/profile edit or elevation occurs.
+
+The HTTPS checksum manifest must contain exactly one SHA256 line for the host asset. Archive bytes must match before archive parsing, staging or execution. Only the regular root executable (`tool.exe` on Windows) is staged; other members are never written to disk. Traversal, links, special types, duplicate paths, malformed metadata/CRC and excessive sizes refuse. Supported formats are basic regular-file tar.gz and single-volume stored/deflated ZIP; unsupported tar extensions and ZIP features refuse explicitly. Bounds: 2MiB manifest, 128MiB download, 256MiB expanded contents, 4096 ZIP entries, five HTTPS redirects and 120s request budget; downloads/checksum failures are never retried. HTTPS downgrades and credential-bearing destinations refuse. Certificate verification is forced; runtime proxy and additional trust-store settings may still apply. No cookies or credential headers are attached.
+
+The staged, verified executable must report exactly the declared version (a leading `v` is optional). Publication is atomic and never replaces an existing destination. An exact installed version changes nothing and fetches nothing; a different/unreadable existing version refuses. The destination must already be on PATH; choose its directory explicitly. A cleanup failure preserves the truthful installed result and `path`, with `cleanupWarning` naming residual staging.
+
+Exit0 installed/unchanged; exit1 named fetch, checksum, archive, version or install refusal; exit2 declaration/destination wiring; exit3 `not-scanned` with unsupported host named. **`--json`** top-level keys (`nen.tool.install/v0.1`): `host`, `tool`, `version`, `verdict`, `exit`, `path`, `check`, `detail`, optional `cleanupWarning`. This installs the pinned tool; it does not claim a security scan ran or passed.
+
+### Exact public verification-prose recovery
+
+`nen pr ledger post --dry-run --json` retains its credential scan and private-name guard on every caller field. One built-in false-positive corpus entry cites [NN#580](https://github.com/zheref/nen/issues/580): the exact already-public harmless candidate `matchingmanualcapturewithGitTree/buildproof/JUnitLCOVhashes` is classified as verification prose only within phase notes. Run the normal dry run again; original local rows and portable note bytes remain unchanged. There is no recovery flag, caller allowlist, dictionary heuristic, escaping, omission or rewritten history. Prefixes, suffixes, case changes, other fields and other entropy candidates retain the original policy; named credential patterns still scan the original note, including credentials elsewhere in that same note.
+
+This fixed case establishes no general proof that English-looking text is safe. Other refusals name field and shape, never values. Inspect the named field locally, preserve the original evidence, resolve the suspected credential and rerun the dry run; never paste suspected values into a report. JSON refusal adds `nextStep`. Existing public-name checks remain mandatory before publication.

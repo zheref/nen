@@ -317,6 +317,7 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     expect(classifyCommand("nen pr retarget --target o/r --pr 1 --base main").classification).toBe("mutating");
     expect(classifyCommand("nen pr request-reviews --target o/r --pr 1 --add-reviewers a").classification).toBe("mutating");
     expect(classifyCommand("nen tag cut --name v1.0.0 --at abc123").classification).toBe("mutating");
+    expect(classifyCommand("nen tool install --contract /trusted/scans.json --row secretScan --bin-dir /tmp/bin").classification).toBe("mutating");
     expect(classifyCommand("nen run rerun-failed --target o/r --run-id 9").classification).toBe("mutating");
     // The run manifest (SDD piece N7): start/append write unless --dry-run;
     // verify, budget, wc overlap, stage check and loop slots --from-run read.

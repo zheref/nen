@@ -1577,6 +1577,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
     },
   },
   tag: { subcommands: { cut: MUT("creates a tag locally even without --push") } },
+  tool: { subcommands: { install: MUT("downloads and installs a verified executable on the existing PATH") } },
   tests: { subcommands: { map: RO("reads an issue body and test reports from disk; runs, fetches and writes nothing") } },
   wake: {
     subcommands: {

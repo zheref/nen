@@ -1,0 +1,2 @@
+- Add `tool install` for caller-declared exact versions and host assets, SHA256 manifest verification before archive parsing/execution, exact-pin idempotence and named fail-closed refusals. ([#604](https://github.com/zheref/nen/issues/604))
+- Classify the exact already-public NN#580 verification-prose false positive only in evidence phase notes, preserving original bytes and all other credential/privacy checks; add actionable value-free refusal guidance. ([#580](https://github.com/zheref/nen/issues/580))
