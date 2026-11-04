@@ -198,6 +198,8 @@ export interface DependencyBlock {
 }
 
 export interface Lane {
+  /** Optional repository-relative changed-file selectors; absent means undeclared. */
+  readonly paths?: readonly string[];
   readonly name: string;
   readonly stack: string;
   /** Repo-relative working directory for every verb in this lane. */
@@ -986,9 +988,17 @@ export function parseDependencyBlock(path: string, value: unknown): DependencyBl
   };
 }
 
+function lanePaths(path: string, pointer: string, value: unknown): readonly string[] {
+  return requireArray(path, pointer, value).map((entry, index) => {
+    const at = `${pointer}[${index}]`; const pattern = requireString(path, at, entry);
+    if (!pattern.trim() || pattern.startsWith("/") || /^[A-Za-z]:/.test(pattern) || /[\\\x00-\x1f\x7f[\]{}!]/.test(pattern) || pattern.split("/").some(part => ["", ".", ".."].includes(part)) || pattern.split("/").some(part => part.includes("**") && part !== "**")) throw new SchemaError(path, at, "lane paths must be repository-relative globs using only *, ** (whole segment), and ?; no traversal, braces, brackets, negation or controls");
+    return pattern;
+  });
+}
+
 function parseLanes(path: string, value: unknown): Record<string, Lane> {
   const record = requireRecord(path, "project.lanes", value);
-  const lanes: Record<string, Lane> = {};
+  const lanes: Record<string, Lane> = Object.create(null) as Record<string, Lane>;
   for (const [name, entry] of Object.entries(record)) {
     if (name.startsWith("$")) continue;
     const pointer = `project.lanes.${name}`;
@@ -998,6 +1008,7 @@ function parseLanes(path: string, value: unknown): Record<string, Lane> {
       stack: requireString(path, `${pointer}.stack`, raw["stack"]),
       // Match stdoutTo's lexical boundary, including Windows paths on POSIX.
       cwd: requireStdoutTo(path, `${pointer}.cwd`, raw["cwd"]),
+      ...(raw["paths"] === undefined ? {} : { paths: lanePaths(path, `${pointer}.paths`, raw["paths"]) }),
       raw,
     };
   }

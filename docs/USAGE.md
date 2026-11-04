@@ -258,7 +258,7 @@ including every refusal reason. The raw NUL-delimited stream
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **106 shapes** and **110 ids** (`nen.runner.plan`
+binary carries**, writing or reading — **107 shapes** and **111 ids** (`nen.runner.plan`
 and `nen.wc.worktree.copies` each have two versions, `nen.stop.mark` three, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -318,7 +318,7 @@ file formats).
 - **`scaffold`** — `nen.scaffold.init/v0.1` · `nen.scaffold.migrate/v0.1` · `nen.scaffold.new/v0.1` · `nen.scaffold.template/v0.1`
 - **`schema`** — `nen.schema.set/v0.1`
 - **`session`** — `nen.session.ledger/v0.1`
-- **`shu`** — `nen.shu.<verb>/v0.1` · `nen.shu.coverage-capture/v0.1` · `nen.shu.coverage/v0.1` · `nen.shu.detect/v0.1` · `nen.shu.evidence/v0.1` · `nen.shu.proof/v0.1` · `nen.shu.test-report/v0.1` · `nen.shu.tools/v0.1` · `nen.shu.warmup/v0.1`
+- **`shu`** — `nen.shu.<verb>/v0.1` · `nen.shu.changed/v0.1` · `nen.shu.coverage-capture/v0.1` · `nen.shu.coverage/v0.1` · `nen.shu.detect/v0.1` · `nen.shu.evidence/v0.1` · `nen.shu.proof/v0.1` · `nen.shu.test-report/v0.1` · `nen.shu.tools/v0.1` · `nen.shu.warmup/v0.1`
 - **`spec`** — `nen.spec.check/v0.1` · `nen.spec.cite-check/v0.1` · `nen.spec.converge/v0.1` · `nen.spec.coverage/v0.1` · `nen.spec.diff/v0.1` · `nen.spec.index/v0.1` · `nen.spec.inventory/v0.1` · `nen.spec.number/v0.1` · `nen.spec.parity/v0.1` · `nen.spec.tasks/v0.1` · `nen.spec.trace/v0.1`
 - **`stop`** — `nen.stop.answer/v0.1` · `nen.stop.list/v0.1` · `nen.stop.mark/v0.1` · `nen.stop.mark/v0.2` · `nen.stop.mark/v0.3` · `nen.stop.proposed-issue/v0.1`
 - **`surface`** — `nen.surface.capabilities/v0.1` · `nen.surface.install/v0.1` · `nen.surface.mirror.check-installed/v0.1` · `nen.surface.mirror.check-plugin/v0.1` · `nen.surface.mirror.check/v0.1` · `nen.surface.mirror.generate/v0.1` · `nen.surface.status/v0.1`
@@ -11323,6 +11323,23 @@ It still never generates scenario-specific project *code* — a framework's own 
 
 ### `nen scaffold init`
 
+Documentation repositories may confirm `--stack prose` (or `--accept-detected`
+after a documentation proposal). The pack writes one lane with unsupported
+seats and a plain `pull_request` workflow that runs only its declared lint row.
+It never infers `kind: process` or a lint tool. Supply an explicit argument array,
+for example `--lint-argv '["node","scripts/lint.mjs"]'`, to replace the lint seat.
+A top-level Markdown-only tree or `handbooks/INDEX.md` can propose this pack only
+without a recognised build marker; proposal remains separate from confirmation.
+
+`--hook-only --marker-env <VAR> [--agent-trailer <key>]` installs only commit-msg
+from an existing `nen/workflow.json`, without requiring or creating a project
+lane. The workflow's admitted trailers and run trailer remain authoritative.
+Missing policy refuses. A different hook requires `--force` and a byte-preserving
+backup; redirected hook and backup paths refuse. `--dry-run` writes nothing.
+The automation marker must still be explicitly supplied: no marker is inferred
+and human commits are not silently subjected to an automation-only rule.
+
+
 Eleven steps, each reporting `created` / `appended` / `skipped` / `would-create` / `would-append` / `refused` with the reason. In order: resolve the stack **and the policy** (**before any write**, so a refusal leaves the tree untouched); create every `--directories` entry that does not exist; install the trailer-enforcing commit-msg hook; install the trunk-guarding pre-commit hook; write the canon-values template when `--canon-values-path` is given and nothing is there; **copy** any of the four taxonomy files still under `schemas/` into `nen/` and print the `git rm` line; write `nen/contract.json`'s `project` block into absence; write [`nen/workflow.json`](#nenworkflowjson)'s policy into absence; add the stack's CI workflow; append `.nen/` and the policy's `reports.dir` to `.gitignore`; and run [`nen shu tools`](#nen-shu-tools) in **check** mode, printing what this host is missing and the `--install` command rather than running it.
 
 **Both git hooks are made out of `nen/workflow.json`, which is why the policy is resolved first.** The commit-msg hook bakes in, *as data*, every attribution trailer the policy does not admit — so it needs no `nen` on `PATH` at the moment of commit — and the pre-commit hook bakes in `branch.base` and refuses a commit made on that branch. A policy file that is **already there wins and is never overwritten**: this run is generated *from* it, and overwriting it would install guards enforcing the rules that had just been deleted. A policy that is there and **malformed** refuses the whole run at exit **2**, before the first write, naming the pointer — nen will not scaffold around a file it could not read. The policy this run writes admits exactly the one trailer key `--agent-trailer` resolved to, and records `--run-trailer` (when given) under the **separate** `commits.runTrailer` key rather than the allow-list — a run identifier is never itself an attribution claim — so a repository that also uses one of the other [attribution trailers](#nenworkflowjson) adds it to `commits.allowedAttributionTrailers` and re-runs.
@@ -11417,6 +11434,24 @@ tools:         (none declared)
 `--marker-env NEN_AUTOMATED` in that example is required, not decoration: `init` without `--marker-env` refuses at exit 2 before any write. `NEN_AUTOMATED` is only an example name — nen ships no marker variable, so state the one your automation sets. With it set in a commit's environment the hook requires `Agent-Name:` and `Run-Id:` trailers; without it the commit is treated as a human's.
 
 ### `nen scaffold new`
+
+The four native packs expose a `native-handoff` plan before any project files
+exist. Android uses Google's Android CLI; WinUI uses Microsoft's installed WinUI
+template pack on Windows. `--run-native` explicitly opts into only that generator,
+after its installed help advertises the required options. WinUI uses
+`--no-restore`; Nen installs no SDK, template pack or dependencies. Xcode New
+Project and the JetBrains Compose desktop wizard remain named manual handoffs.
+The plan names the actual project and destination, then the separate `init`
+invocation. No marker or native project document is fabricated, and no follow-up
+init, package install or other post-step executes automatically.
+
+`--dry-run --json` includes `path` (`template`, `native-handoff`, or `refused`),
+`postSteps` in order and `notes`. Native generator refusal reports its missing
+tool/capability or unsupported host. CI-gated native smoke fixtures explicitly
+skip with a named reason when tools are missing; set `NEN_NATIVE_SMOKE=1` on a
+prepared host to generate an ephemeral project, scaffold its declarations, and
+check schema plus `shu build --dry-run`. These tests never install prerequisites.
+
 
 A **fresh** tree: the stack template's files with `{{name}}` substituted, the CI workflow, `.gitignore` (ignoring `.nen/` and `Reports/`), the commit-msg hook when a trailer convention is stated, the trunk-guarding `pre-commit` hook **always**, [`nen/workflow.json`](#nenworkflowjson)'s policy, and `nen/contract.json` — **proposed by `shu detect` off the marker this verb just wrote**, so "scaffolded a project" and "declared a stack" stop being two chores with two chances to disagree.
 
@@ -14377,6 +14412,17 @@ exit 1, in 4.6 seconds against a child that had 20 to go. (run for real; the
 report's unchanged rows are elided at `…`.)
 
 ### `nen shu test`
+
+`nen shu test --changed [--base <ref>] [--dry-run] --json` maps the committed
+`<base>...HEAD` diff to optional `project.lanes.<name>.paths` globs. Omitted base
+is `origin/<workflow branch.base>`. Patterns are repository-relative and support
+`*`, `?` and whole-segment `**`; malformed/traversing patterns refuse at contract
+read with the lane pointer. The report lists every selected lane and matched
+path, uncovered changed paths, and lanes with no mapping as `undeclared`.
+It always reports `executed: false`: no selected suite runs, including without
+`--dry-run`. Existing explicit lane execution is unchanged. Use the returned
+selection to decide which suites to invoke separately.
+
 
 Run the lane's test suite, from its declared `test` invocation. It reports the
 runner's own output and the **exit code**, and nothing about which tests ran; for

@@ -23,8 +23,8 @@
     ]
   },
   "hostNote": "any host to `run`; PACKAGING is per-format -- `packageDmg` needs macOS, `packageMsi` needs Windows, `packageDeb` needs Linux. That is a host constraint (exit 3), not a tool nen can supply.",
-  "scaffoldTemplate": null,
-  "scaffoldNote": "no template is proposed: one observed lane and one observed command is not enough evidence for one.",
+  "scaffoldTemplate": "minimal",
+  "scaffoldNote": "Existing native trees receive the standard stack CI workflow.",
   "verbs": {
     "detect": {
       "declaredOnly": "Detection is a marker match, not a spawned command: this lane's own Gradle wrapper, its own settings file, and a build file carrying a `compose.desktop` block.",
@@ -137,5 +137,10 @@
   },
   "notes": [
     "THIS LANE IS THE CLEAREST ARGUMENT IN THE INVENTORY FOR PER-LANE STACKS. It lives inside a repository whose every other verb is Android, with `rootProject.name = \"kro-windows\"`, its own wrapper, and inclusion by no workflow and no other build. A per-repository stack model gets it wrong by construction -- and so would a per-repository toolchain model, since the two lanes pin different Gradle versions in the same tree."
-  ]
+  ],
+  "nativeScaffolder": {
+    "mode": "manual",
+    "handoff": "In IntelliJ IDEA use the Kotlin Multiplatform/Compose project wizard, select the desktop target, and choose the stated destination. Finish the Gradle wizard before running init.",
+    "source": "https://www.jetbrains.com/help/kotlin-multiplatform-dev/compose-multiplatform-create-first-app.html"
+  }
 }

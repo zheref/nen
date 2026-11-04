@@ -806,7 +806,8 @@ describe("the bundled pack's two shipped conventions, pinned", () => {
         const at = marker.pattern.lastIndexOf("/");
         if (at === -1) continue;
         prefixed += 1;
-        expect(marker.pattern.slice(0, at + 1), `${id}: ${marker.pattern}`).toBe("*/");
+        if (profileById(pack, id).raw.documentationDetection === true) expect(marker.pattern).toBe("handbooks/INDEX.md");
+        else expect(marker.pattern.slice(0, at + 1), `${id}: ${marker.pattern}`).toBe("*/");
       }
     }
     expect(prefixed, "a prefix nothing uses is a rule nothing tests").toBeGreaterThan(0);
@@ -1150,6 +1151,7 @@ describe("deployDefault -- a stack's canonical non-production target NAME", () =
       gatsby: null,
       "gradle-android": null,
       nextjs: null,
+      prose: null,
       "xcode-ios": "testflight",
     });
     for (const id of pack.ids) {

@@ -1,3 +1,4 @@
+import { changedLanes } from "./changed.js";
 // src/shu/command.ts -- `nen shu ...`, the stack-aware developer verbs.
 //
 // SIXTEEN VERBS, AND ALL SIXTEEN DO SOMETHING NOW. The family was declared
@@ -85,7 +86,7 @@ export const SHU_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   // `--select` IS `test`'s ALONE (zheref/nen#207): the lane's one declared
   // focused form, expanded per identifier. Refused everywhere else by the
   // foreign-flag rule below rather than ignored.
-  test: { values: ["lane", "effort", "heartbeat", "select"], booleans: ["dry-run", "stream"] },
+  test: { values: ["lane", "effort", "heartbeat", "select", "base"], booleans: ["dry-run", "stream", "changed"] },
   "ui-test": { values: ["lane", "effort", "heartbeat"], booleans: ["dry-run", "stream"] },
   lint: { values: ["lane", "effort", "heartbeat"], booleans: ["dry-run", "stream"] },
   typecheck: { values: ["lane", "effort", "heartbeat"], booleans: ["dry-run", "stream"] },
@@ -1461,6 +1462,8 @@ export const shuCommand: Command = {
     const repoRoot = resolveRepoRoot({ repoFlag: context.repoFlag });
 
     try {
+      if (subcommand === "test" && context.args.booleans.has("changed")) return changedLanes(context, repoRoot);
+      if (subcommand === "test" && context.args.values["base"] !== undefined) throw new VerbUsageError("--base on test belongs to --changed.");
       if (subcommand === "detect") return runDetect(context, repoRoot);
       if (subcommand === "tools") {
         return runTools(context, repoRoot, {

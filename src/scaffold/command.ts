@@ -35,10 +35,11 @@ import type { Io } from "../index.js";
 import { shuCommand } from "../shu/command.js";
 import { renderToolsReport, type ToolsReport } from "../shu/tools.js";
 import { PROGRAM } from "../version.js";
-import { scaffoldInit, type ScaffoldInitResult, type ToolsOutcome } from "./init.js";
+import { executeNative } from "./native-exec.js";
+import { scaffoldHookOnly, scaffoldInit, type ScaffoldInitResult, type ToolsOutcome } from "./init.js";
 import { renderMigrate, scaffoldMigrate } from "./migrate.js";
 import { scaffoldNew, type ScaffoldNewResult } from "./new.js";
-import { defaultAgentTrailer, freshTreeSupport, resolveStackId } from "./templates.js";
+import { defaultAgentTrailer, freshTreeSupport, nativeHandoffStacks, resolveStackId } from "./templates.js";
 
 // A trailer key is interpolated into the hook both as an ERE inside a
 // single-quoted shell string and inside a double-quoted echo string (see
@@ -74,6 +75,7 @@ function freshTreeLines(): string {
   return [
     `  'new' writes a tree for:      ${list(support.freshTree)}`,
     `  'init' only (no fresh tree):  ${list(support.initOnly)}`,
+    `  native handoff / --run-native where supported: ${list(nativeHandoffStacks())}`,
     `  no template at all:           ${list(support.noTemplate)} -- 'init' adds no workflow and says so`,
   ].join("\n");
 }
@@ -88,11 +90,14 @@ usage:
                     (--stack <id> | --accept-detected)
                     [--hook-path .git/hooks/commit-msg] [--force]
                     [--canon-values-path .claude/canon-values.yml] [--scenario <name>]
-                    [--nen-ref vX.Y.Z] [--install-tools] [--dry-run] [--json]
+                    [--lint-argv '["tool","argument"]'] [--nen-ref vX.Y.Z] [--install-tools] [--dry-run] [--json]
+
+  nen scaffold init --repo <path> --hook-only --marker-env <VAR> [--agent-trailer <key>]
+                    [--hook-path <path>] [--force] [--dry-run] [--json]
 
   nen scaffold new --stack <id> --name <project> --dir <path>
                    [--marker-env <VAR> [--agent-trailer <key>] [--run-trailer <key>]]
-                   [--nen-ref vX.Y.Z] [--dry-run] [--json]
+                   [--nen-ref vX.Y.Z] [--run-native] [--dry-run] [--json]
 
   nen scaffold migrate --repo <path> [--dry-run] [--json]
 
@@ -113,7 +118,8 @@ workflow, .gitignore, the hook when a trailer convention is stated, and
 nen/contract.json -- proposed by 'nen shu detect' off the marker it just
 wrote, so a scaffolded project and a declared one cannot disagree. EVERY
 post-step (git init, a dependency install, a native prebuild) is PRINTED and
-none is run. It sits BESIDE a full project scaffolder rather than replacing
+none is run except the declared native generator under explicit --run-native.
+Native plans write no placeholder markers; manual IDE seats stay manual. It sits BESIDE a full project scaffolder rather than replacing
 one: it ports the toolchain/CI/declaration slice only.
 
 NEN NEVER GUESSES A STACK. 'init' takes --stack <id> or --accept-detected (the
@@ -374,7 +380,18 @@ function readHookSpec(
   return { agentTrailer, runTrailer, markerEnvVar: markerEnv };
 }
 
+function readLintArgv(value: string | undefined): readonly string[] | undefined {
+  if (value === undefined) return undefined;
+  let parsed: unknown;
+  try { parsed = JSON.parse(value); } catch { throw new VerbUsageError("--lint-argv must be a JSON array of argument strings."); }
+  if (!Array.isArray(parsed) || parsed.length < 2 || parsed.some((arg) => typeof arg !== "string" || arg.length === 0 || /[\x00-\x1f\x7f]/.test(arg))) {
+    throw new VerbUsageError("--lint-argv must name an executable and at least one argument in a JSON array, without controls.");
+  }
+  return parsed as string[];
+}
+
 function runInit(context: CommandContext): number {
+  if (context.args.booleans.has("run-native")) throw new VerbUsageError("--run-native belongs to scaffold new.");
   const hook = readHookSpec(context, true);
   if (hook === undefined) {
     throw new VerbUsageError("scaffold init requires --marker-env <VAR>.");
@@ -386,6 +403,14 @@ function runInit(context: CommandContext): number {
   const root = assertRepoRoot({
     repoFlag: requireRepoFlag(context, "It is the repository being scaffolded."),
   });
+  if (context.args.booleans.has("hook-only")) {
+    const forbidden = ["stack", "lint-argv", "directories", "canon-values-path", "scenario", "nen-ref"].filter(flag => context.args.values[flag] !== undefined);
+    forbidden.push(...["accept-detected", "install-tools"].filter(flag => context.args.booleans.has(flag)));
+    if (forbidden.length) throw new VerbUsageError(`--hook-only does not take ${forbidden.map(flag => `--${flag}`).join(", ")}; it installs only commit-msg from existing policy.`);
+    const result = scaffoldHookOnly({ root, hook, hookPath: context.args.values["hook-path"], force: context.args.booleans.has("force"), dryRun: context.args.booleans.has("dry-run") });
+    emit(context.io, context.json, result, result.writes.map(row => `${row.action}: ${row.path} -- ${row.why}`));
+    return result.exitCode;
+  }
   const stackFlag = context.args.values["stack"];
   const dryRun = context.args.booleans.has("dry-run");
   const installTools = context.args.booleans.has("install-tools");
@@ -405,6 +430,7 @@ function runInit(context: CommandContext): number {
     canonValuesPath: context.args.values["canon-values-path"],
     scenario: context.args.values["scenario"],
     stack: stackFlag === undefined ? undefined : resolveStackId(stackFlag),
+    lintArgv: readLintArgv(context.args.values["lint-argv"]),
     acceptDetected: context.args.booleans.has("accept-detected"),
     nenRef: context.args.values["nen-ref"],
     dryRun,
@@ -453,12 +479,13 @@ function runInit(context: CommandContext): number {
  * "done" and finds out three verbs later.
  */
 const INIT_ONLY_VALUES: readonly string[] = [
+  "lint-argv",
   "hook-path",
   "canon-values-path",
   "scenario",
   "directories",
 ];
-const INIT_ONLY_BOOLEANS: readonly string[] = ["force", "install-tools", "accept-detected"];
+const INIT_ONLY_BOOLEANS: readonly string[] = ["hook-only","force", "install-tools", "accept-detected"];
 
 function runNew(context: CommandContext): number {
   const offending = [
@@ -484,20 +511,26 @@ function runNew(context: CommandContext): number {
   );
   const name = requireValue(context.args, "name", "It is written into this tree's own manifest.");
   const dir = requireValue(context.args, "dir", "It is the directory the fresh tree is written into.");
-  const result = scaffoldNew({
+  const planned = scaffoldNew({
     stack,
     name,
     dir,
     platform: context.seams.platform,
     hook: readHookSpec(context, false),
+    runNative: context.args.booleans.has("run-native"),
     nenRef: context.args.values["nen-ref"],
     dryRun: context.args.booleans.has("dry-run"),
   });
+  const execution = planned.nativeExecution === undefined ? null : executeNative(planned.nativeExecution, context.seams);
+  const result = execution === null ? planned : { ...planned, ...execution, notes: [...planned.notes, ...execution.notes], postSteps: execution.exitCode === 0 ? planned.postSteps.slice(1) : planned.postSteps };
   emit(
     context.io,
     context.json,
     {
       contract: result.contract,
+      path: result.path ?? "template",
+      postSteps: result.postSteps,
+      notes: result.notes,
       writes: result.writes,
       migrated: result.migrated,
       tools: result.tools,
@@ -522,6 +555,7 @@ function runNew(context: CommandContext): number {
  * accepted and ignored is a change the caller asked for and did not get.
  */
 const MIGRATE_REFUSED_VALUES: readonly string[] = [
+  "lint-argv",
   "directories",
   "agent-trailer",
   "run-trailer",
@@ -534,7 +568,7 @@ const MIGRATE_REFUSED_VALUES: readonly string[] = [
   "dir",
   "nen-ref",
 ];
-const MIGRATE_REFUSED_BOOLEANS: readonly string[] = ["force", "accept-detected", "install-tools"];
+const MIGRATE_REFUSED_BOOLEANS: readonly string[] = ["hook-only","run-native","force", "accept-detected", "install-tools"];
 
 function runMigrate(context: CommandContext): number {
   const offending = [
@@ -581,6 +615,7 @@ export const scaffoldCommand: Command = {
   },
   flags: {
     values: [
+      "lint-argv",
       "directories",
       "agent-trailer",
       "run-trailer",
@@ -593,7 +628,7 @@ export const scaffoldCommand: Command = {
       "dir",
       "nen-ref",
     ],
-    booleans: ["force", "accept-detected", "install-tools", "dry-run"],
+    booleans: ["force", "accept-detected", "install-tools", "dry-run", "run-native", "hook-only"],
   },
   run(context: CommandContext): number {
     const subcommand = requireSubcommand("scaffold", context.args, ["init", "new", "migrate"]);
