@@ -40,10 +40,13 @@ import { classifyInvocation, parseIzanamiInvocation } from "../parse/izanami.js"
 
 const SKILL_GRAMMARS = new Set(["futon", "izanagi", "izanami"]);
 
+export const KAGE_BUNSHIN_GRAMMAR = "<urls>{ } --<mode:sequential|parallel> [--cap <cap>]";
+
 const USAGE = `nen parse <skill> --grammar <template> --line <invocation>
 nen parse futon --repo <path> "<repo>@<severity>[+]|<repo>@<label> [--idle] [--dry-run] [then <tag|tag+fanout|skill[@target][+skill...]|prose>]" [--self <owner/name>]
 nen parse izanagi "<task> until <condition> up to <N>"
 nen parse izanami "<task> until <condition>"
+nen parse kage-bunshin "<url> [<url> ...] --<sequential|parallel> [--cap <n>]"
 
 Parse a skill invocation against the grammar that skill publishes, echo the
 parse, and refuse an unparseable line with the corrected line ready to paste.
@@ -59,11 +62,13 @@ parse, and refuse an unparseable line with the corrected line ready to paste.
                                          as the LAST whole-word occurrence
                        @<slot> #<slot>   a symbol separator, last occurrence
                        [ ... ]           an optional trailing clause
+                       [word <text>]{first}  first case-sensitive whole-word
+                                         anchor; trailing free text kept intact
                        [+]               an optional literal suffix on the
                                          slot just declared
                        <slot>{+}         a LIST slot: one or more values
                                          joined by the literal in the braces
-                                         ('{+}', '{&}'); every item of an
+                                         ('{+}', '{&}', '{ }'); every item of an
                                          enumerated list is checked, and an
                                          empty item is refused
                        <a:..>{+}|<b:..>[+]|<c>
@@ -182,12 +187,18 @@ export const parseCommand: Command = {
       return izanami(context, rest.join("\n"));
     }
 
-    const template = requireValue(
+    if (skill === "kage-bunshin") {
+      if (context.args.values["grammar"] !== undefined) throw new VerbUsageError("parse kage-bunshin uses its published grammar and takes no --grammar; choose a different skill name for a custom template.");
+      if (context.args.values["line"] !== undefined && context.args.positionals.length > 2) throw new VerbUsageError("parse kage-bunshin takes --line OR a positional invocation, never both.");
+      if (context.args.passthrough.length > 0) throw new VerbUsageError("parse kage-bunshin takes nothing after '--'; include the complete invocation in --line or one quoted positional string.");
+    }
+
+    const template = skill === "kage-bunshin" ? KAGE_BUNSHIN_GRAMMAR : requireValue(
       context.args,
       "grammar",
       "Nen carries no skill's grammar: the template comes from the skill that publishes it.",
     );
-    const line = context.args.values["line"];
+    const line = context.args.values["line"] ?? (skill === "kage-bunshin" ? context.args.positionals.slice(2).join(" ") : undefined);
     if (line === undefined) {
       throw new VerbUsageError("--line is required. It is the invocation to parse.");
     }

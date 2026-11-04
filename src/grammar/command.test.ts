@@ -484,3 +484,43 @@ describe("nen parse -- refuses an invocation with no skill named", () => {
     expect((await capture(["parse"])).code).toBe(2);
   });
 });
+
+describe("published kage-bunshin grammar (#593)", () => {
+  const urls = "https://github.com/zheref/hatsu/issues/470 https://github.com/zheref/nen/issues/300";
+  it("takes its published invocation without a custom template and reports absent cap", async () => {
+    const result = await capture(["parse", "kage-bunshin", `${urls} --parallel`, "--json"], [], { json: true });
+    expect(result.code).toBe(0);
+    const parsed = JSON.parse(result.out.join("\n"));
+    expect(parsed.slots[0].items).toEqual(urls.split(" "));
+    expect(parsed.echo).toContain("cap: (clause absent)");
+    const capped = await capture(["parse", "kage-bunshin", "--line", `${urls} --parallel --cap 3`]);
+    expect(capped.code).toBe(0);
+    expect(capped.out).toContain("cap: 3");
+  });
+  it("names missing mode, unknown mode and missing issues", async () => {
+    for (const [line, slot] of [[urls, "mode"], [`${urls} --unknown`, "mode"], ["--parallel", "urls"]]) {
+      const result = await capture(["parse", "kage-bunshin", `--line=${line}`]);
+      expect(result.code).toBe(2);
+      expect(result.err.join(" ")).toContain(`<${slot}>`);
+    }
+  });
+  it("passes first-anchor syntax through the public command", async () => {
+    const result = await capture(["parse", "bankai-rule", "--grammar", "<from:a|b> to <to:a|b> [ruling <text>]{first}", "--line", "a to b ruling x maps to y; the ruling is map"]);
+    expect(result.code).toBe(0);
+    expect(result.out).toContain("text: x maps to y; the ruling is map");
+  });
+});
+
+
+it("refuses discarded custom grammar, mixed line sources and passthrough for kage-bunshin", async () => {
+  const line = "https://github.com/zheref/nen/issues/300 --parallel";
+  for (const args of [
+    ["--grammar", "<anything>", "--line", line],
+    [line, "--line", line],
+    [line, "--", "discarded"],
+  ]) {
+    const result = await capture(["parse", "kage-bunshin", ...args]);
+    expect(result.code).toBe(2);
+    expect(result.out).toEqual([]);
+  }
+});

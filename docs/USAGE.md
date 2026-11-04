@@ -12,7 +12,7 @@ repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
 what each version changed: 49 command
-families, 175 verbs, every flag checked against that binary.
+families, 177 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -258,7 +258,7 @@ including every refusal reason. The raw NUL-delimited stream
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **105 shapes** and **109 ids** (`nen.runner.plan`
+binary carries**, writing or reading — **106 shapes** and **110 ids** (`nen.runner.plan`
 and `nen.wc.worktree.copies` each have two versions, `nen.stop.mark` three, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -1006,7 +1006,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 175 verbs, grouped as the README groups them. **Reads** is what a
+All 177 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -16857,6 +16857,32 @@ Corrected line:
   backlog-state <repo>
 ```
 (exit 0, exit 0, exit 2: `<repo>` is required, so the empty line is still a refusal there)
+
+For a final optional free-text clause, append `{first}` to its bracket group:
+`<from:a|b> to <to:a|b> [ruling <text>]{first}`. Its literal is matched at the
+first **case-sensitive whole-word** occurrence, before resolving earlier slots.
+Repeated `to` or `ruling` words inside the tail remain text. Unmarked clauses
+keep their existing last-occurrence, case-insensitive behavior. The modifier is
+refused on enumerated/list/suffixed slots, literal-only clauses and clauses
+followed by more grammar. Internal tail whitespace is preserved; surrounding
+invocation/slot whitespace is trimmed as usual.
+
+A space list is written `<urls>{ }`. Whitespace-separated values yield `items`,
+with runs of whitespace normalized to one space in `value`. Hyphen-only symbol
+introducers in corrected lines have a space before them.
+
+The published shadow-clone grammar needs no `--grammar`:
+
+```sh
+nen parse kage-bunshin "https://github.com/zheref/hatsu/issues/470 https://github.com/zheref/nen/issues/300 --parallel --cap 3"
+nen parse kage-bunshin --line="https://github.com/zheref/nen/issues/300 --sequential"
+```
+
+Its template is `<urls>{ } --<mode:sequential|parallel> [--cap <cap>]`.
+Missing URLs or mode and unknown modes refuse by slot name. An absent cap is
+reported as `cap: (clause absent)` and supplies no slot or default number. Cap
+ceilings and URL/repository resolution remain the caller's policy. For a line
+beginning with a hyphen, use `--line=...`, as for other nen flag values.
 
 ### `nen parse futon`
 
