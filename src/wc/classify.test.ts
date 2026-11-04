@@ -91,13 +91,13 @@ describe("readWorkingCopyState -- gathers the evidence via git", () => {
     // Standing on no branch means standing on no TRUNK, whatever --base says.
     expect(result.isTrunk).toBe(false);
     expect(result.dirty).toBe(true);
-    expect(classifyWorkingCopy(result).case).toBe("on-branch-dirty");
+    expect(classifyWorkingCopy(result).case).toBe("detached-dirty");
     expect(classifyWorkingCopy(result).evidence.join(" ")).toContain("on a detached HEAD at 1a2b3c4");
   });
 
   it("a detached HEAD is never must-move, even when --base would name the commit it sits on", () => {
     const detached = state({ branch: null, detachedAt: "1a2b3c4", isTrunk: false, dirty: true, uncommittedPaths: ["a.ts"] });
-    expect(classifyWorkingCopy(detached).case).toBe("on-branch-dirty");
+    expect(classifyWorkingCopy(detached).case).toBe("detached-dirty");
   });
 
   it("still refuses when HEAD names no branch AND resolves to no commit", () => {

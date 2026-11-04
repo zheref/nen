@@ -12,7 +12,7 @@ repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
 what each version changed: 49 command
-families, 175 verbs, every flag checked against that binary.
+families, 177 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -258,7 +258,7 @@ including every refusal reason. The raw NUL-delimited stream
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **105 shapes** and **109 ids** (`nen.runner.plan`
+binary carries**, writing or reading — **106 shapes** and **110 ids** (`nen.runner.plan`
 and `nen.wc.worktree.copies` each have two versions, `nen.stop.mark` three, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -1006,7 +1006,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 175 verbs, grouped as the README groups them. **Reads** is what a
+All 177 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -1034,7 +1034,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`pr`](#family-pr) | [`nen pr merge`](#nen-pr-merge) | the bounded merge, two forms. `--release-unit`: `pr ready` (in-process) + head pin + `pr body-check` (live body, one fetch) + `release unit-check` (policy from the PR's base) + whose-pr. `--delivery`: a run's own PR into a non-main, unprotected base — a protected base is refused by ruling (exit 2), then base + `pr ready` + head pin + `pr body-check` + whose-pr (viewer and run-form head). Every gate must pass; `gh pr merge --merge --match-head-commit` only under `--run` | github (gh pr view, gh repo view, gh pr list, gh api contents/trees/user/branches/rules, gh pr merge unless plan-only), nen/gates.json, nen/workflow.json, nen/repos.json (a `CODE#n` ref) | yes |
 | [`gate`](#family-gate) | [`nen gate derive`](#nen-gate-derive) | derive G2 vs G4 from a changed-file set against two caller-supplied path sets | git diff (for --range), no schema file -- path sets are flags | yes |
 | [`split`](#family-split) | [`nen split verify`](#nen-split-verify) | prove the union of per-axis branch diffs equals one original diff | caller-supplied --original/--branches diff files, no git/gh | yes |
-| [`wc`](#family-wc) | [`nen wc classify`](#nen-wc-classify) | classify the working copy as must-move / on-branch-dirty / on-branch-clean | git (branch, status, ahead-count) | yes |
+| [`wc`](#family-wc) | [`nen wc classify`](#nen-wc-classify) | classify the working copy as must-move / on-branch-dirty / on-branch-clean / detached-clean / detached-dirty | git (branch, status, ahead-count) | yes |
 | [`wc`](#family-wc) | [`nen wc squash`](#nen-wc-squash) | fold every commit since `git merge-base <onto> HEAD` into one, validated message, refused if dirty / --onto not an ancestor / any commit already on the upstream | git (status, merge-base, log, fetch, reset --soft, commit -F, interpret-trailers --parse --no-divider, config trailer.separators and cat-file commit for the folded commit's trailer read-back -- exit 3 on an injected one, #273), nen/workflow.json under --repo | yes |
 | [`wc`](#family-wc) | [`nen wc catch-up`](#nen-wc-catch-up) | fetch `origin/<base>` and rebase (nothing published) or merge (something is) the current branch onto it; stop on a conflict with both sides of every path, its class (manifest / changelog / mirror / other, by `nen/contract.json`'s `mechanical` block) and the abort line, never picking one -- exit 3 when every path is mechanical, with the commands to run printed and none run; re-run on the same tree to continue a staged resolution, `--abort` to back out | git (status, fetch, rev-list, rebase / merge, diff --diff-filter=U, show :2:/:3:, rebase --continue / commit --no-edit, --abort), nen/contract.json's `mechanical` block under --repo (only on a conflict) | yes |
 | [`wc`](#family-wc) | [`nen wc publish`](#nen-wc-publish) | push the current branch **under its own name** to the remote its upstream names (origin, or `--remote`, when it has none), refusing a detached HEAD, the trunk as local name **or as destination**, an upstream of **another name** unless `--set-upstream` (which publishes to `<remote>/<own name>` — `--remote`, else `origin`, else the upstream's remote — and retracks it there), any refspec/force shape, and reporting `needsForce` at exit 1 instead of forcing | git (symbolic-ref, fetch, merge-base, rev-list, push, reaches the upstream's remote) | yes |
@@ -4551,12 +4551,13 @@ and diff stat beyond a named reviewed head (`ahead`, read-only).
 Reports one of `must-move` (on the trunk, dirty), `on-branch-dirty` (on a
 branch with uncommitted work — whether it is the same effort as the
 branch's existing commits is a judgement this verb hands you evidence for,
-never decides), or `on-branch-clean` (nothing to commit). A git command that
+never decides), `on-branch-clean` (nothing to commit), `detached-clean`, or
+`detached-dirty` (no branch selected). A git command that
 FAILS (a `--base` that does not resolve, an unreadable status) is never folded
-into one of the three cases as an empty/zero reading; it is reported as an
+into a classification as an empty/zero reading; it is reported as an
 error and exits non-zero.
 
-**A detached `HEAD` is classified like any other working copy**, not refused.
+**A detached `HEAD` has its own clean/dirty classification**, not a branch classification or refusal.
 The classification is decided by *trunk-or-not* and *dirty-or-not*, and a
 detached `HEAD` answers both: it is standing on no branch, so it is never the
 trunk (`must-move` cannot apply — a commit made there lands on no branch at
@@ -5116,9 +5117,11 @@ would run: git push -u origin -- refs/heads/feature/x:refs/heads/feature/x  (no 
 ### `nen wc prune`
 
 Acts only on caller-listed resources in a JSON plan. It never discovers a deletion list,
-fetches objects, globally prunes registrations or remote refs, or runs object GC. The
-caller supplies each item's explicit base; a branch or worktree whose commit is not
-already an ancestor of that local base is retained. Picker, marker and billed-resource
+updates caller refs, globally prunes registrations or remote refs, or runs object GC.
+Each explicit base must name `refs/remotes/<remote>/<branch>`. Its frozen configured
+fetch mapping must select one source branch, fetched into private scratch and pinned
+to an immutable commit. A target not proven ancestral to that freshly fetched commit
+is retained. A stale local trunk or tracking ref is never proof of current remote state. Picker, marker and billed-resource
 cleanup remain outside this verb. **Worktree and local-branch removal are currently
 unsupported**: both preview and execution report `refused` for existing targets,
 retaining the directory, registration, ref and branch configuration. An already-absent
@@ -5139,7 +5142,7 @@ nen wc prune --repo <path> --plan <file> [--dry-run | --run] [--json]
 |---|---|---|---|
 | `--repo <path>` | yes | The checkout whose resources the plan names. | Must name its root. |
 | `--plan <file>` | yes | A JSON array of closed-shape rows, processed in order. | Relative paths resolve against `--repo`; unknown fields/kinds, malformed refs and missing strings refuse the whole plan before any deletion. |
-| `--dry-run` | no | Validate and preview without caller-resource mutation. | The default; conflicts with `--run`. No fetch or removal of caller refs/directories; a private transport scratch context is created and removed. |
+| `--dry-run` | no | Validate and preview without caller-resource mutation. | The default; conflicts with `--run`. No update or removal of caller refs/directories; base objects are fetched only into a private transport scratch context, then removed. |
 | `--run` | no | Execute only supported listed remote removals. | Unsupported local rows and other operational refusals/failures are reported; later items still run. |
 | `--json` | no | Emit one outcome document. | No progress text on stdout. |
 
@@ -5155,8 +5158,10 @@ A plan may contain these rows (all named fields are required):
 ]
 ```
 
-`base` is a full local branch or remote-tracking ref already available locally. Missing
-objects must be fetched separately. A base itself listed for removal refuses. Worktrees
+`base` is an explicit remote-tracking ref; local-only bases refuse. The fetch source
+is resolved through frozen configured refspecs, including nonidentity mappings.
+An outcome that reached ancestry judgment carries `baseProof` with `ref`, `remote`,
+`source` and immutable `commit`; caller trunk/tracking refs remain unchanged. A base itself listed for removal refuses. Worktrees
 must belong to this repository, be real directories, clean including ignored files,
 unlocked and merged into the base. Current/primary worktrees, checked-out local branches,
 configured protected base branches and symbolic refs are retained. Even when static
@@ -20828,3 +20833,10 @@ A `severity` enumeration with `[+]` is highest-first; two severities such as
 `high+low` are corrected to `low+`. The refused input remains exit 2 and JSON carries
 `corrected`. Mixed alternatives, incomplete lines and boundary-changing rewrites keep
 the existing refusal without an invented correction; legacy scalar placeholders stay.
+
+
+### NN#409 acceptance status
+
+This change is partial and does not close NN#409. The existing direct registry JSON already preserves every alias's declared `line` (including null), pinned by its fixture. Explicit plans, ref validation, current/dirty/protected/unmerged refusals, remote-branch leased deletion, per-item outcomes and read-only host links remain supported. Fresh private base proofs and detached clean/dirty classes address the owner's additional observations.
+
+Full local worktree, local branch and tracking-ref removals remain unsupported and refused in both preview and execution; the race-preservation controls are retained. No writer-quiescence or native checkout/fetch-authority serialization is inferred from a plan or from process-group observations. Consequently no local removed outcome or reclaimed-byte figure is fabricated. The remaining concurrency-contract decision is explicit and must be settled before claiming full cleanup capability.

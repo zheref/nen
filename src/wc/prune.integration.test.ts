@@ -52,7 +52,8 @@ describe("wc prune -- explicit targets, real disposable repositories", () => {
     expect(result.code).toBe(2); expect(result.report?.dryRun).toBe(true);
     expect(result.report?.items.map((i) => i.status)).toEqual(["refused", "refused"]);
     expect(result.report?.freedBytes).toBe(0); expect(existsSync(w.tree)).toBe(true); expect(git(w.repo, "show-ref")).toBe(before);
-    expect(calls.some((a) => ["push", "fetch", "update-ref", "branch"].includes(a[0] ?? "") || a[0] === "worktree" && a[1] !== "list")).toBe(false);
+    expect(calls.some((a) => ["push", "update-ref", "branch"].includes(a[0] ?? "") || a[0] === "worktree" && a[1] !== "list")).toBe(false);
+    expect(calls.filter(a=>a[0] === "fetch").every(a=>a.includes("--no-write-fetch-head"))).toBe(true);
   });
   it("retains clean worktrees, branches and configuration with zero bytes reclaimed", async () => {
     const w = world(); git(w.repo, "worktree", "add", w.tree, "topic"); git(w.repo, "branch", "keep");
@@ -230,6 +231,7 @@ describe("wc prune -- explicit targets, real disposable repositories", () => {
     const w = world(); const tip = git(w.repo, "rev-parse", "topic");
     git(w.remote, "update-ref", "refs/heads/source", tip);
     git(w.repo, "config", "--replace-all", "remote.origin.fetch", "+refs/heads/source:refs/remotes/origin/topic");
+    git(w.repo, "config", "--add", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main");
     const live = await run(w, [tracking], ["--run"]);
     expect(live.code).toBe(2); expect(live.report?.items[0]?.message).toMatch(/still exists/);
     expect(git(w.repo, "rev-parse", tracking.ref)).toBe(tip);
@@ -242,6 +244,7 @@ describe("wc prune -- explicit targets, real disposable repositories", () => {
     const w = world(); const unrelated = join(w.root, "cache.git"); git(w.root, "init", "--bare", unrelated);
     git(w.repo, "remote", "add", "cache", unrelated);
     git(w.repo, "config", "--replace-all", "remote.origin.fetch", "+refs/heads/*:refs/remotes/cache/*");
+    git(w.repo, "config", "--add", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main");
     const ref = "refs/remotes/cache/topic"; const tip = git(w.repo, "rev-parse", "topic"); git(w.repo, "update-ref", ref, tip);
     const item = { ...tracking, ref };
     expect((await run(w, [item], ["--run"])).code).toBe(2);
@@ -257,6 +260,7 @@ describe("wc prune -- explicit targets, real disposable repositories", () => {
     if (mode === "negative-exact") git(w.repo, "config", "--add", "remote.origin.fetch", "^refs/heads/topic");
     if (mode === "negative-wildcard") git(w.repo, "config", "--add", "remote.origin.fetch", "^refs/heads/top*");
     if (mode === "unmapped") git(w.repo, "config", "--replace-all", "remote.origin.fetch", "+refs/heads/*:refs/remotes/cache/*");
+    git(w.repo, "config", "--add", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main");
     const result = await run(w, [tracking], ["--run"]);
     expect(result.code).toBe(2); expect(result.report?.items[0]?.status).toBe("refused");
     expect(result.report?.items[0]?.message).toMatch(/exactly one source|negative fetch refspec/);
@@ -509,4 +513,20 @@ it("refuses an empty-plan invocation's ignored passthrough before cleanup", asyn
   expect(result.code).toBe(2); expect(result.report).toBeNull();
   expect(result.err).toContain('"unexpected"');
   expect(git(w.repo, "show-ref")).toBe(before);
+});
+
+describe("prune immutable freshly fetched base proof (#409)",()=>{
+  it("uses the fetched remote base even when local trunk and tracking base are behind",async()=>{
+    const w=world();const old=git(w.repo,"rev-parse",base);git(w.repo,"switch","topic");writeFileSync(join(w.repo,"new.txt"),"merged remotely\n");git(w.repo,"add","new.txt");git(w.repo,"commit","-m","new topic");const merged=git(w.repo,"rev-parse","HEAD");git(w.repo,"push","origin","topic");git(w.repo,"switch","main");git(w.remote,"update-ref","refs/heads/main",merged);
+    const result=await run(w,[remoteItem],["--run"]);expect(result.code,result.err).toBe(0);expect(result.report?.items[0]).toMatchObject({status:"removed",baseProof:{ref:base,remote:"origin",source:"refs/heads/main",commit:merged}});expect(git(w.repo,"rev-parse","refs/heads/main")).toBe(old);expect(git(w.repo,"rev-parse",base)).toBe(old);expect(git(w.remote,"for-each-ref","refs/heads/topic")).toBe("");
+  });
+  it("a stale tracking base cannot hide that the fetched remote base excludes the topic",async()=>{
+    const w=world();const old=git(w.repo,"rev-parse","HEAD");git(w.repo,"switch","topic");writeFileSync(join(w.repo,"new.txt"),"unmerged now\n");git(w.repo,"add","new.txt");git(w.repo,"commit","-m","new topic");const tip=git(w.repo,"rev-parse","HEAD");git(w.repo,"push","origin","topic");git(w.repo,"switch","main");git(w.repo,"update-ref",base,tip);git(w.remote,"update-ref","refs/heads/main",old);
+    const result=await run(w,[remoteItem],["--run"]);expect(result.code).toBe(2);expect(result.report?.items[0]).toMatchObject({status:"refused",message:expect.stringContaining("not merged into freshly fetched")});expect(git(w.remote,"rev-parse","refs/heads/topic")).toBe(tip);
+  });
+  it("refuses a local-only base instead of treating it as fresh remote authority",async()=>{const w=world();const result=await run(w,[{...remoteItem,base:"refs/heads/main"}],["--run"]);expect(result.code).toBe(2);expect(result.report?.items[0]?.message).toContain("possibly stale local trunk");expect(git(w.remote,"show-ref","refs/heads/topic")).toContain("topic");});
+});
+
+it("the fetched base proof follows its frozen nonidentity fetch mapping",async()=>{
+  const w=world();git(w.repo,"switch","topic");writeFileSync(join(w.repo,"new.txt"),"merged to another source\n");git(w.repo,"add","new.txt");git(w.repo,"commit","-m","topic");const tip=git(w.repo,"rev-parse","HEAD");git(w.repo,"push","origin","topic");git(w.repo,"switch","main");git(w.remote,"update-ref","refs/heads/accepted-base",tip);git(w.repo,"config","--unset-all","remote.origin.fetch");git(w.repo,"config","--add","remote.origin.fetch","+refs/heads/accepted-base:refs/remotes/origin/main");const result=await run(w,[remoteItem],["--run"]);expect(result.code,result.err).toBe(0);expect(result.report?.items[0]?.baseProof).toMatchObject({ref:base,source:"refs/heads/accepted-base",commit:tip});
 });

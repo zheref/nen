@@ -1,7 +1,7 @@
 import { refuseExtraPositionals } from "../cli/command.js";
 // Explicit-plan cleanup only. No discovery grants permission to remove a target.
 // Dry runs never mutate caller resources; transport uses private scratch only.
-// No fetch, global prune, reset, force removal or GC.
+// Base refreshes use private scratch only; no caller refs, global prune, reset or GC.
 import { lstatSync, mkdtempSync, readlinkSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve, win32 } from "node:path";
@@ -23,7 +23,9 @@ export type PruneItem =
   | { readonly kind: "local-branch"; readonly ref: string; readonly base: string }
   | { readonly kind: "remote-branch" | "remote-ref"; readonly remote: string; readonly ref: string; readonly base: string }
   | { readonly kind: "host-link"; readonly path: string };
+export interface PruneBaseProof { readonly ref:string; readonly remote:string; readonly source:string; readonly commit:string }
 export interface PruneOutcome {
+  readonly baseProof?:PruneBaseProof;
   readonly item: PruneItem;
   readonly status: "would-remove" | "removed" | "missing" | "refused" | "failed" | "read-link";
   readonly message: string;
@@ -68,7 +70,7 @@ function registrations(text: string): Registration[] {
 }
 
 export function prune(seams: Seams, root: string, plan: readonly PruneItem[], dryRun: boolean, trunk: string): PruneReport {
-  const env = { ...seams.env, ...scrubbedGitEnv(seams.env) };
+  const env = { ...seams.env, ...scrubbedGitEnv(seams.env), GIT_NO_REPLACE_OBJECTS:"1", GIT_NO_LAZY_FETCH:"1" };
   const call = (args: readonly string[], cwd: string = root): CommandResult => seams.run(GIT, [...args], { cwd, env });
   const git = (args: readonly string[], cwd: string = root): string => {
     const result = call(args, cwd);
@@ -87,6 +89,8 @@ export function prune(seams: Seams, root: string, plan: readonly PruneItem[], dr
   // Ask the installed Git for its complete local-environment inventory rather
   // than assume --git-dir alone excludes common-dir/worktree/config redirects.
   for (const name of git(["rev-parse", "--local-env-vars"]).split(/\r?\n/)) frozenEnv[name] = undefined;
+  frozenEnv["GIT_NO_REPLACE_OBJECTS"]="1";
+  frozenEnv["GIT_NO_LAZY_FETCH"]="1";
   const rawStdout = (result: CommandResult): string => {
     try {
       // The real runner supplies bytes; mock seams may supply text only. Do
@@ -229,13 +233,31 @@ export function prune(seams: Seams, root: string, plan: readonly PruneItem[], dr
     if (!/^[0-9a-f]{40,64}$/.test(sha)) throw new Error(`invalid object id for '${ref}'`);
     return sha;
   };
-  const merged = (sha: string, base: string): void => {
+  const refreshedBases = new Map<string,PruneBaseProof>();
+  let objectStore:string|null=null;
+  const refreshedBase = (base:string):PruneBaseProof => {
+    if (plan.some(item=>item.kind !== "worktree" && item.kind !== "host-link" && item.ref === base))throw new Refused(`base '${base}' is itself listed for removal`);
+    const cached=refreshedBases.get(base);if(cached!==undefined)return cached;
+    const match=/^refs\/remotes\/([^/]+)\/(.+)$/.exec(base);
+    if(match===null || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(match[1] ?? ""))throw new Refused("cleanup base must name one explicit refs/remotes/<remote>/<branch> fetched authority, never a possibly stale local trunk");
+    const remote=match[1]!;const source=trackingSource(remote,base,true);
+    if(!fullRef(source) || source === "refs/heads/HEAD")throw new Refused("cleanup base source must be one exact remote branch");
+    const endpoint=remoteUrl(remote,false);const scratch=`refs/nen/prune-base-${refreshedBases.size}`;
+    transportGit(["fetch","--no-tags","--no-write-fetch-head","--recurse-submodules=no","--",endpoint,`${source}:${scratch}`]);
+    const commit=transportGit(["rev-parse","--verify","--end-of-options",`${scratch}^{commit}`]).trim();
+    if(!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(commit))throw new Refused("fetched cleanup base did not resolve to a full commit OID");
+    const proof={ref:base,remote,source,commit};refreshedBases.set(base,proof);return proof;
+  };
+  const merged = (sha: string, base: string): PruneBaseProof => {
     if (plan.some((item) => item.kind !== "worktree" && item.kind !== "host-link" && item.ref === base)) throw new Refused(`base '${base}' is itself listed for removal`);
-    const baseSha = refSha(base);
-    if (baseSha === null) throw new Refused(`base '${base}' is absent; fetch it explicitly before cleanup`);
-    const result = call(["merge-base", "--is-ancestor", sha, baseSha]);
-    if (result.code === 1) throw new Refused(`commit ${sha} is not merged into '${base}'; unpublished or unmerged work is retained`);
-    if (result.spawnFailed || result.code !== 0) throw new Refused(`cannot prove ${sha} merged into '${base}'; fetch missing objects explicitly before cleanup`);
+    const proof=refreshedBase(base);
+    // The base lives in the private fetch store. Caller objects are read-only
+    // alternates so unmerged local commits can be distinguished from missing data.
+    objectStore ??= git(["rev-parse","--path-format=absolute","--git-path","objects"]);
+    const result=seams.run(GIT,["merge-base","--is-ancestor",sha,proof.commit],{cwd:transportRoot!,env:{...frozenEnv,GIT_CONFIG_COUNT:"0",GIT_ALTERNATE_OBJECT_DIRECTORIES:objectStore}});
+    if (result.code === 1) throw new Refused(`commit ${sha} is not merged into freshly fetched '${base}' at ${proof.commit}; unpublished or unmerged work is retained`);
+    if (result.spawnFailed || result.code !== 0) throw new Refused(`cannot prove ${sha} merged into freshly fetched '${base}' at ${proof.commit}; unreadable objects are retained`);
+    return proof;
   };
   const remoteSha = (remote: string, ref: string, destination: string = remote): string | null => {
     const text = transportGit(["ls-remote", "--heads", "--", destination, ref]);
@@ -247,8 +269,9 @@ export function prune(seams: Seams, root: string, plan: readonly PruneItem[], dr
     return sha;
   };
   const endpointRef = (url: string, ref: string): string => JSON.stringify([url, ref]);
-  const trackingSource = (remote: string, destination: string): string => {
-    const result = call(["config", "--get-all", `remote.${remote}.fetch`]);
+  const trackingSource = (remote: string, destination: string, forBase = false): string => {
+    const declared = forBase ? readSnapshot().filter(([key])=>key === `remote.${remote}.fetch`).map(([,value])=>value) : null;
+    const result = declared === null ? call(["config", "--get-all", `remote.${remote}.fetch`]) : {code:declared.length>0?0:1,stdout:declared.join("\n"),stderr:"",spawnFailed:false};
     if (result.spawnFailed || result.code !== 0 || result.stdout.trim() === "") throw new Refused("remote-ref requires configured fetch refspecs");
     const sources = new Set<string>();
     const excluded: string[] = [];
@@ -276,13 +299,14 @@ export function prune(seams: Seams, root: string, plan: readonly PruneItem[], dr
     const source = [...sources][0]!;
     if (!source.startsWith("refs/heads/") || !fullRef(source)) throw new Refused("tracking ref source must be one full refs/heads branch");
     if (excluded.some((pattern) => capture(pattern, source) !== null)) throw new Refused("tracking ref source is excluded by a negative fetch refspec");
-    if (isTrunk(source.slice("refs/heads/".length), trunk) || source === "refs/heads/HEAD") throw new Refused("tracking ref maps to a protected base branch or HEAD");
+    if ((!forBase && isTrunk(source.slice("refs/heads/".length), trunk)) || source === "refs/heads/HEAD") throw new Refused("tracking ref maps to a protected base branch or HEAD");
     return source;
   };
   for (const item of plan) {
     const measured: number | null = null;
     let writeStarted = false;
-    const record = (status: PruneOutcome["status"], message: string, freedBytes: number | null = 0, linkTarget: string | null = null): void => { outcome.push({ item, status, message, freedBytes, measuredBytes: measured, linkTarget }); };
+    let baseProof:PruneBaseProof|undefined;
+    const record = (status: PruneOutcome["status"], message: string, freedBytes: number | null = 0, linkTarget: string | null = null): void => { outcome.push({ item, status, message, freedBytes, measuredBytes: measured, linkTarget, ...(baseProof === undefined ? {} : {baseProof}) }); };
     try {
       if (item.kind === "host-link") {
         const path = resolveAgainstRepo(root, item.path);
@@ -305,6 +329,7 @@ export function prune(seams: Seams, root: string, plan: readonly PruneItem[], dr
         if (git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], canonical) !== "") throw new Refused("worktree has tracked, untracked or ignored dirt; nothing is discarded");
         if (row.head === null) throw new Refused("worktree has no readable HEAD");
         if (row.branch !== null && isTrunk(row.branch.slice("refs/heads/".length), trunk)) throw new Refused("worktree holds a protected base branch");
+        baseProof=refreshedBase(item.base);
         merged(row.head, item.base);
         // Neither a status/size snapshot nor moving the directory prevents an
         // already-open writer from adding ignored bytes before recursive removal.
@@ -323,6 +348,7 @@ export function prune(seams: Seams, root: string, plan: readonly PruneItem[], dr
       if (item.kind === "remote-branch") sha = remoteSha(item.remote, item.ref, pushUrl);
       else sha = refSha(item.ref);
       if (sha === null) { record("missing", "named ref is absent"); continue; }
+      baseProof=refreshedBase(item.base);
       merged(sha, item.base);
       if (item.kind === "local-branch") {
         const held = readRegistrations().find((row) => row.branch === item.ref);

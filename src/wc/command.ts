@@ -96,13 +96,15 @@ nen wc overlap --efforts <a,b,...> --repo <path> [--base <ref>] [--always-overla
   -- never read as "touches nothing"). Exit 0 disjoint, 1 stack or unknown.
 
 nen wc prune --repo <path> --plan <file> [--dry-run | --run] [--json]
-  An explicit JSON array, processed in order. Default: dry run, no fetch,
-  deletion, global prune or GC. --run acts ONLY on listed targets.
+  An explicit JSON array, processed in order. Default: dry run, no caller deletion,
+  global prune or GC. Bases are refreshed only in private scratch. --run acts ONLY on listed targets.
   Items: worktree{path,base}, local-branch{ref,base},
   remote-branch{remote,ref,base}, remote-ref{remote,ref,base}, host-link{path},
   each with its named kind field. Refs and bases are full refs/heads/... or
   refs/remotes/...; remote-ref means a stale LOCAL tracking ref, never HEAD.
-  Bases must already be available locally; fetch missing objects separately.
+  Bases must name refs/remotes/<remote>/<branch>; their frozen fetch mappings
+  select one remote source, fetched privately and pinned to an immutable commit.
+  Local trunk/tracking refs are never refreshed or treated as fresh authority.
   Relative plan/worktree/link paths resolve against --repo. Host links are
   readlink-only, never removed. Current/primary, locked, dirty (ignored too),
   unmerged and protected-base resources refuse at exit 2. Never force-remove
@@ -122,7 +124,8 @@ nen wc prune --repo <path> --plan <file> [--dry-run | --run] [--json]
   targets refuse the whole plan before writes; previews never promise an
   unsupported removal.
   --json: nen.wc.prune/v0.1 with dryRun, items (one status/message per item),
-  measuredBytes and freedBytes (logical file bytes), bytesBasis, and
+  baseProof {ref,remote,source,commit} when judged, measuredBytes and freedBytes
+  (logical file bytes), bytesBasis, and
   physicalFreedBytes:null. Supported ref removals reclaim zero measured file
   bytes; uncertain writes report null. Unsupported local removals report zero
   freedBytes and null measuredBytes. No physical-capacity claim or object GC.
@@ -146,7 +149,8 @@ classify:
 Reports one of: must-move (on the trunk, dirty), on-branch-dirty (on a branch
 with uncommitted work -- whether it is the SAME effort as the branch's
 existing commits is a judgement this verb hands you evidence for, never
-decides), on-branch-clean (nothing to commit). Exits 0 for any of those three
+decides), on-branch-clean (nothing to commit), detached-clean, or detached-dirty
+(no branch selected; detachedAt identifies the commit). Exits 0 for these
 -- this is a report, not a guard. A git command that FAILS (a --base that
 does not resolve, an unreadable status) is never folded into one of the three
 cases as an empty/zero reading; it is reported as an error on stderr and

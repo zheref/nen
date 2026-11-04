@@ -1,0 +1,2 @@
+- Judge cleanup ancestry against an immutable privately fetched remote base, following its frozen fetch mapping without updating caller trunk/tracking refs; report the exact base proof. ([#409](https://github.com/zheref/nen/issues/409), partial)
+- Distinguish detached clean/dirty working-copy classes. Existing unsupported local cleanup operations and their concurrency-preservation guards remain unchanged; full NN#409 is not claimed.
