@@ -77,6 +77,22 @@ jobs:
     # own reader refuses them); src/pipeline.test.ts asserts the two lists are
     # equal, so a copy that drifts fails CI.
     steps:
+      # Temp files go to the job's own runner.temp, which the runner empties
+      # around every job. The suite leaves nen-* temp dirs behind
+      # (zheref/nen#635); in the Windows pool's service-account %TEMP% they
+      # reached 1.27 million entries and the Test step grew from ~5 to 25+
+      # minutes. A step writing $GITHUB_ENV, because job-level `env:` cannot
+      # read the `runner` context. Both jobs carry it, so the step lists stay
+      # equal; src/ci/runner-policy.test.ts pins it.
+      - name: Point temp at runner.temp
+        shell: bash
+        run: |
+          {
+            echo "TMP=$RUNNER_TEMP"
+            echo "TEMP=$RUNNER_TEMP"
+            echo "TMPDIR=$RUNNER_TEMP"
+          } >> "$GITHUB_ENV"
+
       - name: Check out
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -158,16 +174,6 @@ jobs:
     # 25, not 15: alone, this leg's suite takes ~11.5 min on the pool's host,
     # too close to 15 to absorb a slow minute (zheref/nen#601's runs).
     timeout-minutes: 25
-    # Temp files go to the job's own runner.temp, which the runner empties before
-    # and after every job. The suite creates thousands of nen-* temp dirs per run
-    # and does not remove all of them; under the service account's %TEMP% they
-    # piled up across runs and the leg's Test step grew from ~5 to 25+ minutes in
-    # four days. Job-level env, not step-level, so the step list stays the one
-    # src/pipeline.test.ts compares against `check`. runner-policy.test.ts pins it.
-    env:
-      TMP: ${{ runner.temp }}
-      TEMP: ${{ runner.temp }}
-      TMPDIR: ${{ runner.temp }}
     # Every run: step here is bash, the shell the windows-x64 pool's preflight proves
     # (nen/workflow.json -> runners.pools[windows-x64].tools: git bash gh). Without it the
     # runner writes each step to a .ps1 and runs it under Windows PowerShell as the service
@@ -179,6 +185,22 @@ jobs:
       run:
         shell: bash
     steps:
+      # Temp files go to the job's own runner.temp, which the runner empties
+      # around every job. The suite leaves nen-* temp dirs behind
+      # (zheref/nen#635); in the Windows pool's service-account %TEMP% they
+      # reached 1.27 million entries and the Test step grew from ~5 to 25+
+      # minutes. A step writing $GITHUB_ENV, because job-level `env:` cannot
+      # read the `runner` context. Both jobs carry it, so the step lists stay
+      # equal; src/ci/runner-policy.test.ts pins it.
+      - name: Point temp at runner.temp
+        shell: bash
+        run: |
+          {
+            echo "TMP=$RUNNER_TEMP"
+            echo "TEMP=$RUNNER_TEMP"
+            echo "TMPDIR=$RUNNER_TEMP"
+          } >> "$GITHUB_ENV"
+
       - name: Check out
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
