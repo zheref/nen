@@ -27,9 +27,20 @@ async function capture(
   };
   const scripted = new ScriptedSeams(script);
   const seams: Seams = scripted;
-  const code = await runFamily(wcCommand, argv, repoFlag, false, io, seams);
+  const code = await runFamily(wcCommand, argv[1] === "catch-up" ? [...argv, "--trailer", "Hatsu-Agent: tester"] : argv, repoFlag, false, io, seams);
   return { code, out, err, seams: scripted };
 }
+
+describe("catch-up attribution input", () => {
+  it("refuses a non-attribution footer before any git call", async () => {
+    const out: string[] = [], err: string[] = [];
+    const seams = new ScriptedSeams([]);
+    const code = await runFamily(wcCommand, ["wc", "catch-up", "--base", "main", "--trailer", "Closes: #1"], BANKAI_REPO, false, { out: line => out.push(line), err: line => err.push(line) }, seams);
+    expect(code).toBe(2);
+    expect(err.join("\n")).toContain("attribution key");
+    expect(seams.calls).toHaveLength(0);
+  });
+});
 
 describe("nen wc classify -- CLI wiring", () => {
   it("reports must-move for a dirty trunk", async () => {
@@ -350,7 +361,7 @@ describe("nen wc squash -- CLI wiring", () => {
     const result = await capture(["wc", "squash", "--onto", "main", "--message-file", path], script, repo);
     expect(result.code).toBe(3);
     expect(result.out.join("\n")).toContain("squashed into newsha00");
-    expect(result.err.join("\n")).toMatch(/^nen wc: the written commit newsha00 carries a trailer this repository refuses: 'Co-authored-by' \(added by a hook.*git reset --soft ORIG_HEAD/m);
+    expect(result.err.join("\n")).toMatch(/^nen wc: the written commit newsha00 carries a trailer this repository refuses: 'Co-authored-by' \(added by a hook.*git -C .* reset --soft ORIG_HEAD/m);
   });
 
   it("--json --dry-run reports injected: null -- nothing was written, nothing read back (hanten N7)", async () => {
@@ -557,12 +568,12 @@ const BEHIND = (n: number): ScriptedCall => ({ match: "git rev-list --count HEAD
 const AHEAD = (n: number): ScriptedCall => ({ match: "git rev-list --count origin/main..HEAD", result: { stdout: `${n}\n` } });
 const OWN_COMMITS = { match: "git log origin/main..HEAD --format=%H%x09%s", result: { stdout: "sha2\tsecond\nsha1\tfirst\n" } };
 
-async function captureJson(argv: readonly string[], script: readonly ScriptedCall[]): Promise<{ code: number; doc: Record<string, unknown>; err: string[]; seams: ScriptedSeams }> {
+async function captureJson(argv: readonly string[], script: readonly ScriptedCall[], attribution = true): Promise<{ code: number; doc: Record<string, unknown>; err: string[]; seams: ScriptedSeams }> {
   const out: string[] = [];
   const err: string[] = [];
   const io: Io = { out: (line): void => void out.push(line), err: (line): void => void err.push(line) };
   const seams = new ScriptedSeams(script);
-  const code = await runFamily(wcCommand, argv, BANKAI_REPO, true, io, seams);
+  const code = await runFamily(wcCommand, attribution && argv[1] === "catch-up" ? [...argv, "--trailer", "Hatsu-Agent: tester"] : argv, BANKAI_REPO, true, io, seams);
   return { code, doc: out.length === 0 ? {} : (JSON.parse(out.join("\n")) as Record<string, unknown>), err, seams };
 }
 
@@ -626,6 +637,13 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
     expect(gitCalls(result.seams)).toContain("git rebase origin/main");
   });
 
+  it("refuses a merge with no agent identity before writing", async () => {
+    const result = await captureJson(["wc", "catch-up", "--base", "main", "--strategy", "merge"], [...NOTHING_PENDING, CLEAN, FETCHED, HEAD_BEFORE, BEHIND(1), AHEAD(1)], false);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("--trailer");
+    expect(gitCalls(result.seams).some(call => call.startsWith("git merge --no-edit"))).toBe(false);
+  });
+
   it("auto picks MERGE when a commit is already on the upstream", async () => {
     const result = await captureJson(["wc", "catch-up", "--base", "main"], [
       ...NOTHING_PENDING,
@@ -638,11 +656,11 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
       { match: "git rev-parse --abbrev-ref @{upstream}", result: { stdout: "origin/work\n" } },
       { match: "git fetch origin work", result: { code: 0 } },
       { match: "git merge-base --is-ancestor sha1 origin/work", result: { code: 0 } },
-      { match: "git merge --no-edit origin/main", result: { code: 0 } },
+      { match: "git merge --no-edit -m Merge origin/main\n\nHatsu-Agent: tester origin/main", result: { code: 0 } },
     ]);
     expect(result.code).toBe(0);
     expect(result.doc["strategy"]).toBe("merge");
-    expect(gitCalls(result.seams)).toContain("git merge --no-edit origin/main");
+    expect(gitCalls(result.seams)).toContain("git merge --no-edit -m Merge origin/main\n\nHatsu-Agent: tester origin/main");
     expect(gitCalls(result.seams)).not.toContain("git rebase origin/main");
   });
 
@@ -660,7 +678,7 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
       ...NOTHING_PENDING, CLEAN, FETCHED, HEAD_BEFORE, BEHIND(2), AHEAD(1),
     ]);
     expect(result.code).toBe(0);
-    expect(result.out.join("\n")).toContain("would run: git merge --no-edit origin/main  (1 ahead, 2 behind)");
+    expect(result.out.join("\n")).toContain("would run: git merge --no-edit -m Merge origin/main\n\nHatsu-Agent: tester origin/main  (1 ahead, 2 behind)");
     expect(gitCalls(result.seams).some((call): boolean => call.startsWith("git merge"))).toBe(false);
   });
 
@@ -702,7 +720,7 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
   it("on a MERGE, ours is stage 2 and theirs stage 3 -- the label follows the strategy, not the stage", async () => {
     const result = await captureJson(["wc", "catch-up", "--base", "main", "--strategy", "merge"], [
       ...NOTHING_PENDING, CLEAN, FETCHED, HEAD_BEFORE, BEHIND(2), AHEAD(1),
-      { match: "git merge --no-edit origin/main", result: { code: 1 } },
+      { match: "git merge --no-edit -m Merge origin/main\n\nHatsu-Agent: tester origin/main", result: { code: 1 } },
       { match: UNMERGED, result: { stdout: "a.ts\0" } },
       { match: CHECK, result: { code: 0 } },
       stagesOf([["a.ts", [1, 2, 3]]]),
@@ -717,7 +735,7 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
     const path = "docs/ünï.md";
     const result = await captureJson(["wc", "catch-up", "--base", "main", "--strategy", "merge"], [
       ...NOTHING_PENDING, CLEAN, FETCHED, HEAD_BEFORE, BEHIND(2), AHEAD(1),
-      { match: "git merge --no-edit origin/main", result: { code: 1 } },
+      { match: "git merge --no-edit -m Merge origin/main\n\nHatsu-Agent: tester origin/main", result: { code: 1 } },
       { match: UNMERGED, result: { stdout: `${path}\0` } },
       { match: CHECK, result: { code: 0 } },
       stagesOf([[path, [2, 3]]]),
@@ -730,7 +748,7 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
     // The stage is listed, the show fails: an error at exit 1, never "deleted".
     const failed = await capture(["wc", "catch-up", "--base", "main", "--strategy", "merge"], [
       ...NOTHING_PENDING, CLEAN, FETCHED, HEAD_BEFORE, BEHIND(2), AHEAD(1),
-      { match: "git merge --no-edit origin/main", result: { code: 1 } },
+      { match: "git merge --no-edit -m Merge origin/main\n\nHatsu-Agent: tester origin/main", result: { code: 1 } },
       { match: UNMERGED, result: { stdout: `${path}\0` } },
       { match: CHECK, result: { code: 0 } },
       stagesOf([[path, [2, 3]]]),
@@ -745,7 +763,7 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
     const ESC = String.fromCharCode(0x1b);
     const script = (): ScriptedCall[] => [
       ...NOTHING_PENDING, CLEAN, FETCHED, HEAD_BEFORE, BEHIND(2), AHEAD(1),
-      { match: "git merge --no-edit origin/main", result: { code: 1 } },
+      { match: "git merge --no-edit -m Merge origin/main\n\nHatsu-Agent: tester origin/main", result: { code: 1 } },
       { match: UNMERGED, result: { stdout: "a.ts\0" } },
       { match: CHECK, result: { code: 0 } },
       stagesOf([["a.ts", [2, 3]]]),
@@ -762,7 +780,7 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
   it("a failure that leaves no conflict is exit 1 with the git error, not a decided outcome", async () => {
     const result = await capture(["wc", "catch-up", "--base", "main", "--strategy", "merge"], [
       ...NOTHING_PENDING, CLEAN, FETCHED, HEAD_BEFORE, BEHIND(2), AHEAD(1),
-      { match: "git merge --no-edit origin/main", result: { code: 128, stderr: "fatal: refusing to merge unrelated histories" } },
+      { match: "git merge --no-edit -m Merge origin/main\n\nHatsu-Agent: tester origin/main", result: { code: 128, stderr: "fatal: refusing to merge unrelated histories" } },
       { match: UNMERGED, result: { stdout: "" } },
       { match: CHECK, result: { code: 0 } },
     ]);
@@ -792,6 +810,25 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
     expect(gitCalls(result.seams)).not.toContain("git status --porcelain=v1 -uall");
   });
 
+  it("refuses to continue a merge without explicit attribution", async () => {
+    const result = await captureJson(["wc", "catch-up", "--base", "main", "--strategy", "merge"], [
+      BASE_OK,
+      { match: "git rebase --show-current-patch", result: { code: 128, stderr: "fatal: no rebase in progress" } },
+      { match: "git rev-parse --git-dir", result: { code: 0, stdout: ".git\n" } },
+  { match: "git rev-parse --git-dir", result: { code: 0, stdout: ".git\n" } },
+      { match: "git rev-parse --verify --quiet MERGE_HEAD", result: { code: 0, stdout: "abc\n" } },
+      { match: "git rev-parse HEAD", result: { stdout: "mid00000\n" } },
+      { match: "git rev-parse HEAD", result: { stdout: "after000\n" } },
+      BEHIND(1),
+      AHEAD(2),
+      { match: UNMERGED, result: { stdout: "" } },
+      { match: CHECK, result: { code: 0 } },
+    ], false);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("--trailer");
+    expect(gitCalls(result.seams).some(call => call.startsWith("git commit"))).toBe(false);
+  });
+
   it("RESUMES an in-progress merge with git commit --no-edit", async () => {
     const result = await captureJson(["wc", "catch-up", "--base", "main", "--strategy", "merge"], [
       BASE_OK,
@@ -805,7 +842,7 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
       AHEAD(2),
       { match: UNMERGED, result: { stdout: "" } },
       { match: CHECK, result: { code: 0 } },
-      { match: "git commit --no-edit", result: { code: 0 } },
+      { match: "git commit --no-edit --trailer Hatsu-Agent: tester", result: { code: 0 } },
     ]);
     expect(result.code).toBe(0);
     expect(result.doc).toMatchObject({ strategy: "merge", resumed: true, after: "after000" });

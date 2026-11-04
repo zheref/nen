@@ -44,6 +44,7 @@
 // guard against, and the report says the check was NOT performed (an empty
 // `baseRefs`, a text line saying so) rather than rendering it as clean.
 
+import { renderCommand } from "./mechanical.js";
 import { GIT, outputLines, type Seams } from "../seam/exec.js";
 import { rawLines } from "../seam/lines.js";
 
@@ -203,7 +204,7 @@ export function planSquash(seams: Seams, cwd: string, onto: string, base: Squash
   // FEWER THAN TWO IS NOT A REFUSAL. There is nothing to fold -- zero commits
   // (--onto resolves to HEAD itself) or exactly one (nothing to collapse) --
   // so this is the verb's own success case, reported at exit 0 by the caller.
-  if (folded.length < 2) {
+  if (folded.length === 0) {
     return { kind: "nothing-to-squash", onto, mergeBase: mergeBaseSha, folded };
   }
 
@@ -376,7 +377,7 @@ export function performSquash(seams: Seams, cwd: string, mergeBaseSha: string, m
   const commit = runGit(seams, cwd, ["commit", "-F", messageFile]);
   if (commit.code !== 0) {
     throw new SquashStateError(
-      `reset to '${mergeBaseSha}' but 'git commit -F ${messageFile}' failed: ${commit.error}. The original commits are not lost -- recover them with 'git reset --hard ORIG_HEAD'.`,
+      `reset to '${mergeBaseSha}' but 'git commit -F ${messageFile}' failed: ${commit.error}. The original commits are not lost -- recover them with '${renderCommand(["git", "-C", cwd, "reset", "--soft", "ORIG_HEAD"])}'.`,
     );
   }
   const head = runGit(seams, cwd, ["rev-parse", "HEAD"]);

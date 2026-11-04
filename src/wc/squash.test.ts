@@ -80,18 +80,19 @@ describe("planSquash -- refuses before anything moves", () => {
     expect(plan.folded).toEqual([]);
   });
 
-  it("answers nothing-to-squash with exactly one commit ahead, and never checks the upstream", () => {
+  it("plans a guarded message rewrite for exactly one unpublished commit", () => {
     const seams = new ScriptedSeams([
       CLEAN,
       MERGE_BASE,
       ANCESTOR_OK,
       { match: "git log base0000..HEAD --format=%H%x09%s", result: { stdout: "sha1\tonly commit\n" } },
+      NO_UPSTREAM, NO_ORIGIN_BASE, NO_LOCAL_BASE,
     ]);
     const plan = planSquash(seams, "/repo", "main", BASE);
-    expect(plan.kind).toBe("nothing-to-squash");
-    if (plan.kind !== "nothing-to-squash") return;
+    expect(plan.kind).toBe("ready");
+    if (plan.kind !== "ready") return;
     expect(plan.folded).toEqual([{ sha: "sha1", subject: "only commit" }]);
-    expect(seams.calls.some((call): boolean => call.args.includes("upstream"))).toBe(false);
+    expect(seams.calls.some((call): boolean => call.args.includes("@{upstream}"))).toBe(true);
   });
 
   it("answers ready with two or more commits, oldest first, when there is no upstream configured", () => {
@@ -342,6 +343,6 @@ describe("performSquash -- the mechanism, and only the mechanism", () => {
       { match: "git reset --soft base0000", result: { code: 0 } },
       { match: "git commit -F msg.txt", result: { code: 1, stderr: "fatal: nothing to commit" } },
     ]);
-    expect((): unknown => performSquash(seams, "/repo", "base0000", "msg.txt")).toThrow(/ORIG_HEAD/);
+    expect((): unknown => performSquash(seams, "/repo", "base0000", "msg.txt")).toThrow(/git -C \/repo reset --soft ORIG_HEAD/);
   });
 });
