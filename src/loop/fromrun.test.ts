@@ -42,7 +42,7 @@ describe("effortsFromRun", () => {
       [480, true, true, true, false, false],
       [481, true, false, false, false, true],
     ]);
-    expect(report.efforts[1]?.facts).toBe("open, not-ready, no stop marker, stacked on b480");
+    expect(report.efforts[1]?.facts).toBe("open, not-ready, no prompt receipt, stacked on b480");
     expect(report.unread).toEqual([]);
   });
 
@@ -171,13 +171,13 @@ describe("markerForBranch", () => {
     platform: "linux",
   });
 
-  it("finds the worktree on the branch and reads a valid marker there as present", () => {
+  it("never treats a valid attention marker as proof a prompt was shown", () => {
     const wt = mkdtempSync(join(tmpdir(), "nen-marker-"));
     mkdirSync(join(wt, ".nen"));
     writeFileSync(join(wt, ".nen", "last-stop.json"), JSON.stringify({ contract: "nen.stop.mark/v0.1", who: "kurapika", gate: "G2", notified: true, at: NOW }));
     const porcelain = `worktree /core\nHEAD 1\nbranch refs/heads/main\n\nworktree ${wt}\nHEAD 2\nbranch refs/heads/b480\n`;
-    expect(markerForBranch(seams(porcelain), "/core", "b480")).toEqual({ ok: true, present: true, where: join(wt, ".nen", "last-stop.json") });
-    expect(markerForBranch(seams(porcelain), "/core", "b999")).toEqual({ ok: true, present: false, where: null });
+    expect(markerForBranch(seams(porcelain), "/core", "b480").ok).toBe(false);
+    expect(markerForBranch(seams(porcelain), "/core", "b999").ok).toBe(false);
   });
 
   it("is unread on a marker that is not JSON", () => {
@@ -186,7 +186,7 @@ describe("markerForBranch", () => {
     writeFileSync(join(wt, ".nen", "last-stop.json"), "{");
     const read = markerForBranch(seams(`worktree ${wt}\nbranch refs/heads/b1\n`), "/core", "b1");
     expect(read.ok).toBe(false);
-    expect(read.ok ? "" : read.reason).toMatch(/is not JSON/);
+    expect(read.ok ? "" : read.reason).toMatch(/expected --prompt-gate is missing/);
   });
 
   it("is unread on a marker that will not parse and on a git that will not list", () => {

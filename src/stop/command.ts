@@ -1,3 +1,4 @@
+import { recordPrompt } from "./prompt.js";
 // src/stop/command.ts -- `nen stop`: the gate-stop ceremony.
 //
 // PORTED FROM bankai-core's `scripts/gate_stop.sh` + `scripts/ichigo_prompt.sh`
@@ -228,11 +229,23 @@ export const stopCommand: Command = {
   // as an unknown subcommand (review finding on zheref/nen#216). `clear` and
   // `show` are recognised in run() instead.
   flags: {
-    values: ["who", "gate", "title", "body", "report-url", "options", "propose-issue", "effort", ...ANSWER_VALUE_FLAGS],
-    booleans: ["notified", "template", "mark", "all", ...ANSWER_BOOLEAN_FLAGS],
+    values: ["pr", "head", "who", "gate", "title", "body", "report-url", "options", "propose-issue", "effort", ...ANSWER_VALUE_FLAGS],
+    booleans: ["prompt-shown", "notified", "template", "mark", "all", ...ANSWER_BOOLEAN_FLAGS],
     lists: [...ANSWER_LIST_FLAGS],
   },
   run(context: CommandContext): number {
+    if (context.args.booleans.has("prompt-shown")) {
+      if (context.args.positionals.length !== 1 || context.args.passthrough.length) throw new VerbUsageError("--prompt-shown is a standalone stop form, with no subcommand or file.");
+      for (const flag of Object.keys(context.args.values)) if (!["repo", "effort", "pr", "head", "gate"].includes(flag)) throw new VerbUsageError(`--${flag} is not read by --prompt-shown.`);
+      for (const flag of context.args.booleans) if (!["prompt-shown", "json"].includes(flag)) throw new VerbUsageError(`--${flag} is not read by --prompt-shown.`);
+      for (const [flag, values] of Object.entries(context.args.lists)) if (values.length) throw new VerbUsageError(`--${flag} is not read by --prompt-shown.`);
+      const root = resolveRepoRoot({ repoFlag: context.repoFlag });
+      const value = (name: string): string => { const given = context.args.values[name]; if (!given) throw new VerbUsageError(`--${name} is required by --prompt-shown.`); return given; };
+      const path = recordPrompt(context.seams, root, { effort: value("effort"), pr: Number(value("pr")), head: value("head"), gate: value("gate") });
+      emit(context.io, context.json, { prompted: true, path }, [`prompt recorded: ${path}`]);
+      return 0;
+    }
+    if (context.args.values["pr"] !== undefined || context.args.values["head"] !== undefined) throw new VerbUsageError("--pr and --head belong to --prompt-shown.");
     if (context.args.positionals[1] === "answer") return runAnswer(context);
     // THE ANSWER FLAGS ARE `stop answer`'s ALONE. This family declares one
     // flag spec for every form, so a flag only `answer` reads would otherwise

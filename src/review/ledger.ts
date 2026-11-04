@@ -228,6 +228,29 @@ function trunk(options: CycleOptions): string {
   const remote = git(options, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"])?.trim();
   return remote?.startsWith("origin/") && remote !== "origin/" ? remote.slice(7) : "main";
 }
+export function repairCycleMarker(options: CycleOptions): { code: number; report: Record<string, unknown> } {
+  const path = cyclePath(options.root, options.branch, options.pr);
+  if (realContainment(options.root, path).link !== null || (present(path) && lstatSync(path).isSymbolicLink())) refuse(`cycle path is redirected: ${path}.`);
+  const doc = readCycle(options, readBudgets(options.root));
+  if (doc.slug !== cycleKey(options.branch, options.pr) || typeof doc.openedAt !== "string" || Number.isNaN(Date.parse(doc.openedAt))) refuse("cycle slug or opening instant is malformed; nothing repaired.");
+  const dir = cycleTraceDir(options);
+  if (dir === null) return { code: 1, report: { repair: "unresolved", path, reason: "git common directory is unreadable; durable trace not restored" } };
+  const marker = join(dir, `${doc.slug}.opened`);
+  const common = dirname(dirname(dir));
+  const content = `${doc.openedAt} ${options.root}\n`;
+  try {
+  const containment = realContainment(common, marker);
+  if (!containment.contained || containment.link !== null || (present(marker) && lstatSync(marker).isSymbolicLink())) refuse(`marker path is redirected: ${marker}.`);
+  if (present(marker)) {
+    if (readFileSync(marker, "utf8") !== content) refuse(`durable marker conflicts at ${marker}; nothing overwritten.`);
+    return { code: 0, report: { repair: "unchanged", path, marker } };
+  }
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(marker, content, { flag: "wx" });
+    return { code: 0, report: { repair: "restored", path, marker } };
+  } catch (error) { if (error instanceof VerbUsageError) throw error; return { code: 1, report: { repair: "unresolved", path, marker, reason: String(error) } }; }
+}
+
 export function ensureCycle(options: CycleOptions): { code: number; report: Record<string, unknown> } {
   const path = cyclePath(options.root, options.branch);
   const base = trunk(options);
