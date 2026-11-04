@@ -952,7 +952,7 @@ describe("refusals", () => {
   it("exit 4 quoting the declaration's OWN sentence for an unsupported verb", async () => {
     const result = await capture(["archive"]);
     expect(result.code).toBe(4);
-    expect(result.err.join("\n")).toContain("no packaging step exists; this lane ships as a web application.");
+    expect(result.out.join("\n")).toContain("no packaging step exists; this lane ships as a web application.");
   });
 
   it("exit 3 naming the host and the platforms the declaration allows", async () => {
@@ -982,7 +982,7 @@ describe("refusals", () => {
     // render.ts left it green. That mutant now dies here.
     const conflicted = await capture(["release"], { platform: "linux" });
     expect(conflicted.code).toBe(4);
-    expect(conflicted.err.join("\n")).toMatch(/no package or store pipeline/);
+    expect(conflicted.out.join("\n")).toMatch(/no package or store pipeline/);
     expect(conflicted.err.join("\n")).not.toMatch(/this host is/);
     // And the host gate is real for the same verb on a lane that DOES declare
     // it, which is what makes the assertion above about the order.
@@ -1126,7 +1126,7 @@ describe("nen shu deploy -- the seat, the destination, and which answers first",
     ]) {
       const result = await capture(argv);
       expect(result.code, argv.join(" ")).toBe(4);
-      expect(result.err.join("\n"), argv.join(" ")).toContain(
+      expect(result.out.join("\n"), argv.join(" ")).toContain(
         "no target is wired. Declare one under `targets` before nen will run this.",
       );
       expect(result.seams.calls, argv.join(" ")).toEqual([]);
@@ -1142,7 +1142,7 @@ describe("nen shu deploy -- the seat, the destination, and which answers first",
     // lane's own.
     const result = await capture(["deploy", "--target", "provider-integration"]);
     expect(result.code).toBe(4);
-    expect(result.err.join("\n")).toContain(
+    expect(result.out.join("\n")).toContain(
       "no target is wired. Declare one under `targets` before nen will run this.",
     );
     // And NOT the destination's, which would send a maintainer to fix the one
@@ -1557,7 +1557,7 @@ describe("nen shu deploy -- the seat, the destination, and which answers first",
     expect(report.target?.args).toEqual(["--note", "two words", "it's"]);
   });
 
-  it("prints NO document on stdout for any of its refusals under --json", async () => {
+  it("prints a declared-unsupported document only for explicit verb seats under --json", async () => {
     const refusals: readonly (readonly string[])[] = [
       ["deploy", "--json"],
       ["deploy", "--lane", "pages", "--json"],
@@ -1567,7 +1567,8 @@ describe("nen shu deploy -- the seat, the destination, and which answers first",
     for (const argv of refusals) {
       const result = await capture(argv);
       expect(result.code, argv.join(" ")).not.toBe(0);
-      expect(result.out, argv.join(" ")).toEqual([]);
+      if (argv.length === 2) expect(JSON.parse(result.out.join("\n"))).toMatchObject({verdict:"declared-unsupported",executed:false,verified:false,exitCode:4});
+      else expect(result.out, argv.join(" ")).toEqual([]);
     }
   });
 });
@@ -3101,7 +3102,7 @@ describe("the target's own verb answers before the lane's seat", () => {
     };
     const result = await withDeclaration(project, ["dev", "--target", "handset"]);
     expect(result.code).toBe(4);
-    expect(result.err.join("\n")).toContain("there is no local server for this lane.");
+    expect(result.out.join("\n")).toContain("there is no local server for this lane.");
   });
 
   it("leaves the seated TARGET's own exit 4 exactly where it was", async () => {

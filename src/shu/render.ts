@@ -1,3 +1,4 @@
+import { DeclaredUnsupported } from "./exit.js";
 // src/shu/render.ts -- turn a DECLARATION into the exact steps a verb would
 // run. Pure: no seam, no filesystem, no clock, no network.
 //
@@ -713,10 +714,7 @@ export function renderInvocation(
     );
   }
   if (invocation.kind === "unsupported") {
-    throw new ShuRefusal(
-      EXIT_UNSUPPORTED_VERB,
-      `'${request.verb}' is unsupported on lane '${lane}' (${declaredLane.stack}). The declaration's own reason: ${invocation.reason}`,
-    );
+    throw new DeclaredUnsupported(lane, declaredLane.stack, request.verb, invocation.reason);
   }
 
   const declaredHosts = declaredHostsFor(project, request.verb);

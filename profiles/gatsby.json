@@ -16,7 +16,11 @@
     }
   ],
   "hosts": {
-    "*": ["darwin", "linux", "win32"]
+    "*": [
+      "darwin",
+      "linux",
+      "win32"
+    ]
   },
   "hostNote": "any host with Node >= 18 (CI pins 20). `archive` AND `deploy` additionally need a LOCALLY INSTALLED Chrome/Chromium/Edge -- the PDF builder deliberately avoids puppeteer and probes for an installed browser binary (zheref.io/scripts/build-resume-pdf.mjs:38-44), which is exactly why that step is not in CI. That is a tool constraint, not a platform one, so it is a toolchain row rather than a narrower `hosts` entry.",
   "scaffoldTemplate": "full",
@@ -29,14 +33,27 @@
     },
     "build": {
       "exe": "gatsby",
-      "argv": ["build"],
+      "argv": [
+        "build"
+      ],
       "why": "The repository's own build script. Its CI profile differs by one flag: `npx gatsby build --prefix-paths` when `PREFIX_PATHS=true`, else `npx gatsby build` -- a profile the declaration states, not a second row here.",
       "source": "zheref.io/package.json:11 (ci profile: .github/workflows/deploy.yml:36-37)"
     },
     "test": {
-      "unsupported": "No test script and no test-runner dependency.",
-      "summary": "no test runner at all",
-      "source": "zheref.io/package.json"
+      "exe": "node",
+      "argv": [
+        "node_modules/jest/bin/jest.js",
+        "--config",
+        "jest.config.cjs",
+        "--runInBand",
+        "--json",
+        "--outputFile=jest-results.json"
+      ],
+      "artifacts": [
+        "jest-results.json"
+      ],
+      "why": "Recommended adoption recipe, not an observed zheref.io command. Requires repository-local Jest29+, babel-jest, babel-preset-gatsby, React Testing Library, jest-environment-jsdom and the fixture-backed jest.config.cjs/preprocessor/setup/mocks. Executes the local pinned Jest entrypoint without npx or implicit installation. Consumer declarations remain the sole execution authority.",
+      "source": "https://www.gatsbyjs.com/docs/how-to/testing/unit-testing/; https://www.gatsbyjs.com/docs/how-to/testing/testing-react-components/; fixtures/gatsby-jest (pinned Gatsby5/React18/Jest29 proof)"
     },
     "ui-test": {
       "unsupported": "No UI or E2E runner of any kind.",
@@ -55,7 +72,9 @@
     },
     "archive": {
       "exe": "node",
-      "argv": ["{archiveScript}"],
+      "argv": [
+        "{archiveScript}"
+      ],
       "why": "The one archive in the inventory that produces a real artifact: a PDF. Cited verbatim as `node scripts/build-resume-pdf.mjs` (`npm run resume:pdf`); `{archiveScript}` is templated because the script path is that repository's, not this stack's. It deliberately avoids puppeteer and PROBES for an installed browser binary, which is why this step is not in CI.",
       "source": "zheref.io/package.json:15; scripts/build-resume-pdf.mjs:38-44"
     },
@@ -66,31 +85,58 @@
     },
     "dev": {
       "exe": "gatsby",
-      "argv": ["develop"],
+      "argv": [
+        "develop"
+      ],
       "why": "Scripts `develop` and `start` are the same command; the repository's launch configuration adds a port (`npx gatsby develop -p 8000`), which is the declaration's argument to add.",
       "source": "zheref.io/package.json:9, :10"
     },
     "run": {
       "exe": "gatsby",
-      "argv": ["serve"],
+      "argv": [
+        "serve"
+      ],
       "why": "Serves the PRODUCTION build on port 9000, so it requires a prior `build` exactly as every other `run` row in this pack does.",
       "source": "zheref.io/package.json:12"
     },
     "deploy": {
       "steps": [
-        { "exe": "node", "argv": ["{archiveScript}"] },
+        {
+          "exe": "node",
+          "argv": [
+            "{archiveScript}"
+          ]
+        },
         {
           "exe": "gh-pages",
-          "argv": ["-d", "public", "-b", "gh-pages", "--dotfiles"]
+          "argv": [
+            "-d",
+            "public",
+            "-b",
+            "gh-pages",
+            "--dotfiles"
+          ]
         }
       ],
       "why": "Cited verbatim as `npm run resume:pdf && gh-pages -d public -b gh-pages --dotfiles`: the first half IS this profile's own `archive` row, which is why it is spelled the same way here. `public` is Gatsby's own output directory and the branch name is the host's convention, so both are carried literally. THE CI PROFILE HAS NO COMMAND AT ALL -- the site is uploaded by one action and published by another (`.github/workflows/deploy.yml:41-43`, `:53`), which is a deploy with no command line for nen to run.",
       "source": "zheref.io/package.json:14 (ci profile: .github/workflows/deploy.yml:41-43, :53)"
     },
     "coverage": {
-      "unsupported": "Same reason as `test`: no test script and no test-runner dependency, so there is nothing to instrument.",
-      "summary": "no tests to instrument",
-      "source": "zheref.io/package.json"
+      "exe": "node",
+      "argv": [
+        "node_modules/jest/bin/jest.js",
+        "--config",
+        "jest.config.cjs",
+        "--runInBand",
+        "--coverage",
+        "--coverageReporters=lcov",
+        "--coverageDirectory=coverage"
+      ],
+      "artifacts": [
+        "coverage/lcov.info"
+      ],
+      "why": "The same adopted Jest suite writes LCOV readable by nen shu coverage. collectCoverageFrom must name the consumer source set, including untested files. Missing reports refuse; threshold.met and touched-file ladder bands report unmet policy without inventing verification or changing runner exit semantics.",
+      "source": "https://www.gatsbyjs.com/docs/how-to/testing/unit-testing/; https://www.gatsbyjs.com/docs/how-to/testing/testing-react-components/; fixtures/gatsby-jest (pinned Gatsby5/React18/Jest29 proof)"
     },
     "tools": {
       "declaredOnly": "All verify-only. Node -- verify-only, >= 18, CI pins 20. npm -- the repository uses npm rather than pnpm and ships NO `packageManager` field, so there is no corepack pin to activate: this is the one JS repository in the inventory where nen's single installable class does not apply. A local browser -- verify-only, and the most interesting row in the stack: `archive` and `deploy` need an installed Chrome/Chromium/Edge, which the PDF builder probes for BY PATH rather than downloading. nen probes the same way and reports; installing a browser is not something a build CLI does.",
@@ -98,15 +144,19 @@
       "source": "zheref.io/package.json; scripts/build-resume-pdf.mjs:38-44"
     },
     "warmup": {
-      "delegatesTo": ["build"],
-      "why": "The git steps are stack-independent and run regardless; build-verification delegates to this profile's own `build` row. The OPTIONAL `--test` step is the one that reports unsupported here -- `test` has no command for this stack -- rather than `warmup` failing as a whole.",
-      "source": "this profile's own build row (test is unsupported)"
+      "delegatesTo": [
+        "build"
+      ],
+      "why": "Git steps are stack-independent; build verification delegates to build. Optional test uses the adopted Jest declaration where present, otherwise reports declared unsupported.",
+      "source": "this profile build/test rows; consumer declaration decides adoption"
     }
   },
   "toolchain": {
     "browser": {
       "minimum": null,
-      "probe": ["{browserPath}"],
+      "probe": [
+        "{browserPath}"
+      ],
       "versionFrom": "path-exists",
       "installer": "verify-only",
       "why": "`archive` and `deploy` need a locally installed Chrome, Chromium or Edge. The repository's PDF builder deliberately avoids puppeteer and probes for the binary BY PATH; nen probes the same way, reports, and never installs a browser. No version is pinned, so the probe is a presence check.",
@@ -114,15 +164,22 @@
     },
     "node": {
       "minimum": "18.0.0",
-      "probe": ["node", "--version"],
+      "probe": [
+        "node",
+        "--version"
+      ],
       "versionFrom": "first-semver-on-stdout",
       "installer": "verify-only",
-      "why": "The repository's floor is Node 18; its CI pins 20. Verify-only for the same reason as every other JS lane: a Node install is a system-wide decision nen does not make.",
-      "source": "zheref.io/package.json; .github/workflows/deploy.yml"
+      "why": "The repository's floor is Node 18; its CI pins 20. Verify-only for the same reason as every other JS lane: a Node install is a system-wide decision nen does not make. The host Node runtime also executes the repository-local pinned Jest entrypoint after explicit adoption; no global Jest is required.",
+      "source": "zheref.io/package.json; .github/workflows/deploy.yml",
+      "hostTool": true
     },
     "npm": {
       "minimum": null,
-      "probe": ["npm", "--version"],
+      "probe": [
+        "npm",
+        "--version"
+      ],
       "versionFrom": "first-semver-on-stdout",
       "installer": "verify-only",
       "why": "THE ONE JS REPOSITORY WHERE COREPACK DOES NOT APPLY: it uses npm, not pnpm, and ships no `packageManager` field, so there is no pin to activate. npm arrives with Node, which is why the entry is verify-only rather than an install.",
@@ -131,9 +188,9 @@
   },
   "reportDefault": {
     "$comment": "ADVISORY ONLY, and the one thing `nen shu coverage` may say about a report location it was not given. That verb parses the report a DECLARATION names under the coverage verb's `artifacts`; when a repository names none, this path (or this reason) is quoted in the refusal and NEVER opened. `path: null` is the honest answer for a stack whose report location does not exist or is not conventional.",
-    "path": null,
-    "why": "Nothing writes a coverage report: there is no test script and no test-runner dependency. If one is added, the convention in this ecosystem is `coverage/lcov.info` under the package that runs the tests -- and which package that is is the repository's fact, so the declaration states it.",
-    "source": "this profile's own `coverage` row (zheref.io/package.json)"
+    "path": "coverage/lcov.info",
+    "why": "Recommended root-lane LCOV location for the adopted Jest coverage recipe. Advisory only: execution reads only the consumer declaration artifacts, never this profile default.",
+    "source": "https://www.gatsbyjs.com/docs/how-to/testing/unit-testing/; https://www.gatsbyjs.com/docs/how-to/testing/testing-react-components/; fixtures/gatsby-jest (pinned Gatsby5/React18/Jest29 proof)"
   },
   "deployDefault": {
     "target": null,
@@ -141,6 +198,51 @@
     "source": "this profile's own `deploy` row (zheref.io/package.json:14)"
   },
   "notes": [
-    "THE SECOND `deploy` PROFILE IS THE POINT. Two of the seven repositories deploy through a mechanism that has NO COMMAND LINE AT ALL -- a Pages action here, a hosting provider's git integration in the nextjs profile. `unsupported` with a sentence, or a declared-only row, is the only honest rendering, and the schema has to be able to say it."
+    "THE SECOND `deploy` PROFILE IS THE POINT. Two of the seven repositories deploy through a mechanism that has NO COMMAND LINE AT ALL -- a Pages action here, a hosting provider's git integration in the nextjs profile. `unsupported` with a sentence, or a declared-only row, is the only honest rendering, and the schema has to be able to say it.",
+    "Jest/RTL recommendation is an adoption recipe supported by the official Gatsby testing guides and fixtures/gatsby-jest, not a claim that zheref.io already has tests. Install the fixture-listed compatible dev dependencies and copy/adapt its config/source selection before replacing seats. No browser E2E ui-test runner is implied."
+  ],
+  "crossChecks": [
+    {
+      "verbs": [
+        "test",
+        "coverage"
+      ],
+      "markers": [
+        {
+          "pattern": "jest.config.cjs",
+          "contains": null,
+          "why": "Required adoption configuration from the documented Gatsby/Jest fixture."
+        }
+      ],
+      "why": "Adopt the documented Gatsby/Jest configuration: this lane has no jest.config.cjs; no test or coverage command is inferred."
+    },
+    {
+      "verbs": [
+        "test",
+        "coverage"
+      ],
+      "markers": [
+        {
+          "pattern": "jest-preprocess.cjs",
+          "contains": null,
+          "why": "Required adoption configuration from the documented Gatsby/Jest fixture."
+        }
+      ],
+      "why": "Adopt the documented Gatsby/Jest configuration: this lane has no jest-preprocess.cjs; no test or coverage command is inferred."
+    },
+    {
+      "verbs": [
+        "test",
+        "coverage"
+      ],
+      "markers": [
+        {
+          "pattern": "setup-test-env.cjs",
+          "contains": null,
+          "why": "Required adoption configuration from the documented Gatsby/Jest fixture."
+        }
+      ],
+      "why": "Adopt the documented Gatsby/Jest configuration: this lane has no setup-test-env.cjs; no test or coverage command is inferred."
+    }
   ]
 }

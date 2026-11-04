@@ -1,0 +1,2 @@
+- Recommend a fixture-proven Gatsby/Jest/React Testing Library runner and LCOV coverage recipe, with explicit consumer adoption prerequisites. ([#530](https://github.com/zheref/nen/issues/530))
+- Render explicit verb seats as `declared unsupported` (exit4, executed:false, verified:false), including structured JSON; retain required test, coverage ladder and readiness semantics. ([#530](https://github.com/zheref/nen/issues/530))

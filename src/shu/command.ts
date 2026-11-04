@@ -37,6 +37,7 @@
 // --write` would otherwise parse cleanly and be silently ignored -- and `--write`
 // is the ONE flag in this family that decides whether anything is written.
 
+import { plainLine } from "../cli/plain.js";
 import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
 import { emit, requireRepoFlag, requireSubcommand, requireValue, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import type { FlagSpec } from "../cli/args.js";
@@ -44,7 +45,7 @@ import { commaList } from "../cli/comma.js";
 import { INSTALLERS, VERSION_FROM, type ProjectBlock } from "../schema/contract.js";
 import { PROGRAM } from "../version.js";
 import { openDeclaration } from "./declaration.js";
-import { EXIT_UNSUPPORTED_HOST, ShuRefusal } from "./exit.js";
+import { DeclaredUnsupported, EXIT_UNSUPPORTED_HOST, ShuRefusal } from "./exit.js";
 import { coverageAdvisories } from "./coverage-defaults.js";
 import { recordCapture } from "./capture-provenance.js";
 import { runCoverage } from "./coverage.js";
@@ -1609,6 +1610,10 @@ export const shuCommand: Command = {
  * executing verb.
  */
 function shuRefusalCode(context: CommandContext, subcommand: string, error: unknown): number {
+  if (error instanceof DeclaredUnsupported) {
+    emit(context.io, context.json, {contract:"nen.shu.unsupported/v0.1",verdict:"declared-unsupported",verb:error.verb,lane:error.lane,stack:error.stack,reason:error.reason,executed:false,verified:false,exitCode:error.code}, [plainLine(`declared unsupported: ${error.message} Not executed or verified; any required evidence remains unmet.`)]);
+    return error.code;
+  }
   if (error instanceof ShuRefusal) {
     context.io.err(`${PROGRAM} shu ${subcommand}: ${error.message}`);
     return error.code;

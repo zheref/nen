@@ -6093,12 +6093,19 @@ function proposeVerbs(
     // the row, and rewriting it here would make it nen's reason rather than the
     // catalogue's.
     const why = packWhy;
+    // A catalogue recipe writes in its lane cwd. Declarations name artifacts
+    // relative to the repository root, including when this lane is nested.
+    const rawArtifacts = cell.invocation.raw["artifacts"];
+    const artifactFields = Array.isArray(rawArtifacts) && rawArtifacts.length > 0
+      ? { artifacts: rawArtifacts.map((path): string => relative(repoRoot, join(laneDirectory, String(path))).split(sep).join("/")) }
+      : {};
     verbs[verb] =
       steps.length === 1
-        ? { exe: first.exe, argv: first.argv, why }
+        ? { exe: first.exe, argv: first.argv, why, ...artifactFields }
         : {
             steps: steps.map((step): unknown => ({ exe: step.exe, argv: step.argv })),
             why,
+            ...artifactFields,
           };
   }
 

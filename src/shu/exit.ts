@@ -122,3 +122,11 @@ export class ShuRefusal extends Error {
     this.code = code;
   }
 }
+
+/** An explicit policy seat, distinct from a failed command or absent declaration. */
+export class DeclaredUnsupported extends ShuRefusal {
+  constructor(readonly lane:string, readonly stack:string, readonly verb:string, readonly reason:string) {
+    super(EXIT_UNSUPPORTED_VERB, `'${verb}' is unsupported on lane '${lane}' (${stack}). The declaration's own reason: ${reason}`);
+    this.name="DeclaredUnsupported";
+  }
+}

@@ -1,0 +1,4 @@
+// Gatsby's documented Jest mock keeps actual exports and controls browser navigation.
+const React = require("react");
+const gatsby = jest.requireActual("gatsby");
+module.exports = { ...gatsby, graphql: jest.fn(), Link: jest.fn().mockImplementation(({ to, ...rest }) => React.createElement("a", { ...rest, href: to })), useStaticQuery: jest.fn() };

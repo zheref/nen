@@ -4,9 +4,9 @@
 
 **This page is generated.** `bun run matrix` renders it from `profiles/*.json`, the bundled profiles pack, and a test in this repository's own suite re-renders it and compares byte for byte -- so it cannot quietly go stale, and a hand edit fails the build. Change the pack, not the page.
 
-**What it is.** For each stack the pack knows, the reference command each verb has *in the product repositories the inventory read*, cited to a file and a line. It is a CATALOGUE, not an authority: the only thing nen ever executes is the target repository's own `nen/contract.json`, and this page exists so that whoever writes one has somewhere honest to start. For the question *"what does THIS checkout support"*, ask `nen shu detect --repo <path>`; this page answers *"what does the pack know"*.
+**What it is.** For each stack the pack knows, reference commands observed in product repositories or explicitly recommended with a reproducible fixture, each with its source and adoption status stated. It is a CATALOGUE, not an authority: the only thing nen ever executes is the target repository's own `nen/contract.json`, and this page exists so that whoever writes one has somewhere honest to start. For the question *"what does THIS checkout support"*, ask `nen shu detect --repo <path>`; this page answers *"what does the pack know"*.
 
-**Empty cells are first-class.** A verb no repository in the inventory implements is `unsupported` with the reason it is, never a plausible command nobody has run.
+**Empty cells are first-class.** A verb with neither observed implementation nor a validated adoption recipe is `unsupported` with its reason, never a plausible command nobody has run.
 
 ## Placeholders
 
@@ -54,12 +54,12 @@ The **host** column is the platform allowlist every verb of that stack shares (`
 | `compose-desktop` | any | — | D declared-only (markers, no spawn) | — no command in the tree | — no command in the tree | — no command in the tree | — no command in the tree | — the compiler checks types | — formats declared, never invoked | — no command in the tree | — no command in the tree | ✓ `{gw} run` | — no command in the tree | — nothing to instrument | D declared-only (verify-only, all of it) | D declared-only (git half only) |
 | `dotnet-winui` | win32 | — | D declared-only (markers, no spawn) | ✓ `dotnet build {project} -c Debug` | ✓ `dotnet test {project}` | — no command in the repo | — no command in the repo | — the compiler checks types | — MSIX is a GUI gesture | — no command in the repo | — no command in the repo | — no command in the repo | — no command in the repo | — coverlet present, unused | D declared-only (SDK gated, IDE never) | D declared-only (git half, then what is declared) |
 | `expo` | any | `minimal` | D declared-only (markers, no spawn) | — run:* builds and launches | — no test runner at all | — no UI runner at all | ✓ `expo lint` | — configured, never run | — no eas.json anywhere | — no release lane at all | ✓ `expo start` | ✓ `expo run:{platform}` | — no deploy target | — no tests to instrument | ✓ `corepack enable` then `corepack prepare {packageManager} --activate` | D declared-only (git half only) |
-| `gatsby` | any | `full` | D declared-only (markers, no spawn) | ✓ `gatsby build` | — no test runner at all | — no UI runner at all | — no linter at all | — no types to check | ✓ `node {archiveScript}` | — no release lane at all | ✓ `gatsby develop` | ✓ `gatsby serve` | ✓ `node {archiveScript}` then `gh-pages -d public -b gh-pages --dotfiles` | — no tests to instrument | D declared-only (verify-only, all of it) | ✓ delegates to `build` |
+| `gatsby` | any | `full` | D declared-only (markers, no spawn) | ✓ `gatsby build` | ✓ `node node_modules/jest/bin/jest.js --config jest.config.cjs --runInBand --json --outputFile=jest-results.json` | — no UI runner at all | — no linter at all | — no types to check | ✓ `node {archiveScript}` | — no release lane at all | ✓ `gatsby develop` | ✓ `gatsby serve` | ✓ `node {archiveScript}` then `gh-pages -d public -b gh-pages --dotfiles` | ✓ `node node_modules/jest/bin/jest.js --config jest.config.cjs --runInBand --coverage --coverageReporters=lcov --coverageDirectory=coverage` | D declared-only (verify-only, all of it) | ✓ delegates to `build` |
 | `gradle-android` | any | `minimal` | D declared-only (markers, no spawn) | ✓ `{gw} assembleDebug --stacktrace` | ✓ `{gw} verifyPaparazziDebug {unitTestTask} --stacktrace` | ✓ `{gw} verifyPaparazziDebug` | ✓ `{gw} :app:lintDebug --stacktrace` | — the compiler checks types | — release type, no signing | — no release lane at all | — no installDebug, no run | — no local run lane | — no deploy target | — no coverage plugin | D declared-only (components only) | ✓ delegates to `build`, `test` |
 | `nextjs` | any | `full` | D declared-only (markers, no spawn) | ✓ `{pm} turbo run build` | ✓ `{pm} turbo run test` | D declared-only (two meanings) | ✓ `{pm} exec biome check .` then `{pm} turbo run lint` | ✓ `{pm} -r exec tsc --noEmit` | D declared-only (evidence, not an artifact) | — declared n/a in the repo | ✓ `{pm} turbo run dev` | ✓ `next start` | D declared-only (three shapes, no default) | ✓ `{pm} --filter {package} test:coverage` | ✓ `corepack enable` then `corepack prepare {packageManager} --activate` | ✓ delegates to `build`, `test` |
 | `xcode-ios` | darwin | `minimal` | D declared-only (markers, no spawn) | ✓ `xcodebuild -project {project} -scheme {scheme} -destination {destination} -configuration Debug build` | ✓ `xcodebuild -project {project} -scheme {scheme} -destination id={simUdid} -enableCodeCoverage YES -skipMacroValidation test` | — targets exist, never run | D declared-only (two meanings, one repo) | — the compiler checks types | — no xcodebuild archive | — no release lane at all | — a GUI gesture | — no simctl install/launch | — db migration, not an app | ✓ `xcodebuild -project {project} -scheme {scheme} -destination id={simUdid} -enableCodeCoverage YES -skipMacroValidation -resultBundlePath {resultBundle} test` then `xcrun xccov view --report --json {resultBundle}` | D declared-only (verify-only, all of it) | ✓ delegates to `build`, `test` |
 
-**Read it honestly, and over the right cells.** 11 of the 14 verbs name a command a repository RUNS; the other 3 describe what nen does *around* a build -- a marker match, a toolchain report, a delegation to two of these same rows -- and counting them in flatters the ratio in both directions at once. Over the **77** stack × verb cells the 11 command verbs make: **48 are unsupported**, 4 are declared-only, and 25 carry a command. That is what the ecosystem actually looks like today; a full grid would be a grid of aspirations.
+**Read it honestly, and over the right cells.** 11 of the 14 verbs name a command a repository RUNS; the other 3 describe what nen does *around* a build -- a marker match, a toolchain report, a delegation to two of these same rows -- and counting them in flatters the ratio in both directions at once. Over the **77** stack × verb cells the 11 command verbs make: **46 are unsupported**, 4 are declared-only, and 27 carry a command. These counts describe the catalogue, including explicitly identified adoption recommendations; they do not say a consumer has adopted or verified every command.
 
 The remaining 21 cells are those 3 rows: 6 carry something to run, 15 are declared-only and 0 are unsupported. They are worth reading and they are not builds.
 
@@ -278,7 +278,7 @@ What nen has been *tested* against, never what it installs: the pin an install w
 
 **Scaffold template:** `full` -- a static-site skeleton a template can carry end to end.
 
-**Coverage report (advisory, never opened):** none recorded -- Nothing writes a coverage report: there is no test script and no test-runner dependency. If one is added, the convention in this ecosystem is `coverage/lcov.info` under the package that runs the tests -- and which package that is is the repository's fact, so the declaration states it. (this profile's own `coverage` row (zheref.io/package.json))
+**Coverage report (advisory, never opened):** `coverage/lcov.info` -- Recommended root-lane LCOV location for the adopted Jest coverage recipe. Advisory only: execution reads only the consumer declaration artifacts, never this profile default. (https://www.gatsbyjs.com/docs/how-to/testing/unit-testing/; https://www.gatsbyjs.com/docs/how-to/testing/testing-react-components/; fixtures/gatsby-jest (pinned Gatsby5/React18/Jest29 proof))
 
 **Default deploy target (proposed only where declared nonProduction):** none recorded -- The one observed deploy publishes the live site to the `gh-pages` branch -- a production destination, which a default must never name. No non-production destination is observed. (this profile's own `deploy` row (zheref.io/package.json:14))
 
@@ -288,7 +288,7 @@ What nen has been *tested* against, never what it installs: the pin an install w
 | --- | --- | --- |
 | `detect` | declared-only | Detection is a marker match, not a spawned command: `gatsby-config.{js,ts}`. *(source: markers)* |
 | `build` | `gatsby build` | The repository's own build script. Its CI profile differs by one flag: `npx gatsby build --prefix-paths` when `PREFIX_PATHS=true`, else `npx gatsby build` -- a profile the declaration states, not a second row here. *(source: zheref.io/package.json:11 (ci profile: .github/workflows/deploy.yml:36-37))* |
-| `test` | unsupported | No test script and no test-runner dependency. *(source: zheref.io/package.json)* |
+| `test` | `node node_modules/jest/bin/jest.js --config jest.config.cjs --runInBand --json --outputFile=jest-results.json` | Recommended adoption recipe, not an observed zheref.io command. Requires repository-local Jest29+, babel-jest, babel-preset-gatsby, React Testing Library, jest-environment-jsdom and the fixture-backed jest.config.cjs/preprocessor/setup/mocks. Executes the local pinned Jest entrypoint without npx or implicit installation. Consumer declarations remain the sole execution authority. *(source: https://www.gatsbyjs.com/docs/how-to/testing/unit-testing/; https://www.gatsbyjs.com/docs/how-to/testing/testing-react-components/; fixtures/gatsby-jest (pinned Gatsby5/React18/Jest29 proof))* |
 | `ui-test` | unsupported | No UI or E2E runner of any kind. *(source: zheref.io (inventory sweep))* |
 | `lint` | unsupported | NO LINTER OF ANY KIND EXISTS IN THIS REPOSITORY. *(source: zheref.io (inventory sweep))* |
 | `typecheck` | unsupported | No TypeScript anywhere in the repository: no tsconfig.json, no `typescript` dependency, no checker of any kind. *(source: zheref.io (inventory sweep))* |
@@ -297,9 +297,9 @@ What nen has been *tested* against, never what it installs: the pin an install w
 | `dev` | `gatsby develop` | Scripts `develop` and `start` are the same command; the repository's launch configuration adds a port (`npx gatsby develop -p 8000`), which is the declaration's argument to add. *(source: zheref.io/package.json:9, :10)* |
 | `run` | `gatsby serve` | Serves the PRODUCTION build on port 9000, so it requires a prior `build` exactly as every other `run` row in this pack does. *(source: zheref.io/package.json:12)* |
 | `deploy` | `node {archiveScript}` then `gh-pages -d public -b gh-pages --dotfiles` | Cited verbatim as `npm run resume:pdf && gh-pages -d public -b gh-pages --dotfiles`: the first half IS this profile's own `archive` row, which is why it is spelled the same way here. `public` is Gatsby's own output directory and the branch name is the host's convention, so both are carried literally. THE CI PROFILE HAS NO COMMAND AT ALL -- the site is uploaded by one action and published by another (`.github/workflows/deploy.yml:41-43`, `:53`), which is a deploy with no command line for nen to run. *(source: zheref.io/package.json:14 (ci profile: .github/workflows/deploy.yml:41-43, :53))* |
-| `coverage` | unsupported | Same reason as `test`: no test script and no test-runner dependency, so there is nothing to instrument. *(source: zheref.io/package.json)* |
+| `coverage` | `node node_modules/jest/bin/jest.js --config jest.config.cjs --runInBand --coverage --coverageReporters=lcov --coverageDirectory=coverage` | The same adopted Jest suite writes LCOV readable by nen shu coverage. collectCoverageFrom must name the consumer source set, including untested files. Missing reports refuse; threshold.met and touched-file ladder bands report unmet policy without inventing verification or changing runner exit semantics. *(source: https://www.gatsbyjs.com/docs/how-to/testing/unit-testing/; https://www.gatsbyjs.com/docs/how-to/testing/testing-react-components/; fixtures/gatsby-jest (pinned Gatsby5/React18/Jest29 proof))* |
 | `tools` | declared-only | All verify-only. Node -- verify-only, >= 18, CI pins 20. npm -- the repository uses npm rather than pnpm and ships NO `packageManager` field, so there is no corepack pin to activate: this is the one JS repository in the inventory where nen's single installable class does not apply. A local browser -- verify-only, and the most interesting row in the stack: `archive` and `deploy` need an installed Chrome/Chromium/Edge, which the PDF builder probes for BY PATH rather than downloading. nen probes the same way and reports; installing a browser is not something a build CLI does. *(source: zheref.io/package.json; scripts/build-resume-pdf.mjs:38-44)* |
-| `warmup` | delegates to `build` | The git steps are stack-independent and run regardless; build-verification delegates to this profile's own `build` row. The OPTIONAL `--test` step is the one that reports unsupported here -- `test` has no command for this stack -- rather than `warmup` failing as a whole. *(source: this profile's own build row (test is unsupported))* |
+| `warmup` | delegates to `build` | Git steps are stack-independent; build verification delegates to build. Optional test uses the adopted Jest declaration where present, otherwise reports declared unsupported. *(source: this profile build/test rows; consumer declaration decides adoption)* |
 
 ### Host allowlist
 
@@ -314,6 +314,30 @@ What nen has been *tested* against, never what it installs: the pin an install w
 | `gatsby-config.js` |  | or `gatsby-config.ts`. The config file is the whole marker: Gatsby has no ambiguity to resolve. |
 | `gatsby-config.ts` |  | the TypeScript spelling. |
 
+### Cross-checks for `test`, `coverage`
+
+Adopt the documented Gatsby/Jest configuration: this lane has no jest.config.cjs; no test or coverage command is inferred. Any ONE of the following matching in the lane's tree is the evidence; without it the row is withheld with this reason.
+
+| pattern | must contain | why |
+| --- | --- | --- |
+| `jest.config.cjs` |  | Required adoption configuration from the documented Gatsby/Jest fixture. |
+
+### Cross-checks for `test`, `coverage`
+
+Adopt the documented Gatsby/Jest configuration: this lane has no jest-preprocess.cjs; no test or coverage command is inferred. Any ONE of the following matching in the lane's tree is the evidence; without it the row is withheld with this reason.
+
+| pattern | must contain | why |
+| --- | --- | --- |
+| `jest-preprocess.cjs` |  | Required adoption configuration from the documented Gatsby/Jest fixture. |
+
+### Cross-checks for `test`, `coverage`
+
+Adopt the documented Gatsby/Jest configuration: this lane has no setup-test-env.cjs; no test or coverage command is inferred. Any ONE of the following matching in the lane's tree is the evidence; without it the row is withheld with this reason.
+
+| pattern | must contain | why |
+| --- | --- | --- |
+| `setup-test-env.cjs` |  | Required adoption configuration from the documented Gatsby/Jest fixture. |
+
 ### Toolchain minimums (advisory)
 
 What nen has been *tested* against, never what it installs: the pin an install would use is the target repository's own, and this column can never contribute one. **Pin read from** names the file `nen shu detect` reads a *target* repository's own version out of -- where a tree states one, that version is proposed and nothing else; where it does not, the entry is withheld with the reason rather than invented. **Host tool** is the one flag that widens what `detect` proposes: the program this entry probes for is the stack's own driver, supplied by the host, so a row naming it is confirmed by this entry instead of by a `package.json` its ecosystem does not have.
@@ -321,12 +345,13 @@ What nen has been *tested* against, never what it installs: the pin an install w
 | tool | pack minimum | probe | version from | installer | pin read from | host tool | why / source |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `browser` | presence only | `{browserPath}` | `path-exists` | `verify-only` | -- | no | `archive` and `deploy` need a locally installed Chrome, Chromium or Edge. The repository's PDF builder deliberately avoids puppeteer and probes for the binary BY PATH; nen probes the same way, reports, and never installs a browser. No version is pinned, so the probe is a presence check. *(source: zheref.io/scripts/build-resume-pdf.mjs:38-44)* |
-| `node` | `18.0.0` | `node --version` | `first-semver-on-stdout` | `verify-only` | -- | no | The repository's floor is Node 18; its CI pins 20. Verify-only for the same reason as every other JS lane: a Node install is a system-wide decision nen does not make. *(source: zheref.io/package.json; .github/workflows/deploy.yml)* |
+| `node` | `18.0.0` | `node --version` | `first-semver-on-stdout` | `verify-only` | -- | **yes** | The repository's floor is Node 18; its CI pins 20. Verify-only for the same reason as every other JS lane: a Node install is a system-wide decision nen does not make. The host Node runtime also executes the repository-local pinned Jest entrypoint after explicit adoption; no global Jest is required. *(source: zheref.io/package.json; .github/workflows/deploy.yml)* |
 | `npm` | presence only | `npm --version` | `first-semver-on-stdout` | `verify-only` | -- | no | THE ONE JS REPOSITORY WHERE COREPACK DOES NOT APPLY: it uses npm, not pnpm, and ships no `packageManager` field, so there is no pin to activate. npm arrives with Node, which is why the entry is verify-only rather than an install. *(source: zheref.io/package.json (no `packageManager` field))* |
 
 ### Notes
 
 - THE SECOND `deploy` PROFILE IS THE POINT. Two of the seven repositories deploy through a mechanism that has NO COMMAND LINE AT ALL -- a Pages action here, a hosting provider's git integration in the nextjs profile. `unsupported` with a sentence, or a declared-only row, is the only honest rendering, and the schema has to be able to say it.
+- Jest/RTL recommendation is an adoption recipe supported by the official Gatsby testing guides and fixtures/gatsby-jest, not a claim that zheref.io already has tests. Install the fixture-listed compatible dev dependencies and copy/adapt its config/source selection before replacing seats. No browser E2E ui-test runner is implied.
 
 ---
 

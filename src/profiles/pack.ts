@@ -2,7 +2,7 @@
 //
 // THE PACK IS A CATALOGUE, NOT AN AUTHORITY, and that sentence is the whole
 // design of this file. `profiles/*.json` states, per stack, the reference
-// command each verb has IN THE SEVEN PRODUCT REPOSITORIES THE INVENTORY READ --
+// command observed in the inventory or explicitly recommended with a tested recipe --
 // every cell cited to a file and a line. The only thing an execution path ever
 // reads is the TARGET repository's own `nen/contract.json` (../schema/
 // contract.ts). This pack exists so that a human writing that declaration has

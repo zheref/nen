@@ -1192,14 +1192,14 @@ describe("nen shu detect -- the nextjs golden suite, byte for byte", () => {
         // THE WHOLE POINT OF THE STUB: the executor's refusal is the pack's
         // sentence, arriving as the repository's own reason because it now sits
         // in the repository's own file.
-        expect(result.err.join("\n"), verb).toContain(reasonOf(verbs, verb));
+        expect(result.out.join("\n"), verb).toContain(reasonOf(verbs, verb));
       }
       const withTarget = await capture(
         ["deploy", "--dry-run", "--lane", "web", "--target", "x"],
         dir,
       );
       expect(withTarget.code).toBe(4);
-      expect(withTarget.err.join("\n")).toContain(reasonOf(verbs, "deploy"));
+      expect(withTarget.out.join("\n")).toContain(reasonOf(verbs, "deploy"));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1425,19 +1425,17 @@ describe("nen shu detect -- the gatsby lane, end to end", () => {
     const verbs = detect(GATSBY_SITE).lanes[0]?.verbs;
     const seat = (verb: string, packReason: string): string =>
       `PROPOSED SEAT -- replace it. nen shu detect wrote this row because the reference pack proposes no command for '${verb}' on gatsby; nen never invents one. The pack's own reason: ${packReason}`;
-    expect(reasonOf(verbs, "test")).toBe(
-      seat("test", "No test script and no test-runner dependency."),
-    );
+    expect(reasonOf(verbs, "test")).toMatch(/Adopt the documented Gatsby\/Jest configuration/);
     expect(reasonOf(verbs, "lint")).toBe(
       seat("lint", "NO LINTER OF ANY KIND EXISTS IN THIS REPOSITORY."),
     );
     expect(reasonOf(verbs, "ui-test")).toBe(seat("ui-test", "No UI or E2E runner of any kind."));
     expect(reasonOf(verbs, "release")).toBe(seat("release", "No release lane of any kind."));
-    expect(reasonOf(verbs, "coverage")).toMatch(/nothing to instrument/);
+    expect(reasonOf(verbs, "coverage")).toMatch(/Adopt the documented Gatsby\/Jest configuration/);
     // THE STACK IS NAMED, not just the verb: the same seat on two stacks has
     // two different reasons behind it, and a reader who cannot see which stack
     // this row came from cannot check the claim.
-    expect(reasonOf(verbs, "test")).toMatch(/proposes no command for 'test' on gatsby/);
+    expect(reasonOf(verbs, "test")).toMatch(/withheld the reference pack's command for 'test' on gatsby/);
   });
 
   it("proposes hosts of any, from the pack, for every verb", () => {
@@ -1527,9 +1525,10 @@ describe("nen shu detect -- the gatsby golden suite, byte for byte", () => {
       for (const verb of ["test", "ui-test", "lint", "release", "coverage"]) {
         const result = await capture([verb, "--dry-run"], dir);
         expect(result.code, verb).toBe(4);
-        expect(result.err.join("\n"), verb).toBe(
-          `nen shu ${verb}: '${verb}' is unsupported on lane 'gatsby' (gatsby). The declaration's own reason: ${reasonOf(verbs, verb)}`,
+        expect(result.out.join("\n"), verb).toBe(
+          `declared unsupported: '${verb}' is unsupported on lane 'gatsby' (gatsby). The declaration's own reason: ${reasonOf(verbs, verb)} Not executed or verified; any required evidence remains unmet.`,
         );
+        expect(result.err).toEqual([]);
       }
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -3666,7 +3665,7 @@ describe("nen shu detect -- the two Gradle lanes, end to end through the executo
       for (const verb of ["archive", "coverage", "deploy", "dev", "release", "run", "typecheck"]) {
         const result = await capture([verb, "--dry-run", "--lane", "gradle-android"], dir);
         expect(result.code, verb).toBe(4);
-        expect(result.err.join("\n"), verb).toContain(reasonOf(verbs, verb));
+        expect(result.out.join("\n"), verb).toContain(reasonOf(verbs, verb));
       }
       // `deploy` reaches its seat here too, and with a --target that names
       // nothing: the seat is the more specific fact and it is terminal, so it
@@ -3677,7 +3676,7 @@ describe("nen shu detect -- the two Gradle lanes, end to end through the executo
         dir,
       );
       expect(deploy.code).toBe(4);
-      expect(deploy.err.join("\n")).toContain(reasonOf(verbs, "deploy"));
+      expect(deploy.out.join("\n")).toContain(reasonOf(verbs, "deploy"));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -5937,10 +5936,11 @@ describe("nen shu detect -- the xcode-ios proposal, executed", () => {
         // seat answers first and this loop needs no special case.
         const result = await capture([verb, "--dry-run"], dir, "darwin");
         expect(result.code).toBe(4);
-        expect(result.err.join("\n")).toMatch(/PROPOSED SEAT -- replace it/);
-        expect(result.err.join("\n")).toContain(quoted);
-        // And nothing was spawned to find that out.
-        expect(result.out).toEqual([]);
+        expect(result.out.join("\n")).toMatch(/PROPOSED SEAT -- replace it/);
+        expect(result.out.join("\n")).toContain(quoted);
+        // Unsupported is a fact, not a spawned command failure.
+        expect(result.out.join("\n")).toContain("declared unsupported:");
+        expect(result.err).toEqual([]);
       });
     });
   }
@@ -5956,7 +5956,7 @@ describe("nen shu detect -- the xcode-ios proposal, executed", () => {
       for (const extra of [[], ["--target", "anything"]]) {
         const result = await capture(["deploy", "--dry-run", ...extra], dir, "darwin");
         expect(result.code, extra.join(" ")).toBe(4);
-        expect(result.err.join("\n"), extra.join(" ")).toContain(
+        expect(result.out.join("\n"), extra.join(" ")).toContain(
           "KroApple's only deploy lane is a Supabase DATABASE MIGRATION",
         );
       }
@@ -6214,12 +6214,13 @@ describe("nen shu detect -- the expo proposal, executed", () => {
       expect((await capture(["detect", "--write"], dir)).code).toBe(0);
       const result = await capture(["build", "--dry-run", "--lane", "expo"], dir);
       expect(result.code).toBe(4);
-      expect(result.err.join("\n")).toMatch(/PROPOSED SEAT -- replace it/);
-      expect(result.err.join("\n")).toMatch(
+      expect(result.out.join("\n")).toMatch(/PROPOSED SEAT -- replace it/);
+      expect(result.out.join("\n")).toMatch(
         /Conflating the two would make `nen shu build` launch an app/,
       );
-      // And nothing was spawned to find that out.
-      expect(result.out).toEqual([]);
+      // Unsupported is a fact, not a spawned command failure.
+      expect(result.out.join("\n")).toContain("declared unsupported:");
+      expect(result.err).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -7207,7 +7208,7 @@ describe("nen shu detect -- the dotnet-winui golden suite, byte for byte", () =>
       for (const verb of ["archive", "release", "ui-test", "lint", "coverage"]) {
         const result = await capture([verb, "--dry-run"], dir, "win32");
         expect(result.code, verb).toBe(4);
-        expect(result.err.join("\n"), verb).toContain(reasonOf(verbs, verb));
+        expect(result.out.join("\n"), verb).toContain(reasonOf(verbs, verb));
       }
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -7352,7 +7353,7 @@ describe("nen shu detect -- the dotnet-winui rows live in the pack, not in this 
         }
       }
     }
-    expect(exempt).toEqual(["dotnet"]);
+    expect(exempt).toEqual(["dotnet", "node"]);
     expect(withheld.length, "OFF is the default and most entries take it").toBeGreaterThan(5);
   });
 
@@ -7431,7 +7432,7 @@ describe("nen shu detect -- the dotnet-winui rows live in the pack, not in this 
     // a rule the project reader acts on" -- and they agreed only by accident
     // while exactly one profile stated either. A borrowed list is a pin that
     // moves when something unrelated does.
-    const READS_THE_TREE: readonly string[] = ["dotnet-winui", "gradle-android"];
+    const READS_THE_TREE: readonly string[] = ["dotnet-winui", "gatsby", "gradle-android"];
     // And the other list is still what it was, so the divergence above is a
     // real one rather than a rename nobody noticed.
     expect(PACK_MATCHED_STACKS).toEqual(["dotnet-winui"]);

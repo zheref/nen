@@ -1,0 +1,60 @@
+{
+  "recorded": "2026-11-03",
+  "host": "darwin-arm64",
+  "runtime": "Node24.16.0",
+  "dependencies": "Exact direct pins in package.json; installed in a temporary directory with lifecycle scripts disabled.",
+  "green": {
+    "test": {
+      "exit": 0,
+      "passed": 2,
+      "failed": 0,
+      "total": 2
+    },
+    "coverage": {
+      "exit": 0,
+      "format": "lcov",
+      "lines": {
+        "covered": 1,
+        "total": 1,
+        "percent": 100
+      },
+      "branches": {
+        "covered": 2,
+        "total": 2,
+        "percent": 100
+      }
+    }
+  },
+  "negativeControls": {
+    "wrongExpectation": {
+      "exit": 1,
+      "classification": "normal executed Jest failure, not declared unsupported"
+    },
+    "untestedCommittedSource": {
+      "exit": 0,
+      "ladder": {
+        "minimum": 80,
+        "recommended": 85,
+        "ideal": 90,
+        "source": "nen/workflow.json",
+        "present": true
+      },
+      "file": {
+        "name": "src/components/welcome.jsx",
+        "lines": {
+          "covered": 1,
+          "total": 5,
+          "percent": 20
+        },
+        "branches": {
+          "covered": 2,
+          "total": 8,
+          "percent": 25
+        },
+        "band": "under-minimum"
+      },
+      "note": "Existing measurement exit semantics retained; under-minimum is not a passed requirement."
+    }
+  },
+  "bounds": "Single Jest worker; no Gatsby build/deploy, browser E2E, global installation or consumer changes."
+}
