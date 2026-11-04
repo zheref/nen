@@ -1,3 +1,4 @@
+import { loadRepoRegistry } from "../schema/repos.js";
 // src/canon/pin-write.integration.test.ts -- zheref/nen#291's acceptance
 // against a REAL git: `nen canon pin --write <tag>` moves the pin in the row
 // the read path answers from, changing one value and no other byte, and only
@@ -106,12 +107,12 @@ describe.skipIf(!HAVE_GIT)("canon pin --write -- the pin moves without an editor
     const result = await run(root, ["canon", "pin", "--write", "v1.3.0"]);
     expect(result.code, result.err).toBe(0);
     const after = registryOf(root);
-    expect(after).toBe(REGISTRY.replace('"pinned": "v1.2.0",\n        "repo"', '"pinned": "v1.3.0",\n        "repo"'));
+    expect(after).toBe(REGISTRY.replace('"pinned": "v1.2.0",\n        "repo"', `"pinned": "v1.3.0", "pinnedCommit": "${tagCommit}",\n        "repo"`));
     // The diff, line by line: one line, one value.
     const was = REGISTRY.split("\n");
     const now = after.split("\n");
     const changed = was.map((line, index): [string, string | undefined] => [line, now[index]]).filter(([a, b]): boolean => a !== b);
-    expect(changed).toEqual([['        "pinned": "v1.2.0",', '        "pinned": "v1.3.0",']]);
+    expect(changed).toEqual([['        "pinned": "v1.2.0",', `        "pinned": "v1.3.0", "pinnedCommit": "${tagCommit}",`]]);
     expect(result.out).toContain("pin: v1.2.0 -> v1.3.0");
     expect(result.out).toContain(`tag: v1.3.0 is ${tagCommit.slice(0, 12)} in ${canon} (resolved from env $NEN_TEST_CANON (nen/repos.json maintained_tools[2].checkout_env))`);
     expect(result.out).toContain("recorded in: " + join(root, "nen", "repos.json") + " (maintained_tools[2].pinned, line 9)");
@@ -264,7 +265,7 @@ describe.skipIf(!HAVE_GIT)("canon pin --write -- the pin moves without an editor
     expect(result.code, result.err).toBe(0);
     expect(result.out).toContain(`written: ${realpathSync.native(real)} (through the link ${join(root, "nen", "repos.json")}), read back`);
     expect(lstatSync(join(root, "nen", "repos.json")).isSymbolicLink()).toBe(true);
-    expect(readFileSync(real, "utf8")).toContain('"pinned": "v1.3.0",\n        "repo": "owner/handbooks"');
+    expect(readFileSync(real, "utf8")).toContain(`"pinned": "v1.3.0", "pinnedCommit": "${tagCommit}",\n        "repo": "owner/handbooks"`);
   });
 
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("names a failed replace at exit 1: the pin was not moved, and no temporary file is left (Nobunaga N6)", async () => {
@@ -389,13 +390,15 @@ describe.skipIf(!HAVE_GIT)("canon pin --write -- the pin moves without an editor
   });
 
   it("writes nothing and exits 0 when the tag is the pin already", async () => {
-    const root = consumer();
+    const commit = git(canon, ["rev-parse", "v1.2.0^{commit}"]);
+    const existing = REGISTRY.replace('"pinned": "v1.2.0",\n        "repo"', `"pinned": "v1.2.0", "pinnedCommit": "${commit}",\n        "repo"`);
+    const root = consumer(existing);
     const result = await run(root, ["canon", "pin", "--write", "v1.2.0"]);
     expect(result.code, result.err).toBe(0);
     expect(result.out).toContain("pin: v1.2.0 -> v1.2.0 (unchanged)");
     expect(result.out).toContain("written: nothing (the pin is already that tag)");
     expect(result.out).not.toMatch(/STALE/);
-    expect(registryOf(root)).toBe(REGISTRY);
+    expect(registryOf(root)).toBe(existing);
   });
 
   it("does not need the checkout to sit on the tag, or to be clean: that is the regenerate's to verify", async () => {
@@ -406,6 +409,49 @@ describe.skipIf(!HAVE_GIT)("canon pin --write -- the pin moves without an editor
       expect(result.code, result.err).toBe(0);
     } finally {
       rmSync(join(canon, "untracked.md"));
+    }
+  });
+});
+
+describe.skipIf(!HAVE_GIT)("recorded commit identity (#506)", () => {
+  it("records an absent commit even when the tag is unchanged, then reads both fields", async () => {
+    const root = consumer();
+    const result = await run(root, ["canon", "pin", "--write", "v1.2.0"]);
+    expect(result.code, result.err).toBe(0);
+    const commit = git(canon, ["rev-parse", "v1.2.0^{commit}"]);
+    expect(loadRepoRegistry(root).toolPinCommits?.["owner/handbooks"]).toBe(commit);
+    const read = await run(root, ["canon", "pin", "--json"], true);
+    expect(read.code, read.err).toBe(0);
+    expect(JSON.parse(read.out)).toMatchObject({ ref: "v1.2.0", commit });
+  });
+  it("names moved tags on existing and fresh heads and refuses mirror check and repin overwrite", async () => {
+    const original = git(canon, ["rev-parse", "v1.2.0^{commit}"]);
+    const text = REGISTRY.replace('"pinned": "v1.2.0",\n        "repo"', `"pinned": "v1.2.0", "pinnedCommit": "${original}",\n        "repo"`);
+    const root = consumer(text);
+    try {
+      git(canon, ["tag", "-f", "v1.2.0", tagCommit]);
+      // Existing clone's HEAD remains original; fresh clone would sit on moved tag.
+      for (const head of [original, tagCommit]) {
+        git(canon, ["-c", "advice.detachedHead=false", "checkout", "--quiet", head]);
+        for (const verb of [["pin"], ["checkout"]]) {
+          const result = await run(root, ["canon", ...verb]);
+          expect(result.code).toBe(1);
+          expect(result.err + result.out).toContain("moved tag");
+          expect(result.err + result.out).toContain(original);
+          expect(result.err + result.out).toContain(tagCommit);
+        }
+      }
+      writeFileSync(join(root, "values.yml"), "scenario: sample\nsurfaces: claude-code\nvalues:\n");
+      const mirror = await run(root, ["canon", "mirror", "check", "--rules-dir", join(canon, "handbooks"), "--canon-values", "values.yml"]);
+      expect(mirror.code).not.toBe(0);
+      expect(mirror.err).toContain("moved tag");
+      const write = await run(root, ["canon", "pin", "--write", "v1.2.0"]);
+      expect(write.code).toBe(1);
+      expect(write.err).toContain("moved tag");
+      expect(registryOf(root)).toBe(text);
+    } finally {
+      git(canon, ["tag", "-f", "v1.2.0", original]);
+      git(canon, ["-c", "advice.detachedHead=false", "checkout", "--quiet", original]);
     }
   });
 });

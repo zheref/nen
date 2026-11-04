@@ -20,6 +20,7 @@
 // They are re-exported below so this module's callers and tests keep their
 // imports; what stays here is the pin's own rule.
 
+import { isDeepStrictEqual } from "node:util";
 import { JsonSpanError, locateJsonValue, memberCount, skipWs, type JsonStep, type Span } from "../edit/json-span.js";
 
 export { JsonSpanError, locateJsonValue, memberCount, type JsonStep, type Span } from "../edit/json-span.js";
@@ -50,7 +51,7 @@ export interface PinEdit {
  * other byte, and prove it: the new text must parse to the old document with
  * that one value changed. Throws `JsonSpanError` on any disagreement.
  */
-export function rewritePin(text: string, index: number, tag: string, source: string): PinEdit {
+export function rewritePin(text: string, index: number, tag: string, source: string, commit?: string): PinEdit {
   const path: readonly JsonStep[] = ["maintained_tools", index, "pinned"];
   // EACH MEMBER ON THE EDIT PATH ONCE (Feitan F3): a repeated
   // `maintained_tools`, or a row repeating `repo` or `pinned`, is a file in
@@ -60,7 +61,7 @@ export function rewritePin(text: string, index: number, tag: string, source: str
     throw new JsonSpanError("maintained_tools appears more than once; JSON.parse keeps only the last, so the file must be fixed by hand first");
   }
   const rowSpan = locateJsonValue(text, ["maintained_tools", index]);
-  for (const member of ["repo", "pinned"]) {
+  for (const member of ["repo", "pinned", "pinnedCommit"]) {
     if (memberCount(text, rowSpan.start, member) > 1) {
       throw new JsonSpanError(`maintained_tools[${index}] carries '${member}' more than once; JSON.parse keeps only the last, so the file must be fixed by hand first`);
     }
@@ -69,7 +70,18 @@ export function rewritePin(text: string, index: number, tag: string, source: str
   const literal = text.slice(span.start, span.end);
   const current: unknown = JSON.parse(literal);
   if (typeof current !== "string") throw new JsonSpanError(`maintained_tools[${index}].pinned is not a string`);
-  const next = `${text.slice(0, span.start)}${JSON.stringify(tag)}${text.slice(span.end)}`;
+  let next = `${text.slice(0, span.start)}${JSON.stringify(tag)}${text.slice(span.end)}`;
+  if (commit !== undefined) {
+    if (!/^[a-f0-9]{40}$/i.test(commit)) throw new JsonSpanError("the resolved commit is not a full SHA");
+    const row = JSON.parse(text.slice(rowSpan.start, rowSpan.end)) as Record<string, unknown>;
+    if (Object.hasOwn(row, "pinnedCommit")) {
+      const at = locateJsonValue(next, ["maintained_tools", index, "pinnedCommit"]);
+      next = `${next.slice(0, at.start)}${JSON.stringify(commit)}${next.slice(at.end)}`;
+    } else {
+      const at = locateJsonValue(next, path);
+      next = `${next.slice(0, at.end)}, "pinnedCommit": ${JSON.stringify(commit)}${next.slice(at.end)}`;
+    }
+  }
 
   const expected = JSON.parse(text) as Record<string, unknown>;
   const rows = expected["maintained_tools"];
@@ -86,7 +98,8 @@ export function rewritePin(text: string, index: number, tag: string, source: str
     throw new JsonSpanError(`the scanned maintained_tools[${index}].pinned ('${current}') is not the value the parser reads`);
   }
   (row as Record<string, unknown>)["pinned"] = tag;
-  if (JSON.stringify(JSON.parse(next)) !== JSON.stringify(expected)) {
+  if (commit !== undefined) (row as Record<string, unknown>)["pinnedCommit"] = commit;
+  if (!isDeepStrictEqual(JSON.parse(next), expected)) {
     throw new JsonSpanError(`replacing maintained_tools[${index}].pinned changed more than that one value`);
   }
   const line = text.slice(0, span.start).split("\n").length;

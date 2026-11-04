@@ -249,9 +249,9 @@ describe("nen canon pin -- the canon pin is data in the consumer's own registry"
     writeRegistry(fx.root, { "owner/handbooks": "v1.2.0", "owner/tool": null });
     const result = await capture(["canon", "pin"], fx.root);
     expect(result.code, result.err.join("\n")).toBe(0);
-    expect(result.out).toEqual(["source: owner/handbooks", "ref: v1.2.0", `recorded in: ${join(fx.root, "nen", "repos.json")} (maintained_tools[].pinned)`]);
+    expect(result.out).toEqual(["source: owner/handbooks", "ref: v1.2.0", "commit: unrecorded", `recorded in: ${join(fx.root, "nen", "repos.json")} (maintained_tools[].pinned)`]);
     const doc = json(await capture(["canon", "pin", "--json"], fx.root));
-    expect(doc).toEqual({ contract: PIN_CONTRACT, source: "owner/handbooks", ref: "v1.2.0", tagShaped: true, recordedIn: "nen/repos.json (maintained_tools[].pinned)" });
+    expect(doc).toEqual({ contract: PIN_CONTRACT, source: "owner/handbooks", ref: "v1.2.0", commit: null, tagShaped: true, recordedIn: "nen/repos.json (maintained_tools[].pinned)" });
   });
 
   it("exits 1 naming the field when the consumer has no registry, or pins nothing", async () => {
@@ -844,12 +844,12 @@ describe("Nobunaga round 1 -- the registry and flag findings (zheref/nen#294)", 
     }
   });
 
-  it("N6: --canon-checkout is refused on 'canon pin' and 'canon resolve'", async () => {
+  it("N6: --canon-checkout verifies pin reads and stays foreign to legacy resolve", async () => {
     const fx = fixture();
     writeRegistry(fx.root, { "owner/handbooks": "v1.2.0" });
     const pin = await capture(["canon", "pin", "--canon-checkout", "/x"], fx.root);
-    expect(pin.code).toBe(2);
-    expect(pin.err.join("\n")).toMatch(/--canon-checkout is not read by 'canon pin'/);
+    expect(pin.code).toBe(1);
+    expect(pin.err.join("\n")).toMatch(/not|exist|found/);
     const resolved = await capture([...resolveArgs({ target: "zheref/KroApple", "always-load": "a.md", "stack-dir": "s" }), "--canon-checkout", "/x"]);
     expect(resolved.code).toBe(2);
     expect(resolved.err.join("\n")).toMatch(/--canon-checkout is not read by 'canon resolve'/);

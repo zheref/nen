@@ -1,0 +1,1 @@
+- Canon pin writes retain resolved commit identity and reject moved tags on read/checkout/mirror. Manifest-aware resolve verifies scenario membership and handbook files. Directed port pair resolution and incoming pair mirrors share the canon tree. New clause cites reads statuses and displacement closure from caller-owned homes/vocabulary (#506, #569, #457, #554).
