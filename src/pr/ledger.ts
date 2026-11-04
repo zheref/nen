@@ -265,3 +265,35 @@ export function writeComment(seams: Seams, target: Target, pr: number, existing:
     return "";
   }
 }
+
+/** Content-addressed chunks: only the active index makes a part current. */
+export function ledgerParts(body: string, effort: string): readonly string[] {
+  const digest = sha256Hex(body);
+  const chunks = body.match(/[\s\S]{1,10000}/gu) ?? [];
+  return chunks.map((chunk, i) => `<!-- nen:ledger-part effort=${encodeEffortId(effort)} sha256=${digest} part=${i + 1} -->\n${Buffer.from(chunk, "utf8").toString("base64")}`);
+}
+
+export function ledgerIndex(body: string, effort: string, urls: readonly string[]): string {
+  return `${markerPrefix(effort)}multipart -->\n${JSON.stringify({ digest: sha256Hex(body), urls })}`;
+}
+
+export function assembleLedger(body: string, effort: string, comments: readonly PrComment[], login: string): string {
+  if (!body.startsWith(`${markerPrefix(effort)}multipart -->\n`)) return body;
+  let index: { digest: string; urls: string[] };
+  try { index = JSON.parse(body.slice(body.indexOf("\n") + 1)) as typeof index; }
+  catch { throw new LedgerReadError("multipart index is malformed"); }
+  if (index === null || typeof index !== "object" || !/^[0-9a-f]{64}$/.test(index.digest) || !Array.isArray(index.urls) || index.urls.length === 0 || index.urls.some(url => typeof url !== "string") || new Set(index.urls).size !== index.urls.length) throw new LedgerReadError("multipart index is malformed");
+  const chunks = index.urls.map((url, i) => {
+    const part = comments.find(comment => comment.url === url);
+    if (!part || !isOwn(part, login)) throw new LedgerReadError(`part ${i + 1} (${url}) is missing or foreign`);
+    const prefix = `<!-- nen:ledger-part effort=${encodeEffortId(effort)} sha256=${index.digest} part=${i + 1} -->\n`;
+    if (!part.body.startsWith(prefix)) throw new LedgerReadError(`part ${i + 1} (${url}) has an edited marker`);
+    const payload = part.body.slice(prefix.length).trim();
+    const decoded = Buffer.from(payload, "base64");
+    if (decoded.toString("base64") !== payload) throw new LedgerReadError(`part ${i + 1} (${url}) has malformed encoding`);
+    return decoded.toString("utf8");
+  });
+  const joined = chunks.join("");
+  if (sha256Hex(joined) !== index.digest) throw new LedgerReadError(`multipart parts ${index.urls.join(", ")} fail the recorded digest`);
+  return joined;
+}
