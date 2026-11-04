@@ -1,7 +1,9 @@
+import { writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { classifyCommand } from "./command.js";
 import { COMMANDS } from "../cli/registry.js";
-import { capture, landedRepo, MINI, SLUG } from "./fixtures/harness.js";
+import { capture, landedRepo, MINI, SLUG, mutatedTaxonomy } from "./fixtures/harness.js";
 
 describe("nen classify -- registration and dispatch", () => {
   it("is registered, between changelog and color, with its four subcommands", () => {
@@ -72,4 +74,13 @@ describe("nen classify -- a flag that belongs to another verb is a usage error",
   it("still accepts a verb's own flags (the allow-list is not over-eager)", async () => {
     expect((await capture(["classify", "labels", "--taxonomy", MINI, "--json"])).code).toBe(0);
   });
+});
+
+it("validates coverage against the supplied registry phases, not the jobs' own union", async () => {
+  const taxonomy = mutatedTaxonomy((value) => { value.axes.job.keys.forEach((job: { phases: unknown }, index: number) => { job.phases = { one: [`P${index}`] }; }); });
+  const registry = join(dirname(taxonomy), "registry.json"); writeFileSync(registry, JSON.stringify({ phases: { P0: {}, P1: {} } }));
+  const args = ["classify", "labels", "--taxonomy", taxonomy, "--phase-registry", registry];
+  expect((await capture(args)).code).toBe(0);
+  writeFileSync(registry, JSON.stringify({ phases: { P0: {}, P1: {}, P2: {} } }));
+  const missing = await capture(args); expect(missing.code).toBe(1); expect(missing.err.join("\n")).toContain("P2");
 });

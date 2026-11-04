@@ -36,7 +36,11 @@ import { withLedgerLock, writeLedgerAtomically } from "../ledger/lock.js";
 // a git repository. Re-exported for the callers that named it here.
 export { LOOP_COMMON_DIR, LOOP_LEDGER_DIR };
 
-const USAGE = `nen loop slots -- how many concurrency slots each plane has free.
+const USAGE = `slots also accepts caller-proven stacked, stackedBase, prBase and hantenSettled facts.
+A local stacked slot frees only with prOpen, matching nonempty bases and settled Hanten;
+this does not claim main readiness or a human prompt.
+
+nen loop slots -- how many concurrency slots each plane has free.
 
 usage:
   nen loop slots --efforts <path.json> --local-cap <n> [--ci-cap <n>] [--repo <path>] [--json]

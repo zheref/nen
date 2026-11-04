@@ -726,3 +726,41 @@ describe("check --installed", () => {
     expect(onGenerate.err.join("\n")).toMatch(/--installed is not read by 'surface mirror generate'/);
   });
 });
+
+describe("explicit all-surface generation plan", () => {
+  it.each(["${HATSU_PLUGIN_ROOT:-$HOME/.gemini/config/plugins/demo}", "relative/demo", "/opt/demo"])("preserves ordinary hooks-root semantics in a plan: %s", async (hooksRoot) => {
+    const root = tempDir(); const ordinary = join(root, "ordinary"); const planned = join(root, "planned");
+    const flags = ["--hooks", join(PACKS, "hooks.json"), "--hooks-root", hooksRoot];
+    expect((await capture(generateArgv("antigravity", ordinary, flags))).code).toBe(0);
+    const plan = join(root, "plan.json");
+    writeFileSync(plan, JSON.stringify([{ source: SKILLS, surface: "antigravity", out: planned, hooks: join(PACKS, "hooks.json"), "hooks-root": hooksRoot }]));
+    const result = await capture(["surface", "mirror", "generate", "--plan", plan]);
+    expect(result.code, result.err.join("\n")).toBe(0);
+    expect(readFileSync(join(planned, "hooks.json"), "utf8")).toBe(readFileSync(join(ordinary, "hooks.json"), "utf8"));
+  });
+  it("generates exactly the declared surfaces in one result and previews without writes", async () => {
+    const root = tempDir(); const plan = join(root, "plan.json");
+    const rows = ["codex", "cursor"].map((surface) => ({ surface, source: SKILLS, out: join(root, surface), "invocation-prefix": "demo:" }));
+    writeFileSync(plan, JSON.stringify(rows));
+    const args = ["surface", "mirror", "generate", "--plan", plan, "--json"];
+    const preview = await capture([...args, "--dry-run"]); expect(preview.code).toBe(0); expect(readdirSync(root)).toEqual(["plan.json"]);
+    const generated = await capture(args); expect(generated.code).toBe(0);
+    const report = json(generated) as { surfaces: { surface: string }[] }; expect(report.surfaces.map((row) => row.surface)).toEqual(["codex", "cursor"]);
+    expect(readdirSync(root).sort()).toEqual(["codex", "cursor", "plan.json"]);
+  });
+  it("preflights every declaration before writing and rejects overlap or unknown surfaces", async () => {
+    const root = tempDir(); const plan = join(root, "plan.json");
+    for (const second of [{ surface: "unknown", source: SKILLS, out: join(root, "b") }, { surface: "cursor", source: SKILLS, out: join(root, "a", "nested") }]) {
+      writeFileSync(plan, JSON.stringify([{ surface: "codex", source: SKILLS, out: join(root, "a") }, second]));
+      const result = await capture(["surface", "mirror", "generate", "--plan", plan]); expect(result.code).toBe(2); expect(readdirSync(root)).toEqual(["plan.json"]);
+    }
+  });
+});
+
+it("preflights the last surface's ownership before the first surface is generated", async () => {
+  const root = tempDir(); const out = join(root, "second"); mkdirSync(join(out, "alpha"), { recursive: true });
+  writeFileSync(join(out, "alpha", "SKILL.md"), "user-owned"); const plan = join(root, "plan.json");
+  writeFileSync(plan, JSON.stringify([{ source: SKILLS, surface: "codex", out: join(root, "first") }, { source: SKILLS, surface: "cursor", out }]));
+  const result = await capture(["surface", "mirror", "generate", "--plan", plan]); expect(result.code).toBe(2);
+  expect(readdirSync(root).sort()).toEqual(["plan.json", "second"]); expect(readFileSync(join(out, "alpha", "SKILL.md"), "utf8")).toBe("user-owned");
+});

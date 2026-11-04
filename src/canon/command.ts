@@ -1,3 +1,4 @@
+import { runCanonCheck } from "./check.js";
 // src/canon/command.ts -- `nen canon resolve`, and `nen canon mirror
 // generate|check`: a consumer's canon mirror, rendered into every agent
 // surface it declares (CON-13).
@@ -382,7 +383,7 @@ export const canonCommand: Command = {
   ],
   jsonRefusals: ["resolve"],
   name: "canon",
-  subcommands: ["resolve", "mirror", "pin", "checkout", "lint", "clause"],
+  subcommands: ["resolve", "mirror", "pin", "checkout", "lint", "clause", "check"],
   summary: "Resolve a repo's handbook set, read its canon pin, or render/check its canon-rule mirror on every surface it uses.",
   usage: USAGE,
   flags: {
@@ -391,6 +392,7 @@ export const canonCommand: Command = {
       "home",
       "status-vocabulary",
       "include",
+      "registry", "taxonomy",
       "target",
       "always-load",
       "stack-dir",
@@ -425,9 +427,11 @@ export const canonCommand: Command = {
     "--header-pattern": "the marker is read back by nen itself now; there is no pattern to give. Pass --source and --ref, and 'check' tells stale from hand-edited on its own.",
   },
   run(context: CommandContext): number {
-    const subcommand = requireSubcommand("canon", context.args, ["resolve", "mirror", "pin", "checkout", "lint", "clause"]);
+    const subcommand = requireSubcommand("canon", context.args, ["resolve", "mirror", "pin", "checkout", "lint", "clause", "check"]);
     if (subcommand !== "resolve" && subcommand !== "mirror") refuseForeignFlags(context, subcommand, ["manifest", "canon-root", "ports-dir", "port-from"]);
     if (subcommand !== "clause" || context.args.positionals[2] !== "cites") refuseForeignFlags(context, subcommand, ["text", "home", "status-vocabulary", "include"]);
+    if (subcommand === "check") return runCanonCheck(context);
+    if (context.args.values["registry"] !== undefined || context.args.values["taxonomy"] !== undefined) throw new VerbUsageError("registry/taxonomy belong to canon check");
     if (subcommand === "lint") return lintVerb(context);
     if (subcommand === "clause") return clauseVerb(context);
     if (subcommand === "resolve") return resolveVerb(context);

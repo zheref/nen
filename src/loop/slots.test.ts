@@ -84,3 +84,10 @@ describe("parseEfforts -- validated, not cast", () => {
     expect(parseEfforts("{}").errors[0]).toMatch(/expected a JSON array/);
   });
 });
+
+it("frees a stacked local slot only after PR open on the declared stacked base and settled Hanten", () => {
+  const effort: Effort = { id: "stack", plane: "local", prOpen: true, ready: false, prompted: false, stacked: true, stackedBase: "feature/base", prBase: "feature/base", hantenSettled: true };
+  expect(occupancy(effort).occupied).toBe(false);
+  for (const change of [{ prOpen: false }, { hantenSettled: false }, { prBase: "main" }, { stackedBase: null }, { stacked: false }]) expect(occupancy({ ...effort, ...change }).occupied).toBe(true);
+  const parsed = parseEfforts(JSON.stringify([effort])); expect(parsed.errors).toEqual([]); expect(occupancy(parsed.efforts[0]!).occupied).toBe(false);
+});

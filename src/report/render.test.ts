@@ -608,3 +608,19 @@ describe("a --data `variant` that is not a name (Copilot #221)", () => {
     }
   });
 });
+
+describe("stdout report output and explicit output language", () => {
+  it("renders only document bytes to stdout and writes no '-' file", async () => {
+    const root = stagedRepo({ text: "A & B" }); writeFileSync(join(root, "t.md"), "{{text}}");
+    const result = await capture(["report", "render", "--template", "t.md", "--data", "data.json", "--out", "-"], root);
+    expect(result.code).toBe(0); expect(result.out).toEqual(["A &amp; B"]); expect(existsSync(join(root, "-"))).toBe(false);
+    expect((await capture(["report", "render", "--template", "t.md", "--data", "data.json", "--out", "-", "--json"], root)).code).toBe(2);
+  });
+  it("escapes Markdown punctuation through nested blocks, keeps raw tokens raw, and preserves default HTML", async () => {
+    const root = stagedRepo({ items: [{ text: "A & <B> *x*" }], raw: "*raw*" });
+    writeFileSync(join(root, "t.md"), "{{#each items}}{{text}}{{/each}} {{{raw}}}");
+    const result = await capture(["report", "render", "--template", "t.md", "--data", "data.json", "--out", "-", "--language", "markdown"], root);
+    expect(result.code).toBe(0); expect(result.out).toEqual(["A \\& \\<B\\> \\*x\\* *raw*"]);
+    expect((await capture(["report", "render", "--template", "t.md", "--data", "data.json", "--out", "-", "--language", "bogus"], root)).code).toBe(2);
+  });
+});

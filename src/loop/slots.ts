@@ -51,6 +51,9 @@ export interface Effort {
   readonly merged?: boolean;
   /** The PR is stacked onto another effort's branch. Read by `stacked-open`; optional, absent reads false. */
   readonly stacked?: boolean;
+  readonly hantenSettled?: boolean;
+  readonly stackedBase?: string | null;
+  readonly prBase?: string | null;
 }
 
 export interface Caps {
@@ -130,6 +133,7 @@ export function occupancy(
     return { occupied: false, why: "merged locally with no PR -- integrated, nothing left to hand over" };
   }
   if (!effort.prOpen) return { occupied: true, why: "authored locally, no PR yet" };
+  if (effort.stacked === true && effort.hantenSettled === true && typeof effort.stackedBase === "string" && effort.stackedBase.trim() !== "" && effort.prBase === effort.stackedBase) return { occupied: false, why: "stacked PR open on its stacked base and Hanten settled -- local slot handed over" };
   if (rule === "stacked-open" && effort.stacked === true) {
     return {
       occupied: false,
@@ -219,6 +223,9 @@ export function parseEfforts(json: string): ParsedEfforts {
       prompted: record["prompted"] === true,
       merged: record["merged"] === true,
       stacked: record["stacked"] === true,
+      hantenSettled: record["hantenSettled"] === true,
+      stackedBase: typeof record["stackedBase"] === "string" ? record["stackedBase"] : null,
+      prBase: typeof record["prBase"] === "string" ? record["prBase"] : null,
     });
   });
   return { efforts, errors };

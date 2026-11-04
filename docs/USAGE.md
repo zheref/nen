@@ -12,7 +12,7 @@ repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
 what each version changed: 49 command
-families, 178 verbs, every flag checked against that binary.
+families, 181 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -258,7 +258,7 @@ including every refusal reason. The raw NUL-delimited stream
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **107 shapes** and **111 ids** (`nen.runner.plan`
+binary carries**, writing or reading — **112 shapes** and **116 ids** (`nen.runner.plan`
 and `nen.wc.worktree.copies` each have two versions, `nen.stop.mark` three, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -294,7 +294,7 @@ file formats).
 
 <!-- contract-ids:begin -->
 - **`audit`** — `nen.audit.deps/v0.1`
-- **`canon`** — `nen.canon.checkout/v0.1` · `nen.canon.clause-check/v0.1` · `nen.canon.clause-cites/v0.1` · `nen.canon.lint/v0.1` · `nen.canon.mirror.check/v0.1` · `nen.canon.mirror.generate/v0.1` · `nen.canon.pin.write/v0.1` · `nen.canon.pin/v0.1`
+- **`canon`** — `nen.canon.checkout/v0.1` · `nen.canon.clause-check/v0.1` · `nen.canon.clause-cites/v0.1` · `nen.canon.lint/v0.1` · `nen.canon.mirror.check/v0.1` · `nen.canon.mirror.generate/v0.1` · `nen.canon.pin.write/v0.1` · `nen.canon.pin/v0.1` · `nen.canon.check/v0.1`
 - **`classify`** — `nen.classify.apply/v0.1` · `nen.classify.install/v0.1` · `nen.classify.labels/v0.1` · `nen.classify.status/v0.1`
 - **`commit`** — `nen.commit.check/v0.1` · `nen.commit.write/v0.1`
 - **`contract`** — `nen.contract/v0.1`
@@ -318,14 +318,15 @@ file formats).
 - **`scaffold`** — `nen.scaffold.init/v0.1` · `nen.scaffold.migrate/v0.1` · `nen.scaffold.new/v0.1` · `nen.scaffold.template/v0.1`
 - **`schema`** — `nen.schema.set/v0.1`
 - **`session`** — `nen.session.ledger/v0.1`
-- **`shu`** — `nen.shu.<verb>/v0.1` · `nen.shu.coverage-capture/v0.1` · `nen.shu.coverage/v0.1` · `nen.shu.detect/v0.1` · `nen.shu.evidence/v0.1` · `nen.shu.proof/v0.1` · `nen.shu.test-report/v0.1` · `nen.shu.tools/v0.1` · `nen.shu.warmup/v0.1`
+- **`shu`** — `nen.shu.<verb>/v0.1` · `nen.shu.coverage-capture/v0.1` · `nen.shu.coverage/v0.1` · `nen.shu.detect/v0.1` · `nen.shu.evidence/v0.1` · `nen.shu.proof/v0.1` · `nen.shu.test-report/v0.1` · `nen.shu.tools/v0.1` · `nen.shu.warmup/v0.1` · `nen.shu.test-batch/v0.1`
 - **`spec`** — `nen.spec.check/v0.1` · `nen.spec.cite-check/v0.1` · `nen.spec.converge/v0.1` · `nen.spec.coverage/v0.1` · `nen.spec.diff/v0.1` · `nen.spec.index/v0.1` · `nen.spec.inventory/v0.1` · `nen.spec.number/v0.1` · `nen.spec.parity/v0.1` · `nen.spec.tasks/v0.1` · `nen.spec.trace/v0.1`
 - **`stop`** — `nen.stop.answer/v0.1` · `nen.stop.list/v0.1` · `nen.stop.mark/v0.1` · `nen.stop.mark/v0.2` · `nen.stop.mark/v0.3` · `nen.stop.proposed-issue/v0.1`
-- **`surface`** — `nen.surface.capabilities/v0.1` · `nen.surface.install/v0.1` · `nen.surface.mirror.check-installed/v0.1` · `nen.surface.mirror.check-plugin/v0.1` · `nen.surface.mirror.check/v0.1` · `nen.surface.mirror.generate/v0.1` · `nen.surface.status/v0.1`
+- **`surface`** — `nen.surface.capabilities/v0.1` · `nen.surface.install/v0.1` · `nen.surface.mirror.check-installed/v0.1` · `nen.surface.mirror.check-plugin/v0.1` · `nen.surface.mirror.check/v0.1` · `nen.surface.mirror.generate/v0.1` · `nen.surface.status/v0.1` · `nen.surface.mirror.batch/v0.1`
 - **`tests`** — `nen.tests.map/v0.1`
 - **`usage`** — `nen.usage.ledger/v0.1`
-- **`wc`** — `nen.wc.catch-up/v0.2` · `nen.wc.prune/v0.1` · `nen.wc.publish/v0.1` · `nen.wc.squash/v0.1` · `nen.wc.swap.state/v0.1` · `nen.wc.swap/v0.1` · `nen.wc.worktree.copies/v0.1` · `nen.wc.worktree.copies/v0.2` · `nen.wc.worktree/v0.1` · `nen.wc.worktrees/v0.1`
+- **`wc`** — `nen.wc.catch-up/v0.2` · `nen.wc.prune/v0.1` · `nen.wc.publish/v0.1` · `nen.wc.squash/v0.1` · `nen.wc.swap.state/v0.1` · `nen.wc.swap/v0.1` · `nen.wc.worktree.copies/v0.1` · `nen.wc.worktree.copies/v0.2` · `nen.wc.worktree/v0.1` · `nen.wc.worktrees/v0.1` · `nen.wc.publish-gated/v0.1`
 - **`workflow`** — `nen.workflow/v0.1`
+- **`tag`** — `nen.tag.announce/v0.1`
 <!-- contract-ids:end -->
 
 Four verbs have no `--json` because they have no result of their own to
@@ -1006,7 +1007,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 178 verbs, grouped as the README groups them. **Reads** is what a
+All 181 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -1090,10 +1091,12 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`changelog`](#family-changelog) | [`nen changelog fragment-required`](#nen-changelog-fragment-required) | whether a change owes a changelog.d/ fragment (CON-33(a)) | git diff/caller files, CHANGELOG.md at base+head, optional nen/repos.json-shaped --base-repos/--head-repos | yes |
 | [`changelog`](#family-changelog) | [`nen changelog collate`](#nen-changelog-collate) | collate every changelog.d/ fragment into a new dated CHANGELOG.md section (CON-33(b)) | changelog.d/, CHANGELOG.md | yes |
 | [`changelog`](#family-changelog) | [`nen changelog completeness`](#nen-changelog-completeness) | every PR merged in a range has a CHANGELOG entry or an (un)collated fragment (CON-33(c)), except the range's terminal PR when its merge introduced the dated section | git log --merges, git ls-tree/cat-file (the CHANGELOG's history, for the release-PR allowance), CHANGELOG.md, changelog.d/ | yes |
+| [`tag`](#family-tag) | [`nen tag announce`](#nen-tag-announce) | read the archive identity and built SHA without creating a tag | nen/workflow.json tags.identity.nameFrom; bounded regular-file reads | yes |
 | [`tag`](#family-tag) | [`nen tag cut`](#nen-tag-cut) | cut an annotated git tag pinned at an explicit SHA, never auto-pushed | git (tag/ls-remote/merge-base; --push also reaches origin) | yes |
 | [`fanout`](#family-fanout) | [`nen fanout compute`](#nen-fanout-compute) | which registered consumers (nen/repos.json) are affected by workflows changed in a release range | nen/repos.json, git diff, .github/workflows/ | yes |
 | [`fanout`](#family-fanout) | [`nen fanout record`](#nen-fanout-record) | the same computation, appended to an audit ledger file | nen/repos.json, git diff, .github/workflows/, ledger file | yes |
 | [`report`](#family-report) | [`nen report data`](#nen-report-data) | one document describing a branch against a base: commits, changed files (with a caller-supplied tier), the evidence seam, the lane's coverage report if it is on disk, the build proof, the last recorded stop, and -- only when one of the five register flags is given -- the issues and pull requests the effort is about; then where the effort is (worktree, stage, gate, turn, local clock), derived | git (rev-parse/symbolic-ref/remote get-url/log/diff), the zoneinfo file the zone names, nen/repos.json for the gate, nen/contract.json for the lane, .nen/proof/&lt;lane&gt;.json, .nen/last-stop.json, the declared coverage artifact, a caller-supplied --tiers file; under --target/--prs/--issues/--backlog also github (gh api, gh pr view) and nen's own in-process readiness gate; under --objects-from a caller-supplied file instead | yes |
+| [`report`](#family-report) | [`nen report check`](#nen-report-check) | verify declared report variants in Markdown and HTML | workflow sections, templates and examples | yes |
 | [`report`](#family-report) | [`nen report render`](#nen-report-render) | fill a template with a data document and write the result: {{token}}, {{{token}}}, {{#each}}, {{#if}} and nothing else, refusing an unknown token by name; --variant injects a declared variant's section flags and --graph injects a validated architecture-delta graph | caller-named --template + --data (+ --graph) files, nen/workflow.json's reports.sections under --variant; writes --out, inside --repo, unless --dry-run | yes |
 | [`report`](#family-report) | [`nen report mermaid`](#nen-report-mermaid) | print the mermaid text for a graph document and nothing else | a caller-named --graph file; writes nothing; no git/gh | no |
 | [`review`](#family-review) | [`nen review scopes`](#nen-review-scopes) | which review scopes a branch diff raises, off the repository's own review.scopes block, plus the changed paths no scope claims | nen/workflow.json's review block, git diff --name-only; writes nothing; no gh | yes |
@@ -1135,6 +1138,8 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`idea`](#family-idea) | [`nen idea file`](#nen-idea-file) | file an idea issue (reusing issue file's own choreography), then read it back over the API and diff title/body/labels against what was submitted | nen/labels.json; gh (issue create + api read) | yes |
 | [`scaffold`](#family-scaffold) | [`nen scaffold init`](#nen-scaffold-init) | stand an EXISTING repository up: the directory skeleton, the trailer-enforcing commit-msg hook, the trunk-guarding pre-commit hook, a canon-values.yml template, nen/contract.json's project block, nen/workflow.json's policy, the schemas/-&gt;nen/ copy migration, the stack's CI workflow, .gitignore upkeep, and a closing `shu tools` CHECK that installs nothing | nen/contract.json + nen/workflow.json (both hooks are generated FROM the policy) + the legacy schemas/ copies; the bundled profiles pack and templates/; writes to disk under --repo; spawns the version probes the target declares (never on --dry-run) | yes |
 | [`scaffold`](#family-scaffold) | [`nen scaffold new`](#nen-scaffold-new) | write a FRESH tree for one stack into an empty --dir: the template's files with {{name}} substituted, the CI workflow, .gitignore, both git hooks, nen/workflow.json's policy, and nen/contract.json as `shu detect` proposes it off the marker just written -- every post-step PRINTED, none run | the bundled profiles pack and templates/; writes to disk under --dir; spawns nothing at all | yes |
+| [`canon`](#family-canon) | [`nen canon check`](#nen-canon-check) | one read-only verdict over registry validity, independent classification phase coverage and bidirectional dry-run label parity | explicit registry/taxonomy files, nen/labels.json | yes |
+
 | [`scaffold`](#family-scaffold) | [`nen scaffold migrate`](#nen-scaffold-migrate) | write each ABSENT nen/colors.yml and nen/gates.json from a seed that widens nothing (no colour category; a Copilot round owed at head on every PR, a delivery carve-out matching no author), read each back through its loader, and never open an existing file -- idempotent; the command schema check names for each missing one | writes to disk under --repo; spawns nothing | yes |
 | [`canon`](#family-canon) | [`nen canon resolve`](#nen-canon-resolve) | resolve a target repo's always-load handbook set plus its ONE stack handbook, from the scenario nen/repos.json records for it | nen/repos.json | yes |
 | [`canon`](#family-canon) | [`nen canon pin`](#nen-canon-pin) | read the canonical handbooks repository a consumer mirrors and the TAG it is pinned to, from the `pinned` field on that repository's maintained_tools entry -- data a sync checks the canon out at, and a drift check holds the mirror to; with `--write <tag>`, MOVE that pin -- one value, every other byte kept -- only to a tag the canon checkout carries | nen/repos.json; with --write, the canon checkout `canon checkout` resolves (read-only, isolated git; fetches nothing) and an atomic write of nen/repos.json unless --dry-run | yes |
@@ -4959,6 +4964,24 @@ would run: git rebase origin/main  (2 ahead, 3 behind)
 
 ### `nen wc publish`
 
+`--gated --proved <40-hex> --persona <token>` runs the published-branch six-gate chain.
+`--base <branch>` defaults to workflow `branch.base`; every `iteration.checks` entry runs
+in declaration order on `iteration.lane` (`--lane` supplies it only when left open).
+The chain requires no-op catch-up, exact proved HEAD, an upstream whose branch name
+exactly equals the current branch, green checks, matching repository author/committer
+identity and explicit responsible `Hatsu-Agent` provenance over the outgoing range
+excluding base history, then another HEAD equality check before publishing the
+proved commit object to that branch's same-name destination. The non-force ancestry
+check and push source both use that object, even if the branch moves afterward.
+A trailerless clean two-parent base merge is exempt only when its tree exactly equals
+Git's clean merge result. A changed catch-up returns to the caller without publishing.
+No squash, force or `--set-upstream` is permitted. `--dry-run` previews catch-up/push
+but still runs iteration checks, which may write local build artifacts/proof.
+JSON is `{contract: "nen.wc.publish-gated/v0.1", proved, dryRun, pushed, gates[], exitCode}`;
+exit 0 means every gate passed, 1 a gate failed, 2 invalid invocation or initial wiring.
+The caller owns regression/coverage and supplies the exact head those checks proved;
+this verb runs only the declaration's iteration checks.
+
 Pushes the **current branch**, **under its own name**, and nothing else
 (v0.13.0, [#227](https://github.com/zheref/nen/issues/227)) — `git push [-u]
 <remote> -- refs/heads/<branch>:refs/heads/<branch>`, the refspec spelled in
@@ -6471,6 +6494,13 @@ holding a slot, and by which plane's own freeing rule.
 `--json`: an ARRAY, one entry per input row — each input object merged with its `effortClass` and `evidence[]`.
 ### `nen loop slots`
 
+An effort may additionally declare `stacked: true`, `stackedBase`, `prBase` and `hantenSettled: true`. A local slot frees at PR-open only when Hanten is settled and the two explicitly supplied nonempty bases match. Missing/mismatched facts retain the slot. This does not report main readiness or invent a human prompt; ordinary local and CI rules remain unchanged.
+
+Answers "how many concurrency slots does each plane have free right now". A CI slot frees the moment
+its PR opens (the builder's own iterate loop takes over from there); a local slot frees only once the
+PR is ready AND the human has been prompted, because nothing else is behind a locally-authored PR. The
+two budgets are counted and reported separately and are never traded against each other.
+
 Answers "how many concurrency slots does each plane have free right now", from a caller-supplied
 efforts file or -- `--from-run` -- one **built** from a run's manifest (below). A CI slot frees the moment
 its PR opens (the builder's own iterate loop takes over from there); when a local slot frees is
@@ -7600,6 +7630,8 @@ root; an absolute path is used as-is.
 
 ### `nen classify labels`
 
+Phase-aware taxonomies (any job states `phases`) must assign at least one phase to every job. Bare legacy taxonomies remain valid. To prove document completeness, supply an independent source: `--phase-inventory <file>` reads a nonempty unique JSON array of phase IDs; `--phase-registry <file>` reads the keys of its `phases` object, ignoring `$` metadata keys. Choose one. Every independently declared phase must be covered, and mapped phases must belong to that inventory. Nen never derives the expected universe from the jobs' own union. Missing/invalid phase coverage refuses at exit 1 by pointer.
+
 Answers "is this taxonomy file valid, and what label set does it define": it validates the file and
 prints one line per label (`name  #colour  description`). A bad file is refused at exit 1 naming the
 pointer into it — a missing axis, a duplicate key, a description over 100 characters, a prefix not
@@ -7618,13 +7650,15 @@ pointer.
 **Usage**
 
 ```text
-nen classify labels --taxonomy <path> [--repo <path>] [--json]
+nen classify labels --taxonomy <path> [--phase-inventory <file> | --phase-registry <file>] [--repo <path>] [--json]
 ```
 
 **Arguments**
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
+| `--phase-inventory <file>` | no | Independent JSON array of document phase IDs. | Nonempty, unique, fully covered by jobs. |
+| `--phase-registry <file>` | no | Independent registry whose `phases` object names the document universe. | Conflicts with `--phase-inventory`; never derived from the job union. |
 | `--taxonomy <path>` | yes | The classification taxonomy file. | Relative paths resolve against `--repo`'s root. Missing -> exit 2. |
 | `--repo <path>` | no | Anchors a relative `--taxonomy`. | Defaults to cwd. The only `classify` verb where it is optional: this one reads one file and nothing else. |
 
@@ -9320,6 +9354,8 @@ directory the caller names; it never opens or merges a PR.
 
 ### `nen changelog fragment-required`
 
+The `no CHANGELOG entry: <reason>` opt-out is recognized only in visible prose. HTML comments and fenced code (backticks or tildes, including unclosed fences) never opt out.
+
 CON-33(a): does this change owe a `changelog.d/` fragment? Not applicable if
 no spec/canon path changed; satisfied by an opt-out stated in the body, a
 fragment added at head, or a recognized "release move" (Unreleased emptied
@@ -9384,6 +9420,8 @@ exit 1
 (from a real run against a scratch repo whose `changelog.d/` held an unrelated fragment and whose changed file was `schemas/gates.json`)
 
 ### `nen changelog collate`
+
+When `### Unreleased` is absent, collation inserts an empty anchor before the first dated `### v...` release (or at the end when none exists), preserving existing text. A present nonempty Unreleased still refuses rather than overwriting entries.
 
 CON-33(b): collates every fragment in `--fragment-dir` into a new dated
 section of `--changelog`. Without `--write`, reports the rendered result
@@ -9599,10 +9637,56 @@ exit 0
 
 **`nen tag`**
 
-Cuts one annotated git tag pinned at an explicit SHA — getsuga §4's
-mechanical follow-through once a release PR merges. It never resolves "the
+Announces an archive's declared identity without Git operations, or cuts one annotated
+git tag pinned at an explicit SHA — getsuga §4's mechanical follow-through once a release PR merges. It never resolves "the
 cut point" itself (`nen release resolve-target` does that), and it never
 pushes unless `--push` is given.
+
+### `nen tag announce`
+
+Reads `nen/workflow.json` → `tags.identity.nameFrom` as data. It never creates a tag,
+resolves a commit, checks an archive or contacts GitHub. This is an announcement of
+what the repository's archive wrote, without inventing tag-name or SHA validation.
+
+**Usage**
+
+```text
+nen tag announce --repo <path> [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--repo <path>` | yes | The checkout containing the workflow and identity file. | Explicit; never inferred from cwd. |
+| `--json` | no | Emit the announcement report instead of two plain lines. | The exit code is unchanged. |
+
+`nameFrom` is a nonempty repo-relative path. Absolute/drive-relative paths, any `..`
+segment, symlinked files or parents, and nonregular files refuse. Nonblocking opened
+file descriptors are checked against the named regular file, with post-read checks;
+FIFOs do not wait for a writer. Reads are bounded to 1 MiB for the workflow and 64 KiB
+for the first two identity lines. Additional identity-file lines are ignored.
+
+**Output and exit codes** — plain success prints exactly the first two file lines:
+the tag identity, then the SHA recorded by the archive. Every CR byte in those lines
+is removed; a final LF is optional, and a trailing LF alone does not supply another
+line. Extra lines are ignored. No tag prefix, diagnostic or success heading is added.
+With `--json`, the top-level keys are `contract` (`nen.tag.announce/v0.1`), `status`,
+`identity`, `archiveSha`, `nameFrom`, `error` and `exitCode`. Status is `announced`,
+`undeclared` or `invalid`; undeclared/invalid reports have null identity and archiveSha.
+`nameFrom` is the declared path when available, otherwise null; `error` is null except
+for an invalid declaration/read. Declaration errors also print a diagnostic on stderr.
+
+| Exit | Meaning |
+|---|---|
+| `0` | The first two lines were read. |
+| `3` | `tags` or `tags.identity` is absent or null; plain output is `no tag declared`. |
+| `1` | Malformed/missing/unreadable workflow or declaration, invalid/nonregular/symlinked identity path, too few lines, changed file or read limit exceeded. Plain stdout is empty. |
+| `2` | Wiring: missing/invalid `--repo`, extra arguments, unknown flags or flags belonging to `tag cut`. |
+
+A missing tag declaration is a no-op announcement; it does not change the completed
+archive's result. The workflow's existing `tags` extension is read directly; unrelated
+workflow settings do not decide this announcement.
 
 ### `nen tag cut`
 
@@ -10327,6 +10411,8 @@ open pull requests scanned: 37
 
 ### `nen issue file`
 
+`--title-file <path>` supplies the title instead of `--title`; relative paths resolve against `--repo`, and surrounding whitespace is trimmed. Supplying both refuses at exit 2 before any API call. The resulting title passes the same validation and private-name check as a literal title.
+
 Creates the issue with its labels and assignee IN the create call -- never a follow-up `gh issue edit`, because a label applied a second later is a *second* `labeled` event on an object that already existed, and in a system where a label is a wake edge that is the difference between one dispatch and two. Refuses (never creates) a label the target repository's taxonomy does not carry, and a label whose family the caller declared off-limits with `--forbid-family`; GitHub itself would silently CREATE an unknown label rather than refuse, which is exactly the permanent undocumented label this verb exists to prevent.
 
 **Usage**
@@ -10345,6 +10431,7 @@ nen issue file --target <owner/name> --repo <path>
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
+| `--title-file <path>` | unless `--title` | Read the title instead of a literal value. | Relative to `--repo`; competing sources refuse before API. |
 | `--target <owner/name>` | yes | The GitHub repository to file into. | Missing exits 1. |
 | `--repo <path>` | yes | The checkout whose `nen/labels.json` validates every `--label`. | Listed unbracketed in usage: omitted, this exits **2** by name, never silently reads the cwd's own taxonomy. |
 | `--title <t>` | one of `--title`/`--title-file` | The issue title. | Empty title is refused as part of the batch below (exit 1), not at the parser. |
@@ -10376,6 +10463,8 @@ stdin: the 611 byte(s) read and checked from /tmp/body.md (gh reads these, not t
 (a `--dry-run` — no GitHub write. Captured before [#329](https://github.com/zheref/nen/issues/329) and updated to its shape: the argv's `--body-file -` and the `stdin:` line are #329's, the byte count illustrative; a dry run now also reads the target's visibility and, for a public target, the private list)
 
 ### `nen issue comment`
+
+Private-name checks read only `~/.config/hatsu/redaction-ignore` by default when present; `--private-names-ignore-file` replaces it. No parent, repository-local or broader ignore-file discovery runs. Existing all-ignored refusal and explicit opt-out rules remain in force.
 
 The general primitive the rest of the family lacked: post ONE caller-supplied comment on ONE issue -- so a mechanized choreography no longer has to drop back to a hand-run `gh issue comment` for the one step written in a human's own words. Deliberately accepts a number that names a pull request (unlike `attach-sub`/`chain-position`/`terminus`), because commenting on a PR is a normal thing to want to do and carries none of the hazards attaching or closing one silently would.
 
@@ -10418,6 +10507,8 @@ Filed as part of the USAGE.md doc pass; see docs/USAGE.md#issue for the wire-up.
 (from a real run in `--dry-run` mode — no GitHub write, no network; captured before [#329](https://github.com/zheref/nen/issues/329), since when a dry run reads the target's visibility and, for a public target, the private list)
 
 ### `nen issue edit-body`
+
+Private-name checks read only `~/.config/hatsu/redaction-ignore` by default when present; `--private-names-ignore-file` replaces it. No parent, repository-local or broader ignore-file discovery runs. Existing all-ignored refusal and explicit opt-out rules remain in force.
 
 Replaces an issue's body OUTRIGHT with a file's bytes — no trimming, no
 template, the file becomes the body exactly, through `gh issue edit
@@ -11525,6 +11616,37 @@ Resolves which handbooks a target repository loads, reads the canon pin its regi
 
 **Where the canon lives.** The single canonical source of every handbook and rule set is the public [`zheref/bankai-handbooks`](https://github.com/zheref/bankai-handbooks) repository (`CON-13`): `handbooks/INDEX.md` is its manifest -- the always-load set plus exactly one `stacks/<scenario>/` handbook per scenario, each stack carrying its operational `rules/` set. Every path flag on this family (`--always-load`, `--stack-dir`, `--rules-dir`) names a location inside a **checkout of that repository at the tag the consumer pins**; nen fetches nothing and knows no repository by name. **Where that checkout is on a given machine is data too** ([#294](https://github.com/zheref/nen/issues/294)): [`canon checkout`](#nen-canon-checkout) resolves it from the consumer's declaration and the environment and verifies it at the pin, and `canon mirror` does the same when `--rules-dir` is omitted -- so a mirror command is portable argv a declared iteration gate can carry. The scenario-to-stack mapping is derived, not looked up: the recorded scenario IS the directory name under `--stack-dir`, so a stack added to the canon needs no change here. The reference implementation these verbs were ported from is frozen; nothing in this family reads it.
 
+### `nen canon check`
+
+Combines the existing registry, classification and declaration-parity readers. No install,
+sync or write runs. The phase universe comes from the explicit registry, independently of
+the taxonomy's job mappings. Both missing/drifted taxonomy labels and foreign axis-prefixed
+labels refuse; unrelated labels outside those prefixes remain outside the comparison.
+
+**Usage**
+
+```text
+nen canon check --repo <path> --registry <file> --taxonomy <file> [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--repo <path>` | yes | The checkout whose `nen/labels.json` is compared. | No cwd inference. |
+| `--registry <file>` | yes | Independent model/phase registry. | Relative to `--repo`; no built-in path or vocabulary. |
+| `--taxonomy <file>` | yes | Classification taxonomy. | Relative to `--repo`; all inputs must stay inside the root without symlinked files/parents. |
+
+**Output and exit codes** — with `--json`, the top-level keys are `contract`
+(`nen.canon.check/v0.1`), `checks`, `parity` and `exitCode`. Each `checks` entry is
+`{ name, ok, detail }`: the read's name, boolean verdict and explanation. `parity` is
+`{ entries, foreign }`, the same plan as `classify install --dry-run`, or null when
+unavailable. Its entries are `{ name, status }` with status `present`, `drift` or
+`absent`; `foreign` lists declared axis-prefixed label names outside the taxonomy.
+Human output prints one verdict per read. Exit 0 when all pass, 1 for invalid contracts
+or parity, 2 for missing/unreadable/nonregular/symlinked inputs or invalid invocation.
+No Hatsu wrapper or CI file is removed; consumer repinning and wrapper retirement are external.
+
 ### `nen canon resolve`
 
 Answers "which handbooks does this repository load" as always-load-paths + exactly one stack handbook, the stack path derived directly from the target's recorded scenario (never looked up in a table). `--always-load` is the target repository's own manifest, handed in by the caller; `--repo`, `--target`, `--stack-dir` and `--always-load` are all required and refused by name if omitted or empty, never defaulted to something that would misreport a forgotten flag as a missing registry.
@@ -12064,6 +12186,8 @@ exactly)
 
 ### `nen canon clause cites`
 
+With `--json`, top-level keys are `contract`, `clauses`, `readSet`, `dangling` and `exit`. Each clause names its definition location, status, binding and displacement evidence.
+
 Read a request's cited clause IDs once each, with their definition file/line,
 status and binding, then follow displaced clauses transitively. Homes and the
 status vocabulary are explicit caller data; Nen does not decide conflicts or
@@ -12273,6 +12397,8 @@ Validates the SHAPE of a Conventional Commits message -- a declared type, a non-
 
 ### `nen commit format`
 
+`--body-file <path>` supplies the body instead of `--body`; relative paths resolve against `--repo`. Supplying both refuses at exit 2 before formatting. File content follows the same wrapping, trailer and policy checks as a literal body.
+
 Builds and validates one Conventional Commits header (`type(scope)!: subject`) plus optional body paragraph and trailers, from the type set `feat, fix, chore, docs, refactor, test, perf, build, ci`. `--trailer` keys are caller data (a specific persona's trailer convention lives in the calling skill, never a literal in this binary).
 
 **A repository may state which ATTRIBUTION trailers it admits, and then this verb enforces it.** When [`nen/workflow.json`](#nenworkflowjson) is present under `--repo`, a `--trailer` whose key is attribution-shaped and is *not* listed in that file's `commits.allowedAttributionTrailers` is refused at exit **2**, naming the trailer and the file. Attribution-shaped means one of `Assisted-by`, `Claude-Session`, `Co-Authored-By`, `Generated-by`, `Generated-with`, `Reviewed-by`, `Signed-off-by` — the keys that say *who or what produced this commit* — plus every key the file's own `commits.forbiddenTrailers` adds; matching **ignores case**, because every tool that reads the finished commit does. `Closes`, `Refs` and a project's own agent trailer are untouched.
@@ -12319,6 +12445,7 @@ nen commit format --type feat --subject "a short imperative subject"
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
+| `--body-file <path>` | no | Read the body instead of `--body`. | Relative to `--repo`; conflicts with `--body`, follows the same policy and wrapping checks. |
 | `--type <type>` | yes | One of `feat, fix, chore, docs, refactor, test, perf, build, ci`. | |
 | `--subject <text>` | yes | The header's imperative subject. | Non-empty, the FULL header line (`type(scope)!: subject`) must be <= 72 characters, and must not end in `.!?`. |
 | `--scope <scope>` | no | The parenthesised scope. | Given but empty is refused -- omit the flag entirely instead. |
@@ -14464,6 +14591,8 @@ report's unchanged rows are elided at `…`.)
 
 ### `nen shu test`
 
+`--lanes <a,b,...>` runs an explicit ordered set of unique declared lanes, instead of `--lane`. Every lane preflights before any test executes; malformed/unknown lanes run none. Tests then run sequentially, retaining every outcome even after a failure. `--dry-run` executes none. JSON is one `nen.shu.test-batch/v0.1` envelope with `dryRun`, `preflightPassed`, ordered `lanes[]` (`lane`, `executed`, `exitCode`, parsed `report`, captured `stdout[]`/`stderr[]`) and aggregate `exitCode` (first nonzero in lane order, otherwise zero). Single-lane output is unchanged.
+
 Run the lane's test suite, from its declared `test` invocation. It reports the
 runner's own output and the **exit code**, and nothing about which tests ran; for
 that, [`nen shu test-report`](#nen-shu-test-report) runs this same invocation and
@@ -14472,7 +14601,7 @@ then parses the results file it names under `artifacts`.
 **Usage**
 
 ```text
-nen shu test [--repo <path>] [--lane <name>] [--select <id>[,<id>...]] [--dry-run] [--stream] [--heartbeat <s>] [--json]
+nen shu test [--repo <path>] [--lane <name> | --lanes <a,b,...>] [--select <id>[,<id>...]] [--dry-run] [--stream] [--heartbeat <s>] [--json]
 ```
 
 **Output and exit codes** — as `build`, and `--json` is the family's [shared run report](#shu-run-report), with `contract: "nen.shu.test/v0.1"`. Like every executing verb in this family it is **`dry-run-gated`** in izanami's automation-policy table, so `nen watch until --command "nen shu test"` refuses and `nen shu test --dry-run` is the form a watcher or a loop can use. The reason is in [`--dry-run` discipline](#--dry-run-discipline) above and in `src/parse/izanami.ts`: the argv comes from a file in the *target* repository — a declared test task may well write, and one keystroke separates a golden-image check from its recorder — so the bare form is never certified, while the dry run is, because rendering and spawning nothing is a property of nen rather than a claim about that argv.
@@ -17170,18 +17299,21 @@ The TypeScript half of the supply contract: resolves `bootstrap/nen.sh` (found f
 
 ### `nen bootstrap`
 
+`--script-sha256 <64-hex>` optionally checks the selected bootstrap script file's SHA256 before spawning Bash. A malformed or mismatching expected value returns the wrapper failure and executes no script. The expected value must come from a trusted pin supplied by the caller; Nen does not calculate its own expected value from the file it is checking. This is distinct from per-platform binary checksums. Omission preserves legacy execution. This checks the selected file before execution; callers must keep that file unchanged between verification and the Bash read. Rendering/recording the trusted script pin in Hatsu Tenkai remains Hatsu-owned.
+
 There is deliberately no default and no `latest`: a bootstrap that picked the newest release would convert a source-pinned supply chain into an unpinned one, so `--ref` is required with no fallback. On success, stdout carries ONLY the verified binary path; every diagnostic goes to stderr.
 
 **Usage**
 
 ```text
-nen bootstrap --ref <tag> [--source <owner/name>] [--cache-dir <dir>] [--script <path>] [--repo <path>]
+nen bootstrap --ref <tag> [--source <owner/name>] [--cache-dir <dir>] [--script <path>] [--script-sha256 <64-hex>] [--repo <path>]
 ```
 
 **Arguments**
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
+| `--script-sha256 <64-hex>` | no | Caller-trusted expected script digest, checked before Bash. | Distinct from binary checksums; malformed or mismatching values run no script. |
 | `--ref <tag>` | yes | The exact tag to fetch and pin to. | No default, no `latest`; omitted, this exits its own usage code (2). |
 | `--source <owner/name>` | no | GitHub repository to fetch release assets from. | Defaults to `zheref/nen` inside the script; NOT `--repo` -- a wholly different meaning (a path vs. an `owner/name`) is deliberately given two different flag names across both the shell and the CLI. Both halves must be a real name: neither may be empty, `.` or `..`, so `a/..` is a usage error (2) at the flag rather than a 404 from the network. |
 | `--cache-dir <dir>` | no | Cache root for verified binaries. | Defaults to `${XDG_CACHE_HOME:-$HOME/.cache}/nen`. A verified binary is cached at `<root>/<source>/<ref>/<artifact>`, each key flattened to exactly one path segment -- so a fork or a mirror at the same tag as the upstream gets its own slot instead of sharing one. |
@@ -17739,7 +17871,34 @@ last stop: none
 ```
 (run for real, in this repository's own worktree while the family was being written — before [#258](https://github.com/zheref/nen/issues/258), so its `repo:` line shows the directory's name where today's prints `zheref/nen`; `tiers.json` was `{"tests": ["src/**/*.test.ts"], "source": ["src"], "docs": ["docs", "README.md", "CHANGELOG.md"]}`. The coverage line is this repository's OWN declaration answering: `nen/contract.json` names lane `nen`, whose `coverage` verb declares `coverage/lcov.info`, and that file was on disk from a previous [`shu coverage`](#nen-shu-coverage) run — this verb read it and spawned nothing. Before that run it printed `coverage: none read`, with `coverage: lane 'nen' declares 'coverage/lcov.info', which is not there. Run 'nen shu coverage --repo <path> --lane nen' to produce it; reported as null.` on stderr)
 
+### `nen report check`
+
+`nen report check --repo <path> [--variant <name>] [--json]` renders each
+selected `reports.sections` variant from `templates/report-examples/<variant>.data.json`
+through its declared `templates/<template>.md` and `.html`, without writing files.
+Optional graphs use the variant graph or `templates/graph.example.json`.
+It checks the actual renderer's refusals, remaining tokens, declared block
+order and cross-format parity, duplicate/unknown HTML sections, exactly one
+starred option per ask, and escaping visible in Markdown cells. Markdown blocks
+use `<!-- <namespace>:block <name> -->`; asks use `<!-- <namespace>:ask -->`.
+HTML blocks use section ids derived from block names (camelCase becomes
+kebab-case), with masthead/header.mast and tally/section.tally anchors.
+Exit 0 conformant; 1 findings named by variant, template and rule; 2 wiring
+(no variants, unknown variant, missing/nonregular/redirected template or example).
+With `--json`, top-level keys are `conformant`, `variants` and `findings`; each finding names `variant`, `template` and `rule`.
+This owns the requested conformance checks; richer consumer guards remain
+until their additional checks are deliberately migrated.
+
+`report data --agents-dir <directory>` additionally reads only the explicitly
+selected directory's regular `.md` agent specifications. JSON gains `agentSpecs`
+with name, repository-relative path, byte size and SHA256 metadata. No spec
+contents are published. An empty directory argument, traversal or symlink is
+refused. Omit the flag to preserve the existing output; the Hatsu layout is
+selected explicitly as `--agents-dir claude/agents/`, never inferred.
+
 ### `nen report render`
+
+`--out -` prints only the filled document on stdout and creates no file. It conflicts with `--json` metadata output. A dry run still prints the ordinary preview rather than document bytes. File outputs retain their containment checks. `--language html|markdown` selects ordinary-token escaping: HTML remains the default; Markdown backslash-escapes CommonMark punctuation rather than inserting HTML entities. Nested blocks use the same escaper; raw triple-brace tokens remain raw.
 
 Fills a template with a data document and writes the result. The **whole** template language is four constructs: `{{token}}` (HTML-escaped), `{{{token}}}` (raw), `{{#each <list>}}…{{/each}}` (nested; `{{.}}` is a scalar item and `{{@index}}` its position) and `{{#if <key>}}…{{/if}}`. There are no helpers, no partials, no comments and no expressions — nen fills reports, it does not run them, and the whole language fits in a sentence on purpose.
 
@@ -17748,16 +17907,17 @@ A token the data document has not got is **refused at exit 2 naming it**, becaus
 **Usage**
 
 ```text
-nen report render --template <file> --data <file> --out <file> [--variant <name>] [--graph <file>] [--dry-run] [--repo <path>] [--json]
+nen report render --template <file> --data <file> --out <file|-> [--language html|markdown] [--variant <name>] [--graph <file>] [--dry-run] [--repo <path>] [--json]
 ```
 
 **Arguments**
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
+| `--language <html-or-markdown>` | no | Ordinary-token escaping language. | Default HTML; raw tokens stay raw. |
 | `--template <file>` | **yes** | the template to fill | read **raw**: its own line endings survive into the output, so a CRLF template writes a CRLF report |
 | `--data <file>` | **yes** | the JSON document every token is answered from | typically [`report data --json`](#nen-report-data)'s output, but any JSON works |
-| `--out <file>` | **yes** | where to write | must resolve **inside** `--repo`, **with symlinks resolved** — a `Reports/` that is a link out of the tree is refused naming the link. Parent directories are created |
+| `--out <file-or-dash>` | **yes** | where to write | file targets must resolve **inside** `--repo`, **with symlinks resolved** — a `Reports/` that is a link out of the tree is refused naming the link. Parent directories are created |
 | `--dry-run` | no | print every token the template names and write nothing | it still parses **and renders**, so its refusals are the real run's; a refusal on a dry run also lists the tokens, so the advice to run it is not a loop |
 | `--variant <name>` | no | a variant declared under `reports.sections` in `--repo`'s [`nen/workflow.json`](#nenworkflowjson) | injects `sections` (a presence flag per declared block) and `sectionList` (the block names in the file's own order) into the data document before the fill, **and nothing else**. An undeclared variant is refused at exit 2 naming the declared ones; a `--data` document whose own `variant` key disagrees is refused too. Without the flag nothing at all is injected — v0.11 behaviour byte for byte |
 | `--graph <file>` | no | an architecture-delta graph document | validated whole (see [`report mermaid`](#nen-report-mermaid)) and injected as `graphJson`, `graphMermaid`, `graphNodes` and `graphEdges`. All four together, always, because a template that draws the graph must be able to count on every token it names being there |
@@ -18372,6 +18532,8 @@ the source's own layout.
 
 ### `nen surface mirror generate`
 
+`--plan <file>` generates all explicitly declared surfaces in one call. Its nonempty JSON array contains per-surface string flag objects, each naming `source`, `surface`, `out` and any ordinary generation inputs (`agents`, `models`, `hooks`, `hooks-root`, `manifest`, `rules`, `permissions`, `source-surface`, `invocation-prefix`, `stamp`). Relative file paths resolve against `--repo`; `hooks-root` remains a literal root or shell expression, exactly as with the ordinary flag. No surface or path is inferred. All declarations preflight before writing; duplicate surfaces, unknown fields/surfaces and overlapping output directories refuse at exit 2. Do not combine the plan with individual input flags. `--dry-run` writes nothing. JSON is `{contract: "nen.surface.mirror.batch/v0.1", dryRun, surfaces: [<ordinary generation report>, ...]}`.
+
 Reads every `<name>/SKILL.md` under `--source` and writes `<out>/<name>/SKILL.md`
 — `<out>/skills/<name>/SKILL.md` on the two plugin-shaped rows, `antigravity`
 and `claude-code`, whose mirror is a plugin root — with the body verbatim but
@@ -18393,6 +18555,7 @@ that is the self-healing the mirror is for.
 **Usage**
 
 ```text
+nen surface mirror generate --plan <file> [--repo <path>] [--dry-run] [--json]
 nen surface mirror generate --source <dir> --surface codex|cursor|antigravity --out <dir>
                             [--agents <dir>] [--invocation-prefix <prefix>] [--repo <path>]
                             [--hooks <hooks.json>] [--hooks-root <expr>]
@@ -18406,6 +18569,7 @@ nen surface mirror generate --source <dir> --surface codex|cursor|antigravity --
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
+| `--plan <file>` | alternative to per-surface inputs | Explicit nonempty array of per-surface flag objects. | Whole-plan declaration and clobber preflight before writes. |
 | `--source <dir>` | **yes** | the directory whose **subdirectories** are the skills | one holding no `<name>/SKILL.md` is refused at exit 2, never mirrored as empty: an empty generation would delete the whole mirror as orphaned, so the one plausible typo (`--source` pointed one level too high) would quietly empty it instead of saying so |
 | `--surface <name>` | **yes** | which row of the table above | anything else is refused at exit 2, listing the ones that exist |
 | `--out <dir>` | **yes** | where the mirror is written | a path resolving **inside** `--source` (its own directory included) is refused at exit 2 — the mirror would become part of the source, and the next run would mirror its own output. Created if absent |
@@ -18613,6 +18777,8 @@ descriptionBudgetSource, permissionsShape, readOnly, source, caveat }` (`readOnl
 the page in the row and change the row.
 
 ### `nen surface mirror check`
+
+Permission-only hook drift reports `permission-drift` in human output and `permissionDrift[]` in JSON (only present when nonempty), separately from `handEdited[]` content changes. It still fails the check and a regeneration reapplies the declared mode. Read-only copies therefore receive the actual reason.
 
 Regenerates from the SAME inputs `generate` uses and diffs the result against
 `--out` **without writing anything** — the CI-safe half of the pair. A file is:
