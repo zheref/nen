@@ -1,0 +1,6 @@
+{
+  "$comment": "Caller-repository report conventions. These are resolved under the explicit --repo, never under the Nen executable or source checkout. The metadata itself is statically bundled.",
+  "directory": "templates",
+  "examples": "templates/report-examples",
+  "graph": "templates/graph.example.json"
+}

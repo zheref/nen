@@ -255,10 +255,10 @@ describe("nen report data refuses rather than reporting an empty answer", () => 
     expect(captured.err.join("\n")).toMatch(/--out is not read by 'report data'/);
   });
 
-  it("refuses a subcommand it has not got, naming the three it has", async () => {
+  it("refuses a subcommand it has not got, naming the four it has", async () => {
     const captured = await capture(["report", "publish"], []);
     expect(captured.code).toBe(2);
-    expect(captured.err.join("\n")).toMatch(/unknown 'report' subcommand 'publish'\. Known: data, render, mermaid\./);
+    expect(captured.err.join("\n")).toMatch(/unknown 'report' subcommand 'publish'\. Known: data, render, mermaid, check\./);
   });
 });
 

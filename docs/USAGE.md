@@ -12186,6 +12186,8 @@ exactly)
 
 ### `nen canon clause cites`
 
+With `--json`, top-level keys are `contract`, `clauses`, `readSet`, `dangling` and `exit`. Each clause names its definition location, status, binding and displacement evidence.
+
 Read a request's cited clause IDs once each, with their definition file/line,
 status and binding, then follow displaced clauses transitively. Homes and the
 status vocabulary are explicit caller data; Nen does not decide conflicts or
@@ -17883,7 +17885,7 @@ HTML blocks use section ids derived from block names (camelCase becomes
 kebab-case), with masthead/header.mast and tally/section.tally anchors.
 Exit 0 conformant; 1 findings named by variant, template and rule; 2 wiring
 (no variants, unknown variant, missing/nonregular/redirected template or example).
-The JSON result names `conformant`, `variants` and every `findings` row.
+With `--json`, top-level keys are `conformant`, `variants` and `findings`; each finding names `variant`, `template` and `rule`.
 This owns the requested conformance checks; richer consumer guards remain
 until their additional checks are deliberately migrated.
 

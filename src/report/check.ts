@@ -1,3 +1,4 @@
+import layout from "./layout.json";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { emit, VerbUsageError, type CommandContext } from "../cli/command.js";
@@ -23,23 +24,23 @@ export function runReportCheck(context: CommandContext): number {
   const allBlocks = [...new Set(Object.values(declarations).flatMap(section => section.blocks))];
   for (const variant of variants) {
     const section = declarations[variant]!;
-    const mdPath = `templates/${section.template}.md`, htmlPath = `templates/${section.template}.html`;
-    const mdTemplate = read(mdPath), htmlTemplate = read(htmlPath), example = read(`templates/report-examples/${variant}.data.json`);
+    const mdPath = `${layout.directory}/${section.template}.md`, htmlPath = `${layout.directory}/${section.template}.html`;
+    const mdTemplate = read(mdPath), htmlTemplate = read(htmlPath), example = read(`${layout.examples}/${variant}.data.json`);
     const finding = (template: string, rule: string): void => { findings.push({ variant, template, rule }); };
     let data: Record<string, unknown>;
     try { const raw: unknown = JSON.parse(example); if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("example is not an object"); data = raw as Record<string, unknown>; }
     catch (error) { finding(mdPath, `refused example: ${String(error)}`); continue; }
     const sections = Object.fromEntries(allBlocks.map(block => [block, section.blocks.includes(block)]));
     let injection: Readonly<Record<string, unknown>> = { sections, sectionList: section.blocks };
-    const ownGraph = `templates/report-examples/${variant}.graph.json`;
-    const graphPath = existsSync(resolve(root, ownGraph)) ? ownGraph : "templates/graph.example.json";
+    const ownGraph = `${layout.examples}/${variant}.graph.json`;
+    const graphPath = existsSync(resolve(root, ownGraph)) ? ownGraph : layout.graph;
     if (existsSync(resolve(root, graphPath))) {
       try { injection = { ...injection, ...graphInjection(parseGraph(JSON.parse(read(graphPath)) as unknown, graphPath)) }; }
       catch (error) { finding(mdPath, `refused graph: ${String(error)}`); continue; }
     }
     const rendered: Record<string, string> = {};
     for (const [path, template, language] of [[mdPath, mdTemplate, "markdown"], [htmlPath, htmlTemplate, "html"]] as const) {
-      try { void template; rendered[language] = renderReport(root, { template: path, data: `templates/report-examples/${variant}.data.json`, out: "-", dryRun: false, language, variant, inject: injection }).content!; }
+      try { void template; rendered[language] = renderReport(root, { template: path, data: `${layout.examples}/${variant}.data.json`, out: "-", dryRun: false, language, variant, inject: injection }).content!; }
       catch (error) { finding(path, `refused render: ${String(error)}`); }
     }
     const md = rendered["markdown"], html = rendered["html"];

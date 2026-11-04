@@ -1052,7 +1052,6 @@ function file(context: CommandContext): number {
   // private-name guard reads the file below, and the guard and `gh` must agree
   // about which file it is, or the check vouches for bytes nobody sends.
   const rawBodyFile = context.args.values["body-file"] ?? "";
-  if (context.args.values["title-file"] !== undefined && context.args.values["title"] !== undefined) throw new VerbUsageError("--title and --title-file conflict; supply one title source.");
   const request: FileRequest = {
     title: readTitleFile(context, root) ?? context.args.values["title"] ?? "",
     bodyFile: rawBodyFile === "" ? "" : resolveAgainstRepo(root, rawBodyFile),
