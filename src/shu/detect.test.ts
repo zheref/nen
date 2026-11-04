@@ -1227,6 +1227,7 @@ describe("nen shu detect -- the gatsby lane, end to end", () => {
       "lint",
       "release",
       "test",
+      "typecheck",
       "ui-test",
     ]);
   });
@@ -3577,6 +3578,7 @@ describe("nen shu detect -- gradle-android's screenshot rows are gated on the pl
       "build",
       "ui-test",
       "lint",
+      "typecheck",
       "archive",
       "release",
       "dev",
@@ -3591,6 +3593,7 @@ describe("nen shu detect -- gradle-android's screenshot rows are gated on the pl
       "test",
       "ui-test",
       "lint",
+      "typecheck",
       "archive",
       "release",
       "dev",
@@ -3658,8 +3661,9 @@ describe("nen shu detect -- the two Gradle lanes, end to end through the executo
         "dev",
         "release",
         "run",
+        "typecheck",
       ]);
-      for (const verb of ["archive", "coverage", "deploy", "dev", "release", "run"]) {
+      for (const verb of ["archive", "coverage", "deploy", "dev", "release", "run", "typecheck"]) {
         const result = await capture([verb, "--dry-run", "--lane", "gradle-android"], dir);
         expect(result.code, verb).toBe(4);
         expect(result.err.join("\n"), verb).toContain(reasonOf(verbs, verb));
@@ -4582,6 +4586,7 @@ describe("nen shu detect -- the xcode-ios lane", () => {
         "lint",
         "release",
         "run",
+        "typecheck",
         "ui-test",
       ]);
     }
@@ -6391,6 +6396,7 @@ describe("nen shu detect -- the dotnet-winui lane, end to end", () => {
       "lint",
       "release",
       "run",
+      "typecheck",
       "ui-test",
     ]);
     // `archive` IS THE MSIX ROW, and it stays a seat: the approved decision was
@@ -7751,6 +7757,34 @@ describe("detect proposes deploy.defaultTarget only for a DECLARED canonical tar
       const result = await capture(["detect", "--write"], dir);
       expect(result.code).toBe(0);
       expect(() => readFileSync(join(dir, "nen", "workflow.json"), "utf8")).toThrow();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("nen shu detect -- the nextjs typecheck seat (zheref/nen#588)", () => {
+  it("withholds it on a tree that does not visibly carry the checker, saying why", () => {
+    // `tsc` ships inside the `typescript` package, and detect matches a program
+    // to a declared package by name (or scope tail) only -- so a manifest that
+    // never spells the line out is a tree nen cannot see the checker in.
+    const lane = detect(NEXTJS_SINGLE).lanes[0];
+    expect(commandRows(lane?.verbs)).not.toContain("typecheck");
+    expect(lane?.notes.join("\n")).toMatch(/'typecheck' withheld: 'pnpm -r exec tsc --noEmit' asks the package manager to run 'tsc'/);
+  });
+
+  it("proposes the pack's row where the manifest spells the same line out as one of its own scripts", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-nextjs-typecheck-"));
+    try {
+      cpSync(NEXTJS_SINGLE, dir, { recursive: true });
+      const manifest = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as {
+        scripts: Record<string, string>;
+      };
+      manifest.scripts["typecheck"] = "pnpm -r exec tsc --noEmit";
+      writeFileSync(join(dir, "package.json"), JSON.stringify(manifest, null, 2));
+      const verbs = detect(dir).lanes[0]?.verbs as Readonly<Record<string, { exe?: string; argv?: readonly string[] }>>;
+      expect(commandRows(verbs)).toContain("typecheck");
+      expect(verbs["typecheck"]).toMatchObject({ exe: "pnpm", argv: ["-r", "exec", "tsc", "--noEmit"] });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -1,0 +1,62 @@
+{
+  "$comment": "The seeds 'nen scaffold migrate' writes into an ABSENT nen/colors.yml or nen/gates.json (zheref/nen#592). DATA, not code, for src/taxonomy-purity.test.ts's reason: a reviewer name, a colour and a glyph may live in shipped data and never in shipped code. src/scaffold/seeds.ts renders each entry: 'lines' joined with a newline and ended with one, 'document' as two-space JSON ended with a newline. Each seed widens nothing; src/scaffold/seeds.ts says why, and src/scaffold/migrate.test.ts loads each through schema check's own loader.",
+  "seeds": [
+    {
+      "file": "nen/colors.yml",
+      "what": "the colour vocabulary, with no category declared",
+      "lines": [
+        "# nen/colors.yml -- seeded by 'nen scaffold migrate' (zheref/nen#592).",
+        "#",
+        "# The colour vocabulary 'nen color status' and the board renderers resolve. It",
+        "# declares no category yet: nen never assumes one, so a verb asked for a",
+        "# category this file does not carry refuses by name, exactly as it did while",
+        "# the file was absent. Add the families this repository uses, then re-run",
+        "# 'nen schema check --repo .'. A category looks like:",
+        "#",
+        "#   status:",
+        "#     scope: One per issue or PR -- what a human must do next.",
+        "#     precedence: [blocked, in_progress]",
+        "#     values:",
+        "#       blocked:     { emoji: \"🔴\", hex: \"#d73a4a\", label: \"Blocked\" }",
+        "#       in_progress: { emoji: \"🟠\", hex: \"#e36209\", label: \"In progress\" }",
+        "version: 1",
+        "",
+        "categories: {}"
+      ]
+    },
+    {
+      "file": "nen/gates.json",
+      "what": "the readiness gate, owing a Copilot round on every pull request",
+      "document": {
+        "version": 1,
+        "$comment": "Seeded by 'nen scaffold migrate' (zheref/nen#592). A seed, not a ruling, and it FAILS CLOSED: Copilot owes a review round at head on every pull request, requested or not, and no other reviewer or approval stands in for it, so nothing reads ready until Copilot has reviewed. Name the reviewers this repository actually uses (and mark one bounded_policy_exempt only if a pending request is the round you want), and the author and branch prefix its delivery pull requests use, then re-run 'nen schema check --repo .'.",
+        "reviewers": [
+          {
+            "$comment": "Posts as copilot-pull-request-reviewer[bot]; a request reads Copilot. NOT bounded_policy_exempt: its round is owed at head whether or not it was requested, so a pull request nobody asked it to review is not ready.",
+            "name": "copilot",
+            "login_pattern": {
+              "pattern": "^(copilot|copilot-pull-request-reviewer(\\[bot\\])?)$",
+              "ignoreCase": true
+            }
+          }
+        ],
+        "approval_policy": "review-round-only",
+        "default_approvers": [],
+        "base_reviewers": [
+          "copilot"
+        ],
+        "delivery": {
+          "$comment": "A GitHub login cannot contain a space, so this pattern matches no author and the carve-out applies to no pull request until it names the delivery author.",
+          "author_pattern": {
+            "pattern": "^no author declared$",
+            "ignoreCase": false
+          },
+          "head_ref_prefixes": [
+            "delivery/"
+          ],
+          "labels": []
+        }
+      }
+    }
+  ]
+}

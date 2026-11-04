@@ -175,6 +175,10 @@ nen/decisions.json -- and report each one's verdict: ok, or FAIL naming what
 is wrong. An absent nen/colors.yml is an ok row reading 'absent (optional)'
 from v0.11.0: the verbs that resolve a colour refuse by name when asked, and
 the aggregate no longer fails a repository that never adopted the file. An
+absent nen/colors.yml row, and the warn row of an absent nen/gates.json, end
+with the command that creates the file -- 'nen scaffold migrate --repo
+<path>', which writes only absent seeded files (#592); a present-but-broken
+file, a legacy-only copy or a dangling symlink gets no such command. An
 absent nen/decisions.json is 'absent (none declared)': every stop is then
 decided by prose. An absent nen/workflow.json is an ok row reading
 'absent (defaults apply)': every parameter of that file has a default, so a
@@ -224,13 +228,20 @@ schema set
 Write ONE value into a JSON declaration under nen/ (labels, repos, gates,
 contract, workflow or decisions -- never colors.yml, which is YAML), touching
 no other byte: formatting, key order, every other member and every '$' note
-stay as they are. Two edits only: an existing scalar (string, number, boolean,
-null) is replaced in place by a scalar, or a member an existing object lacks
-is added as its last member, in that object's own style. Replacing an object
-or an array, replacing a scalar with one, appending to an array, and creating
-an object on the way are refused; so is a pointer through a '$'-prefixed or
-an empty segment, and a path through an object that repeats the member it
-names. The file must exist (scaffold init writes them).
+stay as they are. Four edits only: an existing scalar (string, number,
+boolean, null) is replaced in place by a scalar; a member an existing object
+lacks is added as its last member, in that object's own style; a pointer
+ending in '/-' APPENDS --value as the last item of an existing array, in the
+array's own style (--json's 'at' names the index it took); and an existing
+object or array is REPLACED WHOLE by an object or an array from --value, in
+the layout it had (expanded or inline) and the file's own indentation.
+Changing a value's kind (a scalar for a structure, an object for an array,
+or back) and creating an object on the way are refused; so is a pointer
+through a '$'-prefixed or an empty segment, a --value carrying a '$' key
+(exit 2), a replace over an object or array carrying one -- which would
+delete the note (exit 1) -- and a path through an object that repeats the
+member it names. The file must exist (scaffold init writes
+them).
 
 The original text and then the edited text go through that file's own loader
 BEFORE anything is written. A result the loader refuses is exit 1, with the
@@ -247,7 +258,10 @@ project/toolchain/**, project/targets/**, and any probe, version_probe, args,
 cwd, installer, bootstrap, select or pinned_ref segment anywhere; workflow.json
 branch/**, review/**, coverage/**, tests/**, iteration/**, deploy/**. The
 named exceptions are prose: a decision row's 'why', and a 'note' anywhere. An
-added object or array is matched at every key path inside it. With the flag,
+added, appended or replacing object or array is matched at every key path
+inside it, and so is the object or array a replace removes; for an object
+or array --value that check, and --gate-change given for no gate change, run
+after the file is read (still exit 2, after any refusal of the edit itself). With the flag,
 a 'security-relevant:' line is printed and --json carries gateChange: true;
 the flag on an edit that is no gate change is exit 2. The canon pin
 (repos.json maintained_tools/*/pinned) is exit 2 either way: 'nen canon pin

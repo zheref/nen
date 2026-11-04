@@ -43,13 +43,14 @@ describe("the family's registration", () => {
     expect(findCommand("shu")).toBe(shuCommand);
   });
 
-  it("carries all fifteen verbs, in the order the design lists them", () => {
+  it("carries all sixteen verbs, in the order the design lists them", () => {
     expect(SHU_SUBCOMMANDS).toEqual([
       "detect",
       "build",
       "test",
       "ui-test",
       "lint",
+      "typecheck",
       "archive",
       "release",
       "dev",
@@ -67,7 +68,7 @@ describe("the family's registration", () => {
     expect(Object.keys(SHU_SUBCOMMAND_FLAGS).sort()).toEqual([...SHU_SUBCOMMANDS].sort());
   });
 
-  it("splits the fifteen into the eleven that execute a lane's invocation, and four that do not", () => {
+  it("splits the sixteen into the twelve that execute a lane's invocation, and four that do not", () => {
     // `detect` reads markers, `tools` probes the host, `warmup` mutates git
     // state and then DELEGATES to the rest, and `evidence` reads git and this
     // repository's own project.evidence block. None of the four goes through
@@ -131,7 +132,7 @@ describe("each verb owns its flags", () => {
 });
 
 describe("the help text", () => {
-  it("documents all fifteen verbs", async () => {
+  it("documents all sixteen verbs", async () => {
     const result = await capture(["--help"]);
     expect(result.code).toBe(0);
     const help = result.out.join("\n");
