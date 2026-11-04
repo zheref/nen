@@ -36,6 +36,7 @@ import {
 } from "../cli/command.js";
 import { readJsonFile, readTextFile, readVerbatimTextFile, resolveAgainstRepo } from "../cli/inputs.js";
 import { mergeUnit, MergeUnitUsageError, EXIT_GH_REFUSED, EXIT_GH_NOT_RUNNABLE } from "./mergeunit.js";
+import { mergeChild } from "./mergechild.js";
 import { deliveryExit, mergeDelivery } from "./mergedelivery.js";
 import { commaList } from "../cli/comma.js";
 import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
@@ -203,6 +204,7 @@ PRIVATE-NAME FLAGS (zheref/nen#363): [--skip-private-name-check]
   stdin ('--body-file -'), never the path.
 nen pr merge <n|owner/name#n|CODE#n> --release-unit --requirements-from <path> --repo <path> [--run] [--json]
 nen pr merge <n|owner/name#n|CODE#n> --delivery --requirements-from <path> --repo <path> [--require-head <sha>] [--run] [--json]
+nen pr merge <n|owner/name#n|CODE#n> --child --requirements-from <path> --repo <path> [--require-head <sha>] [--run] [--json]
 nen pr ledger post --target <owner/name> --pr <n> --effort <id> [--findings <path> --findings-schema <path>] [--proof <path>]... [--login <name>] [--dry-run] [--repo <path>] [--json] [PRIVATE-NAME FLAGS]
 nen pr ledger read --target <owner/name> --pr <n> --effort <id> [--restore] [--login <name>] [--repo <path>] [--json]
 
@@ -899,6 +901,14 @@ merge:
   mergeArgv, gates: [{ name, ok, lines }] }'.
   --require-head is refused (exit 2) with --release-unit.
 
+merge --child (zheref/nen#570):
+  Explicit childAutonomy opt-in is required in checkout, live base and default
+  workflow policies. Every authority must allow the live actor, PR author and
+  exact base. Default, human-gated and protected bases refuse. Current-head
+  Ready precedes a head-matched merge; durable intent/outcome is recorded in
+  .nen/child-merges.json. No --run means plan only. --child is mutually
+  exclusive with --delivery and --release-unit.
+
 merge --delivery (zheref/nen#286):
   A RUN'S OWN PULL REQUEST INTO A NON-MAIN, UNPROTECTED BASE, and nothing
   wider -- the maintainer's ruling of 2026-10-03 ("Narrow to non-main
@@ -1324,7 +1334,7 @@ export const PR_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   },
   // --require-head is read by --delivery only; doMerge refuses it with
   // --release-unit, naming the form that reads it.
-  merge: { values: ["requirements-from", "require-head", "catalogue"], booleans: ["release-unit", "delivery", "run"] },
+  merge: { values: ["requirements-from", "require-head", "catalogue"], booleans: ["release-unit", "delivery", "child", "run"] },
   // zheref/nen#510; the post/read split of these flags is ./ledger-verb.ts's LEDGER_ACTION_FLAGS.
   ledger: {
     values: ["target", "pr", "effort", ...LEDGER_ACTION_FLAGS.post.values],
@@ -2957,22 +2967,24 @@ async function doMerge(context: CommandContext): Promise<number> {
   // (round 2, N7; zheref/nen#351) before this ran.
   const releaseUnit = context.args.booleans.has("release-unit");
   const delivery = context.args.booleans.has("delivery");
+  const child = context.args.booleans.has("child");
+  if (child && (delivery || releaseUnit)) throw new VerbUsageError("--child, --delivery and --release-unit are mutually exclusive");
   if (releaseUnit && delivery) {
     throw new VerbUsageError("--release-unit and --delivery are mutually exclusive -- a pull request is merged as one or the other, never both.");
   }
-  if (!releaseUnit && !delivery) {
+  if (!releaseUnit && !delivery && !child) {
     throw new VerbUsageError(
       "nen pr merge only merges a release unit (--release-unit) or a run's own delivery pull request into a non-main base (--delivery) -- pass one to say so explicitly. There is no general-purpose merge here.",
     );
   }
   const typedRef = context.args.positionals[2];
-  const form = releaseUnit ? "--release-unit" : "--delivery";
+  const form = releaseUnit ? "--release-unit" : child ? "--child" : "--delivery";
   if (typedRef === undefined) {
     throw new VerbUsageError(
       `'pr merge' requires a pull-request reference. Try 'pr merge <n> ${form} ...', 'pr merge owner/name#<n> ${form} ...' or 'pr merge <CODE>#<n> ${form} ...'.`,
     );
   }
-  if (delivery) return doMergeDelivery(context, typedRef);
+  if (delivery || child) return doMergeDelivery(context, typedRef, child);
   if (context.args.values["require-head"] !== undefined) {
     throw new VerbUsageError("--require-head is read by 'pr merge --delivery', not by --release-unit, which pins the head 'pr ready' judges.");
   }
@@ -3023,7 +3035,7 @@ export function mergeExit(report: { readonly ok: boolean; readonly ran: boolean;
  * maintainer's ruling of 2026-10-03 to non-main bases). See
  * ./mergedelivery.ts's header; this adapter only reads flags and renders.
  */
-async function doMergeDelivery(context: CommandContext, typedRef: string): Promise<number> {
+async function doMergeDelivery(context: CommandContext, typedRef: string, child = false): Promise<number> {
   const requirementsPath = requireRequirementsPath(context);
   const root = assertRepoRoot({
     repoFlag: requireRepoFlag(context, "It is the checkout whose origin names the repository and whose nen/workflow.json declares branch.base."),
@@ -3032,7 +3044,7 @@ async function doMergeDelivery(context: CommandContext, typedRef: string): Promi
   const { catalogue, policy } = readCriteriaCatalogue(context, "catalogue", root);
   let outcome;
   try {
-    outcome = await mergeDelivery({
+    outcome = await (child ? mergeChild : mergeDelivery)({
       typedRef,
       repoFlag: context.repoFlag,
       requirements,
@@ -3048,6 +3060,7 @@ async function doMergeDelivery(context: CommandContext, typedRef: string): Promi
     throw error;
   }
   emit(context.io, context.json, outcome.report, outcome.lines.map(plainLine));
+  if ("ledgerError" in outcome && outcome.ledgerError !== undefined) return 7;
   return deliveryExit(outcome.report, mergeExit);
 }
 

@@ -4,6 +4,7 @@
 // UNPROTECTED base. A protected name is refused by ruling (exit 2, document
 // still emitted); every base read that fails is "unknown" (exit 1).
 
+import { mergeChild } from "./mergechild.js";
 import { afterAll, describe, expect, it } from "vitest";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -794,5 +795,60 @@ describe("helpers", () => {
   it("stripHeads", () => {
     expect(stripHeads("refs/heads/main")).toBe("main");
     expect(stripHeads("main")).toBe("main");
+  });
+});
+
+describe("explicit trusted child autonomy (#570)", () => {
+  const head = "c".repeat(40);
+  const policy = { branch: { base: "main" }, childAutonomy: { enabled: true, allowedBases: [INTEGRATION], allowedActors: ["someone"], allowedAuthors: ["someone"], humanGatedBases: ["release/human"] } };
+  const initial = (base = INTEGRATION, localPolicy: unknown = policy): ScriptedCall[] => script({ pr: prOnceCall({ headRefOid: head, baseRefName: base, headRefName: "child/independent" }), baseWorkflow: workflowAt(BASE_OID, localPolicy), defaultWorkflow: workflowAt("main", localPolicy), protection: protectionCalls(base), chain: chainCall(base) });
+  const fresh = (options: { head?: string; workflow?: unknown; default?: string; protected?: boolean } = {}): ScriptedCall[] => [
+    { match: "gh pr view 9 --repo zheref/example --json baseRefName,baseRefOid,headRefOid,state", result: { stdout: JSON.stringify({ baseRefName: INTEGRATION, baseRefOid: BASE_OID, headRefOid: options.head ?? head, state: "OPEN" }) } },
+    defaultBranchCall(options.default ?? "main"), workflowAt(BASE_OID, options.workflow ?? policy), workflowAt("main", options.workflow ?? policy), ...protectionCalls(INTEGRATION, options.protected ?? false), VIEWER_CALL,
+  ];
+  const child = async (root: string, calls: ScriptedCall[], source: PrStateSource | null = readySource(head)): Promise<Awaited<ReturnType<typeof mergeChild>>> => mergeChild({ typedRef: "zheref/example#9", repoFlag: root, requirements: REQUIREMENTS, requireHead: head, run: true, seams: new ScriptedSeams(calls), root, deps: readyDeps(source) });
+  it("requires exact-head Ready, pins merge and durably records repo/PR/base/judged SHA", async () => {
+    const root = tmpRoot(policy);
+    const calls = [...initial(), ...fresh(), { match: `gh pr merge 9 --repo zheref/example --merge --match-head-commit ${head}`, result: {} }, stateCall()];
+    const outcome = await child(root, calls);
+    expect(outcome.report.ok, outcome.lines.join("\n")).toBe(true); expect(outcome.report.state).toBe("MERGED");
+    const ledger = JSON.parse(readFileSync(join(root, ".nen/child-merges.json"), "utf8"));
+    expect(ledger.records.at(-1)).toMatchObject({ repo: "zheref/example", pr: 9, base: INTEGRATION, judgedSha: head, verdict: "merged" });
+  });
+  it("refuses default and declared human-gated bases before any merge", async () => {
+    for (const base of ["main", "release/human"]) {
+      const root = tmpRoot(policy); const calls = new ScriptedSeams(initial(base));
+      const outcome = await mergeChild({ typedRef: "zheref/example#9", repoFlag: root, requirements: REQUIREMENTS, requireHead: head, run: true, seams: calls, root, deps: readyDeps(readySource(head)) });
+      expect(outcome.report.refused).toBe(true); expect(outcome.lines.join(" ")).toContain(base); expect(calls.calls.some((call) => call.args[0] === "pr" && call.args[1] === "merge")).toBe(false);
+    }
+  });
+  it("denied actor or author and unreadable durable intent never merge", async () => {
+    for (const kind of ["actor", "author", "ledger"] as const) {
+      const selected = kind === "actor" ? {...policy,childAutonomy:{...policy.childAutonomy,allowedActors:["different"]}} : kind === "author" ? {...policy,childAutonomy:{...policy.childAutonomy,allowedAuthors:["different"]}} : policy;
+      const root=tmpRoot(selected);
+      if (kind === "ledger") { mkdirSync(join(root,".nen"),{recursive:true}); writeFileSync(join(root,".nen/child-merges.json"),"invalid JSON"); }
+      const seams=new ScriptedSeams([...initial(INTEGRATION,selected),...(kind === "ledger" ? fresh() : [])]);
+      const outcome=await mergeChild({typedRef:"zheref/example#9",repoFlag:root,requirements:REQUIREMENTS,requireHead:head,run:true,seams,root,deps:readyDeps(readySource(head))});
+      expect(outcome.report.ok,outcome.lines.join("\n")).toBe(false); expect(outcome.report.ran).toBe(false);
+      expect(seams.calls.some(call=>call.args[0] === "pr" && call.args[1] === "merge")).toBe(false);
+    }
+  });
+  it("absent opt-in, non-Ready, moved head, fresh policy revocation/default changes and protection never merge", async () => {
+    const disabled = { ...policy, childAutonomy: { ...policy.childAutonomy, enabled: false } };
+    const cases = [
+      { local: {}, calls: [...initial()] },
+      { local: policy, calls: [...initial(INTEGRATION, {})] },
+      { local: policy, calls: [...initial(), ...fresh({ head: "d".repeat(40) })] },
+      { local: policy, calls: [...initial(), ...fresh({ workflow: disabled })] },
+      { local: policy, calls: [...initial(), ...fresh({ default: INTEGRATION })] },
+      { local: policy, calls: [...initial(), ...fresh({ protected: true })] },
+      { local: policy, calls: [...initial()], source: null },
+    ];
+    for (const entry of cases) {
+      const root = tmpRoot(entry.local); const seams = new ScriptedSeams(entry.calls);
+      const outcome = await mergeChild({ typedRef: "zheref/example#9", repoFlag: root, requirements: REQUIREMENTS, requireHead: head, run: true, seams, root, deps: readyDeps("source" in entry ? entry.source ?? null : readySource(head)) });
+      expect(outcome.report.ok, outcome.lines.join("\n")).toBe(false); expect(outcome.report.ran).toBe(false);
+      expect(seams.calls.some((call) => call.args[0] === "pr" && call.args[1] === "merge")).toBe(false);
+    }
   });
 });

@@ -12,7 +12,7 @@ repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
 what each version changed: 49 command
-families, 175 verbs, every flag checked against that binary.
+families, 177 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -258,7 +258,7 @@ including every refusal reason. The raw NUL-delimited stream
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **105 shapes** and **109 ids** (`nen.runner.plan`
+binary carries**, writing or reading — **108 shapes** and **112 ids** (`nen.runner.plan`
 and `nen.wc.worktree.copies` each have two versions, `nen.stop.mark` three, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -305,7 +305,7 @@ file formats).
 - **`issue`** — `nen.issue.body-check/v0.1` · `nen.issue.criteria/v0.1` · `nen.issue.edit-body/v0.3` · `nen.issue.questions/v0.1` · `nen.issue.questions.batch/v0.1` · `nen.issue.reconcile/v0.1`
 - **`loop`** — `nen.loop.iterate/v0.1`
 - **`phase`** — `nen.phase.ledger/v0.1`
-- **`pr`** — `nen.pr.converge/v0.1` · `nen.pr.edit-body/v0.1` · `nen.pr.edit-title/v0.1` · `nen.pr.ledger/v0.1` · `nen.pr.mark-ready/v0.1` · `nen.pr.merge-delivery/v0.1` · `nen.pr.merge-unit/v0.1` · `nen.pr.open/v0.1` · `nen.pr.sections/v0.1` · `nen.pr.ready.head-mismatch/v0.1` · `nen.pr.ready/v0.1` · `nen.pr.threads-settle/v0.1` · `nen.pr.threads/v0.1`
+- **`pr`** — `nen.pr.converge/v0.1` · `nen.pr.edit-body/v0.1` · `nen.pr.edit-title/v0.1` · `nen.pr.ledger/v0.1` · `nen.pr.mark-ready/v0.1` · `nen.pr.merge-delivery/v0.1` · `nen.pr.merge-child/v0.1` · `nen.pr.child-merge-ledger/v0.1` · `nen.pr.merge-unit/v0.1` · `nen.pr.open/v0.1` · `nen.pr.sections/v0.1` · `nen.pr.ready.head-mismatch/v0.1` · `nen.pr.ready/v0.1` · `nen.pr.threads-settle/v0.1` · `nen.pr.threads/v0.1`
 - **`prose-lint`** — `nen.prose-lint/v0.1` (the `$schema` a [`canon lint`](#nen-canon-lint) rules contract may carry)
 - **`ref`** — `nen.ref.resolve/v0.1`
 - **`release`** — `nen.release.unit-check/v0.1`
@@ -1006,7 +1006,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 175 verbs, grouped as the README groups them. **Reads** is what a
+All 177 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -9613,7 +9613,7 @@ name). The tag is always annotated (`git tag -a`).
 **Usage**
 
 ```text
-nen tag cut --repo <path> --name <vX.Y.Z> --at <sha> [--message <text>] [--trunk main] [--push]
+nen tag cut --repo <path> --name <vX.Y.Z> --at <sha> --previous-tag <vPrev> [--mode release|marker] [--message <text>] [--trunk main] [--push]
 ```
 
 **Arguments**
@@ -9623,7 +9623,9 @@ nen tag cut --repo <path> --name <vX.Y.Z> --at <sha> [--message <text>] [--trunk
 | `--repo <path>` | **yes** | the repository the tag is cut in | unbracketed in usage; omitted is refused at exit 2 (#28) |
 | `--name <vX.Y.Z>` | yes | the tag name | — |
 | `--at <sha>` | yes | the exact commit to pin the tag at | REQUIRED, never defaulted to HEAD — "cut from main" is not an instruction a script can follow |
-| `--message <text>` | no | the annotated tag's message | default: the tag name itself |
+| `--previous-tag <tag>` | yes | previous release tag for reachability and reconciliation | both modes require it |
+| `--mode release\|marker` | no | release checks collation; marker allows fragments | default release; annotations include mode and fragment count |
+| `--message <text>` | no | annotated tag message prefix | mode and fragment count are appended |
 | `--trunk <branch>` | no | checked as `origin/--trunk` for the ancestor test | default `main` |
 | `--push` | no | also `git push origin <name>` | without it the tag is created LOCALLY ONLY, never auto-pushed |
 | `--json` | no | machine-readable cut result | — |
@@ -9639,7 +9641,7 @@ missing `--name`/`--at`/`--repo`.
 **Example**
 
 ```bash
-nen tag cut --repo . --name v1.0.0 --at abc
+nen tag cut --repo . --name v1.0.0 --at abc --previous-tag v0.9.0
 ```
 ```text
 'v1.0.0' does not exist locally or on origin
@@ -20227,7 +20229,7 @@ deletes no fragment; `--write` is the only thing that rewrites `CHANGELOG.md`.
 
 ```bash
 # 4. Cut the tag at the exact reconciled commit. --at is never defaulted to HEAD.
-nen tag cut --repo . --name v0.3.0 --at 1cf8b04 --message "v0.3.0" --push
+nen tag cut --repo . --name v0.3.0 --at 1cf8b04 --previous-tag v0.2.0 --message "v0.3.0" --push
 ```
 
 Without `--push` the tag exists locally only. The cut refuses if the name
@@ -20828,3 +20830,18 @@ A `severity` enumeration with `[+]` is highest-first; two severities such as
 `high+low` are corrected to `low+`. The refused input remains exit 2 and JSON carries
 `corrected`. Mixed alternatives, incomplete lines and boundary-changing rewrites keep
 the existing refusal without an invented correction; legacy scalar placeholders stay.
+
+
+### Explicit child merge authority
+
+`nen pr merge <ref> --child --repo <path> --requirements-from <path> --require-head <sha> [--run]` plans by default. It requires `childAutonomy` in checkout, live base commit and default-branch `nen/workflow.json`, all explicitly enabled:
+
+```json
+{"childAutonomy":{"enabled":true,"allowedBases":["integration/example"],"allowedActors":["maintainer"],"allowedAuthors":["maintainer"],"humanGatedBases":["release/human"]}}
+```
+
+Every authority must allow the live authenticated actor, PR author and exact base. Default, human-gated, protected and unknown bases refuse. Fresh current-head Ready and exact `--require-head` precede a head-matched merge. Current base/default policies and protections are rechecked before mutation. No opt-in is inferred. Existing delivery and release-unit routes retain their contracts. `.nen/child-merges.json` (`nen.pr.child-merge-ledger/v0.1`) records durable intent before merge and its confirmed outcome; an unreadable intent ledger prevents merging. Child reports use `nen.pr.merge-child/v0.1`. A post-attempt ledger failure requires inspection before retrying.
+
+### Tag mode preconditions
+
+`nen tag cut --repo <path> --name <tag> --at <commit> --previous-tag <release-tag> [--mode release|marker] [--push]` resolves the supplied target once. All tree reads, ancestry and tag creation use that immutable SHA. Both modes require readable inactive `RELEASE_HOLD`, the previous release tag, and reachability after refreshing `origin/<trunk>` (default main). Marker mode allows fragments and annotates `mode: marker` plus their count. Release mode is the default and additionally requires an explicitly empty Unreleased section, a dated target section, empty fragments, and complete previous-release-to-target PR reconciliation within the target section (including nested change headings). The proven terminal collation-PR allowance is retained. `--changelog` and `--fragment-dir` select paths inside the target Git tree, never working files. Existing tags are never moved; pushing still requires `--push`. Unmet preconditions exit 1; unreadable inputs or authority exit 2. No fragments or changelog entries are repaired automatically.

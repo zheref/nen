@@ -16,9 +16,16 @@
 // tag" -- this module creates a local tag once and stops there unless the
 // caller explicitly asked for the push too.
 
+import { scrubbedGitEnv } from "../wc/worktree.js";
+import { GIT_ENV } from "../schema/canonmirror.js";
+import { checkTagPreconditions } from "./preconditions.js";
 import { GIT, outputLines, type Seams } from "../seam/exec.js";
 
 export interface CutTagOptions {
+  readonly mode?: "marker" | "release";
+  readonly previousTag?: string;
+  readonly changelog?: string;
+  readonly fragmentDir?: string;
   readonly name: string;
   readonly at: string;
   readonly message?: string;
@@ -27,6 +34,9 @@ export interface CutTagOptions {
 }
 
 export interface CutTagResult {
+  readonly exit?: 1 | 2;
+  readonly mode?: "marker" | "release";
+  readonly fragmentCount?: number;
   readonly ok: boolean;
   readonly pushed: boolean;
   readonly log: readonly string[];
@@ -38,12 +48,13 @@ function run(
   args: readonly string[],
   cwd: string,
 ): { code: number; stdout: string; stderr: string; spawnFailed: boolean } {
-  const result = seams.run(GIT, [...args], { cwd });
+  const result = seams.run(GIT, ["--no-replace-objects", "--no-lazy-fetch", ...args], { cwd, env: { ...scrubbedGitEnv(seams.env), ...GIT_ENV } });
   return { code: result.code, stdout: result.stdout, stderr: result.stderr, spawnFailed: result.spawnFailed };
 }
 
 export function cutTag(seams: Seams, cwd: string, options: CutTagOptions): CutTagResult {
   const log: string[] = [];
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(options.name) || options.name.includes("..") || options.name.endsWith("/")) return {ok:false,pushed:false,exit:2,log,error:"--name must name one exact tag"};
   const trunk = options.trunk ?? "main";
 
   // "Does not exist" is a claim that must be VERIFIED, never assumed from a
@@ -59,6 +70,7 @@ export function cutTag(seams: Seams, cwd: string, options: CutTagOptions): CutTa
       ok: false,
       pushed: false,
       log,
+      exit: 2,
       error: `could not determine whether '${options.name}' already exists on origin (${outputLines(existsRemote.stderr).join(" ") || `exit ${existsRemote.code}`}) -- a tag is never cut on an unverified name`,
     };
   }
@@ -76,6 +88,7 @@ export function cutTag(seams: Seams, cwd: string, options: CutTagOptions): CutTa
       ok: false,
       pushed: false,
       log,
+      exit: 2,
       error: `could not determine whether '${options.name}' already exists locally (${outputLines(existsLocal.stderr).join(" ") || `exit ${existsLocal.code}`}) -- a tag is never cut on an unverified name`,
     };
   }
@@ -84,30 +97,6 @@ export function cutTag(seams: Seams, cwd: string, options: CutTagOptions): CutTa
   }
   log.push(`'${options.name}' does not exist locally or on origin`);
 
-  const ancestor = run(seams, ["merge-base", "--is-ancestor", options.at, `origin/${trunk}`], cwd);
-  // A code above 1, OR a git that never started at all (spawnFailed --
-  // reported as code -1, which is NOT above 1), is a git failure and must not
-  // be read as "not an ancestor" -- that would report "is not an ancestor of
-  // origin/main" (a promise the code is NOT on the trunk) when the honest
-  // answer is "could not test reachability" at all.
-  if (ancestor.spawnFailed || ancestor.code > 1) {
-    return {
-      ok: false,
-      pushed: false,
-      log,
-      error: `could not test reachability of '${options.at}' against origin/${trunk}: ${outputLines(ancestor.stderr).join(" ") || `exit ${ancestor.code}`}`,
-    };
-  }
-  if (ancestor.code !== 0) {
-    return {
-      ok: false,
-      pushed: false,
-      log,
-      error: `'${options.at}' is not an ancestor of origin/${trunk} -- a tag is a promise the code is on the trunk, and this commit is not on it. Use 'nen release resolve-target' first.`,
-    };
-  }
-  log.push(`'${options.at}' is an ancestor of origin/${trunk}`);
-
   // ALWAYS ANNOTATED, never lightweight. bankai-core's own tag_cut.sh cuts an
   // annotated tag, and bankai-core's own releases are annotated tag objects
   // (`git cat-file -t v0.11.3` -> `tag`, not `commit`) -- a lightweight tag
@@ -115,7 +104,11 @@ export function cutTag(seams: Seams, cwd: string, options: CutTagOptions): CutTa
   // system has made, and any tooling that resolves `v*^{}` or reads a tagger
   // date would see it. When no --message is given the tag name itself is the
   // message, rather than making the flag required.
-  const tagArgs = ["tag", "-a", "-m", options.message ?? options.name, options.name, options.at];
+  if (options.previousTag === undefined) return { ok: false, pushed: false, log, error: "--previous-tag is required to verify CON-41", exit: 2 };
+  const proof = checkTagPreconditions(seams, cwd, options.at, options.name, { mode: options.mode ?? "release", trunk, previousTag: options.previousTag, ...(options.changelog === undefined ? {} : { changelog: options.changelog }), ...(options.fragmentDir === undefined ? {} : { fragmentDir: options.fragmentDir }) });
+  if (!proof.ok) return { ok: false, pushed: false, log, error: proof.reason, exit: proof.exit };
+  const annotation = `${options.message ?? options.name}\n\nmode: ${proof.mode}\nuncollated fragments: ${proof.fragmentCount}`;
+  const tagArgs = ["tag", "-a", "-m", annotation, options.name, proof.sha];
   const tag = run(seams, tagArgs, cwd);
   if (tag.code !== 0) {
     return {
@@ -125,11 +118,11 @@ export function cutTag(seams: Seams, cwd: string, options: CutTagOptions): CutTa
       error: `git tag failed: ${outputLines(tag.stderr).join(" ") || `exit ${tag.code}`}`,
     };
   }
-  log.push(`created local tag '${options.name}' at ${options.at}`);
+  log.push(`created local tag '${options.name}' at ${proof.sha}`);
 
   if (options.push !== true) {
     log.push("NOT pushed -- pass --push to push this tag; it is never automatic");
-    return { ok: true, pushed: false, log, error: null };
+    return { ok: true, pushed: false, log, error: null, mode: proof.mode, fragmentCount: proof.fragmentCount };
   }
 
   const push = run(seams, ["push", "origin", options.name], cwd);
@@ -142,5 +135,5 @@ export function cutTag(seams: Seams, cwd: string, options: CutTagOptions): CutTa
     };
   }
   log.push(`pushed '${options.name}' to origin`);
-  return { ok: true, pushed: true, log, error: null };
+  return { ok: true, pushed: true, log, error: null, mode: proof.mode, fragmentCount: proof.fragmentCount };
 }

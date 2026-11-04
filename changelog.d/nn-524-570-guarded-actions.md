@@ -1,0 +1,2 @@
+- Add explicit `pr merge --child` authority with live base/default policy checks, exact-head Ready and durable merge ledger; default and human-gated bases remain refused. ([#570](https://github.com/zheref/nen/issues/570))
+- Add `tag cut --mode marker|release` with immutable target preconditions, refreshed trunk reachability, HOLD checks, marker fragment annotations and release reconciliation. ([#524](https://github.com/zheref/nen/issues/524))
