@@ -279,3 +279,14 @@ it("refuses at exit 4 a private name in the caller schema's $id, which the comme
   expect(code).toBe(4);
   expect(err.join("\n")).toMatch(/findings\.schema\.id/);
 });
+
+describe("guarded public verification prose recovery (#580)",()=>{
+  const note="Verified matchingmanualcapturewithGitTree/buildproof/JUnitLCOVhashes against the delivered build.";
+  const phasePath=(root:string):string=>join(root,".nen","phases","HA%2F12.json");
+  it("public dry run keeps original rows and note bytes without any publication",async()=>{
+    const root=effortRepo();const phases=[{...PHASE,note}];const bytes=JSON.stringify({contract:"nen.phase.ledger/v0.1",effort:"HA/12",phases});writeFileSync(phasePath(root),bytes);
+    const result=await run([...POST,"--dry-run","--json"],root,[pull(),me,comments([])]);
+    expect(result.code,result.err).toBe(0);const doc=JSON.parse(result.out);expect(doc.verdict).toBe("dry-run");expect(doc.slice.phases).toEqual(phases);expect(readFileSync(phasePath(root),"utf8")).toBe(bytes);expect(result.seams.calls.some(call=>call.args.includes("POST")||call.args.includes("PATCH"))).toBe(false);
+  });
+  for(const [label,overrides] of [["credential elsewhere in note",{note:note+" ghp_"+"e".repeat(36)}],["changed candidate",{note:note.replace("GitTree","GitTreeX")}],["non-note field",{note,model:"matchingmanualcapturewithGitTree/buildproof/JUnitLCOVhashes"}]] as const){it(`refuses ${label} without exposing values or rewriting local evidence`,async()=>{const root=effortRepo();const bytes=JSON.stringify({contract:"nen.phase.ledger/v0.1",effort:"HA/12",phases:[{...PHASE,...overrides}]});writeFileSync(phasePath(root),bytes);const result=await run([...POST,"--dry-run","--json"],root,[pull(),me,comments([])]);expect(result.code).toBe(1);const doc=JSON.parse(result.out);expect(doc.verdict).toBe("secret-shape");expect(doc.nextStep).toContain("locally");expect(result.err).toContain("phases[0]");expect(result.out).not.toContain("ghp_");expect(result.out).not.toContain("GitTree");expect(readFileSync(phasePath(root),"utf8")).toBe(bytes);expect(result.seams.calls.some(call=>call.args.includes("POST")||call.args.includes("PATCH"))).toBe(false);});}
+});

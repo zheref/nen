@@ -28,7 +28,7 @@ import { guardPrivateNames, PRIVATE_NAME_FLAGS, readIgnoreFlag } from "../issue/
 import { assertEffortId } from "../ledger/effort.js";
 import { legacyLine, locateEffortLedger, resolveEffortHome } from "../ledger/home.js";
 import { PHASE_CONTRACT, readLedger, withLedgerLock, writeLedger, type PhaseEntry } from "../phase/ledger.js";
-import { scanContentSecrets } from "../security/secrets.js";
+import { scanContentSecrets, scanEvidenceNoteSecrets } from "../security/secrets.js";
 import { resolveRepoRoot } from "../repo/root.js";
 import { UnsupportedSchemaError, validateJsonSchema } from "../schema/jsonschema.js";
 import { totalsOf } from "../usage/command.js";
@@ -182,7 +182,7 @@ function callerFields(slice: LedgerSlice): readonly { field: string; text: strin
 
 /** Every credential shape in the caller's text, by field (../security/secrets.ts's scanner). */
 function secretHits(slice: LedgerSlice): readonly { field: string; shapes: readonly string[] }[] {
-  return callerFields(slice).map(({ field, text }) => ({ field, shapes: scanContentSecrets(text) })).filter((hit): boolean => hit.shapes.length > 0);
+  return callerFields(slice).map(({ field, text }) => ({ field, shapes: /^phases\[\d+\]\.note$/.test(field) ? scanEvidenceNoteSecrets(text) : scanContentSecrets(text) })).filter((hit): boolean => hit.shapes.length > 0);
 }
 
 /** Step argv and notes with the repository root spelt `.` (SEC-8): the comment names no machine's layout. */
@@ -267,8 +267,8 @@ function post(context: CommandContext, target: Target, pr: number, effort: strin
   // refuses the post naming the shape and the field -- never the value.
   const secrets = secretHits(slice);
   if (secrets.length > 0) {
-    context.io.err(`nen pr ledger post: the slice carries a credential's shape (${secrets.map((hit): string => `${hit.field}: ${hit.shapes.join(", ")}`).join("; ")}; values redacted); it would be posted to the PR, so nothing was posted.`);
-    emit(context.io, context.json, { contract: PR_LEDGER_CONTRACT, verdict: "secret-shape", posted: false, secrets }, []);
+    context.io.err(`nen pr ledger post: the slice carries a credential's shape (${secrets.map((hit): string => `${hit.field}: ${hit.shapes.join(", ")}`).join("; ")}; values redacted); it would be posted to the PR, so nothing was posted. Inspect the named field locally and rerun --dry-run after resolving it; retain the original evidence, and never paste a suspected value into a report.`);
+    emit(context.io, context.json, { contract: PR_LEDGER_CONTRACT, verdict: "secret-shape", posted: false, secrets, nextStep: "Inspect the named field locally; preserve original evidence, resolve the suspected credential and rerun --dry-run. Never paste suspected values into reports." }, []);
     return 1;
   }
   const guard = guardPrivateNames(context, target, callerFields(slice), ignore, "nen pr ledger post");
