@@ -786,9 +786,10 @@ function doCatchUp(context: CommandContext): number {
   const trailer = context.args.values["trailer"];
   if (trailer !== undefined) {
     if (!/^[A-Za-z0-9][A-Za-z0-9-]*: [^\r\n\0]+$/.test(trailer)) throw new VerbUsageError("--trailer must be one Key: alias line.");
-    const commits = loadWorkflow(root).workflow.commits;
+    const loaded = loadWorkflow(root);
+    const commits = loaded.workflow.commits;
     const key = trailer.slice(0, trailer.indexOf(":"));
-    if (key.toLowerCase() !== "hatsu-agent" && !commits.allowedAttributionTrailers.some(allowed => allowed.toLowerCase() === key.toLowerCase())) throw new VerbUsageError("--trailer must name Hatsu-Agent or a repository-declared attribution key, not an unrelated footer.");
+    if (!(loaded.present ? commits.allowedAttributionTrailers.some(allowed => allowed.toLowerCase() === key.toLowerCase()) : /^[A-Za-z0-9][A-Za-z0-9-]*-Agent$/i.test(key))) throw new VerbUsageError("--trailer must name a repository-declared attribution key (or an explicit Key-Agent when nen/workflow.json is absent), not an unrelated footer.");
     const refusal = trailerRefusal(commits, key);
     if (refusal !== null) throw new VerbUsageError(refusal);
   }

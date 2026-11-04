@@ -361,14 +361,16 @@ describe.skipIf(!HAVE_GIT)("nen wc squash, against the real git", () => {
     expect(mustGit(work, ["rev-parse", "HEAD"])).toBe(beforeHead);
   });
 
-  it("exits 0 with nothing moved when fewer than two commits would fold", async () => {
+  it("rewrites one unpublished commit without changing its tree", async () => {
     const work = freshBranch("single-commit-case", ["feat: only one"]);
     const beforeHead = mustGit(work, ["rev-parse", "HEAD"]);
     const msg = messageFile("feat: would fold\n");
 
     const result = await squash(["squash", "--repo", work, "--onto", "main", "--message-file", msg]);
     expect(result.code).toBe(0);
-    expect(result.out.join("\n")).toMatch(/nothing to squash/);
-    expect(mustGit(work, ["rev-parse", "HEAD"])).toBe(beforeHead);
+    expect(result.out.join("\n")).toMatch(/squashed into/);
+    expect(mustGit(work, ["rev-parse", "HEAD"])).not.toBe(beforeHead);
+    expect(mustGit(work, ["log", "-1", "--format=%s"])).toBe("feat: would fold");
+    expect(mustGit(work, ["diff", "--stat", beforeHead, "HEAD"])).toBe("");
   });
 });

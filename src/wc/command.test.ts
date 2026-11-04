@@ -32,6 +32,15 @@ async function capture(
 }
 
 describe("catch-up attribution input", () => {
+  it.each([{ allowed: [] }, { allowed: ["X-Agent"] }])("uses the configured attribution list $allowed as authoritative", async ({ allowed }) => {
+    const root = mkdtempSync(join(tmpdir(), "nen-wc-attribution-"));
+    mkdirSync(join(root, "nen"));
+    writeFileSync(join(root, "nen/workflow.json"), JSON.stringify({ commits: { allowedAttributionTrailers: allowed } }));
+    const err: string[] = [];
+    const code = await runFamily(wcCommand, ["wc", "catch-up", "--base", "main", "--trailer", "Other-Agent: tester"], root, false, { out: () => {}, err: line => err.push(line) }, new ScriptedSeams([]));
+    expect(code).toBe(2);
+    expect(err.join("\n")).toContain("attribution key");
+  });
   it("refuses a non-attribution footer before any git call", async () => {
     const out: string[] = [], err: string[] = [];
     const seams = new ScriptedSeams([]);

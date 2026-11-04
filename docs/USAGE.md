@@ -20847,3 +20847,9 @@ abort never need an identity. Missing merge attribution refuses before writing.
 publication and trailer guards as a multi-commit fold. Both squash recovery
 messages name the exact repository and use `reset --soft ORIG_HEAD`, preserving
 working-tree edits.
+
+Catch-up attribution never infers an alias or key. With `nen/workflow.json`
+present, `--trailer` must name a key in `commits.allowedAttributionTrailers`;
+an empty list admits no automated merge identity. Without that declaration,
+an explicitly supplied `Key-Agent: alias` trailer is accepted subject to the
+same forbidden-trailer policy. An unrelated footer is never an identity.
