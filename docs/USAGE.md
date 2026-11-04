@@ -12,7 +12,7 @@ repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
 what each version changed: 49 command
-families, 175 verbs, every flag checked against that binary.
+families, 180 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -258,7 +258,7 @@ including every refusal reason. The raw NUL-delimited stream
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **105 shapes** and **109 ids** (`nen.runner.plan`
+binary carries**, writing or reading — **109 shapes** and **113 ids** (`nen.runner.plan`
 and `nen.wc.worktree.copies` each have two versions, `nen.stop.mark` three, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -305,10 +305,10 @@ file formats).
 - **`issue`** — `nen.issue.body-check/v0.1` · `nen.issue.criteria/v0.1` · `nen.issue.edit-body/v0.3` · `nen.issue.questions/v0.1` · `nen.issue.questions.batch/v0.1` · `nen.issue.reconcile/v0.1`
 - **`loop`** — `nen.loop.iterate/v0.1`
 - **`phase`** — `nen.phase.ledger/v0.1`
-- **`pr`** — `nen.pr.converge/v0.1` · `nen.pr.edit-body/v0.1` · `nen.pr.edit-title/v0.1` · `nen.pr.ledger/v0.1` · `nen.pr.mark-ready/v0.1` · `nen.pr.merge-delivery/v0.1` · `nen.pr.merge-unit/v0.1` · `nen.pr.open/v0.1` · `nen.pr.sections/v0.1` · `nen.pr.ready.head-mismatch/v0.1` · `nen.pr.ready/v0.1` · `nen.pr.threads-settle/v0.1` · `nen.pr.threads/v0.1`
+- **`pr`** — `nen.pr.added-lines/v0.1` · `nen.pr.next-id/v0.1` · `nen.pr.converge/v0.1` · `nen.pr.edit-body/v0.1` · `nen.pr.edit-title/v0.1` · `nen.pr.ledger/v0.1` · `nen.pr.mark-ready/v0.1` · `nen.pr.merge-delivery/v0.1` · `nen.pr.merge-unit/v0.1` · `nen.pr.open/v0.1` · `nen.pr.sections/v0.1` · `nen.pr.ready.head-mismatch/v0.1` · `nen.pr.ready/v0.1` · `nen.pr.threads-settle/v0.1` · `nen.pr.threads/v0.1`
 - **`prose-lint`** — `nen.prose-lint/v0.1` (the `$schema` a [`canon lint`](#nen-canon-lint) rules contract may carry)
 - **`ref`** — `nen.ref.resolve/v0.1`
-- **`release`** — `nen.release.unit-check/v0.1`
+- **`release`** — `nen.release.compare/v0.1` · `nen.release.unit-check/v0.1`
 - **`repo`** — `nen.repo.classify/v0.1` · `nen.repo.family/v0.1`
 - **`refusal`** — `nen.refusal/v0.1`
 - **`report`** — `nen.report.data/v0.1` · `nen.report.graph/v0.1` · `nen.report.render/v0.1`
@@ -1006,7 +1006,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 175 verbs, grouped as the README groups them. **Reads** is what a
+All 180 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -1019,6 +1019,8 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`pr`](#family-pr) | [`nen pr body-check`](#nen-pr-body-check) | checks a PR body against caller-supplied requirement patterns, or, with no `--requirements-from`, against the headings of the repository's own PR template, each required present and filled (named as derived, with where it was read) | caller-supplied --body-from/--requirements-from files; else the PR template (`pull_request_template.md`/`.txt` at the root, `.github/` or `docs/`, or `PULL_REQUEST_TEMPLATE/*.md`/`.txt`) in the working tree, or at `--base <ref>` through git (`rev-parse`, `ls-tree`, `cat-file`) | yes |
 | [`pr`](#family-pr) | [`nen pr sections resolve`](#nen-pr-sections-resolve) | resolves a caller-owned section catalogue by kind, family and conditional facts | --catalogue JSON; optional workflow.json pr.sections overrides | yes |
 | [`pr`](#family-pr) | [`nen pr sections family`](#nen-pr-sections-family) | folds taxonomy jobs into the catalogue family with the most jobs, ties by declared precedence | --taxonomy and --catalogue JSON | yes |
+| [`pr`](#family-pr) | [`nen pr added-lines`](#nen-pr-added-lines) | read matching lines added under one path by every open PR using immutable complete blobs | gh auth, PR list/merge bases/trees/blobs | yes |
+| [`pr`](#family-pr) | [`nen pr next-id`](#nen-pr-next-id) | read base and open-PR stable IDs, refusing collisions/incomplete reads | gh auth, base commit and open PR blobs | yes |
 | [`pr`](#family-pr) | [`nen pr fetch`](#nen-pr-fetch) | one typed snapshot of a PR: head sha, mergeability, check rollup, per-commit reviews, review threads, pending review requests | github (gh) | yes |
 | [`pr`](#family-pr) | [`nen pr converge`](#nen-pr-converge) | read-only: compares the AC rows of every issue a PR closes with the PR body's verify rows, per criterion; the blocking rules are the caller's catalogue (defaults equal Hatsu's) | github (gh pr view, gh api issue reads) | yes |
 | [`pr`](#family-pr) | [`nen pr next-blocker`](#nen-pr-next-blocker) | the first blocking condition, in fixed order (conflict, red check, owed round, unresolved thread, missing body requirement) | nen/gates.json (or --gates), github (gh) | yes |
@@ -1083,6 +1085,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`ref`](#family-ref) | [`nen ref format`](#nen-ref-format) | formats the &lt;CODE&gt;-&lt;IS\|PR&gt;-#&lt;N&gt; notation, checking the code against the registry first | nen/repos.json | yes |
 | [`ref`](#family-ref) | [`nen ref parse`](#nen-ref-parse) | parses a token in object notation | none | yes |
 | [`ref`](#family-ref) | [`nen ref resolve`](#nen-ref-resolve) | where one canon citation (`<path> § N`, `§ *Title*`, `#anchor`, `HR-n`, `CON-n`) lands, or `unresolved` with candidates; never re-aims one | the cited Markdown file under --root | yes |
+| [`release`](#family-release) | [`nen release compare`](#nen-release-compare) | compare two immutable commits by whole Git-tree identity and complete object closure | local Git objects only | yes |
 | [`release`](#family-release) | [`nen release preflight`](#nen-release-preflight) | every getsuga §2 release-cut precondition, checked and reported whole | github (gh variable get, git ls-remote), CHANGELOG.md, changelog.d/, git log --merges, git ls-tree/cat-file (the CHANGELOG's history, for the release-PR allowance) | yes |
 | [`release`](#family-release) | [`nen release resolve-target`](#nen-release-resolve-target) | resolve a release token (main/last-commit/checkout/hash/branch) to a SHA and test trunk ancestry | git (fetch/rev-parse/merge-base, reaches origin) | yes |
 | [`release`](#family-release) | [`nen release self-check`](#nen-release-self-check) | whether a release PR should list itself in its own range | git (merge-base ancestry, local only) | yes |
@@ -2884,6 +2887,59 @@ When `nen pr body-check` refuses for want of an input, give it one. Either:
 
 What the file requires is the repository's decision. Nen never writes it.
 Where the template is ambiguous, the file is the way to say which one counts.
+
+### `nen pr added-lines`
+
+```sh
+nen pr added-lines --target owner/repo --path handbooks/ports/from--to.md \
+  --pattern '^\\| PT-[[:digit:]]+' --json
+```
+
+Lists each added line with PR number, head ref/SHA, immutable merge-base SHA,
+file line and text. Every open-PR page is read through the maintainer's normal
+`gh` authentication; no bot credential or token override is selected. Complete
+regular UTF-8 blobs are read at the PR's immutable merge base and head, checked
+against blob size/digest, then compared with the shared bounded line diff.
+Truncated patch fields are never used. Head/base/state are rechecked before a
+PR contributes lines. Each unread PR is named and the result stays incomplete.
+
+`--pattern` is a bounded POSIX ERE subset with **C-locale UTF-8 byte semantics**:
+ordinary/grouped alternatives, repetition, ranges, escaped metacharacters and
+POSIX named classes (alnum, alpha, blank, cntrl, digit, graph, lower, print,
+punct, space, upper, xdigit). Search is unanchored unless its branch has `^` or
+`$`. Backreferences, GNU/JavaScript escape extensions, collating/equivalence
+elements and anchors inside groups are explicitly refused, never silently
+reinterpreted. Syntax errors exit 2 before network reads; matching exhaustion
+is an unread PR, not a non-match. Limits: 256 PRs, 200,000 tree entries,
+8 MiB/blob, 32 MiB cumulative blob text, 100,000 added rows and 8 million
+pattern-work steps. Budget exhaustion refuses completeness.
+
+`--json`: `{ contract: "nen.pr.added-lines/v0.1", complete, path, lines:
+[{pr, headRef, headSha, baseSha, line, text}], pulls: [{pr, headRef, error}] }`.
+A top-level read failure instead carries `complete:false, reason` under the
+same contract. Exit 0 complete, 1 incomplete/unreadable (including rate-limit
+or 404), 2 malformed invocation. Nothing is written or reserved.
+
+### `nen pr next-id`
+
+```sh
+nen pr next-id --target owner/repo --path handbooks/ports/from--to.md \
+  --prefix PT --json
+```
+
+Resolves `--base <ref>` (default: repository default branch) to one immutable
+commit, reads `^\\| <PREFIX>-([0-9]+)` IDs there and in every open PR's added
+lines, and reports every number/source. The prefix is uppercase letters and
+digits, starting with a letter. A clean read yields maximum+1; any collision
+names all observed sources and refuses allocation (`nextId:null`). Missing
+base file, incomplete reads or unsafe integer IDs never invent an empty ID
+space. This is an observation, not a lock or a write: refetch before acting.
+
+`--json`: `{ contract: "nen.pr.next-id/v0.1", complete, baseSha, nextId,
+ids: [{id, source, line}], collisions, errors }`; top-level failures carry
+`complete:false, reason`. Exit 0 complete/collision-free, 1 collision or
+unreadable evidence, 2 malformed invocation. The same completeness budgets as
+`added-lines` apply; base text is capped at 100,000 rows.
 
 ### `nen pr fetch`
 
@@ -8924,6 +8980,31 @@ one declaring none did not move it above. This is a test rather than a
 repo-agnostic and runs against any repository's cut point, while the floor is a
 literal compiled into *this* binary and can only be reconciled against *this*
 repository's changelog.
+
+### `nen release compare`
+
+```sh
+nen release compare --repo /checkout --left <full-object-sha> \
+  --right <full-object-sha> --json
+```
+
+Compares **whole Git trees**, not a guessed release projection. Both inputs
+must be immutable full 40/64-hex object IDs resolving to commits; branch/tag
+names and abbreviated hashes are refused as unreadable. The result names both
+resolved commit and root-tree SHAs. Different commits with identical trees are
+equal. Missing refs, missing nested trees/blobs or failed/incomplete Git reads
+never report equality. Ambient repository/objects/config-injection environment
+redirects are scrubbed; replacement objects and lazy fetch are disabled.
+
+`--json`: `{ contract: "nen.release.compare/v0.1", outcome:
+"equal"|"different"|"unreadable", compared:"whole-git-tree", left:
+{input,sha,tree}|null, right:{input,sha,tree}|null, reason }`.
+Exit 0 equal, 1 different, 3 unreadable; missing/foreign flags are usage exit 2.
+No tag, branch, ref, release, policy, index or working copy is changed; this
+operation never chooses a cut point. Existing preflight/tag-cut meanings are
+unchanged. The recorded Hatsu363/367 race compares reviewed017a2bd… and
+merged1c7f7ff… as different (later manifest and fragment), not as a release
+selection instruction.
 
 ### `nen release preflight`
 
@@ -20828,3 +20909,22 @@ A `severity` enumeration with `[+]` is highest-first; two severities such as
 `high+low` are corrected to `low+`. The refused input remains exit 2 and JSON carries
 `corrected`. Mixed alternatives, incomplete lines and boundary-changing rewrites keep
 the existing refusal without an invented correction; legacy scalar placeholders stay.
+
+
+#### Gate derivation declaration input (#603)
+
+`--repo` on `gate derive` supplies the root for relative inputs and Git changed
+ranges; it does not supply path sets from `nen/gates.json`.
+
+```sh
+nen gate derive --repo /checkout --files-from changed.txt \
+  --paths-from /declarations/pr-composition.json --row owner/repo
+```
+
+The caller-pointed JSON declares `gateDerive["owner/repo"].policyPaths` and
+`processPaths` as arrays. Both arrays are required, empty arrays are explicit,
+and members are preserved directly (including literal commas). Missing,
+inherited or malformed rows refuse at exit 2. Declaration flags cannot be
+mixed with hand-passed path sets. With no declaration source the existing
+absent `--policy-paths` / `--process-paths` refusals remain unchanged; Nen ships
+no repository's sets and never infers a row.

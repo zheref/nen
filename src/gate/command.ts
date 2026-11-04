@@ -9,6 +9,8 @@ import {
 } from "../cli/command.js";
 import { changedFiles, changedFilesUsage, CHANGED_FILE_FLAGS, splitList } from "../cli/inputs.js";
 import { resolveRepoRoot } from "../repo/root.js";
+import { readFileSync } from "node:fs";
+import { resolveAgainstRepo } from "../cli/inputs.js";
 import { derive } from "./derive.js";
 
 const USAGE = `nen gate derive --policy-paths <a,b> --process-paths <c,d> (--files ... | --files-from ... | --range ...) [--asserted <G2|G4>]
@@ -22,6 +24,8 @@ ${changedFilesUsage()}
   --process-paths <c,d>  Process-surface paths. A hit derives G4 too, for a
                          different reason: in a repository whose product is its
                          process, a process change IS a policy change.
+  --paths-from <file> --row <owner/name>  Read gateDerive[row].policyPaths/processPaths
+                         from the caller-named declaration; never inferred.
   --asserted <G2|G4>     The gate the caller believes this is. When it disagrees
                          with the derivation, the disagreement is reported and
                          the DERIVED gate stands: the gate is a property of the
@@ -37,11 +41,9 @@ everywhere it was pointed.
 
 This derives the DIFF's half only. A pull request that is not ready has no gate.
 
-  --repo <path>    The checkout whose nen/gates.json supplies the path
-                   sets. Defaults to the current directory, so a call made
-                   from anywhere else needs it: the taxonomy-missing
-                   refusal you would otherwise meet is this flag's
-                   absence, not a missing file.`;
+  --repo <path>    The checkout used to resolve relative input paths and Git
+                   changed-file ranges. Defaults to the current directory;
+                   it supplies no implicit path sets.`;
 
 export const gateCommand: Command = {
   name: "gate",
@@ -53,6 +55,8 @@ export const gateCommand: Command = {
       CHANGED_FILE_FLAGS.files,
       CHANGED_FILE_FLAGS.filesFrom,
       CHANGED_FILE_FLAGS.range,
+      "paths-from",
+      "row",
       "policy-paths",
       "process-paths",
       "asserted",
@@ -73,18 +77,38 @@ export const gateCommand: Command = {
     // an omission.
     const policyPathsRaw = context.args.values["policy-paths"];
     const processPathsRaw = context.args.values["process-paths"];
-    if (policyPathsRaw === undefined) {
+    let declared: { policy: string[]; process: string[] } | null = null;
+    const declaration = context.args.values["paths-from"];
+    const row = context.args.values["row"];
+    if (declaration !== undefined || row !== undefined) {
+      if (declaration === undefined || declaration.trim() === "" || row === undefined || row.trim() === "") throw new VerbUsageError("--paths-from and --row must both name a declaration and row");
+      if (policyPathsRaw !== undefined || processPathsRaw !== undefined) throw new VerbUsageError("--paths-from cannot be combined with explicit --policy-paths or --process-paths");
+      let raw: unknown;
+      try { raw = JSON.parse(readFileSync(resolveAgainstRepo(root, declaration), "utf8")); }
+      catch (error) { throw new VerbUsageError(`cannot read --paths-from '${declaration}': ${error instanceof Error ? error.message : String(error)}`); }
+      const rows = raw !== null && typeof raw === "object" ? (raw as Record<string, unknown>)["gateDerive"] : null;
+      if (rows === null || typeof rows !== "object" || Array.isArray(rows) || !Object.hasOwn(rows, row)) throw new VerbUsageError(`--paths-from '${declaration}' has no gateDerive['${row}'] row`);
+      const entry = (rows as Record<string, unknown>)[row];
+      if (entry === null || typeof entry !== "object" || Array.isArray(entry)) throw new VerbUsageError(`gateDerive['${row}'] is not an object`);
+      const read = (key: string): string[] => {
+        const list = (entry as Record<string, unknown>)[key];
+        if (!Array.isArray(list) || list.some((value) => typeof value !== "string" || value.trim() === "" || /[\0\r\n]/.test(value))) throw new VerbUsageError(`gateDerive['${row}'].${key} must be an array of nonempty path patterns without NULs or newlines`);
+        return list as string[];
+      };
+      declared = { policy: read("policyPaths"), process: read("processPaths") };
+    }
+    if (declared === null && policyPathsRaw === undefined) {
       throw new VerbUsageError(
         "--policy-paths is required. An absent flag would silently contribute zero hits and could derive G2 for a policy change nen never checked; pass --policy-paths '' to explicitly assert this repository has none.",
       );
     }
-    if (processPathsRaw === undefined) {
+    if (declared === null && processPathsRaw === undefined) {
       throw new VerbUsageError(
         "--process-paths is required. Same reasoning as --policy-paths: an absent flag must never derive G2 by silently checking nothing; pass --process-paths '' to explicitly assert this repository has none.",
       );
     }
-    const policy = splitList(policyPathsRaw);
-    const process = splitList(processPathsRaw);
+    const policy = declared?.policy ?? splitList(policyPathsRaw ?? "");
+    const process = declared?.process ?? splitList(processPathsRaw ?? "");
     const asserted = context.args.values["asserted"] ?? null;
     if (asserted !== null && asserted !== "G2" && asserted !== "G4") {
       throw new VerbUsageError(`--asserted takes G2 or G4, got '${asserted}'.`);
