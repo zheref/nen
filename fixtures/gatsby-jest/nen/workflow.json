@@ -1,0 +1,13 @@
+{
+  "tests": {
+    "required": [
+      "test"
+    ]
+  },
+  "coverage": {
+    "minimum": 80,
+    "recommended": 85,
+    "ideal": 90,
+    "scope": "touched"
+  }
+}

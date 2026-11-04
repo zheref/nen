@@ -1,0 +1,47 @@
+{
+  "$schema": "nen.contract/v0.1",
+  "project": {
+    "lanes": {
+      "web": {
+        "stack": "gatsby",
+        "cwd": "."
+      }
+    },
+    "defaultLane": "web",
+    "verbs": {
+      "web": {
+        "test": {
+          "exe": "node",
+          "argv": [
+            "node_modules/jest/bin/jest.js",
+            "--config",
+            "jest.config.cjs",
+            "--runInBand",
+            "--json",
+            "--outputFile=jest-results.json"
+          ],
+          "artifacts": [
+            "jest-results.json"
+          ],
+          "why": "Recommended adoption recipe, not an observed zheref.io command. Requires repository-local Jest29+, babel-jest, babel-preset-gatsby, React Testing Library, jest-environment-jsdom and the fixture-backed jest.config.cjs/preprocessor/setup/mocks. Executes the local pinned Jest entrypoint without npx or implicit installation. Consumer declarations remain the sole execution authority."
+        },
+        "coverage": {
+          "exe": "node",
+          "argv": [
+            "node_modules/jest/bin/jest.js",
+            "--config",
+            "jest.config.cjs",
+            "--runInBand",
+            "--coverage",
+            "--coverageReporters=lcov",
+            "--coverageDirectory=coverage"
+          ],
+          "artifacts": [
+            "coverage/lcov.info"
+          ],
+          "why": "The same adopted Jest suite writes LCOV readable by nen shu coverage. collectCoverageFrom must name the consumer source set, including untested files. Nen retains the declared coverage ladder; missing reports or unmet thresholds refuse rather than claim verification."
+        }
+      }
+    }
+  }
+}

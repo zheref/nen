@@ -172,6 +172,9 @@ describe("nen shu typecheck -- AC-2: no declaration is a refusal naming the miss
     };
     const result = await run(["typecheck", "--lane", "docs"], [], project);
     expect(result.code).toBe(4);
-    expect(result.err.join("\n")).toMatch(/'typecheck' is unsupported on lane 'docs'.*plain JavaScript/);
+    expect(result.out.join("\n")).toMatch(/declared unsupported: 'typecheck' is unsupported on lane 'docs'.*plain JavaScript/);
+    expect(result.out.join("\n")).toContain("Not executed or verified");
+    expect(result.err).toEqual([]);
+    expect(result.spawned).toEqual([]);
   });
 });

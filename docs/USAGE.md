@@ -12,7 +12,7 @@ repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
 what each version changed: 49 command
-families, 175 verbs, every flag checked against that binary.
+families, 177 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -258,7 +258,7 @@ including every refusal reason. The raw NUL-delimited stream
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **105 shapes** and **109 ids** (`nen.runner.plan`
+binary carries**, writing or reading — **107 shapes** and **111 ids** (`nen.runner.plan`
 and `nen.wc.worktree.copies` each have two versions, `nen.stop.mark` three, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -326,6 +326,7 @@ file formats).
 - **`usage`** — `nen.usage.ledger/v0.1`
 - **`wc`** — `nen.wc.catch-up/v0.2` · `nen.wc.prune/v0.1` · `nen.wc.publish/v0.1` · `nen.wc.squash/v0.1` · `nen.wc.swap.state/v0.1` · `nen.wc.swap/v0.1` · `nen.wc.worktree.copies/v0.1` · `nen.wc.worktree.copies/v0.2` · `nen.wc.worktree/v0.1` · `nen.wc.worktrees/v0.1`
 - **`workflow`** — `nen.workflow/v0.1`
+- **`shu explicit seats`** — `nen.shu.unsupported/v0.1`
 <!-- contract-ids:end -->
 
 Four verbs have no `--json` because they have no result of their own to
@@ -1006,7 +1007,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 175 verbs, grouped as the README groups them. **Reads** is what a
+All 177 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -20828,3 +20829,14 @@ A `severity` enumeration with `[+]` is highest-first; two severities such as
 `high+low` are corrected to `low+`. The refused input remains exit 2 and JSON carries
 `corrected`. Mixed alternatives, incomplete lines and boundary-changing rewrites keep
 the existing refusal without an invented correction; legacy scalar placeholders stay.
+
+
+### Gatsby Jest adoption and declared unsupported results
+
+The Gatsby profile now recommends a local Jest29+ / React Testing Library recipe based on Gatsby's official [unit testing](https://www.gatsbyjs.com/docs/how-to/testing/unit-testing/) and [component testing](https://www.gatsbyjs.com/docs/how-to/testing/testing-react-components/) guides. [The adoption fixture](../fixtures/gatsby-jest/README.md) pins compatible direct packages and contains the Gatsby Babel preprocessor, jsdom/jest-dom setup, CSS/assets/Gatsby mocks, two real JSX component tests and a sample Nen declaration. Its Node/local-Jest command writes `jest-results.json`; coverage writes `coverage/lcov.info`, which Nen parses. Adapt `collectCoverageFrom` to all relevant consumer source, including untested files. Browser E2E `ui-test` is still a separate unsupported seat.
+
+This is an adoption recommendation, not a statement that an existing Gatsby site has tests. `shu detect` withholds the recommended test/coverage rows until the fixture-named Jest config/preprocessor/setup files are present. It proposes catalogue data for review; it installs no dependencies or config files and never edits an existing consumer contract/workflow. Only the consumer's own `nen/contract.json` controls execution. The ordinary executor continues to read no profile commands.
+
+An explicit `{ "unsupported": "reason" }` verb declaration now renders **declared unsupported** as a fact, rather than as an executed test failure. It retains exit4 and runs nothing. **`--json`** emits `nen.shu.unsupported/v0.1` with top-level keys `contract`, `verdict` (`declared-unsupported`), `verb`, `lane`, `stack`, `reason`, `executed:false`, `verified:false`, `exitCode:4`. Human output goes to stdout and quotes the declaration's reason; real command failures and absent declarations remain distinct. This changes the explicit-seat output contract, including its JSON refusal document, for every stack.
+
+A declared unsupported requirement is still **unverified**: required `test` remains unmet, no coverage value is fabricated, no check is marked green, and merge readiness is not granted. Coverage's existing semantics remain unchanged: successful measurement exits0 while unmet explicit percentages appear as `threshold.met:false`, and touched policy remains the original80/85/90 ladder with per-file `under-minimum`/other bands. An under-minimum band is not verified policy compliance; caller gates must inspect the data. A failing Jest assertion remains exit1. No required row or ladder is lowered to make adoption look complete.

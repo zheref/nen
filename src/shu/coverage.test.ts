@@ -703,7 +703,7 @@ describe("the advisory comes from the pack, as data", () => {
     // One of the seven has a conventional location; the other six say why they
     // do not, which is the finding rather than a gap in the data.
     const withPath = Object.entries(advisories).filter(([, entry]): boolean => entry.path !== null);
-    expect(withPath.map(([stack]): string => stack)).toEqual(["nextjs"]);
+    expect(withPath.map(([stack]): string => stack)).toEqual(["gatsby", "nextjs"]);
   });
 
   it("answers for a stack the pack has never heard of", () => {
@@ -2004,7 +2004,7 @@ describe("--touched --from-capture: the flags and the refusals", () => {
     try {
       const result = await capture(["coverage", "--touched", "--base", "main", "--from-capture"], { repo });
       expect(result.code).toBe(4);
-      expect(result.err.join("\n")).toContain("no coverage tool on this lane");
+      expect(result.out.join("\n")).toContain("no coverage tool on this lane");
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }
