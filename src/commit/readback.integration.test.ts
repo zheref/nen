@@ -304,6 +304,6 @@ describe.skipIf(!HAVE_GIT)("nen wc squash -- the folded commit's trailers, read 
     expect(doc["injected"]).toEqual(["Co-authored-by"]);
     expect(doc["newSha"]).toBe(mustGit(repo, ["rev-parse", "HEAD"]));
     expect(mustGit(repo, ["rev-parse", "HEAD~1"])).toBe(mustGit(repo, ["rev-parse", "main"]));
-    expect(result.err.join("\n")).toMatch(/git reset --soft ORIG_HEAD/);
+    expect(result.err.join("\n")).toMatch(/git -C .* reset --soft ORIG_HEAD/);
   });
 });

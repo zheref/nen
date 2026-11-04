@@ -8,6 +8,7 @@
 // a fixed path with the core-to-worktree copy; and -- zheref/nen#551 -- `nen
 // wc ahead` (./ahead.ts), the commits and diff stat beyond a named reviewed head.
 
+import { stage } from "./stage.js";
 import { AHEAD_EXIT, aheadGitArgv, aheadGitEnv, gitFloorRefusal, readAhead, refuseOptionRef, renderAhead } from "./ahead.js";
 import { runPrune } from "./prune.js";
 import { ancestryReader, computeOverlap, readEffortFiles, renderOverlap, withDeclared } from "./overlap.js";
@@ -26,9 +27,10 @@ import { readTextFile, splitList } from "../cli/inputs.js";
 import { GIT } from "../seam/exec.js";
 import { plainLine } from "../cli/plain.js";
 import { SchemaError } from "../schema/errors.js";
-import { loadWorkflow, WORKFLOW_FILE, type LoadedWorkflow } from "../schema/workflow.js";
+import { loadWorkflow, trailerRefusal, WORKFLOW_FILE, type LoadedWorkflow } from "../schema/workflow.js";
 import { addedNote, admittedAdditions, injectedMessage, readBack, sentTrailers } from "../commit/readback.js";
 import { CATCH_UP_CONTRACT, catchUp, renderConflicts, type RequestedStrategy } from "./catchup.js";
+import { renderCommand } from "./mechanical.js";
 import { EXIT_ALL_MECHANICAL, loadMechanical, renderClassification } from "./mechanical.js";
 import { classifyWorkingCopy, readWorkingCopyState } from "./classify.js";
 import { messageFileRefusals } from "./messagefile.js";
@@ -50,7 +52,11 @@ import { copyPathRefusal, foldName, KEY_FILE, manageWorktree, MANIFEST_CONTRACT,
 
 const SQUASH_CONTRACT = "nen.wc.squash/v0.1";
 
-const USAGE = `nen wc ahead --repo <path> --of <reviewed-head> [--head <ref>] [--json]
+const USAGE = `nen wc stage --repo <path> [--dry-run] [--json] -- <paths...>
+  Stage literal repository-relative paths, including tracked deletions. Absent
+  untracked paths are reported as skipped and do not abort other staging.
+
+nen wc ahead --repo <path> --of <reviewed-head> [--head <ref>] [--json]
   How far a branch has moved beyond a NAMED reviewed head, read from the
   clone with no fetch: --of resolved to its full commit id, --head (default
   HEAD) likewise, then 'git merge-base --is-ancestor', 'git rev-list --count
@@ -710,7 +716,7 @@ function squash(context: CommandContext): number {
         // baseRefs is [] here, and [] is always said out loud -- on the SAME
         // line, since this case's contract is one line (review finding on
         // zheref/nen#253).
-        `nothing to squash: ${plan.folded.length} commit(s) since 'git merge-base ${onto} HEAD' (${plan.mergeBase}) -- need at least two to fold; base check: NOT performed.`,
+        `nothing to squash: ${plan.folded.length} commit(s) since 'git merge-base ${onto} HEAD' (${plan.mergeBase}) -- no commits to rewrite; base check: NOT performed.`,
       );
     }
     return 0;
@@ -757,7 +763,7 @@ function squash(context: CommandContext): number {
   // (nothing failed to run) and not 2 (no refusal before the write fired).
   if (back.findings.length > 0) {
     context.io.err(
-      `nen wc: ${injectedMessage(newSha, back.findings, policy, "'git reset --soft ORIG_HEAD' restores the unsquashed commits; the fold changed no file")}`,
+      `nen wc: ${injectedMessage(newSha, back.findings, policy, `'${renderCommand(["git", "-C", root, "reset", "--soft", "ORIG_HEAD"])}' restores the unsquashed commits; the fold changed no file`)}`,
     );
     return 3;
   }
@@ -777,7 +783,18 @@ function doCatchUp(context: CommandContext): number {
   if (!STRATEGIES.includes(strategyRaw as RequestedStrategy)) {
     throw new VerbUsageError(`--strategy '${strategyRaw}' is not one of ${STRATEGIES.join(", ")}.`);
   }
+  const trailer = context.args.values["trailer"];
+  if (trailer !== undefined) {
+    if (!/^[A-Za-z0-9][A-Za-z0-9-]*: [^\r\n\0]+$/.test(trailer)) throw new VerbUsageError("--trailer must be one Key: alias line.");
+    const loaded = loadWorkflow(root);
+    const commits = loaded.workflow.commits;
+    const key = trailer.slice(0, trailer.indexOf(":"));
+    if (!(loaded.present ? commits.allowedAttributionTrailers.some(allowed => allowed.toLowerCase() === key.toLowerCase()) : /^[A-Za-z0-9][A-Za-z0-9-]*-Agent$/i.test(key))) throw new VerbUsageError("--trailer must name a repository-declared attribution key (or an explicit Key-Agent when nen/workflow.json is absent), not an unrelated footer.");
+    const refusal = trailerRefusal(commits, key);
+    if (refusal !== null) throw new VerbUsageError(refusal);
+  }
   const outcome = catchUp(context.seams, root, {
+    trailer,
     base,
     strategy: strategyRaw as RequestedStrategy,
     dryRun: context.args.booleans.has("dry-run"),
@@ -1064,16 +1081,18 @@ export const wcCommand: Command = {
     { verb: "wc ahead", code: 3, meaning: "even: the head is the reviewed head; nothing new to review" },
   ],
   name: "wc",
-  subcommands: ["classify", "squash", "catch-up", "publish", "worktrees", "swap", "worktree", "prune", "overlap", "ahead"],
+  subcommands: ["classify", "squash", "catch-up", "publish", "worktrees", "swap", "worktree", "prune", "overlap", "ahead", "stage"],
   summary: "Classify the working copy, squash it, catch it up, publish it, list the worktrees, swap one into core, keep one at a fixed path, compute whether efforts overlap, or count the commits beyond a reviewed head.",
   usage: USAGE,
   flags: {
-    values: ["base", "onto", "message-file", "strategy", "remote", "name", "plan", "efforts", "always-overlaps", "declared", "of", "head"],
+    values: ["base", "onto", "message-file", "strategy", "remote", "name", "plan", "efforts", "always-overlaps", "declared", "of", "head", "trailer"],
     booleans: ["dry-run", "abort", "set-upstream", "take", "return", "status", "run"],
     lists: ["copy-from-core"],
   },
   run(context: CommandContext): number {
-    const subcommand = requireSubcommand("wc", context.args, ["classify", "squash", "catch-up", "publish", "worktrees", "swap", "worktree", "prune", "overlap", "ahead"]);
+    const subcommand = requireSubcommand("wc", context.args, ["classify", "squash", "catch-up", "publish", "worktrees", "swap", "worktree", "prune", "overlap", "ahead", "stage"]);
+    if (subcommand === "stage") return stage(context);
+    if (subcommand !== "catch-up" && context.args.values["trailer"] !== undefined) throw new VerbUsageError("--trailer belongs to wc catch-up.");
     if (subcommand === "ahead") return doAhead(context);
     // --of / --head ARE AHEAD'S ALONE.
     for (const flag of ["of", "head"]) {

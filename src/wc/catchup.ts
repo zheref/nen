@@ -309,6 +309,7 @@ export function collectConflicts(seams: Seams, cwd: string, strategy: Strategy):
 
 export interface CatchUpOptions {
   readonly base: string;
+  readonly trailer?: string;
   readonly strategy: RequestedStrategy;
   readonly dryRun: boolean;
   readonly abort: boolean;
@@ -472,13 +473,14 @@ export function catchUp(seams: Seams, cwd: string, options: CatchUpOptions): Cat
       lines.push(abortLine(pending));
       return done(null, stillConflicted);
     }
+    if (pending === "merge" && !options.trailer) return { kind: "refused", reason: "--trailer <Key: alias> is required to attribute the catch-up merge; nothing continued." };
     if (dryRun) {
       lines.push(pending === "rebase" ? "would run: git rebase --continue  (GIT_EDITOR=true)" : "would run: git commit --no-edit");
       return done(null, []);
     }
     const resumed = pending === "rebase"
       ? runGit(seams, cwd, ["rebase", "--continue"], { GIT_EDITOR: "true" })
-      : runGit(seams, cwd, ["commit", "--no-edit"]);
+      : runGit(seams, cwd, ["commit", "--no-edit", "--trailer", options.trailer!]);
     if (resumed.code !== 0) {
       const conflicted = collectConflicts(seams, cwd, pending);
       if (conflicted.length === 0) {
@@ -561,7 +563,8 @@ export function catchUp(seams: Seams, cwd: string, options: CatchUpOptions): Cat
     lines.push(`already up to date with ${remoteBase} (${aheadBefore} ahead, 0 behind) -- nothing to do`);
     return done(before, true, []);
   }
-  const argv = strategy === "rebase" ? ["rebase", remoteBase] : ["merge", "--no-edit", remoteBase];
+  if (strategy === "merge" && !options.trailer) return { kind: "refused", reason: "--trailer <Key: alias> is required to attribute the catch-up merge; nothing merged." };
+  const argv = strategy === "rebase" ? ["rebase", remoteBase] : ["merge", "--no-edit", "-m", `Merge ${remoteBase}\n\n${options.trailer}`, remoteBase];
   if (dryRun) {
     lines.push(`would run: git ${argv.join(" ")}  (${aheadBefore} ahead, ${behindBefore} behind)`);
     return done(null, false, []);

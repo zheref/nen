@@ -12,7 +12,7 @@ repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
 what each version changed: 49 command
-families, 175 verbs, every flag checked against that binary.
+families, 178 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -258,7 +258,7 @@ including every refusal reason. The raw NUL-delimited stream
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **105 shapes** and **109 ids** (`nen.runner.plan`
+binary carries**, writing or reading — **106 shapes** and **110 ids** (`nen.runner.plan`
 and `nen.wc.worktree.copies` each have two versions, `nen.stop.mark` three, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -1006,7 +1006,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 175 verbs, grouped as the README groups them. **Reads** is what a
+All 178 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -1043,6 +1043,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`wc`](#family-wc) | [`nen wc swap`](#nen-wc-swap) | bring a worktree's committed tree into the core checkout (view: HEAD detached; `--take`: the branch), `--return` it with core's parked work restored, `--status`; core's work parked in a pinned commit, never stashed; exit 3 on a dirty tree | git (worktree list, status, read-tree/add/write-tree/commit-tree through a temporary index, update-ref, reset --hard, clean -fd, checkout, diff) | yes |
 | [`wc`](#family-wc) | [`nen wc worktree`](#nen-wc-worktree) | keep ONE detached worktree at `<core>/.nen/worktrees/<name>` at `origin/<base>`'s fetched tip -- created, reused, moved, or (its registration outliving its directory) that one registration dropped and recreated; refused, never discarded, when dirty, and refused for a stray directory, a symlink or a sibling registration; `--copy-from-core` copies gitignored, untracked regular files from core after proving the source in core and the destination at the tip and in the worktree, through a temp file and a rename | git (rev-parse --git-common-dir/--git-dir, check-ref-format, fetch, ls-remote, rev-parse, ls-files, check-ignore, ls-tree, worktree list/add/remove, status -z, diff --name-only, checkout --detach), the files named by --copy-from-core in core, the copy record in the worktree's git dir | yes |
 | [`wc`](#family-wc) | [`nen wc overlap`](#nen-wc-overlap) | file disjointness of parallel efforts, computed: each effort's merge-base diff against `--base` (default `origin/<branch.base>`), plus an always-overlapping list counted as every effort's; verdict `disjoint` / `stack(<order>)` (git's chain when the branches chain, else the `--efforts` order) / `unknown`; `--declared` paths stand in before authoring | git (diff --name-only -z `<base>...<effort>`, merge-base --is-ancestor), nen/workflow.json under --repo (alwaysOverlaps; branch.base without --base), the `--declared` file | yes |
+| [`wc`](#family-wc) | [`nen wc stage`](#nen-wc-stage) | stage literal paths including deletions | git index and named paths | no |
 | [`wc`](#family-wc) | [`nen wc ahead`](#nen-wc-ahead) | the commits and diff stat beyond a NAMED reviewed head, read from the clone with no fetch; verdict `ahead <n>` (exit 0) / `even` (exit 3) / `diverged` -- the reviewed head is not an ancestor, never a count (exit 1) / `unreadable` -- a ref the clone does not hold, never zero (exit 2) | git (rev-parse --verify `<ref>^{commit}`, merge-base --is-ancestor, rev-list --count `<of>..<head>`, diff --numstat -z --no-renames `<of> <head>`) | yes |
 | [`stage`](#family-stage) | [`nen stage triage`](#nen-stage-triage) | flag secret-shaped, binary, out-of-scope and unmentioned-deletion files before staging; report git-ignored paths separately, never counted toward the exit code; `--range <base>..<head>` triages a committed range instead of the working copy — names and blob sizes over every change any commit made (`in-history` for a finding not in the net change), deletions and mentions over the net diff from the merge base — an unresolved, malformed or unrelated range exit 2 and never a fall back | git status --porcelain; with --range: git rev-parse, merge-base, rev-list --count, log --raw, diff --raw, cat-file --batch-check | yes |
 | [`stage`](#family-stage) | [`nen stage list`](#nen-stage-list) | the exact add list — every modified, added, renamed, deleted and untracked path triage called clean, minus flagged and git-ignored ones, each exclusion named with its reasons, unmerged paths, embedded repositories and undecodable names held off with the list withheld, a worktree rename's original included; `--repo` must be the top; newline (C-quoted where needed) or `--nul` form to feed `git add --pathspec-from-file=-` verbatim, withheld on a flag (exit 1), exit 3 when empty | git status --porcelain | yes |
@@ -5546,6 +5547,14 @@ worktree:        /work/app/.nen/worktrees/kagutsuchi (created)
 head:            4f5c11a2b9e0d6c1a7f3e2b8d4c6a0f1e3b5d7c9
 copied:          Kro/Config.xcconfig (from core, gitignored)
 ```
+
+### `nen wc stage`
+
+`nen wc stage --repo <path> [--dry-run] [--json] -- <paths...>` stages
+literal repository-relative files or directories with `git add -A`, retaining
+tracked deletions. An absent untracked path is reported as skipped without
+aborting the remaining paths. Paths outside the repository are refused. JSON
+names `paths` selected and `skipped` absent paths; dry-run writes nothing.
 
 ### `nen wc ahead`
 
@@ -20828,3 +20837,19 @@ A `severity` enumeration with `[+]` is highest-first; two severities such as
 `high+low` are corrected to `low+`. The refused input remains exit 2 and JSON carries
 `corrected`. Mixed alternatives, incomplete lines and boundary-changing rewrites keep
 the existing refusal without an invented correction; legacy scalar placeholders stay.
+
+
+Catch-up merges require explicit `--trailer "Hatsu-Agent: <alias>"` (or the
+repository's own attribution key), validated against the same trailer policy
+as `commit write`. Supply it again when continuing a paused merge. Rebase and
+abort never need an identity. Missing merge attribution refuses before writing.
+`wc squash` also rewrites a single unpublished commit's message, under the same
+publication and trailer guards as a multi-commit fold. Both squash recovery
+messages name the exact repository and use `reset --soft ORIG_HEAD`, preserving
+working-tree edits.
+
+Catch-up attribution never infers an alias or key. With `nen/workflow.json`
+present, `--trailer` must name a key in `commits.allowedAttributionTrailers`;
+an empty list admits no automated merge identity. Without that declaration,
+an explicitly supplied `Key-Agent: alias` trailer is accepted subject to the
+same forbidden-trailer policy. An unrelated footer is never an identity.

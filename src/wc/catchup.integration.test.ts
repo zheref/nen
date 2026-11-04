@@ -77,7 +77,7 @@ async function wc(argv: readonly string[], json = true): Promise<Run> {
   const out: string[] = [];
   const err: string[] = [];
   const io: Io = { out: (line): void => void out.push(line), err: (line): void => void err.push(line) };
-  const code = await runFamily(wcCommand, ["wc", ...argv], null, json, io, defaultSeams());
+  const code = await runFamily(wcCommand, ["wc", ...argv, ...(argv[0] === "catch-up" ? ["--trailer", "Hatsu-Agent: tester"] : [])], null, json, io, defaultSeams());
   const doc = json && out.length > 0 ? (JSON.parse(out.join("\n")) as Record<string, unknown>) : {};
   return { code, out, err, doc };
 }
@@ -384,6 +384,7 @@ describe.skipIf(!HAVE_GIT)("nen wc catch-up classifies a conflict, against the r
     followSteps(work, stopped, (): void => writeFileSync(join(work, "allmech/surfaces/codex/a.md"), "generated a 0.4.0\n"));
     const resumed = await wc(["catch-up", "--repo", work, "--base", "main"]);
     expect(resumed.code).toBe(0);
+    expect(mustGit(work, ["log", "-1", "--format=%B"])).toContain("Hatsu-Agent: tester");
     expect(resumed.doc).toMatchObject({ resumed: true, conflicted: [], declaration: "not-read", mechanical: false });
     expect(mustGit(work, ["show", "HEAD:allmech/surfaces/codex/a.md"])).toBe("generated a 0.4.0");
     expect(mustGit(work, ["merge-base", "--is-ancestor", "origin/main", "HEAD"])).toBe("");
