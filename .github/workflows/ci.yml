@@ -89,7 +89,10 @@ jobs:
         run: |
           d="$(mktemp -d /tmp/nen-ci-XXXXXX)"
           w="$d"
-          if command -v cygpath >/dev/null; then w="$(cygpath -w "$d")"; fi
+          # Git Bash maps /tmp through TEMP, so once TEMP names this dir a POSIX
+          # /tmp/... path no longer reaches it: on Windows every name carries
+          # the drive-letter form (C:/... for bash, C:\... for TMP and TEMP).
+          if command -v cygpath >/dev/null; then d="$(cygpath -m "$d")"; w="$(cygpath -w "$d")"; fi
           {
             echo "NEN_CI_TEMP=$d"
             echo "TMP=$w"
@@ -206,7 +209,10 @@ jobs:
         run: |
           d="$(mktemp -d /tmp/nen-ci-XXXXXX)"
           w="$d"
-          if command -v cygpath >/dev/null; then w="$(cygpath -w "$d")"; fi
+          # Git Bash maps /tmp through TEMP, so once TEMP names this dir a POSIX
+          # /tmp/... path no longer reaches it: on Windows every name carries
+          # the drive-letter form (C:/... for bash, C:\... for TMP and TEMP).
+          if command -v cygpath >/dev/null; then d="$(cygpath -m "$d")"; w="$(cygpath -w "$d")"; fi
           {
             echo "NEN_CI_TEMP=$d"
             echo "TMP=$w"
