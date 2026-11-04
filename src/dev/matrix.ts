@@ -480,6 +480,8 @@ export function renderStackMatrix(pack: ProfilesPack): string {
     "",
     `**This page is generated.** \`${MATRIX_COMMAND}\` renders it from \`profiles/*.json\`, the bundled profiles pack, and a test in this repository's own suite re-renders it and compares byte for byte -- so it cannot quietly go stale, and a hand edit fails the build. Change the pack, not the page.`,
     "",
+    "**Anonymized provenance.** Source-snapshot aliases preserve the inventory’s original observations and file/line references; they do not name live public repositories or assert new live verification.",
+    "",
     "**What it is.** For each stack the pack knows, the reference command each verb has *in the product repositories the inventory read*, cited to a file and a line. It is a CATALOGUE, not an authority: the only thing nen ever executes is the target repository's own `nen/contract.json`, and this page exists so that whoever writes one has somewhere honest to start. For the question *\"what does THIS checkout support\"*, ask `nen shu detect --repo <path>`; this page answers *\"what does the pack know\"*.",
     "",
     "**Empty cells are first-class.** A verb no repository in the inventory implements is `unsupported` with the reason it is, never a plausible command nobody has run.",

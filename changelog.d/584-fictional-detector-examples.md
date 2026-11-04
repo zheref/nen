@@ -1,0 +1,1 @@
+- Replace inherited detector identities and connected fixture/project/profile examples with fictional names, retaining exact behavior assertions and explicitly anonymized snapshot provenance. Detector and connected-file privacy reads are clean without new exemptions; inherited matches elsewhere in the usage manual remain explicitly unresolved.
