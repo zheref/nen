@@ -26,7 +26,7 @@ import { mapTests, renderMap, TESTS_MAP_CONTRACT, unreadableMap, type IssueAncho
 const SUBCOMMANDS = ["map"] as const;
 
 const USAGE = `nen tests map --issue-body <file> --test-report <file>[,<file>...]
-              [--before-report <file>[,<file>...] | --require-red]
+              [--before-report <file>[,<file>...] | --require-red [--names-from-report <files>]]
               [--issue <owner/name>#<N> | <CODE>#<N> | #<N> | <N>]
               [--requirements-from <catalogue.json>] [--repo <path>] [--json]
 
@@ -84,6 +84,11 @@ A relative path flag is held to --repo's tree through every component: a
 '../' climb or a symlinked parent leading out is refused (exit 2). An
 absolute path is the caller's own.
 
+With --require-red, --names-from-report supplies a complete per-test report as
+a data-only source of titles/suites. Names in load-failed suites inherit failure;
+names in other suites do not. Without names, file-level load failures report
+could-not-read per criterion, not a silent untested checkpoint.
+
 Exits: 0 every criterion met in the mode, nothing unrequested, no duplicate
 or unrecognised criterion row; 1 otherwise, and on not-verifiable or
 could-not-read; 2 usage (a missing flag, both --before-report and
@@ -100,7 +105,7 @@ could-not-read; 2 usage (a missing flag, both --before-report and
   verdict: met | unmet | not-verifiable | could-not-read
   mode: after | require-red | before-after
   outcome: passing | failing | skipped | untested
-  checkpoint: null (after) | red | not-red | untested (require-red) |
+  checkpoint: null (after) | red | not-red | unreadable | untested (require-red) |
               red-first | green-only | failing | untested (before-after)`;
 
 const ISSUE_ANCHOR = /^(?:([^\s#]+)#|#)?([0-9]{1,9})$/;
@@ -209,6 +214,9 @@ function runMap(context: CommandContext): number {
   if (requireRed && beforeReports !== null) {
     throw new VerbUsageError("--require-red reads --test-report as the run before the change; --before-report names that run separately. Give one, never both.");
   }
+  const namesFlag = context.args.values["names-from-report"];
+  const namesReports = namesFlag === undefined ? null : commaList(namesFlag);
+  if (namesReports !== null && (!requireRed || namesReports.length === 0)) throw new VerbUsageError("--names-from-report needs --require-red and at least one report path");
   const mode: MapMode = requireRed ? "require-red" : beforeReports !== null ? "before-after" : "after";
   const issueFlag = context.args.values["issue"];
   const anchor = parseAnchor(issueFlag);
@@ -226,6 +234,8 @@ function runMap(context: CommandContext): number {
   if ("reason" in after) return finish(unreadableMap(names, after.reason));
   const before = beforeReports === null ? null : readReports(root, beforeReports, "--before-report");
   if (before !== null && "reason" in before) return finish(unreadableMap(names, before.reason));
+  const namesRead = namesReports === null ? null : readReports(root, namesReports, "--names-from-report");
+  if (namesRead !== null && "reason" in namesRead) return finish(unreadableMap(names, namesRead.reason));
   return finish(
     mapTests({
       mode,
@@ -236,6 +246,7 @@ function runMap(context: CommandContext): number {
       prefix: catalogue?.criteriaPrefix ?? DEFAULT_CRITERIA_PREFIX,
       testReports,
       tests: after.tests,
+      ...(namesRead === null || namesReports === null ? {} : { namesTests: namesRead.tests, namesReports }),
       beforeReports,
       before: before === null ? null : before.tests,
     }),
@@ -248,7 +259,7 @@ export const testsCommand: Command = {
   summary: "Map an issue's acceptance criteria to the tests that name them, and read a red-first checkpoint.",
   usage: USAGE,
   flags: {
-    values: ["issue-body", "test-report", "before-report", "issue", "requirements-from"],
+    values: ["issue-body", "test-report", "before-report", "names-from-report", "issue", "requirements-from"],
     booleans: ["require-red"],
   },
   run(context: CommandContext): number {

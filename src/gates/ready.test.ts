@@ -364,7 +364,7 @@ describe("evaluateReady -- every row is evaluated; the verdict stays the conjunc
     expect(evaluation.failing).toEqual(["checks-green", "unresolved-threads"]);
     // `firstFailing` and the LINE are exactly what they were: the first failure.
     expect(evaluation.firstFailing).toBe("checks-green");
-    expect(evaluation.line).toBe("not-ready: required checks reported but are not all green (CON-32a) — failing: windows / test");
+    expect(evaluation.line).toBe("not-ready: required checks reported but are not all green (CON-32a) — failing: windows / test (FAILURE)");
     const threads = evaluation.conjuncts.find((c): boolean => c.id === "unresolved-threads");
     expect(threads?.status).toBe("failed");
     expect(threads?.reason).toBe("not-ready: 2 unresolved review thread(s) (CON-32d)");
@@ -486,7 +486,7 @@ describe("evaluateReady -- CON-32(a), transcribed reason strings", () => {
       readyState({ checks: [{ name: "ci / build", status: "COMPLETED", conclusion: "FAILURE" }] }),
       OPTIONS,
     );
-    expect(evaluation.line).toBe("not-ready: required checks reported but are not all green (CON-32a) — failing: ci / build");
+    expect(evaluation.line).toBe("not-ready: required checks reported but are not all green (CON-32a) — failing: ci / build (FAILURE)");
   });
 
   it("a PENDING run whose conclusion gh wrote as \"\" is judged, and never ready (zheref/nen#304)", () => {
@@ -617,7 +617,7 @@ describe("evaluateReady -- --exclude-check (zheref/hatsu#81)", () => {
       { ...OPTIONS, excludeCheckNames: ["readiness"] },
     );
     expect(evaluation.ready).toBe(false);
-    expect(evaluation.line).toBe("not-ready: required checks reported but are not all green (CON-32a) — failing: ci / build");
+    expect(evaluation.line).toBe("not-ready: required checks reported but are not all green (CON-32a) — failing: ci / build (FAILURE)");
   });
 
   it("a comma-joined multi-name exclusion drops every named check", () => {
@@ -2372,4 +2372,26 @@ describe("evaluateReady -- round_check_producer (zheref/nen#546)", () => {
       { checkSuiteId: 4, runId: null, path: ".github/workflows/a.yml", repository: "o/r", event: "push", pullRequests: [], jobIds: null },
     ]);
   });
+});
+
+describe("per-check readiness evidence (#531)", () => {
+  it("names all failing and pending checks, with exclusions separated in JSON", () => {
+    const evaluation = evaluateReady(IDENTITIES, readyState({ checks: [greenCheck(), { name: "ubuntu real error", status: "COMPLETED", conclusion: "FAILURE" }, { name: "pending macOS", status: "QUEUED", conclusion: null }, { name: "offline windows", status: "QUEUED", conclusion: null }] }), { ...OPTIONS, excludeCheckNames: ["offline windows"] });
+    const row = evaluation.conjuncts.find((row) => row.id === "checks-green");
+    expect(row?.reason).toContain("ubuntu real error (FAILURE)");
+    expect(row?.reason).toContain("pending macOS (PENDING)");
+    expect(row?.checks).toEqual(expect.arrayContaining([{ name: "offline windows", conclusion: "PENDING", excluded: true }, { name: "ubuntu real error", conclusion: "FAILURE", excluded: false }]));
+  });
+  it("keeps per-check facts on an all-skipped non-green row", () => {
+    const evaluation = evaluateReady(IDENTITIES, readyState({ checks: [{ name: "not run", status: "COMPLETED", conclusion: "SKIPPED" }] }), OPTIONS);
+    expect(evaluation.conjuncts.find((row) => row.id === "checks-green")?.checks).toEqual([{ name: "not run", conclusion: "SKIPPED", excluded: false }]);
+  });
+});
+
+it("does not report terminal STALE/STARTUP_FAILURE checks as pending (#531)", () => {
+  for (const conclusion of ["STALE", "STARTUP_FAILURE"]) {
+    const evaluation = evaluateReady(IDENTITIES, readyState({ checks: [{ name: "terminal failure", status: "COMPLETED", conclusion }] }), OPTIONS);
+    expect(evaluation.line).toContain(conclusion);
+    expect(evaluation.line).not.toContain("pending:");
+  }
 });

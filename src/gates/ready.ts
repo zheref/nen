@@ -332,6 +332,7 @@
 import {
   cancelledLatestReport,
   checksAllGreen,
+  checkAdmissible,
   readinessUndetermined,
   checksSettled,
   dependabotCarveOutSatisfied,
@@ -373,7 +374,7 @@ import {
 } from "../github/parse.js";
 import { producerOptInWarnings, untilText, type GateIdentities } from "../schema/gates.js";
 import { exactLoginPattern } from "../schema/pattern.js";
-import type { RollupEntry } from "../github/types.js";
+import { rollupEntryLabel, rollupEntryStatus, type RollupEntry } from "../github/types.js";
 import type { RunPullRequest, WorkflowRunEvidence } from "./producer.js";
 
 // ── tiny jq equivalents ──────────────────────────────────────────────────────
@@ -493,6 +494,7 @@ export type ConjunctId =
 export type ConjunctStatus = "ready" | "failed" | "unevaluated";
 
 export interface Conjunct {
+  readonly checks?: readonly { readonly name: string; readonly conclusion: string; readonly excluded: boolean }[];
   readonly id: ConjunctId;
   /** 1-based position in evaluation order -- the table's own numbering. */
   readonly order: number;
@@ -1486,12 +1488,14 @@ export function evaluateReady(
     // the common green path one pass cheaper.
     const report = cancelledLatestReport(latestChecks(checksExcluded));
     const cancelledList = report.cancelled.join(", ");
-    const failingList = report.failing.join(", ");
+    const failingList = latest.filter((entry) => report.failing.includes(rollupEntryLabel(entry) ?? "unnamed check")).map((entry) => `${rollupEntryLabel(entry)} (${rollupEntryStatus(entry) ?? "PENDING"})`).join(", ");
+    const pending = latest.filter((entry) => !checkAdmissible(entry) && (rollupEntryStatus(entry) === null || ["PENDING", "EXPECTED"].includes(rollupEntryStatus(entry) ?? ""))).map((entry) => `${entry.kind === "check_run" ? entry.name ?? "unnamed check" : entry.context ?? "unnamed check"} (${rollupEntryStatus(entry) ?? "PENDING"})`);
+    const pendingNote = pending.length === 0 ? "" : `; pending: ${pending.join(", ")}`;
     if (cancelledList !== "") {
       return failed(
         "not-ready: required checks are not all green (CON-32a) — latest run CANCELLED, no " +
           `verdict (needs a re-run, not a fix): ${cancelledList}` +
-          (failingList === "" ? "" : `; failing: ${failingList}`),
+          (failingList === "" ? "" : `; failing: ${failingList}`) + pendingNote,
       );
     }
     // EVERY CHECK SKIPPED OR NEUTRAL (zheref/nen#331): nothing failed, and
@@ -1505,7 +1509,7 @@ export function evaluateReady(
       );
     }
     return failed("not-ready: required checks reported but are not all green (CON-32a)" +
-      (failingList === "" ? "" : ` — failing: ${failingList}`));
+      (failingList === "" ? "" : ` — failing: ${failingList}`) + pendingNote);
   })();
 
   // ── row 6: zero unresolved threads (CON-32(d)) ──────────────────────────
@@ -1811,6 +1815,10 @@ export function evaluateReady(
     }
   }
 
+  const checkFacts = parsedChecks.ok ? ((): NonNullable<Conjunct["checks"]> => {
+    const included = new Set(excludeCheckNames(checksExcludedByRun, excludedNames));
+    return latestChecks(parsedChecks.value).map((entry) => ({ name: entry.kind === "check_run" ? entry.name ?? "unnamed check" : entry.context ?? "unnamed check", conclusion: rollupEntryStatus(entry) ?? "PENDING", excluded: !included.has(entry) }));
+  })() : [];
   const conjuncts = table({
     mergeable: mergeableRow,
     "checks-green": checksRow,
@@ -1818,7 +1826,7 @@ export function evaluateReady(
     "rounds-owed": owedRow,
     "approvals-at-head": approvalsRow,
     "unresolved-threads": threadsRow,
-  });
+  }).map((row): Conjunct => row.id === "checks-green" && (row.status !== "ready" || checkFacts.some((check) => check.excluded)) ? { ...row, checks: checkFacts } : row);
   const failing = conjuncts
     .filter((conjunct): boolean => conjunct.status === "failed")
     .map((conjunct): ConjunctId => conjunct.id);

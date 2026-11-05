@@ -41,7 +41,7 @@ export type MapMode = "after" | "require-red" | "before-after";
 export type MapVerdict = "met" | "unmet" | "not-verifiable" | "could-not-read";
 /** A criterion against its mapped tests in the one report read as the run. */
 export type Outcome = "passing" | "failing" | "skipped" | "untested";
-export type Checkpoint = "red-first" | "green-only" | "failing" | "untested" | "red" | "not-red";
+export type Checkpoint = "red-first" | "green-only" | "failing" | "untested" | "red" | "not-red" | "unreadable";
 
 /** Which issue the map is for, when `--issue` names it: anchors qualified tokens. */
 export interface IssueAnchor {
@@ -99,6 +99,7 @@ export interface TestsMapReport {
   readonly issueBody: string;
   readonly issue: string | null;
   readonly testReports: readonly string[];
+  readonly namesReports?: readonly string[];
   readonly beforeReports: readonly string[] | null;
   readonly criteria: readonly CriterionMap[];
   readonly unrequested: readonly UnrequestedTest[];
@@ -237,6 +238,8 @@ export interface MapInput {
   readonly prefix: string;
   readonly testReports: readonly string[];
   readonly tests: readonly TestCase[];
+  readonly namesTests?: readonly TestCase[];
+  readonly namesReports?: readonly string[];
   readonly beforeReports: readonly string[] | null;
   readonly before: readonly TestCase[] | null;
 }
@@ -252,12 +255,19 @@ export function mapTests(input: MapInput): TestsMapReport {
   const redRun = input.mode === "before-after" ? (input.before ?? []) : input.mode === "require-red" ? input.tests : [];
   const loadFailures = [...new Set(redRun.filter(isLoadFailure).map((test): string => test.suite as string))].sort();
   const loadFailed = new Set(input.mode === "before-after" ? loadFailures : []);
+  const names = input.namesTests?.filter((test) => !isLoadFailure(test)) ?? [];
+  const real = new Map(input.tests.map((test) => [identity(test), test]));
+  const testsToMap = input.mode !== "require-red" || names.length === 0 ? input.tests : [
+    ...input.tests,
+    ...names.filter((test) => !real.has(identity(test))).map((test): TestCase => ({ ...test, status: test.suite !== null && loadFailures.includes(test.suite) ? "failed" : "skipped" })),
+  ];
+  const unreadableRed = input.mode === "require-red" && loadFailures.length > 0 && names.length === 0;
   const numbers = new Map<number, Criterion>();
   for (const criterion of input.criteria.criteria) if (!numbers.has(criterion.number)) numbers.set(criterion.number, criterion);
   const byNumber = new Map<number, MappedTest[]>();
   const unrequested: UnrequestedTest[] = [];
   const foreign: ForeignTest[] = [];
-  for (const test of input.tests) {
+  for (const test of testsToMap) {
     const text = test.suite === null ? test.name : `${test.suite} ${test.name}`;
     const numbered = new Set<number>();
     const refs = input.issue === null ? [] : issueRefsIn(text);
@@ -284,7 +294,7 @@ export function mapTests(input: MapInput): TestsMapReport {
   const criteria: CriterionMap[] = [...numbers.values()].map((criterion): CriterionMap => {
     const tests = byNumber.get(criterion.number) ?? [];
     const outcome = outcomeOf(tests);
-    const checkpoint = checkpointOf(input.mode, outcome, tests);
+    const checkpoint = unreadableRed ? "unreadable" : checkpointOf(input.mode, outcome, tests);
     return {
       id: criterion.id,
       number: criterion.number,
@@ -299,6 +309,7 @@ export function mapTests(input: MapInput): TestsMapReport {
     };
   });
   const blocking: string[] = [];
+  if (unreadableRed) blocking.push(`load-failed suites: ${loadFailures.join(", ")}; checkpoint could not be read per criterion without --names-from-report`);
   if (!input.criteria.verifiable) blocking.push(`${input.issueBody} states no ${input.prefix}-{n} row: nothing to map, never "all mapped"`);
   for (const criterion of criteria) {
     if (criterion.met) continue;
@@ -311,12 +322,13 @@ export function mapTests(input: MapInput): TestsMapReport {
   const mapped = criteria.filter((criterion): boolean => criterion.status === "mapped").length;
   return {
     contract: TESTS_MAP_CONTRACT,
-    verdict: !input.criteria.verifiable ? "not-verifiable" : blocking.length === 0 ? "met" : "unmet",
+    verdict: unreadableRed ? "could-not-read" : !input.criteria.verifiable ? "not-verifiable" : blocking.length === 0 ? "met" : "unmet",
     mode: input.mode,
     issueBody: input.issueBody,
     issue: input.issueLabel,
     testReports: input.testReports,
     beforeReports: input.beforeReports,
+    ...(input.namesReports === undefined ? {} : { namesReports: input.namesReports }),
     criteria,
     unrequested,
     foreign,
@@ -333,7 +345,7 @@ export function mapTests(input: MapInput): TestsMapReport {
       tests: input.tests.length,
     },
     blocking,
-    reason: null,
+    reason: unreadableRed ? `checkpoint could not be read per criterion: load-failed suites ${loadFailures.join(", ")}; supply --names-from-report` : null,
   };
 }
 

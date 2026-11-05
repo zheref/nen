@@ -1450,6 +1450,11 @@ export async function fetchPrState(
     };
   }
 
+  if (node.state === "MERGED" || node.state === "CLOSED") {
+    if ((node.state === "MERGED" || node.mergeCommitOid !== null && node.mergeCommitOid !== undefined) && (typeof node.mergeCommitOid !== "string" || !/^[0-9a-f]{40}$/i.test(node.mergeCommitOid))) return { ok: false, reason: "terminal pull request has no valid full merge commit SHA", remedy: "Ask GitHub again; a merged PR must name its merge commit." };
+    return { ok: true, warnings: [], state: { pr_state: node.state, merge_commit: node.mergeCommitOid, head_sha: node.headRefOid } };
+  }
+
   // CON-42/1's draft clause (zheref/nen#331) reads `isDraft`, and an answer
   // that is not a boolean is never read as "not a draft" (Feitan F4): GraphQL
   // types it `Boolean!`, so anything else is not a fact about the PR.
@@ -1730,6 +1735,8 @@ export async function fetchPrState(
     ok: true,
     warnings: [...threads.warnings, ...headWorkflow.warnings, ...earlier.warnings, ...budgetWarnings, ...requestWarnings],
     state: {
+      pr_state: node.state,
+      merge_commit: node.mergeCommitOid,
       mergeable,
       // CON-42/1's draft clause (zheref/nen#331): a draft is never ready.
       is_draft: node.isDraft,

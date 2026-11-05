@@ -1062,7 +1062,7 @@ describe("prReady -- check-rollup pagination (zheref/nen#14's fact-check, zheref
     expect(report.verdict).toBe("not-ready");
     expect(report.firstFailing).toBe("checks-green");
     // #532 retains the failure and names the entry that page two supplied.
-    expect(report.gateLine).toBe("caller-supplied judgement (not an authoritative verdict): not-ready: required checks reported but are not all green (CON-32a) — failing: sasuke / audit");
+    expect(report.gateLine).toBe("caller-supplied judgement (not an authoritative verdict): not-ready: required checks reported but are not all green (CON-32a) — failing: sasuke / audit (FAILURE)");
   });
 
   it("a FETCH FAILURE on page two is unevaluated, NEVER a partial ready -- the entry never seen cannot be weighed as green", async () => {
@@ -1671,7 +1671,7 @@ describe("prReady -- every CON-32 row is reported, not the first failure alone (
     expect(report.verdict).toBe("not-ready");
     expect(report.firstFailing).toBe("checks-green");
     expect(report.failing).toEqual(["checks-green", "unresolved-threads"]);
-    expect(report.gateLine).toBe("caller-supplied judgement (not an authoritative verdict): not-ready: required checks reported but are not all green (CON-32a) — failing: ci / windows");
+    expect(report.gateLine).toBe("caller-supplied judgement (not an authoritative verdict): not-ready: required checks reported but are not all green (CON-32a) — failing: ci / windows (FAILURE)");
     const threads = report.conjuncts.find((c): boolean => c.id === "unresolved-threads");
     expect(threads?.status).toBe("failed");
     expect(threads?.reason).toBe("not-ready: 2 unresolved review thread(s) (CON-32d)");
@@ -1689,7 +1689,7 @@ describe("prReady -- every CON-32 row is reported, not the first failure alone (
   it("the plain line stays the first failure; every OTHER failing row follows it", async () => {
     const { io, out } = capture();
     await prReady(input({ booleans: new Set() }), io, stubDeps(redCheckAndThreads()));
-    expect(out[0]).toBe("zheref/example#9: caller-supplied judgement (not an authoritative verdict): not-ready: required checks reported but are not all green (CON-32a) — failing: ci / windows");
+    expect(out[0]).toBe("zheref/example#9: caller-supplied judgement (not an authoritative verdict): not-ready: required checks reported but are not all green (CON-32a) — failing: ci / windows (FAILURE)");
     expect(out).toContain("  also FAILED CON-32(d): not-ready: 2 unresolved review thread(s) (CON-32d)");
   });
 
@@ -3131,4 +3131,65 @@ describe("prReady placeholder diagnostics (#532)", () => {
       expect(report.conjuncts.find((row) => row.id === "checks-green")?.status).toBe("unevaluated");
     }
   });
+});
+
+describe("terminal pull requests (#531)", () => {
+  it("answers merged/closed distinctly without readiness-only reads or synthetic unknown rows", async () => {
+    for (const state of ["MERGED", "CLOSED"]) {
+      const source = stubSource();
+      const snapshot = await source.pullRequestSnapshot({ owner: "o", repo: "n" }, 9);
+      if (snapshot.pullRequest === undefined) throw new Error("fixture PR is absent");
+      const pull = snapshot.pullRequest;
+      const terminal = stubSource({
+        pullRequestSnapshot: async () => ({ ...snapshot, pullRequest: { ...pull, state, mergeCommitOid: state === "MERGED" ? "1".repeat(40) : null }, checkRollup: undefined }),
+        reviews: async () => { throw new Error("terminal PR must not read reviews"); },
+        timeline: async () => { throw new Error("terminal PR must not read timeline"); },
+      });
+      const { io, out, err } = capture();
+      const code = await prReady(input(), io, stubDeps(terminal));
+      expect(code, err.join("\n")).toBe(10);
+      const report = JSON.parse(out.join("\n"));
+      expect(report.verdict).toBe(state.toLowerCase());
+      expect(report.terminal.mergeCommit).toBe(state === "MERGED" ? "1".repeat(40) : null);
+      expect(report.conjuncts).toEqual([]);
+      const text = capture();
+      expect(await prReady(input({ booleans: new Set() }), text.io, stubDeps(terminal))).toBe(10);
+      expect(text.out).toHaveLength(1);
+      expect(text.out[0]).toContain(`${state.toLowerCase()}: merge commit`);
+    }
+  });
+});
+
+it("reports non-green names/conclusions and raw excluded checks apart in human/JSON output (#531)", async () => {
+  const source = stubSource(); const snapshot = await source.pullRequestSnapshot({ owner: "o", repo: "n" }, 9);
+  const red = stubSource({ pullRequestSnapshot: async () => ({ ...snapshot, checkRollup: [
+    { name: "ubuntu regression", status: "COMPLETED", conclusion: "FAILURE" },
+    { name: "mac waiting", status: "QUEUED", conclusion: null },
+    { name: "offline windows", status: "QUEUED", conclusion: null },
+  ] }) });
+  for (const mode of [new Set<string>(), new Set(["json"])]) {
+    const { io, out } = capture();
+    expect(await prReady(input({ values: { ...input().values, "exclude-check": "offline windows" }, booleans: mode }), io, stubDeps(red))).toBe(1);
+    if (mode.has("json")) {
+      const checks = JSON.parse(out.join("\n")).conjuncts.find((row: { id: string }) => row.id === "checks-green").checks;
+      expect(checks).toContainEqual({ name: "offline windows", conclusion: "PENDING", excluded: true });
+    } else {
+      expect(out).toContain("  EXCLUDED offline windows: PENDING");
+      expect(out).toContain("  CHECK ubuntu regression: FAILURE");
+      expect(out).toContain("  CHECK mac waiting: PENDING");
+    }
+  }
+});
+
+it("refuses to report a merged state with an invalid merge commit (#531)", async () => {
+  const source = stubSource(); const snapshot = await source.pullRequestSnapshot({ owner: "o", repo: "n" }, 9);
+  if (snapshot.pullRequest === undefined) throw new Error("missing fixture PR");
+  const pull = snapshot.pullRequest;
+  const invalid = stubSource({ pullRequestSnapshot: async () => ({ ...snapshot, pullRequest: { ...pull, state: "MERGED", mergeCommitOid: "invalid" } }) });
+  const { io, out } = capture();
+  expect(await prReady(input(), io, stubDeps(invalid))).toBe(1);
+  const report = JSON.parse(out.join("\n"));
+  expect(report.verdict).toBe("unevaluated");
+  expect(report.terminal).toBeUndefined();
+  expect(report.gateLine).toContain("merge commit SHA");
 });
