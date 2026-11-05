@@ -1,0 +1,1 @@
+- Acceptance criteria now admit catalogue-declared priority annotations and skip withdrawn rows, preserve epic IDs in body checks, ignore unrelated PR tables and paths, and can be read from one trusted marker comment with explicit source provenance (#553, #558, #610).

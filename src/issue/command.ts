@@ -91,6 +91,7 @@ import {
   selectKind,
 } from "./shape.js";
 import { readTitleFile } from "./title.js";
+import { readIssueCriteria } from "./criteria-source.js";
 import { extractCriteria, ISSUE_CRITERIA_CONTRACT } from "./criteria.js";
 import { plainLine } from "../cli/plain.js";
 
@@ -2436,11 +2437,12 @@ function issueQuestions(context: CommandContext): number {
 function issueCriteria(context: CommandContext): number {
   const catalogue = optionalCatalogue(context);
   const { body, source } = readShapeBody(context, "criteria");
-  const report = extractCriteria(body, catalogue);
+  const report = source.kind === "file" ? extractCriteria(body, catalogue) : readIssueCriteria(context.seams, requireTarget(context), source.number, body, catalogue);
   const lines = [
     report.verifiable
       ? `${report.criteria.length} AC row(s), ${report.duplicates.length} duplicate id(s) -- ${describeSource(source)}`
       : `0 AC row(s): not verifiable -- ${describeSource(source)}`,
+    ...(report.criteriaSource?.kind === "comment" ? [`Criteria source: ${report.criteriaSource.url}; ignored: ${report.criteriaSource.ignored.join(", ")}`] : []),
     ...report.criteria.map((criterion): string => `${criterion.id} line ${criterion.line}: ${criterion.text}`),
     ...report.duplicates.map((duplicate): string => `DUPLICATE ${duplicate.id} lines ${duplicate.lines.join(", ")}`),
     ...report.unrecognised.map((row): string => `UNRECOGNISED line ${row.line}: ${row.text}`),

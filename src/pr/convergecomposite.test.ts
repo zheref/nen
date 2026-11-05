@@ -1,3 +1,4 @@
+import { CriteriaTestSeams } from "../issue/criteria-test-seams.js";
 // src/pr/convergecomposite.test.ts -- `nen pr converge --composite` (zheref/nen#483
 // AC-1): readiness, the body check, the closing-issue links and the criteria
 // coverage, all read at one pinned head; a moved head or an unfinished read is
@@ -6,7 +7,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
+import { type ScriptedCall } from "../seam/scripted.js";
 import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 import type { PrReadyDeps } from "../verbs/pr_ready.js";
 import type { PrStateSource } from "../github/pr_state.js";
@@ -93,7 +94,7 @@ const issueCall = (body: string): ScriptedCall => ({ match: "gh api repos/zheref
 const headCall = (head = HEAD): ScriptedCall => ({ match: HEAD_VIEW, result: { stdout: JSON.stringify({ headRefOid: head }) } });
 
 async function judge(calls: readonly ScriptedCall[], source: PrStateSource = readySource()): Promise<CompositeVerdict> {
-  return convergeComposite({ seams: new ScriptedSeams(calls), target: TARGET, prNumber: 5, requireHead: HEAD, requirements: REQUIREMENTS, catalogue: null, repoFlag: null, deps: deps(source) });
+  return convergeComposite({ seams: new CriteriaTestSeams(calls), target: TARGET, prNumber: 5, requireHead: HEAD, requirements: REQUIREMENTS, catalogue: null, repoFlag: null, deps: deps(source) });
 }
 
 describe("pr converge --composite (zheref/nen#483 AC-1)", () => {
@@ -147,7 +148,7 @@ describe("pr converge --composite: usage", () => {
     const { prCommand } = await import("./command.js");
     const run = async (extra: readonly string[]): Promise<{ code: number; err: string }> => {
       const err: string[] = [];
-      const code = await runFamily(prCommand, ["pr", "converge", "--target", "zheref/example", "--pr", "5", ...extra], null, false, { out: (): void => undefined, err: (line): void => void err.push(line) }, new ScriptedSeams([]));
+      const code = await runFamily(prCommand, ["pr", "converge", "--target", "zheref/example", "--pr", "5", ...extra], null, false, { out: (): void => undefined, err: (line): void => void err.push(line) }, new CriteriaTestSeams([]));
       return { code, err: err.join("\n") };
     };
     expect((await run(["--composite", "--body-requirements", "r.json"])).err).toMatch(/--require-head <sha> is required/);

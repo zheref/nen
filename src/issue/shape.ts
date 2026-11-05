@@ -216,7 +216,7 @@ export function criterionCellPatterns(grammar: CriterionGrammar): { readonly bar
   return {
     bare: new RegExp(`^${id}$`),
     qualified: new RegExp(`^(?<nenCellPrefix>[A-Za-z][A-Za-z0-9]*|[A-Za-z0-9._-]+\\/[A-Za-z0-9._-]+)?#(?<nenCellIssue>\\d{1,9})\\/${id}$`),
-    mention: new RegExp(grammar.prefix.toUpperCase() === DEFAULT_CRITERIA_PREFIX ? `${prefix}-` : `(?:${prefix}|${DEFAULT_CRITERIA_PREFIX})-`, "i"),
+    mention: new RegExp(`^(?:(?:[^\\s#]+)?#[^\\s/]+/)?${grammar.prefix.toUpperCase() === DEFAULT_CRITERIA_PREFIX ? prefix : `(?:${prefix}|${DEFAULT_CRITERIA_PREFIX})`}-`, "i"),
   };
 }
 
@@ -875,7 +875,7 @@ export interface IdRowsRead {
  * `canonical` carries its id as written, so a catalogue pattern is matched
  * against what the row says.
  */
-export function readIdRows(lines: readonly MaskedLine[], prefix: string, tail?: string): IdRowsRead {
+export function readIdRows(lines: readonly MaskedLine[], prefix: string, tail?: string, open: RegExp | null = null): IdRowsRead {
   const id = escapeRegExp(prefix);
   const shape = tail ?? ROW_ID_TAIL;
   const first = new RegExp(`^(?:\\*\\*|__|~~|\\*|_)*${id}-(?:\\d|(?:${shape}))`);
@@ -899,7 +899,10 @@ export function readIdRows(lines: readonly MaskedLine[], prefix: string, tail?: 
     const idAt = rest.indexOf(`${prefix}-`);
     const colon = rest.indexOf(":", idAt);
     const span = (colon < 0 ? rest.length : colon) - (idAt + prefix.length + 1);
-    const match = span > MAX_CRITERION_CELL ? null : admitted.exec(rest);
+    const annotated = rest.replace(/ \(P[0-9]+\)(?=\s*:)/, "");
+    const canonical = `- ${rest}`;
+    const allowsAnnotation = open !== null && open.test(canonical);
+    const match = span > MAX_CRITERION_CELL ? null : admitted.exec(allowsAnnotation ? annotated : rest);
     if (quoted || match === null) {
       unrecognised.push({ line: line.line, text: line.text.trim() });
       continue;
@@ -913,7 +916,7 @@ export function readIdRows(lines: readonly MaskedLine[], prefix: string, tail?: 
     }
     const text = (match.groups?.["nenRowText"] as string).trim();
     const rowId = criterionId(prefix, written);
-    rows.push({ id: rowId, number, text, line: line.line, canonical: `- ${tail === undefined ? rowId : `${prefix}-${written}`}: ${text}` });
+    rows.push({ id: rowId, number, text, line: line.line, canonical: allowsAnnotation ? canonical : `- ${tail === undefined ? rowId : `${prefix}-${written}`}: ${text}` });
   }
   return { rows, unrecognised, otherItems };
 }
@@ -1006,10 +1009,10 @@ export function checkIssueBody(body: string, catalogue: IssueSectionsCatalogue, 
     } else {
       // The v1 shape: every list item in a rows section is a row in its pattern's shape.
       const lines = extent.map((at): MaskedLine => masked[at] as MaskedLine);
-      const idRows = readIdRows(lines, prefix, rule.rows.idTail);
+      const idRows = readIdRows(lines, prefix, rule.rows.idTail, new RegExp(rule.rows.pattern));
       const open = new RegExp(rule.rows.pattern);
       const resolved = rule.rows.resolvedPattern === undefined ? null : new RegExp(rule.rows.resolvedPattern);
-      const idFirst = new RegExp(`^(?:~~)?${escapeRegExp(prefix)}-(\\d{1,9})`);
+      const idFirst = new RegExp(`^(?:~~)?${escapeRegExp(prefix)}-(${rule.rows.idTail ?? ROW_ID_TAIL})(?=~~|[ :])`);
       found = [];
       const tryRow = (line: number, canonical: string, rowId: string, number: number, rest: string): void => {
         if (open.test(canonical) || (resolved !== null && resolved.test(canonical))) found.push({ id: rowId, number, rest, line });
@@ -1022,7 +1025,7 @@ export function checkIssueBody(body: string, catalogue: IssueSectionsCatalogue, 
         const quoted = lead !== null && (lead[1] ?? "").includes(">");
         const rest = lead === null ? row.text : row.text.slice(lead[0].length);
         const number = idFirst.exec(rest.replace(/^(?:\*\*|__)/, ""));
-        if (!quoted && resolved !== null && number !== null) tryRow(row.line, `- ${rest}`, `${prefix}-${Number(number[1])}`, Number(number[1]), rest);
+        if (!quoted && resolved !== null && number !== null) tryRow(row.line, `- ${rest}`, criterionId(prefix, number[1] as string), idNumber(number[1] as string) ?? 0, rest);
         else misses.push({ section: rule.id, kind: "row-shape", line: row.line, detail: `a row naming ${prefix}-<n> in no admitted shape: '${row.text}'` });
       }
       for (const item of idRows.otherItems) {

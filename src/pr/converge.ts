@@ -24,8 +24,9 @@
 
 import { GH, outputLines, type Seams } from "../seam/exec.js";
 import type { Target } from "../github/target.js";
+import { readIssueCriteria } from "../issue/criteria-source.js";
 import { readIssue } from "../issue/subissue.js";
-import { converge, extractCriteria, type ClosingIssue, type CoveragePolicy, DEFAULT_COVERAGE_POLICY } from "../issue/criteria.js";
+import { converge, type ClosingIssue, type CoveragePolicy, DEFAULT_COVERAGE_POLICY } from "../issue/criteria.js";
 import { maskedLines, type IssueSectionsCatalogue } from "../issue/shape.js";
 
 export class ConvergeReadError extends Error {
@@ -227,7 +228,11 @@ export function convergeInputFromView(
     }
     if (summary.isPullRequest) throw new ConvergeReadError(`${slug}#${number}, a closing reference of ${target.slug}#${prNumber}, names a pull request, not an issue.`);
     if (summary.body === undefined) throw new ConvergeReadError(`could not read ${slug}#${number}'s body: the API payload carried no 'body' field.`);
-    issues.push({ target: slug, number, report: extractCriteria(summary.body.replace(/\r\n?/g, "\n"), catalogue) });
+    try {
+      issues.push({ target: slug, number, report: readIssueCriteria(seams, issueTarget, number, summary.body.replace(/\r\n?/g, "\n"), catalogue) });
+    } catch (error) {
+      throw new ConvergeReadError(error instanceof Error ? error.message : String(error));
+    }
   }
   const url = parsed["url"];
   const head = parsed["headRefOid"];
