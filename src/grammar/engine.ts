@@ -66,6 +66,8 @@ export interface Alternative {
 }
 
 export interface Slot {
+  /** An explicitly first-anchored trailing free-text clause. */
+  readonly firstAnchored?: boolean;
   /**
    * The position's name: its one alternative's name, or every alternative's
    * name joined by '|' (`gate|severity|label`) when the template alternates.
@@ -156,7 +158,7 @@ export class GrammarError extends Error {
 //                       them is refused, never read as free text. It is the
 //                       generic form of futon's '<severity>[+]|<label>'
 
-const TOKEN = /<([^<>]+)>|\[|\]|\{[^{}\s<>[\]|]+\}|\||[^\s<>[\]{}|]+/g;
+const TOKEN = /<([^<>]+)>|\[|\]|\{ \}|\{[^{}\s<>[\]|]+\}|\||[^\s<>[\]{}|]+/g;
 
 /**
  * A literal word waiting for the slot it will introduce, TAGGED WITH THE BRACKET
@@ -239,6 +241,14 @@ export function parseTemplate(template: string): Grammar {
         );
       }
       alternationPending = true;
+      continue;
+    }
+    if (raw === "{first}" && template.slice(0, match.index).trimEnd().endsWith("]")) {
+      const last = slots[slots.length - 1];
+      if (depth !== 0 || last === undefined || !last.optional || !last.separatorOptional || last.separatorKind !== "word" || last.values.length > 0 || last.joiner !== null || last.suffix !== null || last.alternatives.length !== 1 || clauses.some((clause) => clause.slotsBefore >= slots.length) || template.slice(TOKEN.lastIndex).trim() !== "") {
+        throw new GrammarError("{first} requires a final optional word-introduced free-text clause: '[literal <text>]{first}'");
+      }
+      slots[slots.length - 1] = { ...last, firstAnchored: true };
       continue;
     }
     if (inner === undefined && raw.startsWith("{") && raw.endsWith("}")) {
@@ -430,6 +440,13 @@ export function splitLastWord(text: string, phrase: string): { head: string; tai
   const words = phrase.trim().split(/\s+/).map(escapeRegex);
   const pattern = new RegExp(`(?<![A-Za-z0-9])${words.join("\\s+")}(?![A-Za-z0-9])`, "gi");
   return lastSplit(text, pattern);
+}
+
+/** First, case-sensitive whole-word anchor; its tail remains free text. */
+export function splitFirstWord(text: string, phrase: string): { head: string; tail: string } | null {
+  const words = phrase.trim().split(/\s+/).map(escapeRegex);
+  const hit = new RegExp(`(?<![A-Za-z0-9])${words.join("\\s+")}(?![A-Za-z0-9])`).exec(text);
+  return hit === null ? null : { head: text.slice(0, hit.index), tail: text.slice(hit.index + hit[0].length) };
 }
 
 /** The LAST occurrence of a symbol separator. No word boundary: `@` and `#` have none. */
@@ -643,7 +660,7 @@ function parseInvocationOnce(skill: string, grammar: Grammar, line: string): Inv
     const split =
       slot.separatorKind === "symbol"
         ? splitLastSymbol(remaining, slot.separator)
-        : splitLastWord(remaining, slot.separator);
+        : slot.firstAnchored === true ? splitFirstWord(remaining, slot.separator) : splitLastWord(remaining, slot.separator);
     if (split === null) {
       if (!slot.optional) missing.push(slot.name);
       continue;
@@ -831,7 +848,7 @@ function correctedLine(
       // (`onto [<target-branch>]`): 'onto' alone is a complete valid line,
       // and a corrected line that dropped the literal would not be.
       if (slot.separator !== null && !slot.separatorOptional) {
-        out += slot.separatorKind === "symbol" ? slot.separator : ` ${slot.separator}`;
+        out += slot.separatorKind === "symbol" && !/^-+$/.test(slot.separator) ? slot.separator : ` ${slot.separator}`;
       }
       continue;
     }
@@ -843,7 +860,7 @@ function correctedLine(
     if (slot.separator === null) {
       out += ` ${rendered}`;
     } else if (slot.separatorKind === "symbol") {
-      out += `${slot.separator}${rendered}`;
+      out += `${/^-+$/.test(slot.separator) ? " " : ""}${slot.separator}${rendered}`;
     } else {
       out += ` ${slot.separator} ${rendered}`;
     }
@@ -874,9 +891,13 @@ function matchValue(alternative: Alternative, text: string): string | undefined 
   return alternative.values.find((candidate): boolean => candidate.toLowerCase() === text.toLowerCase());
 }
 
+function splitItems(text: string, joiner: string): string[] {
+  return joiner === " " ? text.trim().split(/\s+/) : text.split(joiner);
+}
+
 function splitAll(text: string, separators: readonly string[]): string[] {
   let pieces = [text];
-  for (const separator of separators) pieces = pieces.flatMap((piece): string[] => piece.split(separator));
+  for (const separator of separators) pieces = pieces.flatMap((piece): string[] => splitItems(piece, separator));
   return pieces;
 }
 
@@ -889,7 +910,7 @@ interface StructuredRepair {
 function repairFreeList(slot: Slot, text: string): SlotValue | undefined {
   const free = slot.alternatives.find((alternative) => alternative.values.length === 0);
   if (free === undefined || free.joiner === null) return undefined;
-  const items = text.split(free.joiner).map((item) => item.trim()).filter((item) => item !== "");
+  const items = splitItems(text, free.joiner).map((item) => item.trim()).filter((item) => item !== "");
   if (items.length === 0) return undefined;
   const own = resolveSlot(slot, items.join(free.joiner));
   if (typeof own === "string" || (slot.alternatives.length > 1 && own.alternative !== free.name)) return undefined;
@@ -961,7 +982,7 @@ function resolveSlot(slot: Slot, text: string): SlotValue | string {
 
   for (const alternative of enumerated) {
     if (alternative.joiner !== null) {
-      const items = text.split(alternative.joiner).map((item): string => item.trim());
+      const items = splitItems(text, alternative.joiner).map((item): string => item.trim());
       const hits = items.map((item): string | undefined => matchValue(alternative, item));
       if (hits.every((hit): boolean => hit !== undefined)) {
         const normalised = hits as string[];
@@ -995,7 +1016,7 @@ function resolveSlot(slot: Slot, text: string): SlotValue | string {
 
   if (touched.length === 0 && free !== undefined) {
     if (free.joiner === null) return { name: slot.name, value: text, suffix: false, ...tag(free) };
-    const items = text.split(free.joiner).map((item): string => item.trim());
+    const items = splitItems(text, free.joiner).map((item): string => item.trim());
     if (items.some((item): boolean => item === "")) {
       return `<${free.name}> is one or more values joined by '${free.joiner}', and '${text}' has an empty item (a leading, trailing or doubled '${free.joiner}').`;
     }
@@ -1010,7 +1031,7 @@ function resolveSlot(slot: Slot, text: string): SlotValue | string {
   if (alternative === undefined) return `'${text}' fills no alternative of <${slot.name}>.`;
   const setText = `${alternative.values.join(" | ")} (case-insensitively)`;
   if (alternative.joiner !== null) {
-    const items = text.split(alternative.joiner).map((item): string => item.trim());
+    const items = splitItems(text, alternative.joiner).map((item): string => item.trim());
     if (items.some((item): boolean => item === "")) {
       return `<${alternative.name}> is one or more of ${setText} joined by '${alternative.joiner}', and '${text}' has an empty item (a leading, trailing or doubled '${alternative.joiner}').`;
     }

@@ -16878,6 +16878,32 @@ Corrected line:
 ```
 (exit 0, exit 0, exit 2: `<repo>` is required, so the empty line is still a refusal there)
 
+For a final optional free-text clause, append `{first}` to its bracket group:
+`<from:a|b> to <to:a|b> [ruling <text>]{first}`. Its literal is matched at the
+first **case-sensitive whole-word** occurrence, before resolving earlier slots.
+Repeated `to` or `ruling` words inside the tail remain text. Unmarked clauses
+keep their existing last-occurrence, case-insensitive behavior. The modifier is
+refused on enumerated/list/suffixed slots, literal-only clauses and clauses
+followed by more grammar. Internal tail whitespace is preserved; surrounding
+invocation/slot whitespace is trimmed as usual.
+
+A space list is written `<urls>{ }`. Whitespace-separated values yield `items`,
+with runs of whitespace normalized to one space in `value`. Hyphen-only symbol
+introducers in corrected lines have a space before them.
+
+The published shadow-clone grammar needs no `--grammar`:
+
+```sh
+nen parse kage-bunshin "https://github.com/zheref/hatsu/issues/470 https://github.com/zheref/nen/issues/300 --parallel --cap 3"
+nen parse kage-bunshin --line="https://github.com/zheref/nen/issues/300 --sequential"
+```
+
+Its template is `<urls>{ } --<mode:sequential|parallel> [--cap <cap>]`.
+Missing URLs or mode and unknown modes refuse by slot name. An absent cap is
+reported as `cap: (clause absent)` and supplies no slot or default number. Cap
+ceilings and URL/repository resolution remain the caller's policy. For a line
+beginning with a hyphen, use `--line=...`, as for other nen flag values.
+
 ### `nen parse futon`
 
 Parses futon's own invocation grammar (`<repo>@<severity>[+] [then <terminal>]`, or `<repo>@<label> [then <terminal>]`) and resolves its repo token against `--repo`'s `nen/repos.json` registry -- `+` means this severity band OR HIGHER, a bare severity means that band alone, any other token is a **label** matched exactly (case and spaces kept -- boundary spaces inside a quoted selector are part of the label too -- surrounding quotes stripped, never expanded: a trailing `+` stays part of the label verbatim unless the token in front of it is itself a severity, so `c++` is the label `c++`, not a refused severity-band operator; `--json` carries `band: null, label: "<label>"`), and the `then` clause starts at the FIRST whole-word `then` after the `@`: `tag`/`tag+fanout` are the built-in terminals, kebab skill tokens joined by `+`, each optionally `plugin:`-prefixed and `@<target>`-suffixed (`getsuga+mugetsu@github`), are classified as a **skill chain** run in order, and anything else as **prose** kept verbatim (`--json` carries `then: {kind: "terminal"|"skills"|"prose", ...}`, `skills` with `steps: [{skill, target}]` beside the unchanged `terminal`). nen classifies a skill or prose step and never authorizes it -- whether it exists and may run is the calling skill's rule. A tag terminal is refused unless the resolved repo IS the one you are standing in (or `--self` names it): a consumer's release is a different job than the registry owner's, and this refusal is what keeps a consumer's futon invocation from accidentally cutting the OWNER's tag.
