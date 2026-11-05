@@ -115,6 +115,7 @@ export const GUARDED_VERBS: readonly string[] = [
   "idea file",
   "pr open",
   "pr edit-body",
+  "pr edit-title",
   "pr threads reply",
   "pr threads settle",
   "pr ledger post",

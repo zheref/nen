@@ -1133,7 +1133,7 @@ function refuseStallOnTests(path: string, pointer: string, verb: string, value: 
   throw new SchemaError(
     path,
     first,
-    `declares a stall guard on the '${UNTIMED_VERB}' row, and tests are untimed: a test suite that goes quiet is a suite that is thinking, and a remedy fired at it would be nen deciding how long somebody else's tests may take. Remove the block; a stall guard belongs on a build-shaped row (build, ui-test, lint, archive, coverage, test-report)`,
+    `declares a stall guard on the '${UNTIMED_VERB}' row, and tests are untimed: a test suite that goes quiet is a suite that is thinking, and a remedy fired at it would be nen deciding how long somebody else's tests may take. Remove the block; a stall guard belongs on a build-shaped row (build, ui-test, lint, typecheck, archive, coverage, test-report)`,
   );
 }
 

@@ -1,6 +1,6 @@
 // src/shu/command.ts -- `nen shu ...`, the stack-aware developer verbs.
 //
-// FIFTEEN VERBS, AND ALL FIFTEEN DO SOMETHING NOW. The family was declared
+// SIXTEEN VERBS, AND ALL SIXTEEN DO SOMETHING NOW. The family was declared
 // whole from day one -- `detect` proposing a declaration, ten verbs executing
 // one, and `tools` and `warmup` refusing by name with the release they arrived
 // in -- for ../cli/registry.ts's reason: a verb that is absent today and
@@ -10,7 +10,7 @@
 // needed is gone rather than left standing empty.
 //
 // `evidence` IS THE ONE THAT FITS NEITHER SHAPE: it does not run a per-lane
-// invocation the way the eleven executing verbs do, and it does not read the
+// invocation the way the twelve executing verbs do, and it does not read the
 // filesystem for markers the way `detect` does. It reads `project.evidence` --
 // a project-level declaration, like `targets` -- and `git diff` through the
 // seam, and reports which of the changed files match the declared globs,
@@ -88,6 +88,7 @@ export const SHU_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   test: { values: ["lane", "effort", "heartbeat", "select"], booleans: ["dry-run", "stream"] },
   "ui-test": { values: ["lane", "effort", "heartbeat"], booleans: ["dry-run", "stream"] },
   lint: { values: ["lane", "effort", "heartbeat"], booleans: ["dry-run", "stream"] },
+  typecheck: { values: ["lane", "effort", "heartbeat"], booleans: ["dry-run", "stream"] },
   archive: { values: ["lane", "effort", "heartbeat"], booleans: ["dry-run", "stream"] },
   release: { values: ["lane", "effort", "heartbeat"], booleans: ["dry-run", "stream"] },
   // `--target` ON THESE TWO NAMES A DEVICE, NOT A DESTINATION: a key of
@@ -108,13 +109,14 @@ export const SHU_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   evidence: { values: ["base"] },
 };
 
-/** The fifteen, in the order the design lists them (not alphabetical). */
+/** The sixteen, in the order the design lists them (not alphabetical). */
 export const SHU_SUBCOMMANDS: readonly string[] = [
   "detect",
   "build",
   "test",
   "ui-test",
   "lint",
+  "typecheck",
   "archive",
   "release",
   "dev",
@@ -128,7 +130,7 @@ export const SHU_SUBCOMMANDS: readonly string[] = [
 ];
 
 /**
- * The eleven that execute a lane's declared invocation in this release.
+ * The twelve that execute a lane's declared invocation in this release.
  *
  * `test-report` IS ON THE LIST THOUGH IT DECLARES NOTHING OF ITS OWN. It runs
  * `project.verbs.<lane>.test` through the same executor and then parses what
@@ -142,6 +144,7 @@ export const EXECUTING_VERBS: readonly string[] = [
   "test",
   "ui-test",
   "lint",
+  "typecheck",
   "archive",
   "release",
   "dev",
@@ -163,9 +166,9 @@ export const EXECUTING_VERBS: readonly string[] = [
 const ENABLED_INSTALLER_IDS = ENABLED_INSTALLERS.join(", ");
 
 const USAGE = `${PROGRAM} shu <verb> [--repo <path>] [--lane <name>] [--dry-run] [--json]
-                  [--stream] [--heartbeat <s>]   (the nine verbs that run a step)
+                  [--stream] [--heartbeat <s>]   (the ten verbs that run a step)
 
---repo is bracketed there because fourteen of the fifteen verbs default it to the
+--repo is bracketed there because fifteen of the sixteen verbs default it to the
 directory you are standing in. It is REQUIRED on 'warmup', the one verb here
 that mutates git state: a verb that fetches into a repository, force-moves a
 branch ref and checks out a new branch must never do it to wherever this process
@@ -188,6 +191,11 @@ verbs:
               instead -- see --select below.
   ui-test     Run the lane's UI/E2E suite.
   lint        Run the lane's linter and format check.
+  typecheck   Run the lane's static type check (a TypeScript lane's
+              'tsc --noEmit', say): exit 0 when it passes, 1 when a step
+              fails, the checker's own code reported on the step line. A
+              lane that declares none is exit 4, naming the missing
+              nen/contract.json pointer project.verbs.<lane>.typecheck.
   archive     Produce the lane's distributable artifact.
   release     Publish it, where the lane declares a publication step.
   dev         Start the lane's DEBUG build. Long-running: nen inherits this
@@ -496,8 +504,8 @@ flags:
                    what a real run would decide differently -- that
                    '${DEFAULT_TRUNK}' is an assumption, and that the orphan-commit count is
                    asked only on a detached HEAD.
-  --stream         build, test, ui-test, lint, archive, release, deploy,
-                   coverage and test-report. Relay each step's stdout and
+  --stream         build, test, ui-test, lint, typecheck, archive, release,
+                   deploy, coverage and test-report. Relay each step's stdout and
                    stderr AS IT IS PRODUCED, whole line by whole line, instead
                    of once the step has exited (zheref/nen#244). The STREAMS
                    ARE KEPT: the child's stdout stays on stdout (on stderr
@@ -509,7 +517,7 @@ flags:
                    declared 'stdoutTo' keeps its stdout for that file under
                    both modes. ONLY --stream makes the log's growth reflect the
                    CHILD.
-  --heartbeat <s>  The same nine verbs. While a step is still running, print
+  --heartbeat <s>  The same ten verbs. While a step is still running, print
                    'nen shu: step <i> of <n> (<exe>) still running (<elapsed>)'
                    on stderr once per <s> seconds. ON BY DEFAULT, every 30
                    seconds, with or without --stream; '--heartbeat 0' turns it
@@ -1437,7 +1445,7 @@ export const shuCommand: Command = {
   summary: "Stack-aware developer verbs, from the target repo's own declaration.",
   usage: USAGE,
   flags: SHU_FLAGS,
-  // NOT AN `async` FUNCTION, AND THAT IS DELIBERATE. Three of the fifteen verbs
+  // NOT AN `async` FUNCTION, AND THAT IS DELIBERATE. Three of the sixteen verbs
   // -- `detect`, `tools`, `evidence` -- spawn nothing that has to be WATCHED and
   // stay synchronous under the hood, and one of them is called from another
   // family: ../scaffold/command.ts runs `shu tools` through this very

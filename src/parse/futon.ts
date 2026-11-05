@@ -90,6 +90,11 @@ export interface FutonInvocation {
    * calling skill's rule and nen/workflow.json's `idle` block.
    */
   readonly idle: boolean;
+  /**
+   * `--dry-run` was typed (zheref/nen#520): the caller asked for a dry futon
+   * run. nen reports the flag; what a dry run does is the calling skill's rule.
+   */
+  readonly dryRun: boolean;
 }
 
 export interface FutonParseError {
@@ -159,6 +164,181 @@ function nearMissTerminal(lowered: string): Terminal | null {
   return null;
 }
 
+// The flags of the scope, in the order a corrected line writes them back.
+const SCOPE_FLAGS = ["--idle", "--dry-run"] as const;
+type ScopeFlag = (typeof SCOPE_FLAGS)[number];
+
+// The text with every quoted span's interior blanked to spaces, same length,
+// so a scan for flag tokens never reads inside quotes (`nen@"x --idle"`,
+// `then "do not --dry-run here"`) and every index still maps to the original.
+// An unmatched quote blanks nothing from there on: it is not a quoted span.
+function blankQuoted(text: string): string {
+  let out = "";
+  let index = 0;
+  while (index < text.length) {
+    const char = text[index] as string;
+    const close = char === '"' || char === "'" ? text.indexOf(char, index + 1) : -1;
+    if (close === -1) {
+      out += char;
+      index++;
+      continue;
+    }
+    out += char + " ".repeat(close - index - 1) + char;
+    index = close + 1;
+  }
+  return out;
+}
+
+// A dash a terminal, a word processor or a phone keyboard may type in place of
+// `--`: the hyphen and dash block (U+2010-2015), minus (U+2212), and the small
+// and full-width hyphen-minus forms.
+const DASHES = "‐-―−﹘﹣－";
+const LEADING_DASHES = new RegExp(`^[-${DASHES}]+`);
+
+// The scope flag a token is an attempt at, offered in a corrected line only
+// for a variant that cannot mean anything else: another case, '_' or a
+// Unicode dash for '-', a dash dropped or doubled, or ONE
+// edit -- a substitution, an insertion, a deletion or two letters swapped
+// (`--dryrun`, `--DRY-RUN`, `--dry_run`, `−−dry-run`,
+// `--idel`). A '=<value>' suffix, a word that does not keep the flag's
+// first three letters, or anything further (`-idea`, `--file`,
+// `--title`) is no attempt at a scope flag: `null`, refused as an unknown
+// option and dropped, never turned into a flag nobody typed (Nobunaga R2-1 on
+// zheref/nen#562).
+function scopeFlagAttempt(token: string): ScopeFlag | null {
+  if ((SCOPE_FLAGS as readonly string[]).includes(token)) return token as ScopeFlag;
+  // A token carrying '=<value>' is never offered a flag: `--idle=false` asks
+  // for the OPPOSITE of `--idle`, and a corrected line that turned "not idle"
+  // into an unattended batch would be the guess this refusal exists to stop
+  // (Feitan F-6 on zheref/nen#562). It is an unknown option, dropped.
+  if (token.includes("=")) return null;
+  const bare = token.toLowerCase().replace(LEADING_DASHES, "").replace(new RegExp(`[-_\\s${DASHES}]`, "g"), "");
+  if (bare === "") return null;
+  // The one edit must also keep the flag's first three letters (`idl`, or
+  // `ide` where the edit is the swap `--idel`), so a word that merely lands
+  // one edit away (`--isle`, `--ile`) is no attempt at it.
+  if (bare.startsWith("idl") || bare.startsWith("ide")) {
+    if (swapDistance(bare, "idle") <= 1) return "--idle";
+  }
+  if (bare.startsWith("dry") && swapDistance(bare, "dryrun") <= 1) return "--dry-run";
+  return null;
+}
+
+// Edit distance counting two adjacent letters swapped as one edit (optimal
+// string alignment), so `idel` is one edit from `idle`.
+function swapDistance(a: string, b: string): number {
+  const d: number[][] = Array.from({ length: a.length + 1 }, (_, i): number[] => Array.from({ length: b.length + 1 }, (_, j): number => (i === 0 ? j : j === 0 ? i : 0)));
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let best = Math.min(d[i - 1]![j]! + 1, d[i]![j - 1]! + 1, d[i - 1]![j - 1]! + cost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) best = Math.min(best, d[i - 2]![j - 2]! + 1);
+      d[i]![j] = best;
+    }
+  }
+  return d[a.length]![b.length]!;
+}
+
+// A head token written as a flag: a run of dashes -- ASCII or any Unicode
+// dash, mixed or repeated (`--x`, `-x`, `−−dry-run`,
+// `－－dry-run`, `——dry-run`, `‐‐idle`) -- in front of a
+// letter, or any `--` token (Feitan F-5 on zheref/nen#562). A lone `-` or a
+// number (`-1`) is not.
+const FLAG_SHAPED = new RegExp(`^[-${DASHES}]+\\p{L}`, "u");
+function looksLikeFlag(token: string): boolean {
+  return token.startsWith("--") || FLAG_SHAPED.test(token);
+}
+
+interface HeadToken {
+  readonly text: string;
+  readonly start: number;
+  readonly end: number;
+}
+
+interface ScopeRead {
+  /** The head with every flag-shaped token taken out. */
+  readonly core: string;
+  /** Each scope flag accepted at an end of the head, with how many copies. */
+  readonly seen: ReadonlyMap<ScopeFlag, number>;
+  /** Flag-shaped tokens refused where they stand, each with the flag it attempts (or null). */
+  readonly refused: readonly { readonly token: string; readonly flag: ScopeFlag | null; readonly exact: boolean }[];
+}
+
+// Reads the scope flags off the head. An EXACT scope flag at either end is
+// accepted, peeling inward until the first and the last token are no flag.
+// Every other flag-shaped token outside quotes -- a near miss, an unknown
+// `--option`, an exact flag left standing inside the selector -- is REFUSED,
+// never read into the label: `nen@high --dryrun` taken as the label
+// `high --dryrun` would be a live run asked for as a dry one (Feitan F1 on
+// zheref/nen#562). A label that really carries such a word is quoted.
+function readScopeFlags(head: string): ScopeRead {
+  const blanked = blankQuoted(head);
+  const tokens: HeadToken[] = [...blanked.matchAll(/\S+/g)].map((match): HeadToken => ({
+    text: head.slice(match.index, match.index + match[0].length),
+    start: match.index,
+    end: match.index + match[0].length,
+  }));
+  const seen = new Map<ScopeFlag, number>();
+  const taken = new Set<HeadToken>();
+  let first = 0;
+  let last = tokens.length - 1;
+  for (let changed = true; changed && first <= last; ) {
+    changed = false;
+    for (const index of [first, last]) {
+      const token = tokens[index];
+      if (token === undefined || taken.has(token) || !(SCOPE_FLAGS as readonly string[]).includes(token.text)) continue;
+      const flag = token.text as ScopeFlag;
+      seen.set(flag, (seen.get(flag) ?? 0) + 1);
+      taken.add(token);
+      if (index === first) first++;
+      else last--;
+      changed = true;
+      break;
+    }
+  }
+  const refused: { token: string; flag: ScopeFlag | null; exact: boolean }[] = [];
+  for (const token of tokens.slice(first, last + 1)) {
+    if (!looksLikeFlag(token.text)) continue;
+    taken.add(token);
+    refused.push({ token: token.text, flag: scopeFlagAttempt(token.text), exact: (SCOPE_FLAGS as readonly string[]).includes(token.text) });
+  }
+  return { core: removeSpans(head, tokens.filter((token): boolean => taken.has(token))), seen, refused };
+}
+
+// The text with each span cut out together with the whitespace in front of it.
+function removeSpans(text: string, spans: readonly { readonly start: number; readonly end: number }[]): string {
+  let out = text;
+  for (const span of [...spans].sort((a, b): number => b.start - a.start)) {
+    let from = span.start;
+    while (from > 0 && /\s/.test(out[from - 1] as string)) from--;
+    out = out.slice(0, from) + out.slice(span.end);
+  }
+  return out.trim();
+}
+
+// An exact scope flag in the `then` clause, outside quotes, as a whole word --
+// followed by whitespace, the end, or punctuation (`then x --dry-run;`, Feitan
+// F3 on zheref/nen#562). Quoted text after `then` is prose and never scanned,
+// so a corrected line never rewrites it.
+function flagsInTail(tail: string): { readonly flags: ReadonlySet<ScopeFlag>; readonly rest: string } {
+  const blanked = blankQuoted(tail);
+  const flags = new Set<ScopeFlag>();
+  const spans: { start: number; end: number }[] = [];
+  for (const flag of SCOPE_FLAGS) {
+    for (const match of blanked.matchAll(new RegExp(`(?<=^|\\s)${flag}(?=[\\s,;.:!?)\\]}]|$)`, "g"))) {
+      flags.add(flag);
+      spans.push({ start: match.index, end: match.index + flag.length });
+    }
+  }
+  return { flags, rest: removeSpans(tail, spans) };
+}
+
+// The line with each typed flag once, after the scope and before any `then`.
+function scopeLine(scope: string, flags: ReadonlySet<ScopeFlag>, then: string | null): string {
+  const written = SCOPE_FLAGS.filter((flag): boolean => flags.has(flag)).map((flag): string => ` ${flag}`).join("");
+  return `${scope}${written}${then === null || then === "" ? "" : ` then ${then}`}`;
+}
+
 export function parseFutonInvocation(raw: string): FutonParseResult {
   const trimmed = raw.trim();
   if (trimmed === "") {
@@ -183,43 +363,45 @@ export function parseFutonInvocation(raw: string): FutonParseResult {
   // near-miss terminal, a reserved step name, a duplicate step): '@ then
   // mugetsu+mugetsu' is refused for its missing selector, never for the
   // duplicate 'mugetsu' step the chain also happens to carry.
-  // `--idle` (HR-5) is an OPTIONAL FLAG OF THE SCOPE, before any `then`: the
-  // first or the last token of the head (`--idle nen@bug`, `nen@bug --idle`).
-  // Only those two places, so a quoted label that merely contains the text
-  // (`nen@"x --idle"`) is never read as the flag. After `then` it would be
-  // indistinguishable from prose, so it is refused there with the line moved,
-  // never silently dropped: an idle run read as attended (or the reverse) is a
-  // guess with side effects.
-  let idle = false;
-  let scopeHead = head;
-  const leading = /^--idle(?:\s+|$)/;
-  const trailing = /(?:^|\s+)--idle$/;
-  for (const pattern of [leading, trailing]) {
-    if (!pattern.test(scopeHead)) continue;
-    if (idle) {
-      return { ok: false, error: { message: "'--idle' is given twice. It is one flag of the scope.", correctedLine: `${scopeHead.replace(pattern, "").trim()} --idle${tail === null ? "" : ` then ${tail}`}` } };
-    }
-    idle = true;
-    scopeHead = scopeHead.replace(pattern, "").trim();
+  // `--idle` (HR-5) and `--dry-run` (zheref/nen#520) are OPTIONAL FLAGS OF
+  // THE SCOPE, before any `then`: tokens at the start or the end of the head
+  // (`--idle nen@bug`, `nen@bug --dry-run --idle`), in any order. Only those
+  // places, so a quoted label that merely contains the text (`nen@"x --idle"`)
+  // is never read as a flag. After `then` a flag would be indistinguishable
+  // from prose, so it is refused there with the line moved, never silently
+  // dropped: an idle run read as attended, or a dry run read as a live one, is
+  // a guess with side effects. Each is one flag: typed twice -- at both ends,
+  // twice at the same end, or once on each side of `then` -- it is refused
+  // with one kept, never read as part of the label (zheref/nen#491 AC-2).
+  const scope = readScopeFlags(head);
+  const scopeHead = scope.core;
+  const moved = tail === null ? { flags: new Set<ScopeFlag>(), rest: null } : flagsInTail(tail);
+  const thenText = moved.rest;
+  const attempted = scope.refused.map((entry): ScopeFlag | null => entry.flag).filter((flag): flag is ScopeFlag => flag !== null);
+  const typed = new Set<ScopeFlag>([...scope.seen.keys(), ...moved.flags, ...attempted]);
+  const copies = (flag: ScopeFlag): number =>
+    (scope.seen.get(flag) ?? 0) + (moved.flags.has(flag) ? 1 : 0) + attempted.filter((each): boolean => each === flag).length;
+  const twice = SCOPE_FLAGS.find((flag): boolean => copies(flag) > 1);
+  const misplaced = SCOPE_FLAGS.find((flag): boolean => moved.flags.has(flag));
+  // A word that is no exact flag is named first: it is the one the caller
+  // most likely did not mean (`nen@bug --dry-run --verbose` names --verbose).
+  const stray = scope.refused.find((entry): boolean => !entry.exact) ?? scope.refused[0];
+  if (twice !== undefined || stray !== undefined || misplaced !== undefined) {
+    const correctedLine = scopeLine(scopeHead, typed, thenText);
+    const message =
+      twice !== undefined
+        ? `'${twice}' is given twice. It is one flag of the scope.`
+        : stray !== undefined
+          ? stray.exact
+            ? `'${stray.token}' stands inside the selector. A flag of the scope is the first or the last token before 'then'; quote the label to keep the word in it.`
+            : stray.flag !== null
+              ? `'${stray.token}' is not '${stray.flag}', and is never read into the label. Type the flag exactly, or quote the label to keep the word in it.`
+              : `'${stray.token}' is not a flag of futon's scope (${SCOPE_FLAGS.join(", ")}), and is never read into the label. Drop it, or quote the label to keep the word in it.`
+          : `'${misplaced}' after 'then' is read as part of the then clause. It is a flag of the scope: put it before 'then'.`;
+    return { ok: false, error: { message, correctedLine } };
   }
-  // Twice at the SAME end (`nen@bug --idle --idle`, `--idle --idle nen@bug`):
-  // the loop above strips one per end, so a second copy at either end is
-  // still standing here. Read as part of the label it would silently turn
-  // `bug --idle` into the selector (zheref/nen#491 AC-2).
-  if (idle && (leading.test(scopeHead) || trailing.test(scopeHead))) {
-    const kept = scopeHead.replace(/^(?:--idle\s+)+/, "").replace(/(?:\s+--idle)+$/, "").trim();
-    return { ok: false, error: { message: "'--idle' is given twice. It is one flag of the scope.", correctedLine: `${kept} --idle${tail === null ? "" : ` then ${tail}`}` } };
-  }
-  if (tail !== null && /(?:^|\s)--idle(?:\s|$)/.test(tail)) {
-    const moved = tail.replace(/(?:^|\s+)--idle(?=\s|$)/g, "").trim();
-    return {
-      ok: false,
-      error: {
-        message: "'--idle' after 'then' is read as part of the then clause. It is a flag of the scope: put it before 'then'.",
-        correctedLine: `${scopeHead} --idle${moved === "" ? "" : ` then ${moved}`}`,
-      },
-    };
-  }
+  const idle = typed.has("--idle");
+  const dryRun = typed.has("--dry-run");
 
   const at = scopeHead.indexOf("@");
   if (at === -1) {
@@ -376,7 +558,7 @@ export function parseFutonInvocation(raw: string): FutonParseResult {
     // ('c++' is the label 'c++', not a refused severity-band operator).
     return {
       ok: true,
-      value: { repoToken: repoPart === "" ? null : repoPart, band: null, label: selectorRaw, terminal, then, idle },
+      value: { repoToken: repoPart === "" ? null : repoPart, band: null, label: selectorRaw, terminal, then, idle, dryRun },
     };
   }
 
@@ -389,6 +571,7 @@ export function parseFutonInvocation(raw: string): FutonParseResult {
       terminal,
       then,
       idle,
+      dryRun,
     },
   };
 }

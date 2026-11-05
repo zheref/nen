@@ -146,6 +146,17 @@ nen scaffold init --repo /path/to/repo --accept-detected --directories src,tests
   --canon-values-path .claude/canon-values.yml --scenario swiftui-tca-uzf-v2
 ```
 
+**`--marker-env <VAR>` is required on `init` and has no default.** It names the
+environment variable the generated commit-msg hook reads to tell an automated
+commit from a human one: when that variable is set, the hook requires the
+`--agent-trailer` key (omitted, it defaults to `Akatsuki-Agent`), plus the run
+trailer when the policy states one — `--run-trailer` writes it into a new
+`nen/workflow.json`, while an existing file's own `commits.runTrailer` wins over
+the flag. When the variable is unset, the commit is a human's and only the
+refused-trailer list applies. Nen ships no marker variable, so pick the one your
+automation already sets (`NEN_AUTOMATED` above is an example). Leave it off and
+`init` refuses at exit 2 before writing anything, naming the flag.
+
 It ends by running `nen shu tools` in **check** mode and printing what this
 machine is missing, without installing anything. Run it yourself for the host
 verdict — exit 5 with the install command per tool when something is missing or
@@ -165,6 +176,16 @@ the `git rm` line for the leftovers was printed:
 nen schema check --repo /path/to/repo
 ```
 
+A repository scaffolded before `nen/colors.yml` and `nen/gates.json` existed
+sees `schema check` name the command that adds each one. `nen scaffold
+migrate` writes only those of the two that are absent, from seeds that widen
+nothing, reads each back, and never opens an existing file — a second run
+changes nothing:
+
+```bash
+nen scaffold migrate --repo /path/to/repo
+```
+
 For a project that does not exist yet, `nen scaffold new` writes a fresh tree
 for one stack — the manifest that identifies it, `nen/contract.json` as `shu
 detect` proposes it, the hook, the CI workflow, `.gitignore` — into an empty
@@ -174,6 +195,12 @@ install, a native prebuild) is **printed and never run**:
 ```bash
 nen scaffold new --stack nextjs --name my-site --dir ./my-site --dry-run
 ```
+
+`new` is the one place `--marker-env` may be left out: without it the
+commit-msg hook is skipped, not refused, and the printed post-steps name the
+`nen scaffold init --repo ./my-site --stack nextjs --marker-env <VAR>` line that
+installs it later. Pass `--marker-env <VAR>` to `new` to write the hook now;
+`--agent-trailer` or `--run-trailer` without it is refused at exit 2.
 
 Both verbs write `.github/workflows/nen-shu.yml`, pinned at a nen release —
 `--nen-ref vX.Y.Z` states one, and left off it is the greater of this binary's
@@ -395,8 +422,9 @@ fallback when `nen/` did not carry a file, so a repository that had not moved
 yet kept working. That fallback is **removed in v0.5.0**: `nen/` is the only
 directory anything reads a taxonomy file from. A repository that still carries
 a file only under `schemas/` is refused exactly like one carrying it nowhere —
-`nen scaffold init --accept-detected` is the migration, and every refusal
-names it. `nen schema check` still reports the migration state, differently:
+`nen scaffold init --repo <path> --marker-env <VAR> --accept-detected` is the
+migration (`--marker-env` is required; see [Set up a repository](#set-up-a-repository)),
+and every refusal names it. `nen schema check` still reports the migration state, differently:
 a required file present only under `schemas/` **FAILS** by that same refusal,
 and a file that loaded from `nen/` with a `schemas/` copy still sitting beside
 it is a **leftover** — a `warn` row naming the `git rm` that clears it, never a
@@ -454,13 +482,13 @@ it stays pending and holds every pull request's checks with it.
 `nen --help` lists every command family (49); each
 family's own `--help` (`nen pr --help`, `nen board --help`, ...) documents
 its verbs and flags in full. [`docs/USAGE.md`](docs/USAGE.md) documents all
-174 verbs outside the binary — each one's purpose, arguments, exit codes and
+177 verbs outside the binary — each one's purpose, arguments, exit codes and
 `--json` shape — plus the conventions they share and the developer workflows
 they compose into. The families group roughly as:
 
 - **Readiness & pull requests** — `pr` (ready, staleness, body-check, fetch,
   next-blocker, cascade-main, retarget, request-reviews, edit-body,
-  mark-ready, threads, open, merge), `gate`, `split`, `wc` (classify, squash,
+  edit-title, mark-ready, threads, open, merge), `gate`, `split`, `wc` (classify, squash,
   catch-up, publish, prune, worktrees, swap, worktree), `stage` (triage, list)
 - **Backlog & boards** — `backlog`, `board`, `epic`, `effort`, `loop`,
   `phase`, `usage` (the per-effort timing and spend ledgers),
@@ -483,7 +511,7 @@ they compose into. The families group roughly as:
   caller-owned rules contract and its clause ids unique, and `ref resolve`
   says where one citation lands
 - **Stack-aware developer verbs** — `shu` (`detect`, `build`, `test`,
-  `ui-test`, `lint`, `archive`, `release`, `dev`, `run`, `deploy`, `coverage`,
+  `ui-test`, `lint`, `typecheck`, `archive`, `release`, `dev`, `run`, `deploy`, `coverage`,
   `test-report`, `evidence`, `tools`, `warmup`). Most of them run what a
   *target project* declares in its own `nen/contract.json` — never a command Nen
   decided; the exceptions are `evidence`, which reads only `git diff`, and
@@ -518,7 +546,7 @@ root — never an owner/name slug) and `--json` where the verb has a
 machine-readable form.
 
 `nen shu` runs those verbs today, against any repository that declares them.
-Fourteen of the fifteen execute a *declared* invocation in some form —
+Fifteen of the sixteen execute a *declared* invocation in some form —
 `nen shu build --dry-run` prints the exact argv, cwd and
 environment *names* it would spawn and spawns nothing; `nen shu detect` proposes
 a `nen/contract.json` project block from the markers on disk and never writes
@@ -529,7 +557,7 @@ through the closed `corepack`, Bashcov-only lane-local `gem`, and general user-l
 run a lane's declared command and then **parse what it wrote** — a coverage
 report, a results file or a whole directory of JUnit XML — into one shape, and
 refuse a damaged report by name rather than printing a plausible number for it.
-The fifteenth, `nen shu evidence`, is the one verb that runs no declared
+The sixteenth, `nen shu evidence`, is the one verb that runs no declared
 invocation at all: it matches `git diff --name-status <base>...HEAD` — a command
 Nen itself chose — against `project.evidence.globs`. `nen shu warmup` is the one
 verb in the family that mutates git state: it warms a **working copy** (clean →
@@ -543,7 +571,7 @@ top-level `nen warmup`, which sweeps a **registry** for stale pins and reads
 only.
 
 What each verb can run **per stack** is written down in
-[`docs/STACK-MATRIX.md`](docs/STACK-MATRIX.md) — seven stacks × thirteen
+[`docs/STACK-MATRIX.md`](docs/STACK-MATRIX.md) — seven stacks × fourteen
 verbs, each cell either a reference command cited to the repository it came
 from, a `declared-only` (real for the stack, and the observed repositories
 disagree about what it means), or an `unsupported` with the reason. It is

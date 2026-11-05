@@ -114,6 +114,11 @@
       "summary": "no command in the repo",
       "source": "KroWindows (inventory sweep)"
     },
+    "typecheck": {
+      "unsupported": "The C# compiler IS the type check: `dotnet build` reports every type error, and no separate checking step exists on this stack.",
+      "summary": "the compiler checks types",
+      "source": "KroWindows (inventory sweep)"
+    },
     "archive": {
       "unsupported": "MSIX PACKAGING IS UNSUPPORTED, AND STAYS UNSUPPORTED -- decisions v3 q7 approved `dotnet build` alone and left this row exactly where it was. NOTHING IN THE REPOSITORY INVOKES A COMMAND: packaging is a Visual Studio gesture (`HasPackageAndPublishMenu true`, with an MSIX launch profile), and the three things it would need -- a Platform, a signing identity and a publish profile -- are stated nowhere here. `<AppxPackageSigningEnabled>False</AppxPackageSigningEnabled>` and a `<PublishProfile>` naming profiles that do not exist are what the tree says instead.",
       "summary": "MSIX is a GUI gesture",

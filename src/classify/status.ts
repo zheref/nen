@@ -42,7 +42,7 @@ import { loadLabelTaxonomy } from "../schema/labels.js";
 import { GH, mustJson, outputLines, type Seams } from "../seam/exec.js";
 import { loadRequiringRepo, requireTarget } from "./common.js";
 import { compareDeclaration, notLanded } from "./install.js";
-import { AXES, axisOfLabel, taxonomyLabels, type AxisName, type ClassifyTaxonomy } from "./taxonomy.js";
+import { AXES, axisOfLabel, installLabels, type AxisName, type ClassifyTaxonomy } from "./taxonomy.js";
 
 /** GitHub's own ceiling on one `gh label list` call, passed as `--limit`. */
 export const LABEL_LIST_LIMIT = 500;
@@ -227,7 +227,7 @@ export function runStatus(context: CommandContext): number {
 
   const onGithub = mustJson<readonly { readonly name: string }[]>(context.seams, GH, labelListArgv(target));
   const present = new Set(onGithub.map((label): string => label.name));
-  const lacking = taxonomyLabels(taxonomy).filter((label): boolean => !present.has(label.name)).map((label): string => label.name);
+  const lacking = installLabels(taxonomy).filter((label): boolean => !present.has(label.name)).map((label): string => label.name);
   const labelListTruncated = onGithub.length >= LABEL_LIST_LIMIT;
   const github: Verdict & { truncated: boolean } = {
     status: lacking.length === 0 ? "ok" : `missing ${lacking.length}`,

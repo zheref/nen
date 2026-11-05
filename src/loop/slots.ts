@@ -121,6 +121,14 @@ export function occupancy(
         : "authored locally, no PR yet",
     };
   }
+  // NO PR AND MERGED IS A LOCAL INTEGRATION (zheref/nen#521, Hatsu HR-353):
+  // an effort on an integration shape opens no sub-PR and is done once its
+  // branch is merged into the run's integration branch, so there is no Ready
+  // or prompt to wait for and none is fabricated. An unmerged effort with no
+  // PR still holds.
+  if (!effort.prOpen && effort.merged === true) {
+    return { occupied: false, why: "merged locally with no PR -- integrated, nothing left to hand over" };
+  }
   if (!effort.prOpen) return { occupied: true, why: "authored locally, no PR yet" };
   if (rule === "stacked-open" && effort.stacked === true) {
     return {

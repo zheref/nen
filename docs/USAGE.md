@@ -12,7 +12,7 @@ repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
 what each version changed: 49 command
-families, 174 verbs, every flag checked against that binary.
+families, 177 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -192,6 +192,7 @@ thing from the checkout on disk, so it gets a different flag. `--target
 [`pr next-blocker`](#nen-pr-next-blocker), [`pr retarget`](#nen-pr-retarget),
 [`pr request-reviews`](#nen-pr-request-reviews),
 [`pr edit-body`](#nen-pr-edit-body),
+[`pr edit-title`](#nen-pr-edit-title),
 [`pr mark-ready`](#nen-pr-mark-ready),
 [`run rerun-failed`](#nen-run-rerun-failed), the whole
 [`issue`](#family-issue) family (including
@@ -257,7 +258,7 @@ including every refusal reason. The raw NUL-delimited stream
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **104 shapes** and **108 ids** (`nen.runner.plan`
+binary carries**, writing or reading — **106 shapes** and **110 ids** (`nen.runner.plan`
 and `nen.wc.worktree.copies` each have two versions, `nen.stop.mark` three, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -304,7 +305,7 @@ file formats).
 - **`issue`** — `nen.issue.body-check/v0.1` · `nen.issue.criteria/v0.1` · `nen.issue.edit-body/v0.3` · `nen.issue.questions/v0.1` · `nen.issue.questions.batch/v0.1` · `nen.issue.reconcile/v0.1`
 - **`loop`** — `nen.loop.iterate/v0.1`
 - **`phase`** — `nen.phase.ledger/v0.1`
-- **`pr`** — `nen.pr.converge/v0.1` · `nen.pr.edit-body/v0.1` · `nen.pr.ledger/v0.1` · `nen.pr.mark-ready/v0.1` · `nen.pr.merge-delivery/v0.1` · `nen.pr.merge-unit/v0.1` · `nen.pr.open/v0.1` · `nen.pr.sections/v0.1` · `nen.pr.ready.head-mismatch/v0.1` · `nen.pr.ready/v0.1` · `nen.pr.threads-settle/v0.1` · `nen.pr.threads/v0.1`
+- **`pr`** — `nen.pr.converge/v0.1` · `nen.pr.edit-body/v0.1` · `nen.pr.edit-title/v0.1` · `nen.pr.ledger/v0.1` · `nen.pr.mark-ready/v0.1` · `nen.pr.merge-delivery/v0.1` · `nen.pr.merge-unit/v0.1` · `nen.pr.open/v0.1` · `nen.pr.sections/v0.1` · `nen.pr.ready.head-mismatch/v0.1` · `nen.pr.ready/v0.1` · `nen.pr.threads-settle/v0.1` · `nen.pr.threads/v0.1`
 - **`prose-lint`** — `nen.prose-lint/v0.1` (the `$schema` a [`canon lint`](#nen-canon-lint) rules contract may carry)
 - **`ref`** — `nen.ref.resolve/v0.1`
 - **`release`** — `nen.release.unit-check/v0.1`
@@ -314,7 +315,7 @@ file formats).
 - **`review`** — `nen.review.scopes/v0.1`
 - **`run`** — `nen.run.record/v0.1` · `nen.run/v0.1`
 - **`runner`** — `nen.runner.plan/v0.1` · `nen.runner.plan/v0.2`
-- **`scaffold`** — `nen.scaffold.init/v0.1` · `nen.scaffold.new/v0.1` · `nen.scaffold.template/v0.1`
+- **`scaffold`** — `nen.scaffold.init/v0.1` · `nen.scaffold.migrate/v0.1` · `nen.scaffold.new/v0.1` · `nen.scaffold.template/v0.1`
 - **`schema`** — `nen.schema.set/v0.1`
 - **`session`** — `nen.session.ledger/v0.1`
 - **`shu`** — `nen.shu.<verb>/v0.1` · `nen.shu.coverage-capture/v0.1` · `nen.shu.coverage/v0.1` · `nen.shu.detect/v0.1` · `nen.shu.evidence/v0.1` · `nen.shu.proof/v0.1` · `nen.shu.test-report/v0.1` · `nen.shu.tools/v0.1` · `nen.shu.warmup/v0.1`
@@ -435,7 +436,7 @@ The complete list:
 | [`commit write`](#nen-commit-write) | `3` | committed, and the read-back found a trailer the policy refuses — **injected** by a hook, or carried by the message where git's parser read one nen's did not; the commit is left in place ([#273](https://github.com/zheref/nen/issues/273)) |
 | [`wc squash`](#nen-wc-squash) | `3` | squashed, and the read-back found a refused trailer on the fold — as `commit write`'s `3` ([#273](https://github.com/zheref/nen/issues/273)) |
 | [`issue edit-body`](#nen-issue-edit-body) | `3` | conflict, nothing written: under `--expect-body-sha256` the current body is not the version the replacement was prepared from ([#205](https://github.com/zheref/nen/issues/205)) |
-| [`issue file`](#nen-issue-file), [`issue comment`](#nen-issue-comment), [`issue edit-body`](#nen-issue-edit-body), [`issue consolidate-close`](#nen-issue-consolidate-close), [`idea file`](#nen-idea-file), [`pr open`](#nen-pr-open), [`pr edit-body`](#nen-pr-edit-body), [`pr threads reply\|settle`](#nen-pr-threads), [`pr ledger`](#nen-pr-ledger) (post), [`wake fire`](#nen-wake-fire), [`wake verify`](#nen-wake-verify), `release-publish` | `4` | a private repository named in text bound for a PUBLIC target; nothing written ([private-name guard](#the-private-name-guard), [#329](https://github.com/zheref/nen/issues/329), [#363](https://github.com/zheref/nen/issues/363)). A check that could not run is `1`, never `4` and never `0`. On `pr threads` `4` is shared (no such thread / the pull request is not visible): `privateNameCheck` tells the two apart |
+| [`issue file`](#nen-issue-file), [`issue comment`](#nen-issue-comment), [`issue edit-body`](#nen-issue-edit-body), [`issue consolidate-close`](#nen-issue-consolidate-close), [`idea file`](#nen-idea-file), [`pr open`](#nen-pr-open), [`pr edit-body`](#nen-pr-edit-body), [`pr edit-title`](#nen-pr-edit-title), [`pr threads reply\|settle`](#nen-pr-threads), [`pr ledger`](#nen-pr-ledger) (post), [`wake fire`](#nen-wake-fire), [`wake verify`](#nen-wake-verify), `release-publish` | `4` | a private repository named in text bound for a PUBLIC target; nothing written ([private-name guard](#the-private-name-guard), [#329](https://github.com/zheref/nen/issues/329), [#363](https://github.com/zheref/nen/issues/363)). A check that could not run is `1`, never `4` and never `0`. On `pr threads` `4` is shared (no such thread / the pull request is not visible): `privateNameCheck` tells the two apart |
 | [`wc swap`](#nen-wc-swap) | `3` | a tree is dirty; nothing moved |
 | [`wc catch-up`](#nen-wc-catch-up) | `3` | stopped on a conflict whose **every** path is in `nen/contract.json`'s declared `mechanical` set (manifest, changelog, mirror); nothing resolved, the commands printed. Any `other` path is still `1`. Exit `1` no longer covers every conflict: a caller that treats `1` as "conflict" must also treat `3` as one ([#326](https://github.com/zheref/nen/issues/326)) |
 | [`wc ahead`](#nen-wc-ahead) | `2` / `3` | its own meaning of 2, beside usage: **unreadable** -- the clone does not hold `--of` or `--head` as a commit, or git could not answer; the verdict is still printed and never read as zero / **even** -- the head is the reviewed head: nothing new to review. Its `1` is **diverged** (the reviewed head is not an ancestor; no count) and its `0` is **ahead**, so the code alone tells the four verdicts apart ([#551](https://github.com/zheref/nen/issues/551)) |
@@ -492,12 +493,14 @@ verb does by default:
 | [`schema set`](#nen-schema-set) | no | `--dry-run` | writes one value into a `nen/` JSON declaration, no other byte; the dry form reads the file, validates the edited text through its loader and prints before → after, writing nothing. In izanami's table `schema` is keyed by subcommand from [#338](https://github.com/zheref/nen/issues/338): `schema check` **read-only**, `schema set` **mutating** and `schema set --dry-run` **read-only**; a bare `nen schema` or another subcommand classifies **unknown** |
 | [`scaffold init`](#nen-scaffold-init) | no | `--dry-run` | prints every write, every migration and every refusal, and performs none. It spawns **nothing**, probes included — the closing [`shu tools`](#nen-shu-tools) check is reported as `would check` rather than run, which is why the dry form classifies **read-only** in izanami's table while the bare form classifies **mutating**. `--dry-run --install-tools` is refused at exit 2: one says nothing happens, the other changes the HOST |
 | [`scaffold new`](#nen-scaffold-new) | no | `--dry-run` | prints the tree it would write. Even the bare form spawns nothing at all: **every post-step is printed and none is run**, the toolchain check included |
+| [`scaffold migrate`](#nen-scaffold-migrate) | no | `--dry-run` | prints `would-create` for each absent seeded file and writes nothing; neither form spawns anything. The bare form writes only into absence, so a second run is `kept` on every row |
 | [`pr retarget`](#nen-pr-retarget), [`run rerun-failed`](#nen-run-rerun-failed) | no | `--dry-run` | print the one `gh` call as `would run:` and spawn **nothing** — not even a read, so the preview needs no token (Hatsu SDD plan N6). izanami still classifies both **mutating** in every spelling, fail-closed |
 | [`pr cascade-main`](#nen-pr-cascade-main) | no | `--dry-run` | prints `git fetch`, `git merge --no-edit` and (unless `--no-push`) `git push` as `would run:` and spawns **nothing**, so whether the merge would conflict is not known. `--no-push` alone is not a preview: it still merges. izanami keeps the verb **mutating** in every spelling, the dry form included |
 | [`spec index`](#nen-spec-index) | yes | `--write` | then `--dry-run` with it. Without `--write` nothing is written and the verb reports whether `<root>/INDEX.md` is current; `--write --dry-run` reports the regeneration and writes nothing. izanami's table classifies `--write` **mutating** and the other forms **read-only** |
 | [`run start`](#nen-run-start), [`run append`](#nen-run-append), [`run park`](#nen-run-park), [`run import`](#nen-run-import) | no | `--dry-run` | write the run manifest under the git common dir (at `0600` in a `0700` directory); the dry form reads it (and asks git for the common dir; `append` also reads the PR) and reports the outcome and the modes it would write, writing nothing -- no file, no directory, no mode change, no move of a legacy-path manifest. izanami's table classifies the bare forms **mutating** and the dry forms **read-only** |
 | [`run verify`](#nen-run-verify), [`run budget`](#nen-run-budget) | no | `--dry-run` | read the run manifest, and write only the **one-time move** of a manifest still at the legacy `<git-common-dir>/hatsu/runs/<id>.json` ([#522](https://github.com/zheref/nen/issues/522)); the dry form prints that move on stderr and reads the file in place, moving nothing. izanami's table classifies the bare forms **mutating** and the dry forms **read-only**; [`wc overlap`](#nen-wc-overlap), [`wc ahead`](#nen-wc-ahead), [`stage check`](#nen-stage-check) and `loop slots --from-run` (which reads a legacy manifest in place and never moves it) are **read-only** |
 | [`pr edit-body`](#nen-pr-edit-body) | no | `--dry-run` | **still reads GitHub** to certify the number reads as a pull request, and runs the [private-name guard](#the-private-name-guard) ([#363](https://github.com/zheref/nen/issues/363)), before printing the byte count and first/last line |
+| [`pr edit-title`](#nen-pr-edit-title) | no | `--dry-run` | **still reads GitHub** to certify the number reads as a pull request (the read returns the current title), and runs the [private-name guard](#the-private-name-guard), before printing the `gh pr edit --title` argv and both titles ([#523](https://github.com/zheref/nen/issues/523)) |
 | [`pr ledger`](#nen-pr-ledger) | no | `--dry-run` | `post` **still reads GitHub** (the PR head, the login, every comment) and the durable ledgers, checks the findings and runs the private-name guard, then prints the `gh api` call and the body and posts nothing. `read` writes nothing unless `--restore`, which writes only a phase ledger that does not exist yet |
 | [`pr mark-ready`](#nen-pr-mark-ready) | no | `--dry-run` | **still reads GitHub** — the one GraphQL read that certifies the number, its state and its head — so every refusal (not a PR, closed/merged, head mismatch, already ready) answers exactly as the real run would; prints the `markPullRequestReadyForReview` argv and sends nothing |
 | [`pr request-reviews`](#nen-pr-request-reviews) | no | `--dry-run` | **still reads GitHub** — resolving every `--add-reviewers` login against the pull request's own known bots and `--target`'s collaborators, with REST bot lookup for unseen bot logins, so it can print which route each name or `--add-bots` login/id would go to — but neither `gh pr edit --add-reviewer` nor the `requestReviews` mutation is ever called (zheref/nen#160). When a bot is named it also reads the base's `nen/gates.json` and, under a declared `round_policy.maxRounds`, the timeline, and previews the ceiling: `request N of M` per bot, or the refusal at exit `2` (zheref/nen#240) |
@@ -505,8 +508,8 @@ verb does by default:
 | [`runner preflight`](#nen-runner-preflight), [`runner enable`](#nen-runner-enable) | no | `--dry-run` | **still reads GitHub** -- the default branch; the run `enable` certifies and the variable's current value -- and dispatches or sets nothing |
 | [`runner relabel`](#nen-runner-relabel) | yes | `--run` | without it, reads the runners list and either lists the candidates (no `--runner`) or prints each label write as `would run:`; with it -- and only with `--runner` naming every runner -- adds the pool's own label and reads each runner's labels back (#340) |
 | [`shu detect`](#nen-shu-detect) | yes | `--write` | fully offline; refuses to overwrite an existing declaration even with `--write`, and there is no `--force` |
-| [`shu build`](#nen-shu-build), [`shu test`](#nen-shu-test), [`shu ui-test`](#nen-shu-ui-test), [`shu lint`](#nen-shu-lint), [`shu archive`](#nen-shu-archive), [`shu release`](#nen-shu-release), [`shu dev`](#nen-shu-dev), [`shu run`](#nen-shu-run), [`shu coverage`](#nen-shu-coverage), [`shu test-report`](#nen-shu-test-report) | no | `--dry-run` | prints every step's exact argv, cwd and env NAMES and spawns **nothing**. All ten are `dry-run-gated` in izanami's automation-policy table: the bare form classifies **mutating** — the argv comes from a file in the *target* repository, and certifying it read-only sight unseen would certify whatever it happens to contain — and the `--dry-run` form classifies **read-only**, because nen renders and spawns nothing whatever that file says. On `dev` and `run`, `--json` is **refused** without `--dry-run`. `coverage` and `test-report` additionally **parse** what their run produced — and their `--dry-run` parses nothing either, so the report sitting on disk from a previous run is never read. `test-report` and `coverage` each carry a **second** read gate — `--from-artifacts` and `--from-capture` ([#250](https://github.com/zheref/nen/issues/250)) — which never reach the executor at all; `--from-capture` starts only nen's own fixed-argv git reads, and a `--base` beginning with `-` is refused before any of them |
-| [`shu deploy`](#nen-shu-deploy) | **yes** | `--run` | the one executing verb in this family that is **dry-run-first**, and the only one whose blast radius is *other people's users*: every other verb here spawns something inside a directory and can be undone by running it again, and a deploy cannot. Without `--run` it prints the fully resolved plan — the destination substituted into the argv, every precondition asserted, each step as `would run:` — and spawns **nothing**, at exit 0. `--dry-run` is the explicit spelling of that same form, and `--run --dry-run` together is exit 2 rather than a guess about which of two contradicting instructions was meant. **Two flags and no single-flag path to acting**: `--target <name>` says *where* (required, no default ever, resolved after the lane, the verb and the host, so a lane that declares no deploy answers its own refusal first) and `--run` says *now*. So this row is `write-flag-gated` on `--run` in izanami's table — like [`label apply`](#nen-label-apply) and [`wake fire`](#nen-wake-fire), and unlike the nine above: the bare form classifies **read-only** because nen spawns nothing whatever the declaration says, which is a property of nen rather than a claim about that file |
+| [`shu build`](#nen-shu-build), [`shu test`](#nen-shu-test), [`shu ui-test`](#nen-shu-ui-test), [`shu lint`](#nen-shu-lint), [`shu typecheck`](#nen-shu-typecheck), [`shu archive`](#nen-shu-archive), [`shu release`](#nen-shu-release), [`shu dev`](#nen-shu-dev), [`shu run`](#nen-shu-run), [`shu coverage`](#nen-shu-coverage), [`shu test-report`](#nen-shu-test-report) | no | `--dry-run` | prints every step's exact argv, cwd and env NAMES and spawns **nothing**. All eleven are `dry-run-gated` in izanami's automation-policy table: the bare form classifies **mutating** — the argv comes from a file in the *target* repository, and certifying it read-only sight unseen would certify whatever it happens to contain — and the `--dry-run` form classifies **read-only**, because nen renders and spawns nothing whatever that file says. On `dev` and `run`, `--json` is **refused** without `--dry-run`. `coverage` and `test-report` additionally **parse** what their run produced — and their `--dry-run` parses nothing either, so the report sitting on disk from a previous run is never read. `test-report` and `coverage` each carry a **second** read gate — `--from-artifacts` and `--from-capture` ([#250](https://github.com/zheref/nen/issues/250)) — which never reach the executor at all; `--from-capture` starts only nen's own fixed-argv git reads, and a `--base` beginning with `-` is refused before any of them |
+| [`shu deploy`](#nen-shu-deploy) | **yes** | `--run` | the one executing verb in this family that is **dry-run-first**, and the only one whose blast radius is *other people's users*: every other verb here spawns something inside a directory and can be undone by running it again, and a deploy cannot. Without `--run` it prints the fully resolved plan — the destination substituted into the argv, every precondition asserted, each step as `would run:` — and spawns **nothing**, at exit 0. `--dry-run` is the explicit spelling of that same form, and `--run --dry-run` together is exit 2 rather than a guess about which of two contradicting instructions was meant. **Two flags and no single-flag path to acting**: `--target <name>` says *where* (required, no default ever, resolved after the lane, the verb and the host, so a lane that declares no deploy answers its own refusal first) and `--run` says *now*. So this row is `write-flag-gated` on `--run` in izanami's table — like [`label apply`](#nen-label-apply) and [`wake fire`](#nen-wake-fire), and unlike the eleven above: the bare form classifies **read-only** because nen spawns nothing whatever the declaration says, which is a property of nen rather than a claim about that file |
 | [`shu tools`](#nen-shu-tools) | yes — nen writes nothing, but see the note | `--install` | the **only verb in this CLI whose blast radius is the developer's machine**, and the only row with three izanami answers rather than two. The bare check form spawns the version probes the *target repository* declares, so it classifies **`unknown`** — refused, and honestly labelled "not provably a read" rather than mislabelled "writes"; `--install` classifies **mutating**; and `--dry-run` classifies **read-only**, because that form spawns nothing at all, probes included. `--install --dry-run` is refused anyway: the write flag is decisive, because a read-only claim that hinges on one adjacent token still being present is exactly what the write-flag rule exists for |
 | [`stop`](#nen-stop) | **yes** | `--mark` | the banner and the table are a pure render, and this verb fires nothing, ever. `--mark` is the banner form's one write ([`stop answer`](#nen-stop-answer), its own row below, is the ledger writer): `.nen/last-stop.json`, the marker a host hook reads to ring the two rungs nen may not ring itself, and beside it the per-gate marker under `<git-common-dir>/.nen/marks/` (#513). So this row is `write-flag-gated` on `--mark` in izanami's table — the bare form is **read-only** because nen provably writes nothing without the flag, which is a property of nen rather than a claim about anybody's file |
 | [`stop answer`](#nen-stop-answer) | no | `--dry-run` | reserves an id and creates one record under the git common directory; the dry form still runs `git rev-parse --git-common-dir` and reads the question and typed files, prints the record and the next free id, and writes nothing. `answer show` writes nothing and refuses `--dry-run`. A `stop` subcommand typed after a flag (`nen stop --gate G5 answer ...`) classifies **unknown** in izanami's table, never as the family-wide `--mark` row |
@@ -525,8 +528,8 @@ repository's `nen/` directory, at the path `--repo` names:
 |---|---|---|
 | `nen/labels.json` | the label set — names, colours, descriptions | [`labels sync`](#nen-labels-sync), [`label apply`](#nen-label-apply), [`issue file`](#nen-issue-file), [`issue consolidate-close`](#nen-issue-consolidate-close), [`idea file`](#nen-idea-file), [`schema check`](#nen-schema-check) |
 | `nen/repos.json` | the registry — consumers, product codes, per-consumer pins, recorded scenarios, and the **canon pin**: the `pinned` tag on the canonical handbooks repository's `maintained_tools` entry (`CON-13`), plus where that repository's checkout is found on a machine (`checkout_env`, `checkout` -- [#294](https://github.com/zheref/nen/issues/294)), and **product families** (`families[]`, [#453](https://github.com/zheref/nen/issues/453); see [Product families](#product-families-families)) | [`repo resolve`](#nen-repo-resolve), [`repo scenario`](#nen-repo-scenario), [`ref format`](#nen-ref-format), [`fanout compute`](#nen-fanout-compute), [`fanout record`](#nen-fanout-record), [`warmup`](#nen-warmup), [`canon resolve`](#nen-canon-resolve), [`canon pin`](#nen-canon-pin), [`canon checkout`](#nen-canon-checkout) (the pin and the checkout declaration), [`canon mirror generate`](#nen-canon-mirror-generate) and [`canon mirror check`](#nen-canon-mirror-check) (the pin, when `--source`/`--ref` are omitted; the checkout declaration, when `--rules-dir` is), [`parse futon`](#nen-parse-futon), [`pr ready`](#nen-pr-ready) (ref resolution), [`schema check`](#nen-schema-check) (reports the pin) |
-| `nen/colors.yml` | the status-colour precedence for board rendering | [`color status`](#nen-color-status), [`schema check`](#nen-schema-check) |
-| `nen/gates.json` | reviewer identities for the readiness check, and optional declared check exclusions (`checks.excluded`, the intersection at pinned base and default-tip commits) | [`pr ready`](#nen-pr-ready), [`pr next-blocker`](#nen-pr-next-blocker), [`schema check`](#nen-schema-check) |
+| `nen/colors.yml` | the status-colour precedence for board rendering | [`color status`](#nen-color-status), [`schema check`](#nen-schema-check), [`scaffold migrate`](#nen-scaffold-migrate) (seeds it into absence) |
+| `nen/gates.json` | reviewer identities for the readiness check, and optional declared check exclusions (`checks.excluded`, the intersection at pinned base and default-tip commits) | [`pr ready`](#nen-pr-ready), [`pr next-blocker`](#nen-pr-next-blocker), [`schema check`](#nen-schema-check), [`scaffold migrate`](#nen-scaffold-migrate) (seeds it into absence) |
 | `nen/contract.json` | optional — `dependency` (what this repository needs *from* nen: the version floor, the pinned ref, the bootstrap), `project` (its stack declaration: lanes, per-lane verbs, toolchain pins) and `mechanical` (the conflict set [`wc catch-up`](#nen-wc-catch-up) classifies: version manifests, changelog, generated mirrors and their regenerate argv — [#326](https://github.com/zheref/nen/issues/326)), and `precedence` (the repository's canon precedence, first wins — see [Canon precedence](#canon-precedence-precedence)) | [`wc catch-up`](#nen-wc-catch-up) (the `mechanical` block, read only on a conflict), [`shu detect`](#nen-shu-detect) (proposes the `project` block), [`shu build`/`test`/`lint`/…](#family-shu) (every argv they run comes from it), [`shu tools`](#nen-shu-tools) (the `toolchain` pins), [`scaffold init`](#nen-scaffold-init) and [`scaffold new`](#nen-scaffold-new) (write it into absence; `init` also reads `dependency.pinned_ref` for the CI file's ref), [`schema check`](#nen-schema-check) |
 | `nen/workflow.json` | optional — the delivery loop's **policy**: the branch template and trunk, the iteration checks, the coverage ladder, the attribution trailers a commit may carry, the declared subject-case rule and body width, the reports directory, the model matrix, the self-hosted runner pools. See [`nen/workflow.json`](#nenworkflowjson) | [`runner`](#family-runner) (the `runners` block), [`commit format`](#nen-commit-format) and [`commit write`](#nen-commit-write) (the trailer policy, `commits.subjectCase` and `commits.bodyMaxLineLength`), [`shu coverage`](#nen-shu-coverage) (the ladder, under `--touched` with no `--threshold`), [`scaffold init`](#nen-scaffold-init) and [`scaffold new`](#nen-scaffold-new) (write it into absence, and generate both git hooks out of it), [`schema check`](#nen-schema-check) |
 
@@ -575,7 +578,10 @@ anything ever reads a taxonomy file from. A repository that still carries a
 file only under `schemas/` is, from every verb's point of view, the SAME as one
 carrying it nowhere — the refusal it gets is the ordinary "no such file" one,
 with one addition: it names the legacy copy it found and the way out, **run
-`nen scaffold init --accept-detected`** (or copy the file by hand). The
+`nen scaffold init --repo <path> --marker-env <VAR> --accept-detected`** (or
+copy the file by hand). The refusal itself abbreviates the command to
+`nen scaffold init --accept-detected`; `--repo` and `--marker-env` are still
+required, as [`scaffold init`](#nen-scaffold-init) says. The
 migration path is a verb, not a fallback — see [`scaffold
 init`](#nen-scaffold-init) below.
 
@@ -1000,7 +1006,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 174 verbs, grouped as the README groups them. **Reads** is what a
+All 177 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -1020,6 +1026,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`pr`](#family-pr) | [`nen pr retarget`](#nen-pr-retarget) | gh pr edit --base, for a stacked PR after its predecessor merges | github (gh) | yes |
 | [`pr`](#family-pr) | [`nen pr request-reviews`](#nen-pr-request-reviews) | resolves each `--add-reviewers` login as a Bot or a collaborator, then requests it through `gh pr edit --add-reviewer` (User/Team) or GitHub's `requestReviews` mutation (Bot, `botIds`) — the one route `--add-bots` logins and node ids travel too | github (gh api graphql to resolve + request; gh pr edit for the user route) | yes |
 | [`pr`](#family-pr) | [`nen pr edit-body`](#nen-pr-edit-body) | replaces a pull request's body outright with a file's bytes, certifying the number IS a pull request before any write | github (gh api read to certify, gh pr edit unless --dry-run) | yes |
+| [`pr`](#family-pr) | [`nen pr edit-title`](#nen-pr-edit-title) | replaces a pull request's title with a file's one line, certifying the number IS a pull request before any write and reading the title back after it | github (gh api read to certify and read back, gh pr edit unless --dry-run) | yes |
 | [`pr`](#family-pr) | [`nen pr mark-ready`](#nen-pr-mark-ready) | moves ONE existing draft pull request out of draft through GitHub's `markPullRequestReadyForReview` mutation, after certifying it is an open PR at the pinned head, and reports success only on a not-draft read back — never the CON-32 verdict, which stays `pr ready`'s | github (gh api graphql: one certifying read; the mutation and a read back unless --dry-run) | yes |
 | [`pr`](#family-pr) | [`nen pr threads`](#nen-pr-threads) | a pull request's review threads: list them all (paginated to completion, with path, line, author, first comment and url), reply to one, resolve one, or settle a batch from one file | github (gh api graphql: one read walk; one mutation for reply/resolve, one reply and one resolve per entry for settle, unless --dry-run) | yes |
 | [`pr`](#family-pr) | [`nen pr open`](#nen-pr-open) | open exactly one pull request from a head the remote already holds at the local sha, refusing an unpushed head at exit 2; one already open for the head against the same base is returned as `opened: existing` at exit 0, against another base at exit 1 | git (symbolic-ref, rev-parse, ls-remote), github (gh pr list always; gh pr create unless --dry-run) | yes |
@@ -1057,7 +1064,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`label`](#family-label) | [`nen label apply`](#nen-label-apply) | applies one label or a batch of ref/label pairs and appends an after-the-fact ledger line | nen/labels.json; gh only with --run | yes |
 | [`labels`](#family-labels) | [`nen labels sync`](#nen-labels-sync) | creates missing labels and updates only differing taxonomy labels | nen/labels.json; gh read even with --dry-run | yes |
 | [`labels`](#family-labels) | [`nen labels rename`](#nen-labels-rename) | renames labels in place, preserving every issue association, idempotently | gh label list (always), gh label edit unless --dry-run | yes |
-| [`classify`](#family-classify) | [`nen classify labels`](#nen-classify-labels) | validates a classification taxonomy file and prints the label set it defines (axis prefix + key, colour, description) | local file (--taxonomy) | yes |
+| [`classify`](#family-classify) | [`nen classify labels`](#nen-classify-labels) | validates a classification taxonomy file and prints the label set it defines (axis or family prefix + key, colour, description) | local file (--taxonomy) | yes |
 | [`classify`](#family-classify) | [`nen classify install`](#nen-classify-install) | compares the taxonomy's labels with nen/labels.json (present, drift, absent, foreign), rewrites the declaration with --write, or syncs only those labels to GitHub with --sync once the declaration is landed | local file (--taxonomy), nen/labels.json; gh only with --sync | yes |
 | [`classify`](#family-classify) | [`nen classify status`](#nen-classify-status) | which issues carry a label on every axis, which are missing one, which carry an unknown key, and whether the declaration and GitHub both hold the taxonomy's labels | local file (--taxonomy), nen/labels.json, gh (issue reads, label list) | yes |
 | [`classify`](#family-classify) | [`nen classify apply`](#nen-classify-apply) | validates a classification plan whole, then applies it as labels (listing low-confidence rows, skipping labels already present), one ledger line per application | local file (--taxonomy, --plan), nen/labels.json, gh (issue reads; gh issue edit only with --run) | yes |
@@ -1066,7 +1073,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`direct`](#family-direct) | [`nen direct matrix`](#nen-direct-matrix) | enumerates every (job, domain, language) answer `resolve` gives, for a consumer that renders the whole table: per job and domain the witness issue that derives it (or `unreachable`), the route, fallback and phase, and per language column (`*` the shared one) the pair, the aggregate, the winner and runner-up resolved and the effort -- computed by `resolve`'s own functions, owning no rule | local files (--registry, --taxonomy), nen/workflow.json under --repo | yes |
 | [`direct`](#family-direct) | [`nen direct answer`](#nen-direct-answer) | writes the maintainer's picker answer (continue or stop) and its time into the record `direct resolve --record` filed, replacing an earlier answer and leaving every other field unchanged; a missing record is a failure | `<git-common-dir>/.nen/direct/<encoded id>.json` (under --repo outside git; reads and rewrites); git rev-parse/worktree list to find it, no gh | yes |
 | [`schema`](#family-schema) | [`nen schema check`](#nen-schema-check) | loads and validates the files a repository is expected to carry under nen/, reporting each one's verdict and any legacy schemas/ leftover, and a consumer's `.claude/rules/` canon mirror against its bindings | nen/labels.json, repos.json, colors.yml, gates.json, contract.json (optional), workflow.json (optional), .claude/canon-values.yml (optional) and its git history | yes |
-| [`schema`](#family-schema) | [`nen schema set`](#nen-schema-set) | writes ONE value into a nen/ JSON declaration by RFC 6901 pointer -- an existing scalar replaced, or a member added to an existing object -- every other byte kept, the result validated by that file's own loader before anything is written, then written atomically and read back; a [gate-change](#gate-changes) pointer needs `--gate-change`; `--dry-run` writes nothing | the named nen/ declaration under --repo (reads and rewrites); no git/gh | yes |
+| [`schema`](#family-schema) | [`nen schema set`](#nen-schema-set) | writes ONE value into a nen/ JSON declaration by RFC 6901 pointer -- an existing scalar replaced, a member added to an existing object, an item appended to an array (`/-`), or an object or array replaced whole by one of its kind -- every other byte kept, the result validated by that file's own loader before anything is written, then written atomically and read back; a [gate-change](#gate-changes) pointer needs `--gate-change`; `--dry-run` writes nothing | the named nen/ declaration under --repo (reads and rewrites); no git/gh | yes |
 | [`color`](#family-color) | [`nen color status`](#nen-color-status) | resolves one row's colour token by the repository's own nen/colors.yml precedence | nen/colors.yml | yes |
 | [`repo`](#family-repo) | [`nen repo resolve`](#nen-repo-resolve) | resolves a repository token (code, slug, short name, or 'all') against the registry, or the cwd's own origin | nen/repos.json; git (no-token form) | yes |
 | [`repo`](#family-repo) | [`nen repo inventory`](#nen-repo-inventory) | senkei's live enumeration: epics + children, integration branches, open PRs | gh (issue list, api sub_issues/branches/compare, pr list) | yes |
@@ -1128,6 +1135,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`idea`](#family-idea) | [`nen idea file`](#nen-idea-file) | file an idea issue (reusing issue file's own choreography), then read it back over the API and diff title/body/labels against what was submitted | nen/labels.json; gh (issue create + api read) | yes |
 | [`scaffold`](#family-scaffold) | [`nen scaffold init`](#nen-scaffold-init) | stand an EXISTING repository up: the directory skeleton, the trailer-enforcing commit-msg hook, the trunk-guarding pre-commit hook, a canon-values.yml template, nen/contract.json's project block, nen/workflow.json's policy, the schemas/-&gt;nen/ copy migration, the stack's CI workflow, .gitignore upkeep, and a closing `shu tools` CHECK that installs nothing | nen/contract.json + nen/workflow.json (both hooks are generated FROM the policy) + the legacy schemas/ copies; the bundled profiles pack and templates/; writes to disk under --repo; spawns the version probes the target declares (never on --dry-run) | yes |
 | [`scaffold`](#family-scaffold) | [`nen scaffold new`](#nen-scaffold-new) | write a FRESH tree for one stack into an empty --dir: the template's files with {{name}} substituted, the CI workflow, .gitignore, both git hooks, nen/workflow.json's policy, and nen/contract.json as `shu detect` proposes it off the marker just written -- every post-step PRINTED, none run | the bundled profiles pack and templates/; writes to disk under --dir; spawns nothing at all | yes |
+| [`scaffold`](#family-scaffold) | [`nen scaffold migrate`](#nen-scaffold-migrate) | write each ABSENT nen/colors.yml and nen/gates.json from a seed that widens nothing (no colour category; a Copilot round owed at head on every PR, a delivery carve-out matching no author), read each back through its loader, and never open an existing file -- idempotent; the command schema check names for each missing one | writes to disk under --repo; spawns nothing | yes |
 | [`canon`](#family-canon) | [`nen canon resolve`](#nen-canon-resolve) | resolve a target repo's always-load handbook set plus its ONE stack handbook, from the scenario nen/repos.json records for it | nen/repos.json | yes |
 | [`canon`](#family-canon) | [`nen canon pin`](#nen-canon-pin) | read the canonical handbooks repository a consumer mirrors and the TAG it is pinned to, from the `pinned` field on that repository's maintained_tools entry -- data a sync checks the canon out at, and a drift check holds the mirror to; with `--write <tag>`, MOVE that pin -- one value, every other byte kept -- only to a tag the canon checkout carries | nen/repos.json; with --write, the canon checkout `canon checkout` resolves (read-only, isolated git; fetches nothing) and an atomic write of nen/repos.json unless --dry-run | yes |
 | [`canon`](#family-canon) | [`nen canon checkout`](#nen-canon-checkout) | resolve WHERE the canon checkout is on this machine -- `--canon-checkout`, then the variable the pinned entry's `checkout_env` names, then its `checkout` path template -- and verify it is a clean checkout of the pinned source at the pinned tag, reporting every step | nen/repos.json + the environment; read-only, isolated git (rev-parse, remote get-url on the checkout and the consumer, status, ls-files); fetches nothing | yes |
@@ -1159,6 +1167,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`shu`](#family-shu) | [`nen shu test`](#nen-shu-test) | run a lane's test suite, from the invocation its declaration states | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
 | [`shu`](#family-shu) | [`nen shu ui-test`](#nen-shu-ui-test) | run a lane's UI/E2E suite, from the invocation its declaration states | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
 | [`shu`](#family-shu) | [`nen shu lint`](#nen-shu-lint) | run a lane's linter and format check, from the invocation its declaration states | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
+| [`shu`](#family-shu) | [`nen shu typecheck`](#nen-shu-typecheck) | run a lane's static type check, from the invocation its declaration states | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
 | [`shu`](#family-shu) | [`nen shu archive`](#nen-shu-archive) | produce a lane's distributable artifact, where its declaration states one | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
 | [`shu`](#family-shu) | [`nen shu release`](#nen-shu-release) | publish a lane's artifact, where its declaration states a publication step | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
 | [`shu`](#family-shu) | [`nen shu dev`](#nen-shu-dev) | start a lane's DEBUG build; long-running, on this terminal. With `--target <name>` it launches a declared DEVICE instead: the declared probe, the verb, then the target's after-steps | nen/contract.json (project block, plus project.launch for `--target`); inherits stdio unless --dry-run; spawns the declared device probe and after-steps only with `--target` | yes |
@@ -1173,7 +1182,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`dev`](#family-dev) | [`nen dev lint`](#nen-dev-lint) | run this checkout's own eslint via `bun run lint` | package.json + eslint config under --repo | no *(stdio)* |
 | [`dev`](#family-dev) | [`nen dev replay`](#nen-dev-replay) | replay the imported dedupe corpus slice against nen's own normalizeTitle/findCanonical and report any disagreement | tests/fixtures/dualrun-slice/dedupe/*.json (or --slice-dir) | yes |
 | [`parse`](#family-parse) | [`nen parse <skill>`](#nen-parse-skill) | parse an arbitrary skill's invocation against a caller-supplied --grammar template, echo the parse, or refuse with a corrected line | none | yes |
-| [`parse`](#family-parse) | [`nen parse futon`](#nen-parse-futon) | parse futon's own grammar and resolve its repo token against the target repo's nen/repos.json, refusing a 'then &lt;terminal&gt;' clause on a repo that is not the caller's own; reports an optional `--idle` (HR-5) | nen/repos.json | yes |
+| [`parse`](#family-parse) | [`nen parse futon`](#nen-parse-futon) | parse futon's own grammar and resolve its repo token against the target repo's nen/repos.json, refusing a 'then &lt;terminal&gt;' clause on a repo that is not the caller's own; reports an optional `--idle` (HR-5) and `--dry-run` (#520) | nen/repos.json | yes |
 | [`parse`](#family-parse) | [`nen parse izanagi`](#nen-parse-izanagi) | parse izanagi's MUTATING-loop grammar, refusing when 'up to &lt;N&gt;' is absent | none | yes |
 | [`parse`](#family-parse) | [`nen parse izanami`](#nen-parse-izanami) | parse izanami's READ-ONLY-loop grammar and classify every command in it against izanami's own allow/refuse table | none | yes |
 | [`bootstrap`](#family-bootstrap) | [`nen bootstrap`](#nen-bootstrap) | fetch, checksum-verify and cache a pinned nen binary by running bootstrap/nen.sh, relaying its verified path and exit code unchanged | bootstrap/nen.sh under --repo; network (GitHub release assets + SHA256SUMS) | no *(stdio)* |
@@ -1232,7 +1241,7 @@ naming a narrower credential still wrote with `gh`'s own. The global `--repo`,
 | Verb | Credential source |
 |---|---|
 | `ready` | Nen's direct GitHub client reads the explicitly selected environment variable: `GH_TOKEN` by default, or `--token-env <VAR>`. It never imports `gh`'s stored credential or discovers a token from the checkout. An unset/unusable token produces `unevaluated`, exit 1, with both token spellings in the remedy. |
-| `fetch`, `next-blocker`, `retarget`, `request-reviews`, `edit-body`, `mark-ready`, `threads list/reply/resolve/settle`, `open`, `merge` | These invoke `gh`; its configured authentication and environment decide the credential. `threads` already uses this path and needs no separate Nen token export. `--token-env` selects only `ready`'s client, never the credential for these calls, and every one of them refuses it at exit 2 ([#351](https://github.com/zheref/nen/issues/351)). `open` and `merge` also use Git's configured transport where they perform Git operations. |
+| `fetch`, `next-blocker`, `retarget`, `request-reviews`, `edit-body`, `edit-title`, `mark-ready`, `threads list/reply/resolve/settle`, `open`, `merge` | These invoke `gh`; its configured authentication and environment decide the credential. `threads` already uses this path and needs no separate Nen token export. `--token-env` selects only `ready`'s client, never the credential for these calls, and every one of them refuses it at exit 2 ([#351](https://github.com/zheref/nen/issues/351)). `open` and `merge` also use Git's configured transport where they perform Git operations. |
 | `cascade-main` | Git's configured transport credentials for fetch/push; no direct Nen API token. |
 | `staleness`, `body-check` | Local inputs and files; no GitHub authentication. |
 
@@ -3531,6 +3540,87 @@ is an issue, ask 'nen issue edit-body' instead.
 Run 'nen pr --help'.
 ```
 exit 2
+
+### `nen pr edit-title`
+
+Replaces a pull request's title with the one line a file holds, through `gh
+pr edit --title`, then **reads it back** ([#523](https://github.com/zheref/nen/issues/523)).
+The sibling of [`pr edit-body`](#nen-pr-edit-body) for the other field, with
+the same certification: the number is CERTIFIED as a pull request (`gh api
+repos/<target>/pulls/<n>` resolves 200) before anything is written, and a
+404/410 is refused without claiming the number IS an issue. That certifying
+read returns the current title, which `--dry-run` prints. Before this verb a
+stale title had no Nen-owned fix, and a raw `gh pr edit --title` is what the
+Nen-first rule forbids.
+
+**Usage**
+
+```text
+nen pr edit-title --target <owner/name> --pr <n> --title-file <path> [--dry-run] [--json]
+                  [--skip-private-name-check]
+                  [--private-names-ignore-file <path> [--allow-all-ignored]]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--target <owner/name>` | yes | The GitHub repository. | |
+| `--pr <n>` | yes | The pull request to retitle. | The strict reader [`pr edit-body`](#nen-pr-edit-body) uses: `1e3` or `0x0c` are refused (exit 2), because this verb WRITES. |
+| `--title-file <path>` | yes | The new title, read verbatim with a leading byte-order mark and **one** trailing newline (`\n` or `\r\n`) dropped, nothing else trimmed — the rule [`issue file`](#nen-issue-file)'s `--title-file` follows, because a written title is read back and compared. | Resolves against the process's directory, as `edit-body`'s `--body-file` does. Refused at exit **2**, before any call: missing, unreadable, not valid UTF-8, a title that still holds a line break or any other control character (U+0000–U+001F, U+007F), one that begins or ends with whitespace (GitHub may store it trimmed, so the write would land and read back different), one over 256 characters, or one that is empty or only whitespace. There is no inline `--title`. |
+| `--dry-run` | no | Certify, run the guard, then print the argv, the target, the number, the current title and the new one instead of writing. | **Still reads GitHub** to certify. |
+| `--skip-private-name-check`, `--private-names-ignore-file`, `--allow-all-ignored` | no | The [private-name guard](#the-private-name-guard)'s flags, exactly as on [`pr edit-body`](#nen-pr-edit-body). | The field checked is `title`, after the certifying read. |
+
+**The read-back.** After `gh pr edit` exits 0 the verb reads `pulls/<n>`
+again and compares the stored title with the file's, exactly. A title GitHub
+stored differently is exit **1** naming both strings — never reported as
+replaced. A read-back that cannot run is exit 1 too, and under `--json` the
+report still says `written: true` (`readBack: "failed"`, with `error`).
+
+**No etag pin: last writer wins.** GitHub's pull request edit takes no
+`If-Match`, so a concurrent retitle can be overwritten. The verb narrows the
+window: it re-reads the title right before the write and stops (exit 1,
+nothing written, `stored` naming the moved title) if it changed since the
+certifying read. A race after the write fails safe, as a false exit 1 from
+the read-back, never a false success. `previous` is the title as certified.
+
+Titles GitHub returns are anyone-with-write's text, so the human lines print
+every title quoted, with control and invisible characters as `\uXXXX`;
+`--json` carries the bytes.
+
+**Output and exit codes** — human line on a real write: `replaced
+<target>#<pr>'s title, read back identical: <title>`; `--dry-run` prints
+`would run: gh pr edit <n> --repo <target> --title '<title>'` (single-quoted, so a pasted line expands nothing) followed by
+`target:`/`number:`/`current title:`/`new title:`. `--json`: `{ contract:
+"nen.pr.edit-title/v0.1", target, number, previous, title, written,
+readBack, dryRun, privateNameCheck }`, `readBack` `"identical"`,
+`"mismatch"` (with `stored`, the title GitHub answered), `"failed"` (with
+`error`) or `null` when nothing was written; a guard refusal's report drops `title`. Exit 0 on success (dry or real); exit 2 on a refused
+input or a number that does not certify as a pull request; exit 1 when `gh
+pr edit` fails, the read-back fails or differs, or the private-name guard
+could not run. Exit 1 has two `stored` cases, told apart by `written`:
+**before the write**, the title moved since certification — `written:
+false`, `readBack: null`, and `stored` is the **moved title** the re-read
+found, nothing written; **after the write**, a mismatch — `written: true`,
+`readBack: "mismatch"`, and `stored` is **what GitHub stored** in place of
+the file's title. A pre-write re-read that **fails** (rather than finding a
+moved title) is exit 1 with nothing written and **no `--json` report**, only
+the error on stderr; exit **4** when the guard finds a private repository named in
+a title bound for a PUBLIC target, nothing written.
+
+**Example**
+
+```bash
+printf '%s\n' 'feat(pr): edit a title from a file, read back' > title.txt
+nen pr edit-title --target zheref/nen --pr 141 --title-file title.txt --dry-run
+```
+```text
+would run: gh pr edit 141 --repo zheref/nen --title 'feat(pr): edit a title from a file, read back'
+target: zheref/nen
+number: 141
+current title: "<the title GitHub holds now>"
+new title: "feat(pr): edit a title from a file, read back"
+```
 
 ### `nen pr mark-ready`
 
@@ -6405,6 +6495,32 @@ and `--efforts` are refused together. A counter never moves a file: a manifest s
 `<git-common-dir>/hatsu/runs/<id>.json` is read **in place** and the move is named on stderr, with the
 [`run verify`](#nen-run-verify) line that makes it ([#522](https://github.com/zheref/nen/issues/522)).
 
+
+**Claimed efforts** (zheref/nen#521): every row of the manifest's `claims[]` whose issue no delivery PR
+row names (by issue, or by the claim's `branch`) is an effort of its own. Two references name one issue
+only when both are `<owner/name>#<N>` and equal (case-insensitively), both are `<CODE>#<N>` with the same
+code and number, or one of each where the `owner/name` is the run's repository and the code is the one
+`--repo`'s `nen/repos.json` assigns it -- never by number alone, so `NN#5` and `HA#5` are two efforts. With
+no registry, or none naming the run's repository, the two spellings stay two efforts (an over-count, the
+safe direction). Each claimed effort is local, has no PR (`pr: null`) and the id `<issue> (claimed)`,
+and it **holds a slot** (`authored locally, no PR yet`), because a run claims an effort before it opens
+anything. The latest claim per issue decides (on an equal `at`, the later row): a `parked[]` row for that issue
+at or after it **frees** the slot and the issue is listed under `parkedClaims`; a claim whose issue has a
+delivery PR is that PR's effort, counted once. `fromRun.claims` says which case held: `read`,
+`not-recorded` (the manifest has no `claims` key -- only its PRs are counted, and the human rendering
+says so) or `unread`. Claim rows that will not read (not an array, a row with a bad `issue`, `branch` or
+`at`) are `claimsUnread` with the reason: the verb **could not look**, so the local plane reports
+`free: 0` and `binding: true` -- `free` is **forced**, not `cap - occupied`, so `occupied + free` may be
+below `cap` and a caller must read `free`, never derive it. A parked claim frees nothing, a `nen:`
+line on stderr names it and the exit is 1. How a run records a claim is not this verb's
+(zheref/nen#564). A claim merged locally into the run's integration branch with no PR still holds here
+until a recorded fork commit can prove the merge (zheref/nen#565).
+
+**A local effort with no PR and `merged: true`** (in an `--efforts` file) is a local integration -- an
+effort that opens no sub-PR and is done once its branch is merged into the run's integration branch
+(Hatsu HR-353) -- and **frees under every rule**, with no Ready or prompt fabricated for it. With no PR
+and not merged it holds, as before.
+
 **Usage**
 
 ```text
@@ -6430,12 +6546,13 @@ rule in force and where it came from (`<path>: idle.localSlotFrees`, `<path>: mo
 why indented beneath, plus a `"freed: <id>, ..."` line when any effort finished by its plane's rule.
 `--json` prints `{ ci, local, done, localSlotFrees: { rule, source } }`, each plane carrying `{ plane,
 cap, occupied, free, holding, binding }`; under `--from-run` the document adds `fromRun: { run, efforts,
-notEfforts, closedUnmerged, unread }` (each effort the computed row plus `pr`, `issue` and a `facts`
-line), and the human rendering adds a `from run <id>: <n> effort(s)` block with each effort's facts and
-every unread reason ahead of the plane lines. Exit 0 when neither budget is fully occupied; exit 1 when
+notEfforts, closedUnmerged, unread, claims, parkedClaims, claimsUnread }` (each effort the computed row
+plus `pr` -- null for a claimed effort with no PR --, `issue` and a `facts` line), and the human
+rendering adds a `from run <id>: <n> effort(s)` block with each effort's facts, every unread reason, the
+parked claims, and a `claims: not recorded ...` or `claims unread: ...` line ahead of the plane lines. Exit 0 when neither budget is fully occupied; exit 1 when
 either plane is fully occupied (`binding: true`) — the caller can stop starting work without
 re-reading the report — or when `nen/workflow.json` is present and will not load, or the run's
-manifest is missing or will not read; exit 2 when neither `--efforts` nor `--from-run` is given, both
+manifest is missing or will not read, or its claim rows will not read; exit 2 when neither `--efforts` nor `--from-run` is given, both
 are, `--local-cap` is missing, or a cap is not an integer.
 
 **Example**
@@ -7505,6 +7622,16 @@ prints one line per label (`name  #colour  description`). A bad file is refused 
 pointer into it — a missing axis, a duplicate key, a description over 100 characters, a prefix not
 ending in `/`, a colour that is not six hex digits, a key that is not kebab-case.
 
+The taxonomy may also carry an optional root `families` block (zheref/nen#590): install-only label
+families, each with the axis shape (`prefix`, `color`, `keys` with `key`, `title` and `description`),
+keyed by a kebab-case family name that is not an axis name — for example hatsu:direct's `model/`
+family, once the taxonomy declares it (zheref/hatsu `contracts/classify.taxonomy.json` →
+`families.model`; a taxonomy without the block installs the axes only). A family is **never classified on**: `classify status` and `classify apply` read the two
+axes only, so an issue without a `model/` label is still classified. It is part of the label set
+`classify labels` prints and `classify install` declares and syncs. A family whose prefix overlaps an
+axis's or another family's, a family named like an axis, or a family with no keys is refused by
+pointer.
+
 **Usage**
 
 ```text
@@ -7518,10 +7645,13 @@ nen classify labels --taxonomy <path> [--repo <path>] [--json]
 | `--taxonomy <path>` | yes | The classification taxonomy file. | Relative paths resolve against `--repo`'s root. Missing -> exit 2. |
 | `--repo <path>` | no | Anchors a relative `--taxonomy`. | Defaults to cwd. The only `classify` verb where it is optional: this one reads one file and nothing else. |
 
-**Output and exit codes** — human rendering is one line per label, then `<n> label(s): <a> lang, <b>
-job`. `--json` prints one document; top-level keys: `contract` (`nen.classify.labels/v0.1`),
-`taxonomy` (the resolved path), `axes` (per axis: `prefix`, `count`) and `labels` (an array of
-`{ name, color, description, axis, key }`). Exit 0 when the file is valid; exit 1 when it is not (the
+**Output and exit codes** — human rendering is one line per label (the axes' first, then each
+family's), then `<n> label(s): <a> lang, <b> job` followed by `, <c> <family>` per family. `--json`
+prints one document; top-level keys: `contract` (`nen.classify.labels/v0.1`), `taxonomy` (the
+resolved path), `axes` (per axis: `prefix`, `count`), `families` (per family: `prefix`, `count`; `{}`
+when the file carries none) and `labels` (an array of `{ name, color, description, axis, family, key
+}`, where `family` is the axis or family name and `axis` is `null` on a family label). Both are
+additive; the contract stays `v0.1`. Exit 0 when the file is valid; exit 1 when it is not (the
 refusal names the pointer) or cannot be read; exit 2 when `--taxonomy` is missing.
 
 **Example**
@@ -7541,11 +7671,12 @@ file, no `gh` call)
 
 ### `nen classify install`
 
-Answers "has the classification label set been installed here": it compares the taxonomy's labels with
-the consumer's `nen/labels.json`. Each label is `present` (name, colour and description identical;
+Answers "has the classification label set been installed here": it compares the taxonomy's labels —
+both axes' and every install-only family the taxonomy declares (`families`, for example the `model/`
+family hatsu:direct applies once the taxonomy carries `families.model`; zheref/nen#590) — with the consumer's `nen/labels.json`. Each label is `present` (name, colour and description identical;
 colours compare case-insensitively), `drift` (the name is declared but the colour or description
-differs) or `absent`. Labels in `nen/labels.json` that wear an axis prefix but whose key the taxonomy
-does not carry are listed as `foreign` and are **never** removed or changed — a retired key may still
+differs) or `absent`. Labels in `nen/labels.json` that wear an axis or family prefix but whose key the
+taxonomy does not carry are listed as `foreign` and are **never** removed or changed — a retired key may still
 sit on issues.
 
 Three forms, and the third is the second step of a deliberate two:
@@ -7625,7 +7756,9 @@ the labels already on it into the keys the taxonomy knows on each axis, `unknown
 axis prefix whose key the taxonomy lacks) and `missing` (the axes with no label at all). An issue is
 `classified` only when every axis has a label. It also reports `declared` — whether `nen/labels.json`
 carries every taxonomy label — and `github` — whether every taxonomy label exists on the repository
-(existence only; colour drift is `install`'s question).
+(existence only; colour drift is `install`'s question). `declared` and `github` cover the axes' and
+every install-only family's labels, so a declared family label missing on GitHub reads `missing <n>`;
+`unknown` and `missing` read the two axes only.
 
 Exactly one of `--issue <n>[,<n>...]` and `--open`. `--open` reads every open issue, paginated to the
 end (pull requests, which GitHub serves from the same endpoint, are filtered out) and says so when it
@@ -7788,13 +7921,16 @@ It is also where the `schemas/` → `nen/` migration is reported, in the shape v
 the only directory anything reads, so the report distinguishes two, unrelated findings instead of the
 four the fallback needed. A REQUIRED file present only under `schemas/` FAILS the report exactly as an
 absent file always has — its `detail` is the ordinary "no such file" refusal, with one addition: it
-names the legacy copy it found and the migration (`nen scaffold init --accept-detected`, or copy it by
-hand). A file that DID load from `nen/`, with a `schemas/` copy still sitting beside it, is a
+names the legacy copy it found and the migration (`nen scaffold init --repo <path> --marker-env <VAR>
+--accept-detected` — the refusal abbreviates it to `--accept-detected`, but `init` still requires
+`--repo` and [`--marker-env`](#nen-scaffold-init) — or copy it by hand). A file that DID load from `nen/`, with a `schemas/` copy still sitting beside it, is a
 **leftover**: a `warn` row, never a `FAIL`, with an indented `^ a legacy '<path>' copy is still
 there…` line naming the `git rm` that clears it. It is a `warn` because `nen/` is the only file anything
 reads now — a stale duplicate is clutter to delete, not a correctness risk, so whether its bytes still
 agree with `nen/`'s no longer changes the verdict, and detecting the leftover is a stat, never a read: an
 unopenable `schemas/` copy (a directory, a broken symlink) is still reported as a leftover to delete.
+
+**A missing `nen/colors.yml` or `nen/gates.json` names the command that creates it** ([#592](https://github.com/zheref/nen/issues/592)): the colors row reads `absent (optional) -- To create it (…), run: nen scaffold migrate --repo <path>`, and the gates `warn` row ends its "no such file" refusal with the same sentence. The command is last on the line and the path is shell-quoted only when it needs to be, so it pastes as written. [`scaffold migrate`](#nen-scaffold-migrate) writes only the absent seeded files and leaves existing config untouched. No command is named for a file that is present but malformed (that config is the repository's to fix), for one whose only copy is a legacy `schemas/` one (the `scaffold init` migration is named instead), or for `nen/labels.json` and `nen/repos.json`, which have no seed.
 
 **Usage**
 
@@ -8098,18 +8234,31 @@ notes](#metadata-keys) and trailing newline stay exactly as they were. It is the
 form of a hand edit followed by [`schema check`](#nen-schema-check), with the check moved **before**
 the write ([#338](https://github.com/zheref/nen/issues/338)).
 
-**Two edits, and only two.** An existing **scalar** (a string, a number, a boolean or `null`) is
+**Four edits, and only four.** An existing **scalar** (a string, a number, a boolean or `null`) is
 replaced in place by a scalar; a member an existing **object** does not carry is added as its **last**
 member, written in that object's own style (the whitespace around the comma before its last member,
 its own `key: value` separator, and a `{ }`'s inner space on both sides; an empty `{}` is expanded one
-indentation unit past its line in a multi-line file). Refused, each at exit `1` naming why: replacing
-an object or an array, replacing a scalar **with** an object or an array (not supported in v1),
-appending to an array
-(`-` or an index past the end), a missing member before the last step (no object is created on the
+indentation unit past its line in a multi-line file). **Append** ([#587](https://github.com/zheref/nen/issues/587)):
+a pointer whose last step is `-` — RFC 6901's "past the end", as JSON Patch's `add` reads it — adds
+`--value` as the **last item** of the existing array before it, in that array's own style (the
+whitespace around the comma before its last item, so an array kept one item per line gets one more
+line; `[ ]` keeps its inner space; an empty `[]` takes a scalar inline and an object or array expanded
+in a multi-line file), and `--json`'s `at` names the index it took. **Replace a structure**
+([#587](https://github.com/zheref/nen/issues/587)): an existing **object** is replaced whole by an
+object from `--value`, and an existing **array** by an array, written in the layout the old value had —
+expanded one member per line, one indentation unit past its line, when it spanned lines; inline, with
+its own `key: value` separator and its brackets' inner space, when it did not; an empty `{}` or `[]`,
+which has no layout of its own, is expanded in a multi-line file as an added member is — and every byte
+outside it kept. Refused, each at exit `1` naming why: changing a value's **kind** (a scalar for an object or an
+array, an object for an array, or back), an index past the end (the refusal names the `-` pointer),
+a `-` before the last step, a missing member before the last step (no object is created on the
 way), and a path through an object that **repeats** the member it names — `JSON.parse` keeps only the
 last of two equal keys, so the value a reader sees and the one a reviewer reads could differ. A
 pointer through a `$`-prefixed segment, or through an **empty** one (`//`, a trailing `/`), is refused
-at exit `2`: `$` keys are metadata, and the author's, and no declaration has a key called `""`. `nen/colors.yml` is refused at exit `2` too — it is YAML, and this is a JSON text edit.
+at exit `2`: `$` keys are metadata, and the author's, and no declaration has a key called `""`. For the
+same reason a `--value` that carries a `$`-prefixed key at any depth is exit `2`, and replacing an object
+or array that carries one at any depth — which would delete the note — is exit `1` (`refused-edit`):
+set its members one by one instead. `nen/colors.yml` is refused at exit `2` too — it is YAML, and this is a JSON text edit.
 The file must exist; `schema set` never creates one ([`scaffold init`](#nen-scaffold-init) does).
 
 **Validated by the loader before the write.** The original text, then the edited text, is passed to
@@ -8154,14 +8303,20 @@ is ever settable.
 
 **An added object or array is matched key path by key path**: the pointer is joined with every key
 path inside the value, so `{"exe": "sh", …}` added under an ungated parent is still a gate change, and
-the refusal names the inner pointer. With `--gate-change` the edit proceeds, the human output adds
+the refusal names the inner pointer. An appended or replacing value is matched the same way, and a
+**replaced** object or array is matched on what it **removes** as well — a gated key cannot leave
+under an ungated parent either; the refusal says *inside the value it replaces*. That second match
+needs the file, so for any object or array `--value` both it and *--gate-change was given, but … is not
+a gate change* are decided after the file is read and the edit made: they are still exit `2`, but a
+refusal of the edit itself (exit `1`, e.g. a change of kind) is reported first. With `--gate-change` the edit proceeds, the human output adds
 `security-relevant: <pointer> is a gate change -- <why>`, and `--json` carries `gateChange: true`.
 The flag on an edit that is **no** gate change is exit `2` too: *--gate-change was given, but
 `<pointer>` is not a gate change; drop the flag, or report the missing rule*.
 
 **The canon pin is never this verb's.** `nen/repos.json` `/maintained_tools/*/pinned` is refused at
 exit `2` with or without the flag, naming [`nen canon pin --write`](#nen-canon-pin), which moves it
-after resolving the tag in the canon checkout.
+after resolving the tag in the canon checkout — and so is replacing a `maintained_tools` row, or the
+list, whose old value carries one.
 
 **The write is the one [`canon pin --write`](#nen-canon-pin) uses** (`src/edit/atomic.ts`). The
 declaration must be a **regular file directly in a real `nen/`**: a symbolic link — at the file or at
@@ -8192,33 +8347,37 @@ The subcommand is the first positional after `schema`, so `nen schema --repo <pa
 | `--repo <path>` | no | The target repository's working-tree root. | Defaults to cwd. |
 | `--file <nen/…json>` | yes | The declaration, repo-relative, spelled as listed above. | Anything else, including `nen/colors.yml`, is exit `2` naming the list. |
 | `--pointer <pointer>` | yes | An RFC 6901 pointer: `/coverage/minimum`, `/reviewers/0/name`. | `~1` is `/` and `~0` is `~` in a segment. `''` (the whole document), an empty segment, a segment starting with `$`, and a stray `~` are exit `2`. |
-| `--value <JSON>` | yes | The value, as JSON. | `--value 85`, `--value true`, `--value null`, `--value '"main"'`; a negative number is `--value=-1`. A number is written in JSON's normalised spelling (`1.0` is written `1`, `1e2` is `100`). Not JSON, a number JSON cannot write back, or an integer past 2^53 is exit `2`. An object or array is accepted, and is refused by the edit unless it is being added as a new member. |
+| `--value <JSON>` | yes | The value, as JSON. | `--value 85`, `--value true`, `--value null`, `--value '"main"'`, `--value '{"maxCycles": 10}'`; a negative number is `--value=-1`. A number is written in JSON's normalised spelling (`1.0` is written `1`, `1e2` is `100`). Not JSON, a number JSON cannot write back, or an integer past 2^53 is exit `2`. An object or array is added as a new member, appended as an item, or replaces an object or array; over a scalar it is refused. |
 | `--gate-change` | for a [gate change](#gate-changes) | The edit is meant to change a gate. | Without it a gate-change pointer is exit `2`. |
 | `--dry-run` | no (boolean) | Validate and print `before -> after`; write nothing. | The file is still read, and the result still validated. |
 | `--json` | no (boolean) | Machine-readable output. | Below. |
 
 **Output and exit codes** — human rendering, five lines through `plainLine`: `file: <file> (<real
-path>)`, `pointer: <pointer> (line <n>)`, `change: <before> -> <after>` (`(absent) -> …  (added)` for a
-new member, `(unchanged)` when the value is already that), `security-relevant: …` for a gate change,
+path>)`, `pointer: <pointer> (line <n>)` — `pointer: <pointer> -> <resolved> (line <n>)` for an append —,
+`change: <before> -> <after>` (`(absent) -> …  (added)` for a new member, `(absent) -> … (appended)`
+for an appended item, `(unchanged)` when the value is already that), `security-relevant: …` for a gate change,
 `repaired: …` when the file failed its loader before the edit, `validated: <file>'s loader accepts the
-result` — or `validated, and the loader's typed model is unchanged -- <pointer> is kept verbatim` — and `written: <real path>, read back: <pointer> is <after>` — or `written: nothing (--dry-run)`
+result` — or `validated, and the loader's typed model is unchanged -- <pointer> is kept verbatim` — and `written: <real path>, read back: <resolved pointer> is <after>` — or `written: nothing (--dry-run)`
 / `written: nothing (<pointer> is already <after>)`. `--json` (`nen.schema.set/v0.1`):
 
 ```json
 { "contract": "nen.schema.set/v0.1", "ok": true, "file": "nen/workflow.json",
-  "pointer": "/coverage/minimum", "op": "replace", "before": 80, "after": 85,
+  "pointer": "/coverage/minimum", "at": "/coverage/minimum", "op": "replace", "before": 80, "after": 85,
   "changed": true, "read": true, "gateChange": false, "repaired": false,
   "dryRun": false, "written": true,
   "target": "/path/to/repo/nen/workflow.json", "line": 8, "failure": null }
 ```
 
-`op` is `replace` or `add`; `before` is `null` for an `add` (the member was absent — `op` says so).
-`line` is where the replaced literal sat, or where the added member now sits. A refusal at exit `1`
+`op` is `replace`, `add` or `append`; `before` is `null` for an `add` or an `append` (nothing was
+there — `op` says so), and the old object or array for a structure replace. `at` is the pointer of the
+value written: `pointer` itself, except that an append's `-` is resolved to the index the item took.
+`line` is where the replaced value sat, or where the added member or appended item now sits. A refusal at exit `1`
 prints `{ contract, ok: false, file, pointer, written: false, failure: { code, message } }` under
 `--json` and the message on stderr; `written` is `true` only on a `read-back-mismatch`. Exit `0` set, already that value, or a dry run; `1` refused —
 `failure.code` one of `no-file`, `symlink`, `outside-repo`, `file-changed`, `not-json`, `refused-edit`, `invalid`
 (the loader refused the result), `write-failed`, `read-back-mismatch` — with nothing written except on
-`read-back-mismatch`, which says so; `2` usage, nothing read.
+`read-back-mismatch`, which says so; `2` usage, nothing read — save the two gate refusals an
+object or array `--value` can only get after the file is read (above), which write nothing either.
 
 **Example**
 
@@ -8243,6 +8402,28 @@ exit 1. Without `--gate-change` the same pointer is exit 2:
 
 ```text
 nen schema set: nen/workflow.json /coverage/minimum is a gate change: coverage is the ladder a change must meet. Setting it needs --gate-change, so the change is made on purpose and read as one.
+```
+Appending one item to a list, and replacing an object whole from JSON ([#587](https://github.com/zheref/nen/issues/587)):
+
+```bash
+nen schema set --repo /tmp/site --file nen/workflow.json --pointer /commits/forbiddenTrailers/- --value '"Reviewed-by"' --dry-run
+```
+```text
+file: nen/workflow.json (/tmp/site/nen/workflow.json)
+pointer: /commits/forbiddenTrailers/- -> /commits/forbiddenTrailers/3 (line 34)
+change: (absent) -> "Reviewed-by" (appended)
+validated: nen/workflow.json's loader accepts the result
+written: nothing (--dry-run); would write /tmp/site/nen/workflow.json
+```
+```bash
+nen schema set --repo /tmp/site --file nen/workflow.json --pointer /monitor --value '{"maxCycles": 10, "pollSeconds": 120}' --dry-run
+```
+```text
+file: nen/workflow.json (/tmp/site/nen/workflow.json)
+pointer: /monitor (line 36)
+change: {"maxCycles":20,"pollSeconds":300} -> {"maxCycles":10,"pollSeconds":120}
+validated: nen/workflow.json's loader accepts the result
+written: nothing (--dry-run); would write /tmp/site/nen/workflow.json
 ```
 (all from real runs against a scratch copy of this repository's own `nen/workflow.json`; the
 absolute path is elided to `/tmp/site`)
@@ -9689,7 +9870,12 @@ point the manifest at another repository.
 `owner/name` every PR lives in; per PR, `head` is the head **commit** and `branch` the head **branch**
 (Hatsu's `hatsu.futon.run/v0.2` keeps the branch under `head`), `issue` the `<CODE>#<N>` string (its
 number is what follows `#`) or null for an integration or release PR; `parked[]` `{ issue, row, at }` is
-HR-5's park state. The two manifests are separate records until Hatsu's effort recorder moves onto
+HR-5's park state. An optional `claims[]` `{ issue, branch, at }` (`branch` a branch name, or absent or
+null, both read as null; `at` an ISO-8601 instant such as `toISOString` writes, checked by shape before it is
+parsed, as `parked[].at` now is) is the run's **claimed** efforts, read by
+[`loop slots --from-run`](#nen-loop-slots) (zheref/nen#521). No verb here writes it yet
+(zheref/nen#564): every rewrite (`append`, `park`) carries the stored value **verbatim**, readable or
+not, and only the reader judges it. The two manifests are separate records until Hatsu's effort recorder moves onto
 these verbs; which one Hatsu's `then` gate reads is Hatsu's to say (today, its own).
 
 **Usage**
@@ -10410,6 +10596,7 @@ matched: zheref/hatsu's `scripts/private_name_check.sh`.
 | [`idea file`](#nen-idea-file) | `title`, `body` | after the filing's own refusals, before the create |
 | [`pr open`](#nen-pr-open) | `title`, `body` | before any other GitHub call and before git is asked anything |
 | [`pr edit-body`](#nen-pr-edit-body) | `body` | after the certifying read, before the write |
+| [`pr edit-title`](#nen-pr-edit-title) | `title` | after the certifying read, before the write ([#523](https://github.com/zheref/nen/issues/523)) |
 | [`pr ledger post`](#nen-pr-ledger) | the caller's text only, by field: `effort`, each `phases[i].phase\|surface\|model\|dial\|note` and `steps[j].verb\|argv`, `usage.totals[i].surface\|model`, `findings.schema.id` (the caller schema's `$id`, printed in the summary and the fence), `findings.document`, `proof[i].path` -- never nen's own marker and summary | after the findings check, the PR, login and comment reads, the size check and the secret scan, before the post or edit; on `--dry-run` too |
 | [`pr threads reply`](#nen-pr-threads) | `body` | before the thread walk and the reply |
 | [`pr threads settle`](#nen-pr-threads) | `entry[<n>]`, every reply body in the batch file, numbered from 1 | after the batch file's own refusals, before the walk: one hit sends nothing to any thread |
@@ -10642,7 +10829,7 @@ and the write is published unchecked. `consolidate-close`, `wake fire` and
 begins with the verb that ran it, so a caller can tell the guard's lines from
 the verb's own and from `gh`'s, and knows which verb refused: `nen issue:` for
 the four `issue` verbs (as since #329), `nen idea file:`, `nen pr open:`,
-`nen pr edit-body:`, `nen pr threads reply:`, `nen pr threads settle:`,
+`nen pr edit-body:`, `nen pr edit-title:`, `nen pr threads reply:`, `nen pr threads settle:`,
 `nen wake fire:`, `nen wake verify:` and `release-publish:`.
 
 **Exit 4 is shared on `pr threads`.** There `4` already meant *no such thread*
@@ -10668,6 +10855,7 @@ plus `privateNameCheck`, and never carries the refused text: `issue file`
 `issue consolidate-close` `{ parent, children, refused: true }`, `idea file`
 `{ filed: false }`, `pr open` `{ contract, dryRun, opened: false }`,
 `pr edit-body` `{ contract, target, number, bytes, written: false, dryRun }`,
+`pr edit-title` `{ contract, target, number, previous, written: false, readBack: null, dryRun }`,
 `pr threads reply` `{ contract, target, pr, thread, replied: false, dryRun }`,
 `pr threads settle` `{ contract, target, pr, from, dryRun, ok: false }`,
 `wake fire` `{ repo, number, label, run, fired: false }`, `wake verify`
@@ -11151,6 +11339,8 @@ It still never generates scenario-specific project *code* — a framework's own 
 
 **The CI workflow's `toolchain` step reads `shu tools`'s exit code.** It runs the check and fails the job on any non-zero code **except 7** — [behind `pinned_ref`](#behind-the-pinned-ref), meaning the workflow's own `NEN_REF` is older than the `dependency.pinned_ref` in `nen/contract.json`. That is drift in the CI file rather than a broken runner, so the step prints a `::warning::` naming it (repin `NEN_REF`) and the job goes on. Exit 5 — a pinned tool missing or out of range — still fails it.
 
+**More than one lane gets one job per lane** ([#586](https://github.com/zheref/nen/issues/586)). When the proposal declares several lanes — two stacks such as a Next.js app and an Expo app in one monorepo, or one stack in several directories — there is no `defaultLane`, and a verb run without `--lane` refuses. So `init` writes `.github/workflows/nen-shu.yml` from `templates/ci-lanes.json` instead of the stack template: one `shu-<lane>` job per lane, each on the runner its own stack's template names, each running `nen shu tools` then `build`/`test`/`lint` with `--lane <lane>`. Because `project.toolchain` is repository-wide (`--lane` picks the directory, not the pins), a lane job's `toolchain` step treats exit 5 — a pinned tool missing on that runner, possibly another lane's — as a `::warning::`; the lane's own verbs still fail on a tool it really lacks. It is **all or nothing**: when a lane cannot have a job — its stack has no template (the pack's `scaffoldTemplate` is `null`), or its name is not a plain token — **no workflow is written** and the report prints a `no CI workflow:` note naming each such lane, why, and the manual step (one job per lane, each verb with `--repo . --lane <lane>`). A workflow that silently skipped a lane would be a green check over code nothing built. The note is not a refusal: the exit code is unchanged. **The jobs are the declaration's lanes**: when a different `nen/contract.json` is already there (refused, and left standing), its own lanes name the jobs, since that file is what CI's verbs read; job ids ignore case and take no `.` (it becomes `_`), so two lanes whose ids would collide count as lanes without a job.
+
 ### `nen scaffold init`
 
 Eleven steps, each reporting `created` / `appended` / `skipped` / `would-create` / `would-append` / `refused` with the reason. In order: resolve the stack **and the policy** (**before any write**, so a refusal leaves the tree untouched); create every `--directories` entry that does not exist; install the trailer-enforcing commit-msg hook; install the trunk-guarding pre-commit hook; write the canon-values template when `--canon-values-path` is given and nothing is there; **copy** any of the four taxonomy files still under `schemas/` into `nen/` and print the `git rm` line; write `nen/contract.json`'s `project` block into absence; write [`nen/workflow.json`](#nenworkflowjson)'s policy into absence; add the stack's CI workflow; append `.nen/` and the policy's `reports.dir` to `.gitignore`; and run [`nen shu tools`](#nen-shu-tools) in **check** mode, printing what this host is missing and the `--install` command rather than running it.
@@ -11244,6 +11434,8 @@ tools:         (none declared)
 ```
 (run for real against a scratch copy of this repository's own `gatsby-site` marker fixture; the absolute paths are elided to `/tmp/site`)
 
+`--marker-env NEN_AUTOMATED` in that example is required, not decoration: `init` without `--marker-env` refuses at exit 2 before any write. `NEN_AUTOMATED` is only an example name — nen ships no marker variable, so state the one your automation sets. With it set in a commit's environment the hook requires `Agent-Name:` and `Run-Id:` trailers; without it the commit is treated as a human's.
+
 ### `nen scaffold new`
 
 A **fresh** tree: the stack template's files with `{{name}}` substituted, the CI workflow, `.gitignore` (ignoring `.nen/` and `Reports/`), the commit-msg hook when a trailer convention is stated, the trunk-guarding `pre-commit` hook **always**, [`nen/workflow.json`](#nenworkflowjson)'s policy, and `nen/contract.json` — **proposed by `shu detect` off the marker this verb just wrote**, so "scaffolded a project" and "declared a stack" stop being two chores with two chances to disagree.
@@ -11304,9 +11496,45 @@ post-steps (nen does NOT run these):
 ```
 (run for real, `dist/nen-darwin-arm64 scaffold new --stack nextjs --name kro-site --dir ./kro-site --dry-run`)
 
+That example leaves `--marker-env` out on purpose: on `new` it is optional, and omitting it is what skips the commit-msg hook (the `skipped:` line) and adds post-step 4, the `scaffold init` line that installs the hook once you have chosen a marker variable. To write the hook in the same run, add `--marker-env <VAR>` (and, if wanted, `--agent-trailer`/`--run-trailer`).
+
 **What the generated workflow does.** `.github/workflows/nen-shu.yml` declares `permissions: contents: read`, fetches nen's bootstrap at a pinned ref, runs `nen shu tools --repo .`, then `build`, `test` and `lint` — **`--dry-run` first, then for real** — treating exit 4 (this lane declares no such verb) as a fact rather than a failure.
 
 **Which ref it pins, and why it needs a published release.** The ref is `--nen-ref` when given; otherwise the repository's own `dependency.pinned_ref` (for `init`) or this binary's own version, and then **the greater of that and the minimum `templates/index.json` declares** — which is the first release carrying the `nen shu` verbs the workflow runs. That floor exists because the failure without it is silent at scaffold time and total at CI time: a workflow pinned at a release with no `shu` family is red on the first push, and one pinned at a tag with no *release* never gets a binary at all — `bash nen-bootstrap.sh --ref <tag>` refuses at **exit 6**, because [a tag is not a release](#getting-the-binary) and there is no `SHA256SUMS` to verify against. nen cannot check either fact offline, so whenever the written ref is not this binary's own version it prints the ref, that caveat, and the releases page. It names no build tool, no package manager and no test runner: every argv it runs comes from the scaffolded repository's own `nen/contract.json`, so changing what CI runs means changing the declaration.
+
+### `nen scaffold migrate`
+
+**For a repository scaffolded before `nen/colors.yml` and `nen/gates.json` existed** ([#592](https://github.com/zheref/nen/issues/592)). It writes each of those two files that is **absent**, from a seed, reads each one back through the loader [`schema check`](#nen-schema-check) uses, and touches nothing else. `schema check` names this verb, with the repository's own `--repo`, on the row of each of the two files that is missing.
+
+**Only absence is written, and a second run writes nothing.** A path that exists in any form — a file, a directory, a symlink dangling or not, a file this process cannot read — is reported `kept` and is never opened, read or compared: the repository's existing config is not this verb's to judge, and `schema check` judges it. The write is an exclusive create, so a file that appears between the check and the write is left alone and reported `refused`. A second run finds every seeded file present and reports every row `kept`, exit 0. A legacy `schemas/` copy of a seeded file is `refused`, naming [`scaffold init --accept-detected`](#nen-scaffold-init)'s copy, which keeps that config — a seed would shadow it. A `nen/` that is a symlink is refused before anything is written through it.
+
+**Each seed widens nothing.** `nen/colors.yml` declares **no category**: an empty vocabulary and an absent file answer every colour verb the same way, and nen invents no status or severity names. `nen/gates.json` **fails closed**: Copilot (`base_reviewers: ["copilot"]`, `review-round-only`, no separate approver) owes a round **at head on every pull request, requested or not** — it is deliberately not `bounded_policy_exempt`, which would excuse it whenever no request is pending and let a pull request nobody reviewed read ready — so where the readiness verbs refused for want of a gate, they now wait for a review. Its required `delivery` carve-out matches no author — its pattern carries a space, which no GitHub login can. Both are seeds, not rulings: tune them, commit them, then re-run `schema check`. **`nen/labels.json` and `nen/repos.json` are never seeded** — a label set and a registry are names only the repository can choose.
+
+**Usage**
+
+```text
+nen scaffold migrate --repo <path> [--dry-run] [--json]
+```
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--repo <path>` | yes | The repository whose missing `nen/` files are written. | Omitted, refused at exit 2 — a default to the cwd would write into whatever repository the process stands in. |
+| `--dry-run` | no | Print `would-create` for each absent file, and write nothing. | Spawns nothing either way. |
+
+Every other `scaffold` flag is **refused at exit 2 naming it**: no flag changes what this verb writes, and one accepted and ignored would be a change the caller asked for and did not get.
+
+**Output and exit codes** — one line per seeded file, `<action>: <file> -- <why>`, where the action is `created` (with the read-back summary), `would-create`, `kept` or `refused`, then a `next:` line when anything was created. `--json` publishes `{ contract: "nen.scaffold.migrate/v0.1", repo, dryRun, files: [{ file, action, why }], exitCode }`. Exit **0** when nothing was refused, **1** when a row was (a legacy copy, a symlinked `nen/`, a write the filesystem rejected, or a written seed that did not load), **2** on usage.
+
+**Example**
+
+```bash
+nen scaffold migrate --repo .
+```
+```text
+created: nen/colors.yml -- wrote the colour vocabulary, with no category declared; read back: 0 categories
+created: nen/gates.json -- wrote the readiness gate, owing a Copilot round on every pull request; read back: 1 reviewer(s)
+next: review the seeded file(s), commit them, then run 'nen schema check --repo .'
+```
 
 <a id="family-canon"></a>
 
@@ -13424,7 +13652,7 @@ cannot be written is a line on stderr and never a failed run.
 ([#244](https://github.com/zheref/nen/issues/244)). A step that prints nothing
 until it exits looks hung to anything watching its log grow, and a log-growth
 watchdog killed healthy multi-minute compiles for exactly that reason. Two
-signals answer it, on `build`, `test`, `ui-test`, `lint`, `archive`, `release`,
+signals answer it, on `build`, `test`, `ui-test`, `lint`, `typecheck`, `archive`, `release`,
 `deploy`, `coverage` and `test-report` (not on `dev`/`run`, which already hand
 the terminal to the child, and not on `warmup`, whose delegated build and test
 carry the default heartbeat). Neither is read with `coverage --from-capture` or
@@ -13511,7 +13739,7 @@ by a server's log lines is not a document.
 | `project.kind` | Optional. `product`, `process` (plugins and machinery) or `library` (reusable code shared across repositories, products and other process or library repositories, whatever its stack). Absent, [`repo classify`](#nen-repo-classify) derives `product` or `process` from the lanes' stacks; a declaration wins, and is the only way to read `library`. A value outside the three is refused by pointer at load. |
 | `project.defaultLane` | Which lane `--lane` defaults to. `null` is legal and means `--lane` is required — even when there is exactly one lane, so a second lane arriving later cannot silently change what a scripted `nen shu build` builds. |
 | `project.verbs` | `{ "<lane>": { "<verb>": <invocation> } }`, where an invocation is `{ exe, argv }`, `{ steps: [...] }`, or `{ unsupported: "<why>" }`. `argv` is a **list**, never a string: there is no shell, no expansion, no `sh -c`. An invocation may also carry `env` (NAME → value, passed to the child; only the names are ever reported), `artifacts` (repo-relative paths the verb produces, which nen reports and never creates) `stall` and `stdoutTo` (both below). |
-| `…<verb>.stall` | `{ elapsedMs, quietMs, onStall: { exe, argv }, maxStrikes }` — what to do about a step that stops making progress, **in the repository's own words**. Some toolchains hang: a compiler process wedges, the build stops emitting and never finishes, and the fix is to kill the wedged **grandchild** and let the build respawn it. Which process that is, and how it is named, is knowledge about a toolchain — the one thing this family's executor may not carry — so the repository declares the remedy as an ordinary argv and nen contributes the two numbers that decide **when**. It runs `onStall` once **both** budgets are past: `elapsedMs` since the step started **and** `quietMs` with no output. Both, never one — a guard that acted on silence alone would fire at a healthy build that legitimately went quiet early on. Each firing restarts the quiet window and costs a strike; after `maxStrikes` (default **2**) the step is reported **stalled** at exit 1. **Nen never kills the child it started**, at any strike count: on a stall it stops watching, stops waiting, and says the process is still running and is yours to stop. Both budgets and `maxStrikes` are required positive integers (a default for either budget would be nen deciding what "too long" means for somebody else's build) and `onStall` is argv, never a string. Declarable on an invocation (it reaches every step that declares none) or on one `steps[]` entry (which wins). Only on the verbs whose output nen READS — `build`, `ui-test`, `lint`, `archive`, `coverage`, `test-report` — since [`dev`](#nen-shu-dev)/[`run`](#nen-shu-run) hand this terminal to the child and `release`/`deploy` put bytes where nen will not intervene mid-flight; anywhere else is exit 2 naming the set. **A `stall` on the `test` row is refused at load, by pointer, with the reason "tests are untimed"** (v0.13.0, [#227](https://github.com/zheref/nen/issues/227)): a test suite that goes quiet is a suite that is thinking, and a remedy fired at it would be nen deciding how long somebody else's tests may take. `--dry-run` prints the guard as a `stall guard: elapsed >N ms AND quiet >M ms (both)` line under the step it guards — see [the two-gate symptom](#stall-two-gate). |
+| `…<verb>.stall` | `{ elapsedMs, quietMs, onStall: { exe, argv }, maxStrikes }` — what to do about a step that stops making progress, **in the repository's own words**. Some toolchains hang: a compiler process wedges, the build stops emitting and never finishes, and the fix is to kill the wedged **grandchild** and let the build respawn it. Which process that is, and how it is named, is knowledge about a toolchain — the one thing this family's executor may not carry — so the repository declares the remedy as an ordinary argv and nen contributes the two numbers that decide **when**. It runs `onStall` once **both** budgets are past: `elapsedMs` since the step started **and** `quietMs` with no output. Both, never one — a guard that acted on silence alone would fire at a healthy build that legitimately went quiet early on. Each firing restarts the quiet window and costs a strike; after `maxStrikes` (default **2**) the step is reported **stalled** at exit 1. **Nen never kills the child it started**, at any strike count: on a stall it stops watching, stops waiting, and says the process is still running and is yours to stop. Both budgets and `maxStrikes` are required positive integers (a default for either budget would be nen deciding what "too long" means for somebody else's build) and `onStall` is argv, never a string. Declarable on an invocation (it reaches every step that declares none) or on one `steps[]` entry (which wins). Only on the verbs whose output nen READS — `build`, `ui-test`, `lint`, `typecheck`, `archive`, `coverage`, `test-report` — since [`dev`](#nen-shu-dev)/[`run`](#nen-shu-run) hand this terminal to the child and `release`/`deploy` put bytes where nen will not intervene mid-flight; anywhere else is exit 2 naming the set. **A `stall` on the `test` row is refused at load, by pointer, with the reason "tests are untimed"** (v0.13.0, [#227](https://github.com/zheref/nen/issues/227)): a test suite that goes quiet is a suite that is thinking, and a remedy fired at it would be nen deciding how long somebody else's tests may take. `--dry-run` prints the guard as a `stall guard: elapsed >N ms AND quiet >M ms (both)` line under the step it guards — see [the two-gate symptom](#stall-two-gate). |
 | `stdoutTo` | On an invocation, or on one entry of its `steps`: the **repo-relative file** that step's stdout is written to. There is still no shell and no redirection **operator** — nen already captures a child's stdout, and this says to write those bytes to a file rather than relay them. It is the answer for a tool that **prints** the thing nen then parses (`xccov view --report --json` is the bundled example: `nen shu coverage` reads a *file*). Refused **at load** for a path that is absolute, carries a `..` segment, or carries a glob character (`*`, `?`, `[…]`) — nen expands nothing, so a glob would create a file with that character in its name; refused **at the run**, before anything spawns, when a directory is already at the path or a symlink would land the write outside the tree. Refused outright on `dev` and `run`: those hand the terminal to the child, so nen never sees their output. The file is written whatever the tool exited (a half report is what a redirect leaves), and **not** written for a step that could not start. That step's stdout does not also go to the terminal; its **stderr** still does. `--dry-run` prints `stdout -> <path>` on the step, the report lists every such file beside `artifacts`, and `--json` carries `steps[].stdoutTo`. It works on a step that also carries a `stall` guard: that step's output arrives from the streaming seam as chunks rather than as one buffer, so the chunks are held and joined rather than relayed. |
 | `project.preconditions` | `{ "<lane>": [ { kind, value, why } ] }`. Nen **asserts** these and **never performs** them. |
 | `project.hosts` | `{ "<verb>\|*": ["darwin","linux","win32"] }`, compared against this host. An exact verb key wins over `*`, and a declaration with no `hosts` block constrains no verb — a repository that said nothing about platforms has not said `darwin`. |
@@ -13889,13 +14117,13 @@ any tree** and is the clearest example of what a withheld row still gives you:
 
 | Stack | What it proposes | What it withholds, and why |
 |---|---|---|
-| `nextjs` | `build`, `test`, `dev` (`<pm> turbo run <task>`), `run` (`next start`), `lint` (**two steps, in order** — the repo-wide format check, then the per-workspace fan-out), and `coverage` (`<pm> --filter <package> test:coverage`) where the lane resolves to one package that declares the task. Every workspace member carrying a `next.config.*` becomes its own lane, plus the root when the root has one, with `defaultLane: null` and `--lane` required. Seats for `ui-test`, `archive`, `deploy` (all `declared-only`) and `release` (`unsupported` — one observed repository says so in its own Makefile). | The four turbo rows unless your manifest declares **turbo** and your lane has a `turbo.json` declaring that task — `turbo run build` does not run the npm `build` script, and a manager the manifest names says nothing about the tool it hands the work to. `lint` likewise needs **biome** declared (`@biomejs/biome` counts). `coverage` on a **workspace root** — the root is the *list* of packages, not one of them, so answering `{package}` with its own name would propose a command the repository never runs; the note names every member it found, negations applied and missing directories dropped. `coverage` on a lane with no `test:coverage` script, naming the task. Any row whose `{pm}` cannot be read, because `package.json` states no `packageManager` (or states one with no `@version` to split). |
-| `gatsby` | `build` (`gatsby build`), `dev` (`gatsby develop`), `run` (`gatsby serve`), `archive` (`node <the script your package.json names>`) and the two-step `deploy` (that same archive step, then the pages push the pack cites). Seats for `test`, `ui-test`, `lint`, `release` and `coverage`, each with the pack's sentence — *"no test script and no test-runner dependency"*, *"NO LINTER OF ANY KIND EXISTS IN THIS REPOSITORY."* `hosts` is every platform. | `archive` and `deploy` when no declared script both matches the shape **and** corroborates it — `{archiveScript}` is a path, the one place `detect` can see a path this repository runs is its own `scripts` block, and `node {archiveScript}` is thin enough that arity alone would take the first one-argument `node` script in the file. A `resume:pdf` answers; a `start` is named as a near miss. Two corroborated scripts that disagree are an ambiguity, not a choice. `build`/`dev`/`run` when `gatsby` is not a declared dependency, and the second step of `deploy` when the **publishing** tool the pack cites is not one either: a marker match is not evidence a tool is installed, and this is the one row where a proposal nobody checked would put bytes on somebody's infrastructure. And **no precondition for the locally installed browser** `archive` and `deploy` need — the reference probes for it *by path* and cites no environment variable, and a `path` precondition cannot name a location outside the repository at all, so `detect` reports the requirement in a note. |
-| `gradle-android` | `build` (`{gw} assembleDebug --stacktrace`), `lint` (`{gw} :app:lintDebug --stacktrace`), and — **only where a module of your lane applies the Paparazzi plugin** — `ui-test` (`{gw} verifyPaparazziDebug` — screenshot verification; **recording** the baselines is the deliberately separate `{gw} recordPaparazziDebug`, which your declaration states if it wants it) and `test` (`{gw} verifyPaparazziDebug <your unit-test task> --stacktrace`), the latter additionally needing your settings file to name exactly one module `detect` can see is a library. Seats for `archive` (a `release` buildType with **no signingConfig**), `release`, `dev`, `run`, `deploy` and `coverage` (**no** JaCoCo or Kover is applied anywhere — and the observed repository's own checklist documents a task that does not exist on a clean checkout). `hosts` is every platform: the toolchain is cross-platform and the repository says so itself. **The `test` row's `why` is load-bearing and is carried verbatim into your declaration** — the task must be `verifyPaparazziDebug` and never `testDebugUnitTest`, because under the latter a snapshot test renders and discards: replacing a golden with a completely different image still reports PASSED. A note also reports a **conflict** the pack records and refuses to resolve: one canonical handbook binds its lint/test placeholder to exactly the forbidden task. Fix that upstream; nen encodes one side, cites it, and reports the other. A second note names the **plugin gate** on those two rows and why the markers cannot stand in for it. | `test` unless the lane's own `settings.gradle{,.kts}` names exactly **one** module `detect` can see is a library. Every included module is classified three ways — `application` (its build file carries the plugin that identified this lane), `library` (`detect` read the file, every plugin application in it is a literal id, and none of them is the plugin or a look-alike for it), and **`unknown`** — and a single `unknown` ends the row, naming the module and why. A module is `unknown` when its directory is not there, when its `projectDir` is remapped outside the repository, when its build file applies no plugin `detect` can see, when it applies one through an `alias(…)` or a dynamic `apply(…)` — the id then lives in a version catalogue `detect` does not read — or when it applies an id ending in the same word as the lane's plugin, which is how a **convention plugin** wrapping it is spelled. This is why `unknown` is not folded into `library`: an application module applying AGP through `id("myapp.android.application")` would otherwise be the one "library" the settings file named, and `{unitTestTask}` would be answered `:app:test` — the aggregate this row's own `why` exists to forbid. Also withheld: no `include(...)` `detect` can read, every module an application module, or two library candidates, in which case the note lists them and asks which. (`includeBuild` is deliberately not read: it names a separate build, not a module of this one.) And every row on a lane whose wrapper is missing for **this** host, naming the platform, the spelling it implies and what the lane carries instead. <br><br>**`test` *and* `ui-test` unless a module of this lane applies the Paparazzi plugin.** Both rows run `verifyPaparazziDebug`, which is that plugin's own task, and the markers that identify this stack confirm a wrapper, a settings file and the Android *application* plugin — none of the three says anything about Paparazzi, so a lane without it used to be handed a command whose first run is `Task 'verifyPaparazziDebug' not found in root project`. Four spellings count as applied — `id("app.cash.paparazzi")`, `id 'app.cash.paparazzi'`, `apply plugin: 'app.cash.paparazzi'`, and `alias(libs.plugins.paparazzi)` — and the id has to be the **argument of an application**, never merely present: a `testImplementation("app.cash.paparazzi:paparazzi-annotations:…")` names this plugin's artifacts and applies nothing. The alias is followed in the catalogue **its own accessor names**, among the `gradle/*.versions.toml` files at your lane root (`libs.` is `gradle/libs.versions.toml`; a second catalogue is addressed by its own file stem, and a `testLibs.` accessor is not answered by `libs`), matched on the **whole key** Gradle would generate — `libs.plugins.compose.paparazzi` is your `compose-paparazzi` entry or it is nothing. Every spelling is read with **comments stripped** (a commented-out application is not one, in either language — the catalogue by TOML's `#` rule and the build files by the script one), in a **module** build file your settings file `include(…)`s: a root `plugins` block naming the plugin `apply false` applies it nowhere, and a directory Gradle never configures creates no task whatever it applies — a build file in one is named as outside the build rather than counted. The answer is three-valued: `applied`, `absent`, or **`unknown`** — an `alias(…)` no catalogue of that name resolves, a settings file that builds its catalogues itself with `versionCatalogs {`, a dynamic `apply(…)`, a **root** build file that configures its modules from the top (`subprojects {`, `allprojects {`, `apply(…)` — the one thing `detect` reads the root for, and never for the id), or a `buildSrc/` or `build-logic/` whose convention plugins `detect` does not read and one of which may be applying it. `absent` and `unknown` both **withhold**, as a seat that says which of the two it was, names every file it opened and every file it deliberately did not, and states what to write instead: for `test`, the plain JVM row `{gw} :<module>:test` (never `testDebugUnitTest`); for `ui-test`, that there is no screenshot task to propose and instrumented UI tests are unsupported on this stack. A plugin applied inside a **nested build** (a directory with its own wrapper or settings file) is named and not counted — it is applied to a build your lane's wrapper never runs. |
-| `compose-desktop` | `run` (`{gw} run`) and nothing else — one observed lane, one observed command, and it exists only as an IDE run configuration. Seats for the other nine, each with the pack's sentence: `archive` in particular declares `Dmg`/`Msi`/`Deb` target formats, **so the tasks exist**, and no command string for them appears anywhere in the repository — proposing one would be nen inventing a release path. `hosts` is every platform *to run*; packaging is per-format and host-locked, which is a `hosts` constraint your declaration states rather than a tool nen can supply. | The `run` row on a lane whose wrapper is missing for this host, **and** every row when the `compose.desktop` block sits in a subdirectory the lane's settings file names no module for — that build is neither addressable as `:<module>:run` nor a build of its own. Where the settings file *does* include it, the row is proposed as `{gw} :<module>:run`, and a note says so. A note also carries the pack's own argument for **per-lane** stacks: this lane lives inside a repository whose every other verb is Android, with its own wrapper pinned to a different version than the root's. |
-| `expo` | The **Metro lane**, end to end: `dev` (`expo start`) and `lint` (`expo lint`), each proposed only where `expo` is a dependency the lane's own `package.json` declares — `expo` is invoked through the project, and Expo itself warns against a global install. Seats for `test`, `ui-test`, `archive`, `release`, `deploy`, `coverage` and — the one worth reading — **`build`**. `hosts` is every platform for a single-lane tree. | **`build`, always, and this is a rule rather than a withholding.** `expo run:ios` and `expo run:android` build *and launch*; there is no build-only invocation, and `expo start --web` is a dev server rather than an export. A `build` row mapped onto either would start an application on somebody's simulator the first time a script asked for a compile, so the pack carries no such row and `detect` will not manufacture one — the seat quotes that reason and `nen shu build` refuses at exit 4 with it. And **`run`**, because `expo run:{platform}` names a native lane and neither half is the other's default. The note goes further than naming the token: it names every value the lane's **own scripts** spell in that position (`ios` from `"ios": "expo run:ios"`, `android` from `"android": "expo run:android"`) and says where to state one — seeing a value and choosing one are different acts, and only the second is forbidden. Paste the pack's row in unedited and the executor refuses at exit **2**, naming `{platform}`. |
-| `xcode-ios` | **No command row, on any tree** — and the seven seats, the darwin-only `hosts` block, and everything the checkout says about the rows it could not write. `{project}` is answered from the one container of the kind **the reference row's own flag addresses** — a lone `.xcodeproj` behind `-project`, a lone `.xcworkspace` behind `-workspace`, and lane-relative either way; the flag is read out of the pack's argv, not assumed. `{scheme}` is answered from the one shared scheme whose cross-check was performed **in full** and passed: every testable is read against the container *its own* `ReferencedContainer` names, and a scheme that delegates its test action to a `<TestPlanReference>` — which is what every project a recent Xcode creates looks like — is followed into the `.xctestplan` and checked from there. `{resultBundle}` comes from nen's own `.nen/`. Every withheld row then says what it **did** answer — *"nen DID answer `{project} = Kro.xcodeproj`, `{scheme} = Kro` from this lane's own files, so what this row still needs stated is `{destination}` and nothing else"* — which is the whole value of the verb on this stack: it does the copying out of the checkout, and you add the one value it cannot know. Seats for `ui-test`, `lint` (**declared-only** — two incompatible scripts in the observed repository, and SwiftLint appears in none of the seven), `archive`, `release`, `dev`, `run` and `deploy` (the observed repository's only deploy lane is a **database migration**, which is not an app deploy). A `Podfile` beside the container is recorded as **evidence**, never as a marker. | **`build`, `test` and `coverage`, on every tree there will ever be**, and one reason covers all three: each names `{destination}` or `id={simUdid}`, which name a simulator that exists, is of the right device type and is **booted on the machine** — and `detect` reads a working tree and spawns nothing. That is the one withholding here that is not a gap in your repository, and the note says so rather than reading like something you could close. The pack's own rows CITE forms for the position (`-destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5'`, `-destination id=<udid>`); `detect` quotes those sentences once per lane and lifts no value out of them. `{project}` is withheld where the container is not the kind the reference row's flag addresses — a workspace-only lane behind a project flag, the CocoaPods shape where the workspace's own `contents.xcworkspacedata` references the project, a workspace whose contents file `detect` could not read at all (**fail closed**: a container it could not ask is not a container that answered), or a flag it knows no container kind for — because the flag is **part of the row** and a path of the wrong kind behind it fails on every machine; the note names the flag the pack's row carries and asks you for both halves. Also withheld, each with its own sentence because each is a different repair: two projects (or two workspaces); two shared schemes; an unreadable `project.pbxproj`, which withholds the cross-check for the **whole lane** rather than measuring schemes against a target list missing a project; a test plan `detect` could not read, which is a target list it has not got rather than a scheme that names nothing; a testable declared **outside** this lane's root projects — a local Swift package, a project one directory over — which is neither confirmed nor called broken, because `detect` reads the `.xcodeproj` bundles at the lane root and nothing else, and a *partial* check is not a check that passed; a scheme whose test action names a target the projects do not declare (**a finding about your checkout**, not about the proposal — `xcodebuild test` on that scheme fails before any token matters); and a scheme that names **no** target anywhere. |
-| `dotnet-winui` | `build` (`dotnet build <the project or solution your tree resolves to> -c Debug`) and, where a test project exists, `test` (`dotnet test <that test project>`). `hosts` is **`win32` only** — every verb, exit **3** everywhere else, and the pack's `hostNote` rides along as a lane note saying what that means in practice. A `path` precondition for each `ProjectReference` that resolves inside the tree **and names a file that is there today**, and a `project.toolchain.dotnet-sdk` entry when a `global.json` states `sdk.version` (searched from the lane up to the repository root; a `rollForward` beside the pin is carried into the reason, because it makes the pin a **floor** and a toolchain block has no field for one). Seats for the other eight, each with the pack's own sentence — *"NOTHING IN THE REPOSITORY INVOKES A COMMAND"* — plus a seat for any row a cross-check withholds, carrying the reason. **Read those two rows honestly:** the observed repository (`zheref/KroWindows`) runs no command anywhere — no Makefile, no `.cmd`/`.ps1`/`.sh`, no `.github/` at all. `dotnet build` is the maintainer's approved decision; `-c Debug` and the whole `test` row are argued in this PR and are **not** in that approval, which is why the pack's `source` fields say so and why deleting the `test` row returns the grid to the approved shape. | **`archive`, and MSIX packaging with it.** Packaging here is a Visual Studio gesture needing a platform, a signing identity and a publish profile the repository states nowhere, and the approval was `dotnet build` **alone**. `build` and `test` when the tree does not resolve to exactly one project or solution, with the candidates named — and a solution answers only when it **lists** the lane's WinUI project, so an unrelated, empty or stale one is named in a note and stands aside. Both rows when a `ProjectReference` in the graph the answer reaches **escapes the repository**, or is one `detect` cannot resolve at all — an MSBuild `$(property)`, a `*`/`?` wildcard, a `;`-list, an `&entity;` — or differs from disk only in **case**: each is quoted verbatim, no precondition is written, and nothing is guessed. A reference in a project file the answered graph does **not** reach is a finding and withholds nothing. `test` when nothing in the tree is a test project. And the SDK **version** when no `global.json` states one: assert the version CI would need and `detect` uses it; it will not invent one. |
+| `nextjs` | `build`, `test`, `dev` (`<pm> turbo run <task>`), `run` (`next start`), `lint` (**two steps, in order** — the repo-wide format check, then the per-workspace fan-out), and `coverage` (`<pm> --filter <package> test:coverage`) where the lane resolves to one package that declares the task. Every workspace member carrying a `next.config.*` becomes its own lane, plus the root when the root has one, with `defaultLane: null` and `--lane` required. Seats for `ui-test`, `archive`, `deploy` (all `declared-only`) and `release` (`unsupported` — one observed repository says so in its own Makefile). `typecheck` (`{pm} -r exec tsc --noEmit`, both observed repositories' CI line) is proposed only where the lane's `package.json` spells that line out verbatim as one of its scripts: `tsc` ships under the `typescript` package name, which `detect` does not map to the program, so otherwise the row is withheld with a note naming `tsc`. | The four turbo rows unless your manifest declares **turbo** and your lane has a `turbo.json` declaring that task — `turbo run build` does not run the npm `build` script, and a manager the manifest names says nothing about the tool it hands the work to. `lint` likewise needs **biome** declared (`@biomejs/biome` counts). `coverage` on a **workspace root** — the root is the *list* of packages, not one of them, so answering `{package}` with its own name would propose a command the repository never runs; the note names every member it found, negations applied and missing directories dropped. `coverage` on a lane with no `test:coverage` script, naming the task. Any row whose `{pm}` cannot be read, because `package.json` states no `packageManager` (or states one with no `@version` to split). |
+| `gatsby` | `build` (`gatsby build`), `dev` (`gatsby develop`), `run` (`gatsby serve`), `archive` (`node <the script your package.json names>`) and the two-step `deploy` (that same archive step, then the pages push the pack cites). Seats for `test`, `ui-test`, `lint`, `typecheck`, `release` and `coverage`, each with the pack's sentence — *"no test script and no test-runner dependency"*, *"NO LINTER OF ANY KIND EXISTS IN THIS REPOSITORY."* `hosts` is every platform. | `archive` and `deploy` when no declared script both matches the shape **and** corroborates it — `{archiveScript}` is a path, the one place `detect` can see a path this repository runs is its own `scripts` block, and `node {archiveScript}` is thin enough that arity alone would take the first one-argument `node` script in the file. A `resume:pdf` answers; a `start` is named as a near miss. Two corroborated scripts that disagree are an ambiguity, not a choice. `build`/`dev`/`run` when `gatsby` is not a declared dependency, and the second step of `deploy` when the **publishing** tool the pack cites is not one either: a marker match is not evidence a tool is installed, and this is the one row where a proposal nobody checked would put bytes on somebody's infrastructure. And **no precondition for the locally installed browser** `archive` and `deploy` need — the reference probes for it *by path* and cites no environment variable, and a `path` precondition cannot name a location outside the repository at all, so `detect` reports the requirement in a note. |
+| `gradle-android` | `build` (`{gw} assembleDebug --stacktrace`), `lint` (`{gw} :app:lintDebug --stacktrace`), and — **only where a module of your lane applies the Paparazzi plugin** — `ui-test` (`{gw} verifyPaparazziDebug` — screenshot verification; **recording** the baselines is the deliberately separate `{gw} recordPaparazziDebug`, which your declaration states if it wants it) and `test` (`{gw} verifyPaparazziDebug <your unit-test task> --stacktrace`), the latter additionally needing your settings file to name exactly one module `detect` can see is a library. Seats for `archive` (a `release` buildType with **no signingConfig**), `release`, `dev`, `run`, `deploy`, `typecheck` (the Kotlin compiler is the type check) and `coverage` (**no** JaCoCo or Kover is applied anywhere — and the observed repository's own checklist documents a task that does not exist on a clean checkout). `hosts` is every platform: the toolchain is cross-platform and the repository says so itself. **The `test` row's `why` is load-bearing and is carried verbatim into your declaration** — the task must be `verifyPaparazziDebug` and never `testDebugUnitTest`, because under the latter a snapshot test renders and discards: replacing a golden with a completely different image still reports PASSED. A note also reports a **conflict** the pack records and refuses to resolve: one canonical handbook binds its lint/test placeholder to exactly the forbidden task. Fix that upstream; nen encodes one side, cites it, and reports the other. A second note names the **plugin gate** on those two rows and why the markers cannot stand in for it. | `test` unless the lane's own `settings.gradle{,.kts}` names exactly **one** module `detect` can see is a library. Every included module is classified three ways — `application` (its build file carries the plugin that identified this lane), `library` (`detect` read the file, every plugin application in it is a literal id, and none of them is the plugin or a look-alike for it), and **`unknown`** — and a single `unknown` ends the row, naming the module and why. A module is `unknown` when its directory is not there, when its `projectDir` is remapped outside the repository, when its build file applies no plugin `detect` can see, when it applies one through an `alias(…)` or a dynamic `apply(…)` — the id then lives in a version catalogue `detect` does not read — or when it applies an id ending in the same word as the lane's plugin, which is how a **convention plugin** wrapping it is spelled. This is why `unknown` is not folded into `library`: an application module applying AGP through `id("myapp.android.application")` would otherwise be the one "library" the settings file named, and `{unitTestTask}` would be answered `:app:test` — the aggregate this row's own `why` exists to forbid. Also withheld: no `include(...)` `detect` can read, every module an application module, or two library candidates, in which case the note lists them and asks which. (`includeBuild` is deliberately not read: it names a separate build, not a module of this one.) And every row on a lane whose wrapper is missing for **this** host, naming the platform, the spelling it implies and what the lane carries instead. <br><br>**`test` *and* `ui-test` unless a module of this lane applies the Paparazzi plugin.** Both rows run `verifyPaparazziDebug`, which is that plugin's own task, and the markers that identify this stack confirm a wrapper, a settings file and the Android *application* plugin — none of the three says anything about Paparazzi, so a lane without it used to be handed a command whose first run is `Task 'verifyPaparazziDebug' not found in root project`. Four spellings count as applied — `id("app.cash.paparazzi")`, `id 'app.cash.paparazzi'`, `apply plugin: 'app.cash.paparazzi'`, and `alias(libs.plugins.paparazzi)` — and the id has to be the **argument of an application**, never merely present: a `testImplementation("app.cash.paparazzi:paparazzi-annotations:…")` names this plugin's artifacts and applies nothing. The alias is followed in the catalogue **its own accessor names**, among the `gradle/*.versions.toml` files at your lane root (`libs.` is `gradle/libs.versions.toml`; a second catalogue is addressed by its own file stem, and a `testLibs.` accessor is not answered by `libs`), matched on the **whole key** Gradle would generate — `libs.plugins.compose.paparazzi` is your `compose-paparazzi` entry or it is nothing. Every spelling is read with **comments stripped** (a commented-out application is not one, in either language — the catalogue by TOML's `#` rule and the build files by the script one), in a **module** build file your settings file `include(…)`s: a root `plugins` block naming the plugin `apply false` applies it nowhere, and a directory Gradle never configures creates no task whatever it applies — a build file in one is named as outside the build rather than counted. The answer is three-valued: `applied`, `absent`, or **`unknown`** — an `alias(…)` no catalogue of that name resolves, a settings file that builds its catalogues itself with `versionCatalogs {`, a dynamic `apply(…)`, a **root** build file that configures its modules from the top (`subprojects {`, `allprojects {`, `apply(…)` — the one thing `detect` reads the root for, and never for the id), or a `buildSrc/` or `build-logic/` whose convention plugins `detect` does not read and one of which may be applying it. `absent` and `unknown` both **withhold**, as a seat that says which of the two it was, names every file it opened and every file it deliberately did not, and states what to write instead: for `test`, the plain JVM row `{gw} :<module>:test` (never `testDebugUnitTest`); for `ui-test`, that there is no screenshot task to propose and instrumented UI tests are unsupported on this stack. A plugin applied inside a **nested build** (a directory with its own wrapper or settings file) is named and not counted — it is applied to a build your lane's wrapper never runs. |
+| `compose-desktop` | `run` (`{gw} run`) and nothing else — one observed lane, one observed command, and it exists only as an IDE run configuration. Seats for the other ten, each with the pack's sentence: `archive` in particular declares `Dmg`/`Msi`/`Deb` target formats, **so the tasks exist**, and no command string for them appears anywhere in the repository — proposing one would be nen inventing a release path. `hosts` is every platform *to run*; packaging is per-format and host-locked, which is a `hosts` constraint your declaration states rather than a tool nen can supply. | The `run` row on a lane whose wrapper is missing for this host, **and** every row when the `compose.desktop` block sits in a subdirectory the lane's settings file names no module for — that build is neither addressable as `:<module>:run` nor a build of its own. Where the settings file *does* include it, the row is proposed as `{gw} :<module>:run`, and a note says so. A note also carries the pack's own argument for **per-lane** stacks: this lane lives inside a repository whose every other verb is Android, with its own wrapper pinned to a different version than the root's. |
+| `expo` | The **Metro lane**, end to end: `dev` (`expo start`) and `lint` (`expo lint`), each proposed only where `expo` is a dependency the lane's own `package.json` declares — `expo` is invoked through the project, and Expo itself warns against a global install. Seats for `test`, `ui-test`, `typecheck` (TypeScript configured, never run), `archive`, `release`, `deploy`, `coverage` and — the one worth reading — **`build`**. `hosts` is every platform for a single-lane tree. | **`build`, always, and this is a rule rather than a withholding.** `expo run:ios` and `expo run:android` build *and launch*; there is no build-only invocation, and `expo start --web` is a dev server rather than an export. A `build` row mapped onto either would start an application on somebody's simulator the first time a script asked for a compile, so the pack carries no such row and `detect` will not manufacture one — the seat quotes that reason and `nen shu build` refuses at exit 4 with it. And **`run`**, because `expo run:{platform}` names a native lane and neither half is the other's default. The note goes further than naming the token: it names every value the lane's **own scripts** spell in that position (`ios` from `"ios": "expo run:ios"`, `android` from `"android": "expo run:android"`) and says where to state one — seeing a value and choosing one are different acts, and only the second is forbidden. Paste the pack's row in unedited and the executor refuses at exit **2**, naming `{platform}`. |
+| `xcode-ios` | **No command row, on any tree** — and the eight seats, the darwin-only `hosts` block, and everything the checkout says about the rows it could not write. `{project}` is answered from the one container of the kind **the reference row's own flag addresses** — a lone `.xcodeproj` behind `-project`, a lone `.xcworkspace` behind `-workspace`, and lane-relative either way; the flag is read out of the pack's argv, not assumed. `{scheme}` is answered from the one shared scheme whose cross-check was performed **in full** and passed: every testable is read against the container *its own* `ReferencedContainer` names, and a scheme that delegates its test action to a `<TestPlanReference>` — which is what every project a recent Xcode creates looks like — is followed into the `.xctestplan` and checked from there. `{resultBundle}` comes from nen's own `.nen/`. Every withheld row then says what it **did** answer — *"nen DID answer `{project} = Kro.xcodeproj`, `{scheme} = Kro` from this lane's own files, so what this row still needs stated is `{destination}` and nothing else"* — which is the whole value of the verb on this stack: it does the copying out of the checkout, and you add the one value it cannot know. Seats for `ui-test`, `lint` (**declared-only** — two incompatible scripts in the observed repository, and SwiftLint appears in none of the seven), `archive`, `release`, `dev`, `run`, `typecheck` (the Swift compiler is the type check) and `deploy` (the observed repository's only deploy lane is a **database migration**, which is not an app deploy). A `Podfile` beside the container is recorded as **evidence**, never as a marker. | **`build`, `test` and `coverage`, on every tree there will ever be**, and one reason covers all three: each names `{destination}` or `id={simUdid}`, which name a simulator that exists, is of the right device type and is **booted on the machine** — and `detect` reads a working tree and spawns nothing. That is the one withholding here that is not a gap in your repository, and the note says so rather than reading like something you could close. The pack's own rows CITE forms for the position (`-destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5'`, `-destination id=<udid>`); `detect` quotes those sentences once per lane and lifts no value out of them. `{project}` is withheld where the container is not the kind the reference row's flag addresses — a workspace-only lane behind a project flag, the CocoaPods shape where the workspace's own `contents.xcworkspacedata` references the project, a workspace whose contents file `detect` could not read at all (**fail closed**: a container it could not ask is not a container that answered), or a flag it knows no container kind for — because the flag is **part of the row** and a path of the wrong kind behind it fails on every machine; the note names the flag the pack's row carries and asks you for both halves. Also withheld, each with its own sentence because each is a different repair: two projects (or two workspaces); two shared schemes; an unreadable `project.pbxproj`, which withholds the cross-check for the **whole lane** rather than measuring schemes against a target list missing a project; a test plan `detect` could not read, which is a target list it has not got rather than a scheme that names nothing; a testable declared **outside** this lane's root projects — a local Swift package, a project one directory over — which is neither confirmed nor called broken, because `detect` reads the `.xcodeproj` bundles at the lane root and nothing else, and a *partial* check is not a check that passed; a scheme whose test action names a target the projects do not declare (**a finding about your checkout**, not about the proposal — `xcodebuild test` on that scheme fails before any token matters); and a scheme that names **no** target anywhere. |
+| `dotnet-winui` | `build` (`dotnet build <the project or solution your tree resolves to> -c Debug`) and, where a test project exists, `test` (`dotnet test <that test project>`). `hosts` is **`win32` only** — every verb, exit **3** everywhere else, and the pack's `hostNote` rides along as a lane note saying what that means in practice. A `path` precondition for each `ProjectReference` that resolves inside the tree **and names a file that is there today**, and a `project.toolchain.dotnet-sdk` entry when a `global.json` states `sdk.version` (searched from the lane up to the repository root; a `rollForward` beside the pin is carried into the reason, because it makes the pin a **floor** and a toolchain block has no field for one). Seats for the other nine (`typecheck` among them: the C# compiler is the type check), each with the pack's own sentence — *"NOTHING IN THE REPOSITORY INVOKES A COMMAND"* — plus a seat for any row a cross-check withholds, carrying the reason. **Read those two rows honestly:** the observed repository (`zheref/KroWindows`) runs no command anywhere — no Makefile, no `.cmd`/`.ps1`/`.sh`, no `.github/` at all. `dotnet build` is the maintainer's approved decision; `-c Debug` and the whole `test` row are argued in this PR and are **not** in that approval, which is why the pack's `source` fields say so and why deleting the `test` row returns the grid to the approved shape. | **`archive`, and MSIX packaging with it.** Packaging here is a Visual Studio gesture needing a platform, a signing identity and a publish profile the repository states nowhere, and the approval was `dotnet build` **alone**. `build` and `test` when the tree does not resolve to exactly one project or solution, with the candidates named — and a solution answers only when it **lists** the lane's WinUI project, so an unrelated, empty or stale one is named in a note and stands aside. Both rows when a `ProjectReference` in the graph the answer reaches **escapes the repository**, or is one `detect` cannot resolve at all — an MSBuild `$(property)`, a `*`/`?` wildcard, a `;`-list, an `&entity;` — or differs from disk only in **case**: each is quoted verbatim, no precondition is written, and nothing is guessed. A reference in a project file the answered graph does **not** reach is a finding and withholds nothing. `test` when nothing in the tree is a test project. And the SDK **version** when no `global.json` states one: assert the version CI would need and `detect` uses it; it will not invent one. |
 
 **A bare-workflow Expo repository is three lanes, and `detect` says so.** Where
 `ios/` and `android/` prebuild output is committed beside the manifest —
@@ -14040,13 +14268,14 @@ declaration: /Users/…/two-app-monorepo/nen/contract.json  (absent)
         marker: admin/next.config.js
         verbs:  build, dev, lint, run, test
         unsupported (the pack's reason, yours to replace):  archive, deploy, release, ui-test
+        ^ 'typecheck' withheld: 'pnpm -r exec tsc --noEmit' asks the package manager to run 'tsc', and this lane's package.json declares no such dependency. The manager being present says nothing about the tool it hands the work to -- that is the program that has to be there, and a tool the project does not visibly carry is a warning, never a proposal.
         ^ 'coverage' withheld: its reference command asks the package '@acme/admin' for the task 'test:coverage', and this lane's package.json declares no such script. If the task is declared somewhere nen does not read -- a workspace member, a task runner's own config -- add the row by hand; a verb the project does not visibly carry is a warning, never a proposal.
         ^ the reference pack proposes no command for ui-test (two meanings), archive (evidence, not an artifact), release (declared n/a in the repo), deploy (three shapes, no default). … ui-test, archive, deploy are declared-only rather than unsupported: the pack HAS observed commands for them and declines to pick one, so those rows are the first to replace.
   web  (nextjs)  cwd web
         marker: web/next.config.js
         verbs:  build, dev, lint, run, test
         unsupported (the pack's reason, yours to replace):  archive, deploy, release, ui-test
-        ^ … (the same two notes)
+        ^ … (the same three notes)
 
 note: a lane's NAME is proposed from the directory it lives in (or from the stack id at the repository root) and is yours to change -- it is the token '--lane' takes, and nothing in nen reads meaning into it.
 
@@ -14437,6 +14666,28 @@ would run:     pnpm turbo run lint
 
 
 **Output and exit codes** — the report, as text or `--json`; `0`/`1`/`2`/`3`/`4`/`5` as the family's table above. `--json` is the family's [shared run report](#shu-run-report), with `contract: "nen.shu.lint/v0.1"`.
+### `nen shu typecheck`
+
+Run the lane's static type check — a TypeScript lane's `tsc --noEmit`, say — and exit `0` when it passes, `1` when a step fails, the checker's own code reported on that step's line, as every executing verb in this family does ([#588](https://github.com/zheref/nen/issues/588)). Same shape as `lint`, same `dry-run-gated` classification, and per lane like every executing verb: `--lane <name>` picks the lane, `defaultLane` answers when it is omitted. A lane declares it at `project.verbs.<lane>.typecheck` in `nen/contract.json`, in the single-step or `steps` form. **No declaration is exit 4**, naming that exact pointer — nen never falls back to `build`, or to a checker it guessed: a verb this repository has is a verb this repository states. A `{ "unsupported": "<why>" }` seat is exit 4 quoting the reason. A `stall` guard is accepted, as on `lint`.
+
+**Example**
+
+```bash
+nen shu typecheck --dry-run
+```
+```text
+would run:     pnpm -r exec tsc --noEmit
+```
+(the `nextjs` reference row, from both observed repositories' Makefiles; the rest of the report is elided)
+
+```bash
+nen shu typecheck --lane docs
+```
+```text
+nen shu typecheck: lane 'docs' (gatsby) declares no 'typecheck'. It declares: build, lint. A verb this repository has is a verb this repository states: declare it in nen/contract.json at project.verbs.docs.typecheck -- nen never substitutes a plausible command for a declared one.
+```
+
+**Output and exit codes** — the report, as text or `--json`; `0`/`1`/`2`/`3`/`4`/`5` as the family's table above. `--json` is the family's [shared run report](#shu-run-report), with `contract: "nen.shu.typecheck/v0.1"`.
 ### `nen shu archive`
 
 Produce the lane's distributable artifact. Across the stacks this family is designed for, most lanes declare `{ "unsupported": "<why>" }` here, and the refusal quotes that sentence at exit 4.
@@ -14658,7 +14909,7 @@ asserted, nothing sent -- and `--run` is what acts.
 
 `--run` is the same dry-run-first gate [`label apply`](#nen-label-apply) and
 [`wake fire`](#nen-wake-fire) carry, and it is here for the reason the other
-nine executing verbs do not have it: each of those spawns something inside a
+eleven executing verbs do not have it: each of those spawns something inside a
 directory you are standing in and can be undone by running it again, and a
 deploy cannot. So `shu deploy` is the one row of this family that izanami
 classifies **`write-flag-gated`** rather than `dry-run-gated`: without `--run`
@@ -16634,7 +16885,7 @@ Parses futon's own invocation grammar (`<repo>@<severity>[+] [then <terminal>]`,
 **Usage**
 
 ```text
-nen parse futon --repo <path> "<repo>@<severity>[+]|<repo>@<label> [--idle] [then <tag|tag+fanout|skill[@target][+skill...]|prose>]" [--self <owner/name>]
+nen parse futon --repo <path> "<repo>@<severity>[+]|<repo>@<label> [--idle] [--dry-run] [then <tag|tag+fanout|skill[@target][+skill...]|prose>]" [--self <owner/name>]
 ```
 
 **`--idle`** (Hatsu's ruling HR-5) is an optional flag of the scope: the first or the last token before
@@ -16645,10 +16896,29 @@ the flag (an UNQUOTED label whose last word is `--idle` now reads as the flag: q
 `--idle` after `then` would be indistinguishable from prose and is refused at exit 2 with the line moved
 before `then`; given twice -- at both ends or twice at the same end (`nen@bug --idle --idle`) -- it is
 refused with one kept, never read as part of the label (zheref/nen#491). On any other skill it is exit 2.
-**Kazaana carries the same flag through the generic grammar**, as a literal-only optional clause:
+**Kazaana carries `--idle` through the generic grammar**, as a literal-only optional clause:
 `nen parse kazaana --grammar "<repo> [on <line:…>] [--idle]" --line "hatsu on claude --idle"` reports
 `clauses: [{ literal: "--idle", present: true }]` (and `present: false` without it), so a caller reads
 the flag off the parse and strips nothing by hand.
+**`--dry-run`** (zheref/nen#520) is a second flag of the scope under the same rules: the first or the last
+token before any `then`, or its own argv word; nen reports it (`dry-run: yes`, `--json` `dryRun: true`,
+otherwise `false`) and never acts on it -- what a dry futon run does is the calling skill's rule. Both
+flags may be typed together, in either order and at either end (`--dry-run nen@bug --idle`,
+`nen@bug --idle --dry-run`), and both are read. After `then` -- followed by whitespace, the end or
+punctuation (`then x --dry-run;`), and never inside quotes, where it is prose -- or typed twice -- in the
+line, as two argv words, or once each way (true of `--idle` too) -- it is refused at exit 2 with the
+corrected line, which writes each typed flag once, `--idle` before `--dry-run`, after the scope. **Any
+other flag-shaped word in the scope is refused at exit 2, never read into the label**: a near miss of
+either flag (`--dryrun`, `--DRY-RUN`, `--dry_run`, `-dry-run`, an em dash `—dry-run`,
+`--idel`, a run of any Unicode dash such as `−−dry-run`), with the exact flag in the corrected line -- offered only for a case, `_` or dash variant or one edit (a swap counts as one) that keeps the flag's first three letters; a word further off (`-idea`, `--file`, `--isle`) and any token carrying `=<value>` (`--idle=false`, `--dry-run=false`), which never has a flag offered, are unknown options; an unknown `--option` (`nen@bug --dry-run --verbose`),
+dropped from the corrected line; and a scope flag left inside the selector (`nen@x --dry-run y`), moved
+after it. Quote a label to keep such a word in it (`nen@"bug --dryrun"`). **A leading flag is its own
+argv word**: a QUOTED line that begins with `--` (`nen parse futon "--dry-run nen@bug"`) is refused by the
+argv reader as an unknown option at exit 2, so type `nen parse futon --dry-run nen@bug` or put the flag
+last. Anything after a bare `--` is refused at exit 2, never dropped. In the plain rendering the echoed
+line, label and `try:` line have control characters stripped; `--json` keeps them escaped. On
+`parse futon` the flag is part of the grammar, never a preview: `parse` writes nothing. On any other
+skill it is exit 2.
 
 **Arguments**
 
@@ -16658,7 +16928,7 @@ the flag off the parse and strips nothing by hand.
 | (positional invocation) | yes | The futon line itself, e.g. `BC@high+ then tag`. | Joined from every positional after `futon`. |
 | `--self <owner/name>` | no | Overrides "which repo am I standing in" (otherwise read from the git remote). | Needed when the caller's own remote does not resolve, or under test. |
 
-**Output and exit codes** -- prints `repo: <slug> (<code>)`, `band: <severity>[+] -> <severities>`, `terminal: <clause or '(none -- build-only)'>`. `--json`: `{ repo, code, isSelf, band, label, terminal, then, idle }`; the plain rendering adds `idle: yes (...)` when the flag was given. Exit 0 on a resolved, permitted invocation; exit 2 on an unparseable line, an unresolvable repo token, or a `then <terminal>` clause against a repo that is not the caller's own (with a corrected, build-only line offered).
+**Output and exit codes** -- prints `repo: <slug> (<code>)`, `band: <severity>[+] -> <severities>`, `terminal: <clause or '(none -- build-only)'>`. `--json`: `{ repo, code, isSelf, band, label, terminal, then, idle, dryRun }`; the plain rendering adds `idle: yes (...)` and `dry-run: yes (...)` when each flag was given. Exit 0 on a resolved, permitted invocation; exit 2 on an unparseable line, an unresolvable repo token, or a `then <terminal>` clause against a repo that is not the caller's own (with a corrected, build-only line offered).
 
 **Example**
 
@@ -20013,7 +20283,8 @@ against it.
 
 ```bash
 # 1. Directory skeleton, the trailer-enforcing commit-msg hook, a canon-values template.
-nen scaffold init --repo /path/to/new-consumer --directories src,tests,docs \
+#    --marker-env is required: the hook reads it to recognise an automated commit.
+nen scaffold init --repo /path/to/new-consumer --accept-detected --directories src,tests,docs \
   --agent-trailer Agent-Name --run-trailer Run-Id --marker-env NEN_AUTOMATED \
   --canon-values-path .claude/canon-values.yml --scenario swiftui-tca-uzf-v2
 ```
@@ -20507,6 +20778,7 @@ rather than the reader. See [per-stack notes](#nen-shu-detect) under
 | test | **yes — any lane that declares one** | [`shu test`](#nen-shu-test), [`dev test`](#nen-dev-test) | `shu test` runs a *target project's* declared test invocation; `dev test` still spawns `bun run test` in *this* checkout. |
 | ui-test | **yes on `gradle-android` where the plugin is applied; a seat elsewhere** | [`shu ui-test`](#nen-shu-ui-test) | Runs the lane's declared UI/E2E invocation, including the multi-step form. **One stack ships a reference row, and `detect` proposes it where the tree evidences it**: `gradle-android`'s `{gw} verifyPaparazziDebug` — screenshot verification, and recording the baselines is a deliberately separate command the declaration states if it wants it. That row is **gated on the Paparazzi plugin being applied** in one of the lane's module build files: the task is the plugin's, so a lane without it gets a seat carrying the reason rather than a command the build cannot run. Everywhere else the pack proposes no default, and for two different reasons a reader should not conflate: `nextjs` is the *declined-to-choose* case (Playwright as two steps, or a Storybook static build — the observed repositories disagree about what this verb even means), and `gatsby` the *nothing-observed* one. `detect` proposes those as `unsupported` **seats** carrying the pack's own sentence, and the declaration decides. Nen runs no E2E tool of its own; [`quality tooling`](#nen-quality-tooling) *looks up* which one a scenario uses. |
 | lint | **yes — any lane that declares one** | [`shu lint`](#nen-shu-lint), [`dev lint`](#nen-dev-lint) | `shu lint` runs a *target project's* declared lint invocation (commonly two steps, in order); `dev lint` still spawns `bun run lint` in *this* checkout. |
+| typecheck | **yes — any lane that declares one; a reference row on `nextjs`** | [`shu typecheck`](#nen-shu-typecheck) | Runs the lane's declared static type check: exit `0` clean, `1` a step failed (the checker's code on the step line); no declaration is exit 4 naming `project.verbs.<lane>.typecheck`. The `nextjs` pack row is `{pm} -r exec tsc --noEmit`, the line both observed repositories' CI runs; `detect` proposes it only where the lane visibly carries the checker (its `package.json` spells the line out as a script), since `tsc` ships under the `typescript` package name. `expo` (TypeScript configured, never run), `gatsby` and the compiled stacks are `unsupported`. |
 | archive | **yes on `gatsby`; a seat elsewhere** | [`shu archive`](#nen-shu-archive) | Runs a lane's declared packaging step. `gatsby` is the one stack whose archive produces a real artifact, and `detect` proposes it — `node <the script your package.json names>` — reading the path out of the repository's own `scripts` block rather than guessing one. Most other lanes declare `{"unsupported": "<why>"}`, and the refusal quotes that sentence at exit 4. `dotnet-winui` is the sharpest case: **MSIX packaging is unsupported and stays so** — it is a Visual Studio gesture needing a platform, a signing identity and a publish profile the repository states nowhere, and the approval that gave that stack a `build` row deliberately did not give it this one. No signing material is ever synthesised. |
 | release | **mechanics, plus the verb** | [`shu release`](#nen-shu-release), [`release resolve-target`](#nen-release-resolve-target), [`release preflight`](#nen-release-preflight), [`release self-check`](#nen-release-self-check), [`changelog collate`](#nen-changelog-collate), [`changelog completeness`](#nen-changelog-completeness), [`tag cut`](#nen-tag-cut), [`fanout compute`](#nen-fanout-compute), [`fanout record`](#nen-fanout-record) | `shu release` runs a lane's declared publication step where it has one. The rest is unchanged: preconditions, the changelog, the annotated tag, the consumer fan-out — a tag is not a release. |
 | dev (debug run) | **yes — any lane that declares one** | [`shu dev`](#nen-shu-dev) | Starts the lane's declared debug process, long-running, on this terminal. Nen still starts no simulator, emulator, device or daemon of its own. |
@@ -20526,7 +20798,7 @@ stays with each project's own toolchain — and a repository that writes its own
 
 **What those verbs can run, per stack, is already written down.**
 [`docs/STACK-MATRIX.md`](STACK-MATRIX.md) is the full reference: seven stacks ×
-thirteen verbs, each cell either a command cited to the repository it was read
+fourteen verbs, each cell either a command cited to the repository it was read
 from, `declared-only` (real for the stack, and the observed repositories
 disagree about what it means, so no default is proposed), or `unsupported` with
 the reason. It is **generated** from the bundled profiles pack

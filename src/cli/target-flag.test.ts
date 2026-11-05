@@ -57,6 +57,7 @@ const VERBS: readonly (readonly [Command, readonly string[]])[] = [
   [issueCommand, ["issue", "consolidate-close", "--parent", "1", "--children", "2"]],
   [ideaCommand, ["idea", "file", "--repo", ".", "--title", "x", "--body-file", "x"]],
   [prCommand, ["pr", "open", "--title-file", "x", "--body-file", "x"]],
+  [prCommand, ["pr", "edit-title", "--pr", "1", "--title-file", "x"]],
   [prCommand, ["pr", "converge", "--pr", "1"]],
   [prCommand, ["pr", "threads", "list", "--pr", "1"]],
   [classifyCommand, ["classify", "install", "--sync"]],

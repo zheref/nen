@@ -83,6 +83,52 @@ export interface RunManifest {
   readonly idleAnswers: Readonly<Record<string, IdleResolution>> | null;
   readonly prs: readonly RunPr[];
   readonly parked: readonly RunParked[];
+  /**
+   * The run's CLAIMED efforts, VERBATIM as stored, or absent when the run
+   * recorded none (zheref/nen#521). Kept unparsed on purpose: no nen verb writes
+   * claims yet (how a run records one is not this module's -- #521's scope),
+   * so a row this build cannot read is carried through every rewrite untouched
+   * and judged only by `readClaims`, which a reader asks and which fails closed.
+   */
+  readonly claims?: unknown;
+}
+
+/** One claimed effort (zheref/nen#521). KEY ORDER IS THE CONTRACT. */
+export interface RunClaim {
+  /** The issue the effort delivers, as `<CODE>#<N>` or `<owner/name>#<N>`. */
+  readonly issue: string;
+  /** The effort's branch, or null when none was named at the claim. */
+  readonly branch: string | null;
+  readonly at: string;
+}
+
+/**
+ * What a manifest says about its claims. `recorded: false` is a manifest with
+ * no `claims` key -- written before claims existed, or by a run that records
+ * none -- and is said so, never read as "no effort claimed". A `claims` value
+ * that is present and will not read is `ok: false`: the reader could not look.
+ */
+export type ClaimsRead =
+  | { readonly ok: true; readonly recorded: boolean; readonly claims: readonly RunClaim[] }
+  | { readonly ok: false; readonly reason: string };
+
+export function readClaims(manifest: RunManifest): ClaimsRead {
+  if (!Object.prototype.hasOwnProperty.call(manifest, "claims")) return { ok: true, recorded: false, claims: [] };
+  const raw = manifest.claims;
+  if (!Array.isArray(raw)) return { ok: false, reason: `claims is ${raw === null ? "null" : typeof raw}, not an array` };
+  const claims: RunClaim[] = [];
+  for (const [index, entry] of raw.entries()) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return { ok: false, reason: `claims[${index}] is not an object` };
+    const row = entry as Record<string, unknown>;
+    const issue = row["issue"];
+    if (typeof issue !== "string" || !ISSUE_REF.test(issue)) return { ok: false, reason: `claims[${index}].issue is ${JSON.stringify(issue)}` };
+    const branch = row["branch"] ?? null;
+    if (branch !== null && (typeof branch !== "string" || !BRANCH_NAME.test(branch))) return { ok: false, reason: `claims[${index}].branch is ${JSON.stringify(branch)}` };
+    const at = row["at"];
+    if (!isIsoInstant(at)) return { ok: false, reason: `claims[${index}].at is not an ISO-8601 instant` };
+    claims.push({ issue, branch: branch as string | null, at });
+  }
+  return { ok: true, recorded: true, claims };
 }
 
 export class RunManifestError extends Error {}
@@ -90,6 +136,16 @@ export class RunManifestError extends Error {}
 /** The run id, or null when it is not one path segment (the loop ledger's own alphabet). */
 export function runIdSegment(id: string): string | null {
   return loopIdSegment(id);
+}
+
+/**
+ * An ISO-8601 instant as nen writes one (`Date#toISOString`) or a caller
+ * spells one: date, `T`, hours and minutes, optional seconds and fraction, and
+ * a zone. Checked BEFORE `Date.parse`, which reads `"1"` as 2001-01-01.
+ */
+const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:\d{2})$/;
+export function isIsoInstant(value: unknown): value is string {
+  return typeof value === "string" && ISO_INSTANT.test(value) && !Number.isNaN(Date.parse(value));
 }
 
 /** `<CODE>#<N>` or `<owner/name>#<N>`; anything else is not an issue reference. */
@@ -539,10 +595,14 @@ export function parseRunManifest(path: string, value: unknown): RunManifest {
     const row = entry as Record<string, unknown>;
     if (typeof row["issue"] !== "string" || !ISSUE_REF.test(row["issue"])) fail(path, `parked[${index}].issue is ${JSON.stringify(row["issue"])}`);
     if (typeof row["row"] !== "string" || !ROW_ID.test(row["row"])) fail(path, `parked[${index}].row is ${JSON.stringify(row["row"])}`);
-    if (typeof row["at"] !== "string" || Number.isNaN(Date.parse(row["at"]))) fail(path, `parked[${index}].at is not an ISO-8601 instant`);
+    if (!isIsoInstant(row["at"])) fail(path, `parked[${index}].at is not an ISO-8601 instant`);
     return { issue: row["issue"], row: row["row"], at: row["at"] };
   });
-  return { contract: RUN_CONTRACT, id: id as string, repo, startedAt: startedAt as string, idleAnswers, prs: parsed, parked };
+  const manifest: RunManifest = { contract: RUN_CONTRACT, id: id as string, repo, startedAt: startedAt as string, idleAnswers, prs: parsed, parked };
+  // Carried verbatim, never validated here (see RunManifest.claims): a claim
+  // row this build cannot read must not make the whole run unreadable, and must
+  // not be dropped by the next append or park that rewrites the file.
+  return Object.prototype.hasOwnProperty.call(record, "claims") ? { ...manifest, claims: record["claims"] } : manifest;
 }
 
 /** The manifest on disk, or null when there is none. Unreadable is a refusal, never null. */

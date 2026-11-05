@@ -18,6 +18,17 @@
 //   * stacked               -- the PR's live base is the head branch of another
 //                              PR the run recorded.
 //
+// A CLAIMED EFFORT WITH NO PULL REQUEST YET HOLDS A SLOT (zheref/nen#521). A
+// run claims an effort before it authors anything, and the PR comes later; a
+// count of PRs alone let a batch launch past its budget in that window. So
+// every row of the manifest's `claims[]` (../run/manifest.ts, `readClaims`)
+// whose issue no delivery PR row names is an effort too -- local, no PR, held
+// -- unless the run PARKED that issue at or after its latest claim, which
+// frees it. A claim whose issue has a delivery PR is that PR's effort, counted
+// once. Claim rows that will not read are `claimsUnread`: the caller reports
+// it could not look and frees no slot (./command.ts). How a run RECORDS a
+// claim is not this module's: it only reads.
+//
 // The rule that turns those facts into a free slot is still --repo's
 // `monitor.localSlotFrees` (HR-5), read by the caller of this module.
 //
@@ -30,7 +41,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { GIT, type Seams } from "../seam/exec.js";
 import { MARKER_FILE, parseMarker } from "../stop/marker.js";
-import type { RunManifest } from "../run/manifest.js";
+import { readClaims, type RunManifest } from "../run/manifest.js";
 import type { LiveRead } from "../run/verify.js";
 import type { Effort } from "./slots.js";
 import { prReady } from "../verbs/pr_ready.js";
@@ -42,17 +53,54 @@ export interface FromRunDeps {
   readonly readPr: (pr: number) => LiveRead;
   readonly readiness: (pr: number) => Promise<ReadinessRead>;
   readonly marker: (headBranch: string) => MarkerRead;
+  /** The product code --repo's nen/repos.json assigns the run's repository, or null (none, or no registry). */
+  readonly repoCode?: string | null;
 }
 
 /** KEY ORDER IS THE DOCUMENTED `--json` SHAPE (`fromRun`). */
 export interface FromRunReport {
   readonly run: string;
-  readonly efforts: readonly (Effort & { readonly pr: number; readonly issue: string; readonly facts: string })[];
+  /** `pr` is null for a claimed effort with no pull request yet. */
+  readonly efforts: readonly (Effort & { readonly pr: number | null; readonly issue: string; readonly facts: string })[];
   /** Integration and release PRs: recorded by the run, never a slot. */
   readonly notEfforts: readonly number[];
   /** Delivery PRs closed without a merge: no longer an effort, so no slot. */
   readonly closedUnmerged: readonly number[];
   readonly unread: readonly { readonly pr: number; readonly reason: string }[];
+  /**
+   * Whether the manifest records claims at all: `read`, `not-recorded` (no
+   * `claims` key -- only PRs are counted, and that is said), or `unread`.
+   */
+  readonly claims: "read" | "not-recorded" | "unread";
+  /** Claimed issues whose latest claim the run parked: no PR, no slot. */
+  readonly parkedClaims: readonly string[];
+  /** Why the claim rows could not be read, or null. Non-null frees no slot. */
+  readonly claimsUnread: string | null;
+}
+
+/**
+ * Whether two issue references name one issue. Never by number alone: `NN#5`
+ * and `HA#5` are two issues, and folding them would drop a held slot.
+ *
+ *   * both `<owner/name>#<N>` -- equal, case-insensitively;
+ *   * both `<CODE>#<N>`       -- the same code (case-insensitively) and number;
+ *   * one of each             -- only when the `owner/name` IS the run's
+ *                                repository and the code is the one --repo's
+ *                                nen/repos.json assigns it (`repoCode`). With
+ *                                no code known they stay two -- an over-count,
+ *                                the safe direction.
+ */
+export function sameIssue(a: string, b: string, repo: string, repoCode: string | null): boolean {
+  const split = (ref: string): { where: string; number: string } => ({ where: ref.slice(0, ref.lastIndexOf("#")).toLowerCase(), number: ref.slice(ref.lastIndexOf("#") + 1) });
+  const left = split(a);
+  const right = split(b);
+  if (left.number !== right.number) return false;
+  const slugA = left.where.includes("/");
+  const slugB = right.where.includes("/");
+  if (slugA === slugB) return left.where === right.where;
+  const slug = slugA ? left.where : right.where;
+  const code = slugA ? right.where : left.where;
+  return repoCode !== null && slug === repo.toLowerCase() && code === repoCode.toLowerCase();
 }
 
 export async function effortsFromRun(manifest: RunManifest, deps: FromRunDeps): Promise<FromRunReport> {
@@ -105,7 +153,42 @@ export async function effortsFromRun(manifest: RunManifest, deps: FromRunDeps): 
     ].join(", ");
     efforts.push({ id, pr: row.pr, issue: row.issue ?? "-", plane: "local", prOpen: true, ready, prompted, merged: false, stacked, facts });
   }
-  return { run: manifest.id, efforts, notEfforts, closedUnmerged, unread };
+  const parkedClaims: string[] = [];
+  const repoCode = deps.repoCode ?? null;
+  const same = (a: string, b: string): boolean => sameIssue(a, b, manifest.repo, repoCode);
+  const claimRead = readClaims(manifest);
+  if (!claimRead.ok) return { run: manifest.id, efforts, notEfforts, closedUnmerged, unread, claims: "unread", parkedClaims, claimsUnread: claimRead.reason };
+  // The LATEST claim per issue decides: a park recorded before a re-claim does
+  // not free the re-claimed effort.
+  const latest: { issue: string; branch: string | null; at: number }[] = [];
+  for (const claim of claimRead.claims) {
+    const at = Date.parse(claim.at);
+    const seen = latest.find((entry): boolean => same(entry.issue, claim.issue));
+    if (seen === undefined) latest.push({ issue: claim.issue, branch: claim.branch, at });
+    else if (at >= seen.at) Object.assign(seen, { issue: claim.issue, branch: claim.branch, at });
+  }
+  for (const claim of latest) {
+    const hasPr = manifest.prs.some((row): boolean => row.kind === "delivery" && ((row.issue !== null && same(row.issue, claim.issue)) || (claim.branch !== null && row.branch === claim.branch)));
+    if (hasPr) continue;
+    const parked = manifest.parked.some((row): boolean => same(row.issue, claim.issue) && Date.parse(row.at) >= claim.at);
+    if (parked) {
+      parkedClaims.push(claim.issue);
+      continue;
+    }
+    efforts.push({
+      id: `${claim.issue} (claimed)`,
+      pr: null,
+      issue: claim.issue,
+      plane: "local",
+      prOpen: false,
+      ready: false,
+      prompted: false,
+      merged: false,
+      stacked: false,
+      facts: `claimed ${new Date(claim.at).toISOString()}, no PR yet${claim.branch === null ? "" : ` (branch ${claim.branch})`}`,
+    });
+  }
+  return { run: manifest.id, efforts, notEfforts, closedUnmerged, unread, claims: claimRead.recorded ? "read" : "not-recorded", parkedClaims, claimsUnread: null };
 }
 
 /**
