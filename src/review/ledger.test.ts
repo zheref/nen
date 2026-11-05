@@ -4,12 +4,12 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { run, runFamily } from "../index.js";
 import { defaultSeams } from "../seam/exec.js";
 import { reviewCommand } from "./command.js";
-import { cycleKey, cyclePath, cycleTraceDir, cycleTraceLock, ensureCycle, prKeyed, readBudgets, readCycle, runCycle, sameCycleRoot, type Cycle, type CycleOptions } from "./ledger.js";
+import { cycleKey, cyclePath, cycleTraceDir, cycleTraceLock, ensureCycle, prKeyed, readBudgets, readCycle, repairCycleMarker, runCycle, sameCycleRoot, type Cycle, type CycleOptions } from "./ledger.js";
 
 const roots: string[] = [];
 const roster = { alpha: 2, beta: 1, gamma: 1, delta: 1, epsilon: 2, zeta: 3, eta: 1 };
@@ -322,4 +322,54 @@ describe("cross-process concurrency", () => {
     const lost = { ...o, branch: "app/lost" }; const lock = cycleTraceLock(lost.root, lost.branch); writeFileSync(lock, ""); const old = new Date(Date.now() - 120000); utimesSync(lock, old, old);
     const refused = await Promise.all([child(lost, "ensure"), child(lost, "ensure")]); expect(refused.map((text): number => JSON.parse(text).code)).toEqual([4, 4]);
   }, 15000);
+});
+
+describe("guarded durable cycle marker repair", () => {
+  it("repairs twice without changing cycle bytes or used budgets", () => {
+    const o = fixture(roster, true); act(o, "init"); act(o, "record", { persona: "alpha", outcome: "ran" });
+    const path = cyclePath(o.root, o.branch), before = readFileSync(path, "utf8");
+    const marker = join(cycleTraceDir(o)!, `${cycleKey(o.branch)}.opened`); unlinkSync(marker);
+    expect(repairCycleMarker(o).report.repair).toBe("restored");
+    expect(repairCycleMarker(o).report.repair).toBe("unchanged");
+    expect(readFileSync(path, "utf8")).toBe(before);
+    writeFileSync(marker, "foreign");
+    expect(() => repairCycleMarker(o)).toThrow(/conflicts/);
+    expect(readFileSync(marker, "utf8")).toBe("foreign");
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+  it("refuses malformed cycle and redirected marker with no repair writes", () => {
+    const o = fixture(roster, true); act(o, "init");
+    const path = cyclePath(o.root, o.branch), before = readFileSync(path, "utf8");
+    const marker = join(cycleTraceDir(o)!, `${cycleKey(o.branch)}.opened`); unlinkSync(marker);
+    const target = join(o.root, "unrelated"); writeFileSync(target, "preserve"); symlinkSync(target, marker);
+    expect(() => repairCycleMarker(o)).toThrow(/redirected/);
+    expect(readFileSync(target, "utf8")).toBe("preserve");
+    unlinkSync(marker);
+    const original = join(o.root, "cycle-copy"); writeFileSync(original, before); unlinkSync(path); symlinkSync(original, path);
+    expect(() => repairCycleMarker(o)).toThrow(/redirected/);
+    expect(existsSync(marker)).toBe(false); expect(readFileSync(original, "utf8")).toBe(before);
+    unlinkSync(path); writeFileSync(path, before);
+    writeFileSync(path, "{}");
+    expect(() => repairCycleMarker(o)).toThrow(); expect(existsSync(marker)).toBe(false);
+    writeFileSync(path, before);
+  });
+});
+
+it("reports unresolved marker writes and preserves the intact original", () => {
+  const o = fixture(roster, true); act(o, "init");
+  const path = cyclePath(o.root, o.branch), before = readFileSync(path, "utf8");
+  const dir = cycleTraceDir(o)!; rmSync(dir, { recursive: true }); writeFileSync(dir, "blocking parent");
+  const result = repairCycleMarker(o);
+  expect(result.code).toBe(1); expect(result.report.repair).toBe("unresolved");
+  expect(readFileSync(path, "utf8")).toBe(before); expect(readFileSync(dir, "utf8")).toBe("blocking parent");
+});
+
+it("refuses an original-cycle parent redirected inside the repository", () => {
+  const o = fixture(roster, true); act(o, "init");
+  const path = cyclePath(o.root, o.branch), before = readFileSync(path, "utf8");
+  const marker = join(cycleTraceDir(o)!, `${cycleKey(o.branch)}.opened`); unlinkSync(marker);
+  const target = join(o.root, "other-cycles"); mkdirSync(target); writeFileSync(join(target, basename(path)), before);
+  rmSync(dirname(path), { recursive: true }); symlinkSync(target, dirname(path), "dir");
+  expect(() => repairCycleMarker(o)).toThrow(/redirected/);
+  expect(readFileSync(join(target, basename(path)), "utf8")).toBe(before); expect(existsSync(marker)).toBe(false);
 });

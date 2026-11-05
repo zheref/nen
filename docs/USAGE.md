@@ -1054,7 +1054,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`board`](#family-board) | [`nen board diff`](#nen-board-diff) | field-level diff of two Board snapshots, by row id | local files (--before, --after) | yes |
 | [`epic`](#family-epic) | [`nen epic next-wave`](#nen-epic-next-wave) | flips a completed child, redraws the progress bar, computes the next releasable wave | local file (--body-file), optional write (--out) | yes |
 | [`effort`](#family-effort) | [`nen effort classify`](#nen-effort-classify) | classifies one epic/child against senkei's five-class (plus undecidable) taxonomy from caller-supplied facts | local file (--input) | yes |
-| [`loop`](#family-loop) | [`nen loop slots`](#nen-loop-slots) | counts how many CI and local concurrency slots are free, from a caller-supplied efforts file or -- `--from-run` -- one built from a run's manifest and live reads (PR state, `pr ready`, the stop marker), and explicit caps, a local slot freeing by --repo's declared `idle.localSlotFrees` (under an idle profile) or `monitor.localSlotFrees` | local file (--efforts), or the run manifest, github (gh pr view, pr ready's reads) and git (worktree list) with the stop markers it names; nen/workflow.json under --repo | yes |
+| [`loop`](#family-loop) | [`nen loop slots`](#nen-loop-slots) | counts how many CI and local concurrency slots are free, from a caller-supplied efforts file or -- `--from-run` -- one built from a run's manifest and live reads (PR state, `pr ready`, explicit durable prompt receipts), and explicit caps, a local slot freeing by --repo's declared `idle.localSlotFrees` (under an idle profile) or `monitor.localSlotFrees` | local file (--efforts), or the run manifest, github (gh pr view, pr ready's reads) and git (worktree list) with the stop markers it names; nen/workflow.json under --repo | yes |
 | [`loop`](#family-loop) | [`nen loop iterate`](#nen-loop-iterate) | claims one iteration of an izanagi loop against its own `up to <N>` cap, refusing the claim past it | `<git-common-dir>/.nen/loop/<id>.json` and `<id>.opened` (reads and writes under a lock; `.nen/loop/` under --repo only outside a git repository) | yes |
 | [`phase`](#family-phase) | [`nen phase`](#nen-phase) | records when a workflow phase began and ended for one effort, with the elapsed milliseconds and exit code, in a per-effort ledger | `<git-common-dir>/.nen/phases/<effort>.json` (under --repo outside git; reads and writes); git rev-parse/worktree list to find it, no gh | yes |
 | [`session`](#family-session) | [`nen session`](#nen-session) | records caller-reported session identity and effort dial per effort, and shows the ledger | `<git-common-dir>/.nen/sessions/<effort>.json` (under --repo outside git); git rev-parse/worktree list to find it, no gh or harness reads | yes |
@@ -6525,7 +6525,7 @@ and not merged it holds, as before.
 
 ```text
 nen loop slots --efforts <path.json> --local-cap <n> [--ci-cap <n>] [--repo <path>] [--json]
-nen loop slots --from-run <run-id> --target <owner/name> --local-cap <n> [--ci-cap <n>] [--repo <path>] [--json]
+nen loop slots --from-run <run-id> --target <owner/name> --local-cap <n> [--prompt-gate G2|G4] [--ci-cap <n>] [--repo <path>] [--json]
 ```
 
 **Arguments**
@@ -20848,3 +20848,27 @@ A `severity` enumeration with `[+]` is highest-first; two severities such as
 `high+low` are corrected to `low+`. The refused input remains exit 2 and JSON carries
 `corrected`. Mixed alternatives, incomplete lines and boundary-changing rewrites keep
 the existing refusal without an invented correction; legacy scalar placeholders stay.
+
+
+`nen stop --prompt-shown --repo <checkout> --effort <id> --pr <number>
+--head <full-judged-sha> --gate G2|G4 [--json]` explicitly records that the
+merge prompt has already been shown. Run it only after displaying the prompt;
+creating an attention marker or attempting a notification is not proof. The
+receipt lives in the shared Git directory and survives `stop clear` and worktree
+removal. It names the exact effort, PR, judged head and gate; malformed or
+redirected receipts are refused rather than overwritten. Repeating the same
+receipt is idempotent. It grants no merge authority and emits no notification.
+
+Use `nen loop slots --from-run <run> --target <owner/repo> --repo <checkout>
+--local-cap <n> --prompt-gate G2|G4 [--json]` to count matching receipts against
+the live PR head. A missing effort id, expected gate or matching receipt holds
+the slot and names the unread evidence. Other heads, efforts and gates cannot
+release it; readiness must independently pass. Legacy attention markers never
+prove a prompt was shown.
+
+`nen review ledger repair-marker --branch <branch> [--pr <n>] --repo <checkout>
+[--json]` restores a missing durable opened-cycle trace from a valid existing
+cycle. It preserves the cycle bytes, history and budgets exactly, reports an
+unchanged trace idempotently, and refuses malformed, conflicting or redirected
+state. An unresolved write returns exit 1 naming the trace; the original cycle
+remains usable. This never initializes a lost cycle.

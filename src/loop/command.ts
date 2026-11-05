@@ -155,16 +155,17 @@ export const loopCommand: Command = {
   subcommands: ["slots", "iterate"],
   summary: "Count the concurrency budgets, and enforce izanagi's iteration cap.",
   usage: USAGE,
-  flags: { values: ["efforts", "ci-cap", "local-cap", "id", "line", "release", "from-run", "target"], booleans: [] },
+  flags: { values: ["prompt-gate","efforts", "ci-cap", "local-cap", "id", "line", "release", "from-run", "target"], booleans: [] },
   run(context: CommandContext): number | Promise<number> {
     const subcommand = requireSubcommand("loop", context.args, ["slots", "iterate"]);
     if (subcommand === "iterate") {
-      for (const flag of ["from-run", "target"]) {
+      for (const flag of ["from-run", "target", "prompt-gate"]) {
         if (context.args.values[flag] !== undefined) throw new VerbUsageError(`--${flag} is not read by 'loop iterate'; only 'loop slots' takes it. A flag accepted and ignored is worse than one refused.`);
       }
       return iterate(context);
     }
     const fromRun = context.args.values["from-run"];
+    if (context.args.values["prompt-gate"] !== undefined && (fromRun === undefined || !["G2", "G4"].includes(context.args.values["prompt-gate"]!))) throw new VerbUsageError("--prompt-gate G2|G4 is read only with --from-run.");
     const path = context.args.values["efforts"];
     if (fromRun !== undefined && path !== undefined) {
       throw new VerbUsageError("--from-run and --efforts are refused together: under a run the efforts document is built from the manifest and live reads, and no field of it is caller-typed (HR-5).");
@@ -334,7 +335,8 @@ async function slotsFromRun(context: CommandContext, root: string, id: string, c
   const built = await effortsFromRun(manifest, {
     readPr: (pr) => readLivePr(context.seams, target, pr),
     readiness: (pr) => readinessInProcess(target.slug, pr, root),
-    marker: (branch) => markerForBranch(context.seams, root, branch),
+    marker: (branch, identity) => markerForBranch(context.seams, root, branch, identity),
+    promptGate: context.args.values["prompt-gate"],
     repoCode: repoCodeFor(root, manifest.repo),
   });
   return countAndReport(context, root, built.efforts, caps, built);
