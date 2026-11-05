@@ -1,0 +1,84 @@
+{
+  "recorded": "2026-11-04",
+  "issue": "https://github.com/zheref/nen/issues/391",
+  "nen": {
+    "version": "0.29.0",
+    "sourceCommit": "616d11c7d534ac7b8fd7c8bc87b6eabf164c4cb1",
+    "launcher": "fixture-local nen shell launcher executes the actual Bun src/index.ts; no fake responses"
+  },
+  "harness": {
+    "name": "Claude Code",
+    "version": "2.1.317",
+    "permissionMode": "auto",
+    "observedModel": "claude-opus-5-5",
+    "settingsSource": "unchanged Hatsu default permission pack rendered by scripts/permissions_pack_claude_render.mts and loaded through --settings",
+    "hatsuCommit": "4324b76f9b9a306d639867d72c5bfff47988a09a",
+    "permissionsSourceSha256": "0d0c52c4f2cc8722078f8ef93df09f679cc92ae974792afbd50ac6d3714cb737",
+    "renderedSettingsSha256": "ad6207f5cf0ecfdb82e519157f400c3006a29ec68cbb34c6f1ae7c31db2108a0",
+    "allowRules": 50,
+    "additionalAllowRules": false,
+    "userProjectLocalSettingsSources": [],
+    "permissionChecksBypassed": false,
+    "permissionPrompts": "none",
+    "stderr": "",
+    "scope": "Bash tool availability only; no MCP servers; managed runtime settings still apply"
+  },
+  "actualToolCall": {
+    "name": "Bash",
+    "command": "nen loop iterate --id en-391-pack-proof --line \"check pack fixture until done up to 2\" --release \"fixture completed\" --repo /tmp/nen-391-harness/repo --json",
+    "isError": false,
+    "result": {
+      "contract": "nen.loop.iterate/v0.1",
+      "id": "en-391-pack-proof",
+      "claimed": false,
+      "released": true,
+      "releaseReason": "fixture completed",
+      "iterations": 1,
+      "cap": 2,
+      "remaining": 1,
+      "durable": false
+    }
+  },
+  "result": {
+    "subtype": "success",
+    "permissionDenials": []
+  },
+  "before": {
+    "released": false,
+    "iterations": 1,
+    "cap": 2,
+    "durable": false
+  },
+  "liveReadOnlySync": {
+    "exit": 0,
+    "durationSeconds": 0.542,
+    "declaredLabels": 62,
+    "unchanged": 62,
+    "otherStatuses": [],
+    "progressLines": 63,
+    "writes": "none: --dry-run"
+  },
+  "batchDryRun": {
+    "exit": 0,
+    "durationSeconds": 0.09,
+    "pairs": 136,
+    "resultKeys": [
+      "results",
+      "ledgerPath"
+    ],
+    "results": 136,
+    "ledgerRows": 136,
+    "ledgerUnderNen": true,
+    "rootLedgerAbsent": true,
+    "outcomes": [
+      "dry-run"
+    ],
+    "writes": "local dry-run ledger only; --run absent"
+  },
+  "limits": [
+    "This proves the observed CLI/Auto-mode/default-pack invocation, not all future classifier decisions.",
+    "Non-Git temporary fixture uses the persistent local loop fallback (durable:false); shared Git-common storage is covered by existing regressions separately.",
+    "An earlier project-settings trial emitted an untrusted-workspace warning and is excluded from default-pack evidence.",
+    "No global trust/settings, permission pack, real label/issue/PR, merge, tag or release was changed."
+  ]
+}

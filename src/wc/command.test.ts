@@ -93,7 +93,7 @@ describe("nen wc classify -- a detached HEAD", () => {
   it("classifies it, at exit 0, saying where HEAD is standing", async () => {
     const result = await capture(["wc", "classify"], DETACHED);
     expect(result.code).toBe(0);
-    expect(result.out).toContain("case: on-branch-dirty");
+    expect(result.out).toContain("case: detached-dirty");
     expect(result.out).toContain("branch: (detached HEAD at 1a2b3c4)");
     expect(result.out.join("\n")).toContain("on a detached HEAD at 1a2b3c4");
   });
@@ -110,11 +110,11 @@ describe("nen wc classify -- a detached HEAD", () => {
     expect(parsed.state["branch"]).toBeNull();
     expect(parsed.state["detachedAt"]).toBe("1a2b3c4");
     expect(parsed.state["isTrunk"]).toBe(false);
-    expect(parsed.result["case"]).toBe("on-branch-dirty");
+    expect(parsed.result["case"]).toBe("detached-dirty");
     expect(err).toEqual([]);
   });
 
-  it("a CLEAN detached HEAD is on-branch-clean, at exit 0", async () => {
+  it("a CLEAN detached HEAD is detached-clean, at exit 0", async () => {
     const result = await capture(["wc", "classify"], [
       { match: "git symbolic-ref --short HEAD", result: { code: 128, stderr: "fatal: ref HEAD is not a symbolic ref" } },
       { match: "git rev-parse --short HEAD", result: { stdout: "1a2b3c4\n" } },
@@ -123,7 +123,7 @@ describe("nen wc classify -- a detached HEAD", () => {
       { match: "git log main..HEAD --format=%s", result: { stdout: "" } },
     ]);
     expect(result.code).toBe(0);
-    expect(result.out).toContain("case: on-branch-clean");
+    expect(result.out).toContain("case: detached-clean");
     expect(result.out).toContain("branch: (detached HEAD at 1a2b3c4)");
   });
 

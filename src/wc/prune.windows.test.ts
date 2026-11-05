@@ -28,7 +28,7 @@ describe("isolated prune Git initialization portability", () => {
     git(repo, "config", "user.name", "fixture"); git(repo, "config", "user.email", "fixture@example.invalid");
     git(repo, "config", "commit.gpgsign", "false"); git(repo, "config", "core.hooksPath", "/dev/null");
     writeFileSync(join(repo, "seed"), "fixture"); git(repo, "add", "seed"); git(repo, "commit", "-m", "seed");
-    git(repo, "branch", "topic"); git(repo, "remote", "add", "origin", remote); git(repo, "push", "origin", "topic");
+    git(repo, "branch", "topic"); git(repo, "remote", "add", "origin", remote); git(repo, "push", "origin", "main", "topic");
     const real = defaultSeams(); let incompatibleConfig = false;
     const report = prune({ ...real, platform: "win32", run: (command, args, options) => {
       if (command === "git" && args[0] === "init" && [options?.env?.["GIT_CONFIG_GLOBAL"], options?.env?.["GIT_CONFIG_SYSTEM"]].includes("\\\\.\\nul")) {
@@ -37,7 +37,7 @@ describe("isolated prune Git initialization portability", () => {
         return { code: 128, stdout: "", stderr: "disposable device config: Invalid argument", spawnFailed: false };
       }
       return real.run(command, args, options);
-    } }, repo, [{ kind: "remote-branch", remote: "origin", ref: "refs/heads/topic", base: "refs/heads/main" }], false, "main");
+    } }, repo, [{ kind: "remote-branch", remote: "origin", ref: "refs/heads/topic", base: "refs/remotes/origin/main" }], false, "main");
     expect(incompatibleConfig).toBe(false);
     expect(report.items[0]?.status).toBe("removed"); expect(git(remote, "for-each-ref", "refs/heads/topic")).toBe("");
   });

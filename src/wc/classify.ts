@@ -25,12 +25,15 @@
 // short sha it is standing on, which is the only thing a reader can act on
 // there. A worktree added with `--detach`, a bisect and a rebase step are all
 // ordinary working copies, and a caller running this on one wants the same
-// answer everybody else gets.
+// evidence everybody else gets. It now uses detached-clean/detached-dirty
+// cases (NN#409) so a caller never mistakes standing at a commit for a branch.
 
 import { GIT, outputLines, type Seams } from "../seam/exec.js";
 import { rawLines } from "../seam/lines.js";
 
 export type WcCase =
+  | "detached-clean"
+  | "detached-dirty"
   | "must-move"
   | "on-branch-dirty"
   | "on-branch-clean";
@@ -71,6 +74,10 @@ export function describeHead(state: WcState): string {
 }
 
 export function classifyWorkingCopy(state: WcState): WcClassification {
+  if (state.branch === null) return {
+    case: state.dirty ? "detached-dirty" : "detached-clean",
+    evidence: [`on ${describeHead(state)} with ${state.uncommittedPaths.length} uncommitted path(s) and ${state.aheadOfBase} commit(s) ahead of the configured base; no branch is selected. Cleanup must separately prove this exact commit is merged into its freshly fetched base.`],
+  };
   if (state.isTrunk) {
     if (!state.dirty) {
       return {
