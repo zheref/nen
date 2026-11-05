@@ -1,0 +1,1 @@
+- Durable PR ledgers exceeding GitHub's comment limit publish as bounded, integrity-checked parts behind an active index; reads and fresh-clone restoration retain every row.

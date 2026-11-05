@@ -20848,3 +20848,18 @@ A `severity` enumeration with `[+]` is highest-first; two severities such as
 `high+low` are corrected to `low+`. The refused input remains exit 2 and JSON carries
 `corrected`. Mixed alternatives, incomplete lines and boundary-changing rewrites keep
 the existing refusal without an invented correction; legacy scalar placeholders stay.
+
+### Oversized durable ledger records
+
+`pr ledger post` keeps records that fit GitHub's comment limit unchanged. Larger
+records use bounded `nen:ledger-part` comments and one active `nen:ledger` index.
+The index is written last, after every part has a publication URL. An interrupted
+write therefore leaves the previous index current. Parts not referenced by the
+current index are superseded and must not be used to resume an effort.
+
+`pr ledger read` joins only the indexed parts written and last edited by the
+selected login. It checks their numbered markers and the complete record digest,
+then performs the ordinary slice validation and optional phase restoration.
+Missing, foreign or changed parts refuse the read with their part or URL named.
+Secret and private-name checks run against the complete caller content before
+any part is published. Multipart transport does not bypass either guard.

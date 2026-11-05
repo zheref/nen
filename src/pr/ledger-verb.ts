@@ -35,6 +35,7 @@ import { totalsOf } from "../usage/command.js";
 import { readUsageLedger } from "../usage/ledger.js";
 import {
   GITHUB_COMMENT_LIMIT,
+  ledgerParts, ledgerIndex, assembleLedger,
   isMarkedFor,
   isOwn,
   LedgerReadError,
@@ -226,11 +227,13 @@ function post(context: CommandContext, target: Target, pr: number, effort: strin
   const usage = readUsageLedger(usageLocated.path, effort);
   let head: string;
   let login: string;
+  let allPostComments: ReturnType<typeof listComments> = [];
   let existing: { id: number; body: string; url: string } | null;
   try {
     head = readPrHead(context.seams, target, pr);
     login = loginFor(context);
-    const mine = listComments(context.seams, target, pr).filter((comment): boolean => isMarkedFor(comment.body, effort) && comment.login === login);
+    allPostComments = listComments(context.seams, target, pr);
+    const mine = allPostComments.filter((comment): boolean => isMarkedFor(comment.body, effort) && comment.login === login);
     const tampered = mine.filter((comment): boolean => !isOwn(comment, login));
     if (tampered.length > 0) {
       throw new LedgerReadError(`${tampered.map((c): string => c.url).join(", ")}: this login's ledger comment for effort '${effort}' was last edited by ${tampered.map((c): string => c.editor ?? "?").join(", ")}; nen will not edit over another login's edit. Delete it and post again.`);
@@ -257,11 +260,6 @@ function post(context: CommandContext, target: Target, pr: number, effort: strin
   };
   const body = renderComment(slice);
   const size = body.length;
-  if (size > GITHUB_COMMENT_LIMIT) {
-    context.io.err(`nen pr ledger post: the slice renders to ${size} characters, over GitHub's ${GITHUB_COMMENT_LIMIT}-character comment limit; it is never truncated, so nothing was posted. Post fewer --proof files or a smaller findings file.`);
-    emit(context.io, context.json, { contract: PR_LEDGER_CONTRACT, verdict: "too-large", posted: false, size, limit: GITHUB_COMMENT_LIMIT }, []);
-    return 1;
-  }
   // NO CREDENTIAL'S SHAPE REACHES THE PR (Feitan on #518, SEC-1): the findings,
   // every phase note and step argv, and the proof paths are scanned, and a hit
   // refuses the post naming the shape and the field -- never the value.
@@ -279,7 +277,9 @@ function post(context: CommandContext, target: Target, pr: number, effort: strin
   // UNCHANGED BY DIGEST, not by raw bytes: GitHub may normalise a body's line
   // endings or trailing whitespace, and the marker's sha256 is of the document
   // itself -- the same marker line, on a comment that still parses, is the same slice.
-  const unchanged = existing !== null && existing.body.replace(/\r\n/g, "\n").split("\n", 1)[0] === body.split("\n", 1)[0] && parseComment(existing.body, effort, target.slug, pr).ok;
+  let existingBody = existing?.body ?? "";
+  try { existingBody = assembleLedger(existingBody, effort, allPostComments, login); } catch { /* A damaged record is replaced, never read as complete. */ }
+  const unchanged = existing !== null && existingBody.replace(/\r\n/g, "\n").split("\n", 1)[0] === body.split("\n", 1)[0] && parseComment(existingBody, effort, target.slug, pr).ok;
   const argv = writeArgv(target, pr, existing?.id ?? null);
   if (unchanged || dryRun) {
     const verdict = unchanged ? "unchanged" : "dry-run";
@@ -291,7 +291,18 @@ function post(context: CommandContext, target: Target, pr: number, effort: strin
   }
   let url: string;
   try {
-    url = writeComment(context.seams, target, pr, existing?.id ?? null, body);
+    let publishedBody = body;
+    if (size > GITHUB_COMMENT_LIMIT) {
+      const urls = ledgerParts(body, effort).map(part => {
+        const url = writeComment(context.seams, target, pr, null, part);
+        if (!url) throw new LedgerReadError("part publication returned no URL; the old index remains current");
+        return url;
+      });
+      if (new Set(urls).size !== urls.length) throw new LedgerReadError("part publication returned duplicate URLs; the old index remains current");
+      publishedBody = ledgerIndex(body, effort, urls);
+      if (publishedBody.length > GITHUB_COMMENT_LIMIT) throw new LedgerReadError("multipart index exceeds the comment limit; parts remain inactive, nothing was committed");
+    }
+    url = writeComment(context.seams, target, pr, existing?.id ?? null, publishedBody);
   } catch (error) {
     if (!(error instanceof LedgerReadError)) throw error;
     context.io.err(`nen pr ledger post: ${error.message}`);
@@ -311,10 +322,12 @@ function read(context: CommandContext, target: Target, pr: number, effort: strin
   let head: string;
   let login: string;
   let marked;
+  let allComments;
   try {
     head = readPrHead(context.seams, target, pr);
     login = loginFor(context);
-    marked = listComments(context.seams, target, pr).filter((comment): boolean => isMarkedFor(comment.body, effort));
+    allComments = listComments(context.seams, target, pr);
+    marked = allComments.filter((comment): boolean => isMarkedFor(comment.body, effort));
   } catch (error) {
     if (!(error instanceof LedgerReadError)) throw error;
     return refuse(error.message);
@@ -324,7 +337,10 @@ function read(context: CommandContext, target: Target, pr: number, effort: strin
   if (mine.length === 0) return refuse(`${target.slug}#${pr} carries no ledger comment for effort '${effort}' by ${login}${foreign === 0 ? "" : ` (${foreign} by another login, not read)`}.`, { login, foreign });
   if (mine.length > 1) return refuse(`${target.slug}#${pr} carries ${mine.length} ledger comments for effort '${effort}' by ${login}; nen will not choose which is the record.`, { login, foreign });
   const comment = mine[0]!;
-  const parsed = parseComment(comment.body, effort, target.slug, pr);
+  let assembled: string;
+  try { assembled = assembleLedger(comment.body, effort, allComments, login); }
+  catch (error) { if (!(error instanceof LedgerReadError)) throw error; return refuse(error.message); }
+  const parsed = parseComment(assembled, effort, target.slug, pr);
   if (!parsed.ok) return refuse(`${comment.url}: ${parsed.reason}.`, { login, foreign, url: comment.url });
   const verdict: ReadVerdict = parsed.slice.head.toLowerCase() === head.toLowerCase() ? "ok" : "stale";
   const lines = [
