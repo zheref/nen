@@ -8,8 +8,8 @@
 // nobody scripted -- so "the register flags reach no gh unless they must"
 // is proved by the fixture rather than asserted in a comment.
 
-import { describe, expect, it } from "vitest";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { describe, expect, it, vi } from "vitest";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
@@ -29,6 +29,10 @@ import { viewArgv } from "../pr/fetch.js";
 import { listArgv } from "../pr/threads.js";
 import { parseTarget } from "../github/target.js";
 import type { RollupEntry } from "../github/types.js";
+import type { PullRequestSnapshot } from "../github/graphql.js";
+import type { PrStateSource } from "../github/pr_state.js";
+import { BANKAI_REPO } from "../schema/fixtures/paths.js";
+import { defaultDeps } from "../verbs/pr_ready.js";
 
 const FIELD = "";
 const LOG_FORMAT = `%H${FIELD}%s${FIELD}%an${FIELD}%aI`;
@@ -584,6 +588,72 @@ describe("readiness, and which authority answered it", () => {
     // No check run readable, and the in-process gate has no token here.
     expect(readinessOf(captured)).toBeNull();
     expect(captured.err.join("\n")).toMatch(/objects: the readiness gate/);
+  });
+});
+
+describe("computed readiness uses the real in-process gate (zheref/nen#220)", () => {
+  // Only the transport is replaced. A preassembled `source: "computed"` row
+  // would pass even if objects.ts stopped calling prReady, or ignored its
+  // verdict. Both gate outcomes below must travel through the production gate.
+  it.each(["MERGEABLE", "CONFLICTING"])("computes %s without a readiness check, and never combines authorities", async (mergeable) => {
+    const root = mkdtempSync(join(tmpdir(), "nen-objects-computed-"));
+    const gates = readFileSync(join(BANKAI_REPO, "nen", "gates.json"), "utf8");
+    mkdirSync(join(root, "nen"));
+    writeFileSync(join(root, "nen", "gates.json"), gates);
+    const base = "b".repeat(40);
+    const snapshot = vi.fn(async (): Promise<PullRequestSnapshot> => ({
+      pullRequest: {
+        number: 217, mergeable, isDraft: false, headRefOid: HEAD_SHA,
+        headRefName: "feature/report", baseRefName: "main", baseRefOid: base,
+        author: { login: "someone" }, labels: [], reviewRequests: [],
+      },
+      defaultBranch: "main", defaultBranchOid: base,
+      checkRollup: [{ name: "ci / build", status: "COMPLETED", conclusion: "SUCCESS" }],
+      checkRollupPageInfo: { hasNextPage: false, endCursor: null },
+      reviewRequests: [], reviewRequestsPageInfo: { hasNextPage: false, endCursor: null },
+    }));
+    const source: PrStateSource = {
+      pullRequestSnapshot: snapshot,
+      reviews: async () => [
+        { user: { login: "sasuke" }, state: "APPROVED", commit_id: HEAD_SHA, submitted_at: NOW.toISOString() },
+        { user: { login: "tenma" }, state: "APPROVED", commit_id: HEAD_SHA, submitted_at: NOW.toISOString() },
+      ],
+      reviewThreadsPage: async () => ({ nodes: [], hasNextPage: false, endCursor: null }),
+      timeline: async () => [],
+      checkRollupPage: async () => { throw new Error("the check rollup has no second page"); },
+      reviewRequestsPage: async () => { throw new Error("the review requests have no second page"); },
+      fileAtRef: async (_repo, path) => path === "nen/gates.json" ? gates : null,
+    };
+    const opened = vi.spyOn(defaultDeps, "openSource").mockReturnValue({ ok: true, source });
+    const argv = LIVE_PR.map((arg) => arg === COVERAGE_REPO ? root : arg);
+    try {
+      const computed = await live(argv, [viewCall(), checkRunsCall([]), threadsCall(THREAD_NODES)]);
+      expect(computed.code, computed.err.join("\n")).toBe(0);
+      const rows = (JSON.parse(computed.out.join("\n")) as { objects: ReportObject[] }).objects;
+      const readiness = rows[0]?.readiness;
+      expect(rows).toHaveLength(1);
+      expect(readiness?.source).toBe("computed");
+      expect(readiness?.verdict).toBe(mergeable === "MERGEABLE" ? "ready" : "not-ready");
+      expect(readiness?.reason).toMatch(mergeable === "MERGEABLE" ? /^ready$/ : /^not-ready: mergeable=CONFLICTING/);
+      expect(opened).toHaveBeenCalledTimes(1);
+      expect(opened).toHaveBeenCalledWith("GH_TOKEN");
+      expect(snapshot).toHaveBeenCalledTimes(1);
+      expect(snapshot).toHaveBeenCalledWith({ owner: "zheref", repo: "nen", number: 217, typed: "217" }, 217);
+
+      opened.mockClear();
+      snapshot.mockClear();
+      opened.mockImplementation(() => { throw new Error("a check verdict must never open the computed gate"); });
+      const checked = await live(argv, [viewCall(), checkRunsCall([readinessRun()]), threadsCall(THREAD_NODES)]);
+      expect(checked.code, checked.err.join("\n")).toBe(0);
+      const checkedRows = (JSON.parse(checked.out.join("\n")) as { objects: ReportObject[] }).objects;
+      expect(checkedRows).toHaveLength(1);
+      expect(checkedRows[0]?.readiness).toEqual({ verdict: "ready", reason: "ready", source: "check" });
+      expect(opened).not.toHaveBeenCalled();
+      expect(snapshot).not.toHaveBeenCalled();
+    } finally {
+      opened.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
