@@ -610,18 +610,76 @@ describe("prune whole-plan fetched authority protection (#632 review)", () => {
     git(w.remote, "update-ref", "refs/heads/main", tip);
     const beforeLocal = git(w.repo, "show-ref");
     const calls: string[][] = [];
+    const fetchFailures: string[] = [];
+    let fetchEnvironment: Readonly<Record<string, string | undefined>> | undefined;
     const real = defaultSeams();
     const seams: Seams = { ...real, run: (command, args, options) => {
       if (command === "git") calls.push([...args]);
-      return real.run(command, args, options);
+      const result = real.run(command, args, options);
+      // This fixture uses only disposable, credential-free local paths. Keep
+      // production transport stderr redaction while exposing fixture failures.
+      if (command === "git" && args[0] === "fetch") {
+        fetchEnvironment = options?.env;
+        if (result.code !== 0) fetchFailures.push(result.stderr);
+      }
+      return result;
     } };
     const result = await run(w, [remoteItem], ["--run"], seams);
-    expect(result.code, result.err).toBe(0);
+    expect(result.code, `${result.err} ${JSON.stringify(result.report)} ${fetchFailures.join("\n")}`).toBe(0);
     expect(result.report?.items[0]).toMatchObject({ status: "removed", baseProof: { commit: tip } });
     const fetches = calls.filter((args) => args[0] === "fetch");
     expect(fetches).toHaveLength(1);
     expect(fetches[0]).toContain("--filter=blob:none");
+    expect(fetches[0]).toContain("nen-prune-base");
+    const injected = Object.fromEntries(Array.from({ length: Number(fetchEnvironment?.["GIT_CONFIG_COUNT"] ?? 0) }, (_, index) =>
+      [fetchEnvironment?.[`GIT_CONFIG_KEY_${index}`], fetchEnvironment?.[`GIT_CONFIG_VALUE_${index}`]]));
+    expect(injected).toMatchObject({ "remote.nen-prune-base.url": w.remote, "remote.nen-prune-base.promisor": "true" });
+    expect(injected["remote.nen-prune-base.fetch"]).toBeUndefined();
     expect(fetches[0]?.some((arg) => /^--(?:depth|shallow|deepen)/.test(arg))).toBe(false);
     expect(git(w.repo, "show-ref")).toBe(beforeLocal);
   });
+});
+
+
+it("private promisor name never inherits caller routing and rebinds successive base endpoints", async () => {
+  const w = world();
+  const second = join(w.root, "second.git"); const poison = join(w.root, "poison.git");
+  git(w.root, "init", "--bare", second); git(w.root, "init", "--bare", poison);
+  git(w.repo, "remote", "add", "second", second);
+  git(w.repo, "remote", "add", "nen-prune-base", poison);
+  git(w.repo, "config", "--add", "remote.nen-prune-base.fetch", "+refs/heads/*:refs/remotes/unlisted/*");
+  git(w.repo, "config", `url.${poison}.insteadOf`, "nen-prune-base");
+  git(w.remote, "config", "uploadpack.allowFilter", "true");
+  git(second, "config", "uploadpack.allowFilter", "true");
+  git(w.repo, "switch", "topic"); writeFileSync(join(w.repo, "second-only.txt"), "only second remote base\n");
+  git(w.repo, "add", "second-only.txt"); git(w.repo, "commit", "-m", "second remote descendant");
+  const secondTip = git(w.repo, "rev-parse", "HEAD");
+  git(w.repo, "push", "second", "HEAD:refs/heads/main", "HEAD:refs/heads/keep");
+  git(w.repo, "switch", "main");
+  const beforeLocal = git(w.repo, "show-ref");
+  const beforeConfig = readFileSync(join(w.repo, ".git", "config"), "utf8");
+  const fetchHead = join(w.repo, ".git", "FETCH_HEAD");
+  const beforeFetchHead = existsSync(fetchHead) ? readFileSync(fetchHead) : null;
+  const real = defaultSeams(); const fetchUrls: string[] = [];
+  const seams: Seams = { ...real, run: (command, args, options) => {
+    if (command === "git" && args[0] === "fetch") {
+      const entries = Object.fromEntries(Array.from({ length: Number(options?.env?.["GIT_CONFIG_COUNT"] ?? 0) }, (_, index) =>
+        [options?.env?.[`GIT_CONFIG_KEY_${index}`], options?.env?.[`GIT_CONFIG_VALUE_${index}`]]));
+      fetchUrls.push(String(entries["remote.nen-prune-base.url"]));
+      expect(entries["remote.nen-prune-base.fetch"]).toBeUndefined();
+      expect(Object.keys(entries).some((key) => key.startsWith("url."))).toBe(false);
+      expect(options?.env?.["GIT_NO_LAZY_FETCH"]).toBe("1");
+    }
+    return real.run(command, args, options);
+  } };
+  const result = await run(w, [remoteItem, { ...remoteItem, remote: "second", ref: "refs/heads/keep", base: "refs/remotes/second/main" }], ["--run"], seams);
+  expect(result.code, JSON.stringify(result.report)).toBe(0);
+  expect(fetchUrls).toEqual([w.remote, second]);
+  expect(result.report?.items.map((item) => item.status)).toEqual(["removed", "removed"]);
+  expect(result.report?.items[1]?.baseProof?.commit).toBe(secondTip);
+  expect(git(poison, "for-each-ref")).toBe("");
+  expect(git(w.repo, "show-ref")).toBe(beforeLocal);
+  expect(readFileSync(join(w.repo, ".git", "config"), "utf8")).toBe(beforeConfig);
+  if (beforeFetchHead === null) expect(existsSync(fetchHead)).toBe(false);
+  else expect(readFileSync(fetchHead)).toEqual(beforeFetchHead);
 });

@@ -114,7 +114,8 @@ export function prune(seams: Seams, root: string, plan: readonly PruneItem[], dr
     return snapshot;
   };
   const transportConfig = (key: string): boolean => /^(?:https?|credential|protocol|ssh)\./i.test(key) || ["core.sshcommand", "core.askpass", "core.gitproxy"].includes(key.toLowerCase());
-  const transportGit = (args: readonly string[], rewrite: "insteadof" | "pushinsteadof" | null = null): string => {
+  const fetchRemote = "nen-prune-base";
+  const transportGit = (args: readonly string[], rewrite: "insteadof" | "pushinsteadof" | null = null, fetchEndpoint: string | null = null): string => {
     const settings = readSnapshot();
     if (transportRoot === null) {
       transportRoot = mkdtempSync(join(tmpdir(), "nen-prune-transport-"));
@@ -130,6 +131,13 @@ export function prune(seams: Seams, root: string, plan: readonly PruneItem[], dr
       }
       return [];
     });
+    if (fetchEndpoint !== null) {
+      // Filtered fetch needs a valid promisor remote NAME: an absolute URL/path
+      // is not such a name. Bind one private name to the already-resolved URL
+      // in memory only, without caller remotes, rewrites or tracking refspecs.
+      entries.push([`remote.${fetchRemote}.url`, fetchEndpoint], [`remote.${fetchRemote}.promisor`, "true"],
+        [`remote.${fetchRemote}.partialclonefilter`, "blob:none"]);
+    }
     const configEnv: Record<string, string | undefined> = { ...frozenEnv, GIT_CONFIG_COUNT: String(entries.length) };
     entries.forEach(([key, value], index) => { configEnv[`GIT_CONFIG_KEY_${index}`] = key; configEnv[`GIT_CONFIG_VALUE_${index}`] = value; });
     const result = seams.run(GIT, [...args], { cwd: transportRoot, env: configEnv, bytes: true });
@@ -252,7 +260,7 @@ export function prune(seams: Seams, root: string, plan: readonly PruneItem[], dr
     const scratch=`refs/nen/prune-base-${refreshedBases.size}`;
     // Keep complete commit ancestry; servers may ignore the blob filter, so
     // this requests reduced transfer without promising zero blob downloads.
-    transportGit(["fetch","--filter=blob:none","--no-tags","--no-write-fetch-head","--recurse-submodules=no","--",endpoint,`${source}:${scratch}`]);
+    transportGit(["fetch","--filter=blob:none","--no-tags","--no-write-fetch-head","--recurse-submodules=no","--",fetchRemote,`${source}:${scratch}`], null, endpoint);
     const commit=transportGit(["rev-parse","--verify","--end-of-options",`${scratch}^{commit}`]).trim();
     if(!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(commit))throw new Refused("fetched cleanup base did not resolve to a full commit OID");
     const proof={ref:base,remote,source,commit};refreshedBases.set(base,proof);return proof;
