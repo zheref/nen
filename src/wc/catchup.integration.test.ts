@@ -473,10 +473,10 @@ describe.skipIf(!HAVE_GIT)("nen wc catch-up classifies a conflict, against the r
 });
 
 describe.skipIf(!HAVE_GIT)("nen wc publish, against the real git", () => {
-  it("pushes the branch as refs/heads/<b>:refs/heads/<b>, and -u sets the upstream", async () => {
+  it("first bare publish sets upstream and preserves subsequent fast-forward routing", async () => {
     const work = branchWith("plain-push", { "push.txt": "push\n" });
     const sha = mustGit(work, ["rev-parse", "HEAD"]);
-    const result = await wc(["publish", "--repo", work, "--set-upstream"]);
+    const result = await wc(["publish", "--repo", work]);
     expect(result.code).toBe(0);
     expect(result.doc).toMatchObject({ branch: "plain-push", remote: "origin", upstreamBefore: null, pushed: true, needsForce: false });
     expect(mustGit(work, ["ls-remote", "origin", "refs/heads/plain-push"]).split(/\s+/)[0]).toBe(sha);

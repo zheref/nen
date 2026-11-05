@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { renderCanonValuesTemplate, scaffoldInit } from "./init.js";
+
+import { NEXTJS_MULTI } from "../shu/fixtures/paths.js";
 
 const HOOK = { agentTrailer: "X-Agent", runTrailer: "X-Run", markerEnvVar: "X_AUTOMATED" };
 
@@ -22,6 +24,33 @@ function tempRoot(): string {
 }
 
 describe("scaffoldInit", () => {
+  it("explains multiple accepted lanes and the required explicit lane selection", () => {
+    const root = tempRoot(); cpSync(NEXTJS_MULTI, root, { recursive: true });
+    const result = scaffoldInit({ root, platform: "linux", directories: [], hook: HOOK, acceptDetected: true, dryRun: true });
+    expect(result.notes.join("\n")).toContain("2 lanes were found, so defaultLane is null and --lane is required");
+  });
+  it.each([false, true])("declines a linked checkout's default hook before any write (dryRun=%s)", (dryRun) => {
+    const root = tempRoot();
+    const gitFile = "gitdir: /shared/repo/.git/worktrees/effort\n";
+    writeFileSync(join(root, ".git"), gitFile);
+    expect(() => scaffoldInit({ root, platform: "linux", directories: ["must-not-exist"], hook: HOOK, stack: STACK, dryRun })).toThrow(/main checkout.*shared hooks/);
+    expect(existsSync(join(root, "must-not-exist"))).toBe(false);
+    expect(existsSync(join(root, "nen"))).toBe(false);
+    expect(existsSync(join(root, ".github"))).toBe(false);
+    expect(existsSync(join(root, ".gitignore"))).toBe(false);
+    expect(readFileSync(join(root, ".git"), "utf8")).toBe(gitFile);
+  });
+
+  it("preserves an explicit contained hook path in a linked checkout", () => {
+    const root = tempRoot();
+    writeFileSync(join(root, ".git"), "gitdir: /shared/repo/.git/worktrees/effort\n");
+    const result = scaffoldInit({ root, platform: "linux", directories: [], hook: HOOK, stack: STACK, hookPath: ".husky/commit-msg" });
+    expect(result.hookWritten).toBe(join(root, ".husky", "commit-msg"));
+    expect(result.hookOutcome).toBe("installed");
+    expect(existsSync(join(root, ".husky", "pre-commit"))).toBe(true);
+    expect(() => scaffoldInit({ root, platform: "linux", directories: [], hook: HOOK, stack: STACK, hookPath: "../outside/commit-msg" })).toThrow(/--hook-path/);
+  });
+
   it("creates every requested directory that does not exist", () => {
     const root = tempRoot();
     const result = scaffoldInit({ root, platform: "linux", directories: ["src", "tests"], hook: HOOK, stack: STACK });

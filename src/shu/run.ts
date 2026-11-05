@@ -1,3 +1,4 @@
+import { plainLine } from "../cli/plain.js";
 // src/shu/run.ts -- the executor: assert what the declaration says must already
 // be true, then run what it says to run, in order, and report both.
 //
@@ -104,6 +105,7 @@ export const INTERACTIVE_VERBS: readonly string[] = ["dev", "run"];
 // TARGETED_VERBS is there for exactly the same reason and arrived the same way.
 
 export interface AssertedPrecondition {
+  readonly why?: string;
   readonly kind: string;
   readonly value: string | number | readonly string[];
   /**
@@ -383,6 +385,7 @@ async function assertOne(
     kind: entry.kind,
     value: entry.value,
     expect: entry.expect,
+    ...(entry.why === null ? {} : { why: entry.why }),
     satisfied: null,
   };
   if (!ASSERTABLE_KINDS.includes(entry.kind)) return unassertable;
@@ -458,7 +461,7 @@ function describePrecondition(entry: AssertedPrecondition, width: number): strin
           : ` -- nen cannot assert a precondition of kind '${entry.kind}'${
               Array.isArray(entry.value) ? " stated as a LIST of values" : ""
             } in this release (it asserts: ${ASSERTABLE_KINDS.join(", ")} -- 'path' and 'env' as one string, 'port' as one number). An unperformed check is never reported as a clean one`;
-  return `  ${mark}  ${entry.kind.padEnd(width)} ${value}${asked}${tail}`;
+  return `  ${mark}  ${entry.kind.padEnd(width)} ${value}${asked}${tail}${entry.satisfied !== true && entry.why ? ` -- ${plainLine(entry.why)}` : ""}`;
 }
 
 /**

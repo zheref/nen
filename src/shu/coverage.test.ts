@@ -1520,6 +1520,7 @@ describe("--touched resolves each declared report against its own root (zheref/n
     expect(parsed.touched?.matched).toEqual([]);
     const err = result.err.join("\n");
     expect(err).toMatch(/--touched joined 0 of 2 touched files to the 2 rows nen read/);
+    expect(err).toContain("non-failing for a deliberately source-free diff");
     expect(err).toContain("SEEN in the report rows: 'packages/a/src/sum.ts', 'apps/web/src/page.tsx'");
     expect(err).toContain("EXPECTED, as git names the touched files (repo-relative): '.env.example', 'README.md'");
     expect(err).toContain("packages/a/coverage/lcov.info -> root packages/a");

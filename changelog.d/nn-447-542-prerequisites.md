@@ -1,0 +1,1 @@
+- Failed Shu prerequisites preserve declared explanations in human and structured reports without executing remedies. First publish automatically establishes missing upstream tracking; source-free coverage exit 6 is documented and reported as non-failing without claiming measured evidence.
