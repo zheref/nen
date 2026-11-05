@@ -234,16 +234,25 @@ export function prune(seams: Seams, root: string, plan: readonly PruneItem[], dr
     return sha;
   };
   const refreshedBases = new Map<string,PruneBaseProof>();
+  const baseAuthorities = new Map<string, { readonly remote: string; readonly source: string; readonly endpoint: string }>();
+  const baseAuthority = (base: string): { readonly remote: string; readonly source: string; readonly endpoint: string } => {
+    const cached = baseAuthorities.get(base); if (cached !== undefined) return cached;
+    const match = /^refs\/remotes\/([^/]+)\/(.+)$/.exec(base);
+    if (match === null || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(match[1] ?? "")) throw new Refused("cleanup base must name one explicit refs/remotes/<remote>/<branch> fetched authority, never a possibly stale local trunk");
+    const remote = match[1]!; const source = trackingSource(remote, base, true);
+    if (!fullRef(source) || source === "refs/heads/HEAD") throw new Refused("cleanup base source must be one exact remote branch");
+    const authority = { remote, source, endpoint: remoteUrl(remote, false) };
+    baseAuthorities.set(base, authority); return authority;
+  };
   let objectStore:string|null=null;
   const refreshedBase = (base:string):PruneBaseProof => {
     if (plan.some(item=>item.kind !== "worktree" && item.kind !== "host-link" && item.ref === base))throw new Refused(`base '${base}' is itself listed for removal`);
     const cached=refreshedBases.get(base);if(cached!==undefined)return cached;
-    const match=/^refs\/remotes\/([^/]+)\/(.+)$/.exec(base);
-    if(match===null || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(match[1] ?? ""))throw new Refused("cleanup base must name one explicit refs/remotes/<remote>/<branch> fetched authority, never a possibly stale local trunk");
-    const remote=match[1]!;const source=trackingSource(remote,base,true);
-    if(!fullRef(source) || source === "refs/heads/HEAD")throw new Refused("cleanup base source must be one exact remote branch");
-    const endpoint=remoteUrl(remote,false);const scratch=`refs/nen/prune-base-${refreshedBases.size}`;
-    transportGit(["fetch","--no-tags","--no-write-fetch-head","--recurse-submodules=no","--",endpoint,`${source}:${scratch}`]);
+    const { remote, source, endpoint } = baseAuthority(base);
+    const scratch=`refs/nen/prune-base-${refreshedBases.size}`;
+    // Keep complete commit ancestry; servers may ignore the blob filter, so
+    // this requests reduced transfer without promising zero blob downloads.
+    transportGit(["fetch","--filter=blob:none","--no-tags","--no-write-fetch-head","--recurse-submodules=no","--",endpoint,`${source}:${scratch}`]);
     const commit=transportGit(["rev-parse","--verify","--end-of-options",`${scratch}^{commit}`]).trim();
     if(!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(commit))throw new Refused("fetched cleanup base did not resolve to a full commit OID");
     const proof={ref:base,remote,source,commit};refreshedBases.set(base,proof);return proof;
@@ -302,6 +311,52 @@ export function prune(seams: Seams, root: string, plan: readonly PruneItem[], dr
     if ((!forBase && isTrunk(source.slice("refs/heads/".length), trunk)) || source === "refs/heads/HEAD") throw new Refused("tracking ref maps to a protected base branch or HEAD");
     return source;
   };
+  // Whole-plan authority check: no earlier row may delete a branch used as
+  // any row's fetched base, even when remote names or tracking names differ.
+  // URL resolution here is offline (--get-url); no base fetch/write has run.
+  if (plan.some((item) => item.kind === "remote-branch")) {
+    try {
+      const identities = new Map<string, string | null>();
+      const endpointIdentity = (endpoint: string): string | null => {
+        if (identities.has(endpoint)) return identities.get(endpoint)!;
+        // Different network spellings/protocols cannot prove distinct backing
+        // repositories. Only a local Git common directory supplies that proof.
+        if (!endpointAbsolute(endpoint)) { identities.set(endpoint, null); return null; }
+        const result = seams.run(GIT, ["-C", endpoint, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+          { cwd: root, env: { ...frozenEnv, GIT_CONFIG_COUNT: "0" } });
+        if (result.spawnFailed || result.code !== 0) throw new Refused("cannot establish filesystem endpoint's Git common repository identity; whole plan retained");
+        const common = rawStdout(result).replace(/\r?\n$/, "");
+        endpointRecord(common);
+        if (!endpointAbsolute(common)) throw new Refused("filesystem endpoint Git common directory must be absolute");
+        const identity = comparable(realpathSync.native(common), seams.platform);
+        identities.set(endpoint, identity); return identity;
+      };
+      const pushes = plan.flatMap((item) => item.kind === "remote-branch"
+        ? [{ identity: endpointIdentity(remoteUrl(item.remote, true)), ref: item.ref }] : []);
+      const knownPushes = new Set<string>();
+      for (const push of pushes) {
+        if (push.identity === null) continue;
+        const key = JSON.stringify([push.identity, push.ref]);
+        if (knownPushes.has(key)) throw new Refused("planned push targets alias the same Git repository/ref; whole plan retained");
+        knownPushes.add(key);
+      }
+      for (const item of plan) {
+        if (item.kind === "host-link") continue;
+        const authority = baseAuthority(item.base);
+        const identity = endpointIdentity(authority.endpoint);
+        for (const push of pushes) {
+          if (push.ref !== authority.source) continue;
+          if (identity === null || push.identity === null) throw new Refused("same-source-ref network authority separation is unsupported; whole plan retained");
+          if (identity === push.identity) throw new Refused("cleanup base fetch endpoint/source overlaps a planned push endpoint/ref; whole plan retained");
+        }
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { contract: PRUNE_CONTRACT, dryRun, bytesBasis: "logical-file-bytes", physicalFreedBytes: null, freedBytes: 0,
+        items: plan.map((item) => ({ item, status: error instanceof Refused ? "refused" : "failed", message,
+          freedBytes: 0, measuredBytes: null, linkTarget: null })) };
+    }
+  }
   for (const item of plan) {
     const measured: number | null = null;
     let writeStarted = false;

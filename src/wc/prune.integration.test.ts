@@ -530,3 +530,98 @@ describe("prune immutable freshly fetched base proof (#409)",()=>{
 it("the fetched base proof follows its frozen nonidentity fetch mapping",async()=>{
   const w=world();git(w.repo,"switch","topic");writeFileSync(join(w.repo,"new.txt"),"merged to another source\n");git(w.repo,"add","new.txt");git(w.repo,"commit","-m","topic");const tip=git(w.repo,"rev-parse","HEAD");git(w.repo,"push","origin","topic");git(w.repo,"switch","main");git(w.remote,"update-ref","refs/heads/accepted-base",tip);git(w.repo,"config","--unset-all","remote.origin.fetch");git(w.repo,"config","--add","remote.origin.fetch","+refs/heads/accepted-base:refs/remotes/origin/main");const result=await run(w,[remoteItem],["--run"]);expect(result.code,result.err).toBe(0);expect(result.report?.items[0]?.baseProof).toMatchObject({ref:base,source:"refs/heads/accepted-base",commit:tip});
 });
+
+
+describe("prune whole-plan fetched authority protection (#632 review)", () => {
+  it.each(["same-remote", "cross-remote", "file-url-alias", "worktree-alias", "git-dir-alias", "earlier-target"])("retains every row before fetch or deletion for %s overlap", async (mode) => {
+    const w = world();
+    git(w.repo, "branch", "keep"); git(w.repo, "push", "origin", "keep");
+    const alias = mode === "same-remote" ? "origin" : "authority";
+    let aliasEndpoint = mode === "file-url-alias" ? pathToFileURL(w.remote).href : w.remote;
+    if (mode === "worktree-alias") {
+      // An attached checkout and its bare common repository have different
+      // realpaths but expose the same branches to Git transport.
+      git(w.remote, "worktree", "add", w.tree, "topic");
+      aliasEndpoint = w.tree;
+    } else if (mode === "git-dir-alias") {
+      // The caller checkout and .git directory likewise share one identity.
+      git(w.repo, "remote", "set-url", "--push", "origin", w.repo);
+      aliasEndpoint = join(w.repo, ".git");
+    }
+    if (alias !== "origin") git(w.repo, "remote", "add", alias, aliasEndpoint);
+    const source = mode === "earlier-target" ? "keep" : "topic";
+    const mappedBase = `refs/remotes/${alias}/accepted`;
+    git(w.repo, "config", "--replace-all", `remote.${alias}.fetch`, `+refs/heads/${source}:${mappedBase}`);
+    const plan = mode === "earlier-target"
+      ? [{ ...remoteItem, ref: "refs/heads/keep" }, { ...remoteItem, base: mappedBase }]
+      : [{ ...remoteItem, base: mappedBase }];
+    const beforeRemote = git(w.remote, "show-ref");
+    const beforeLocal = git(w.repo, "show-ref");
+    const beforeConfig = readFileSync(join(w.repo, ".git", "config"), "utf8");
+    for (const flags of [[], ["--run"]]) {
+      const calls: string[][] = [];
+      const real = defaultSeams();
+      const seams: Seams = { ...real, run: (command, args, options) => {
+        if (command === "git") calls.push([...args]);
+        return real.run(command, args, options);
+      } };
+      const result = await run(w, plan, flags, seams);
+      expect(result.code, result.err).toBe(2);
+      expect(result.report?.items).toHaveLength(plan.length);
+      expect(result.report?.items.every((item) => item.status === "refused" && item.message.includes("overlaps a planned push"))).toBe(true);
+      expect(calls.filter((args) => ["fetch", "push", "update-ref"].includes(args[0] ?? ""))).toEqual([]);
+      expect(git(w.remote, "show-ref")).toBe(beforeRemote);
+      expect(git(w.repo, "show-ref")).toBe(beforeLocal);
+      expect(readFileSync(join(w.repo, ".git", "config"), "utf8")).toBe(beforeConfig);
+    }
+  });
+
+  it("refuses same-source network authorities whose distinctness cannot be proved without contacting them", async () => {
+    const w = world();
+    git(w.repo, "remote", "set-url", "--push", "origin", "ssh://git@example.invalid/project.git");
+    git(w.repo, "remote", "add", "authority", "https://example.invalid/project.git");
+    git(w.repo, "config", "--replace-all", "remote.authority.fetch", "+refs/heads/topic:refs/remotes/authority/accepted");
+    const calls: string[][] = [];
+    const real = defaultSeams();
+    const seams: Seams = { ...real, run: (command, args, options) => {
+      if (command === "git") {
+        calls.push([...args]);
+        if (args[0] === "fetch" || args[0] === "push" || args[0] === "ls-remote" && !args.includes("--get-url")) {
+          throw new Error("network access must not precede authority separation refusal");
+        }
+      }
+      return real.run(command, args, options);
+    } };
+    const result = await run(w, [{ ...remoteItem, base: "refs/remotes/authority/accepted" }], ["--run"], seams);
+    expect(result.code, result.err).toBe(2);
+    expect(result.report?.items[0]?.message).toContain("same-source-ref network authority separation is unsupported");
+    expect(calls.some((args) => args[0] === "fetch" || args[0] === "push")).toBe(false);
+    expect(git(w.remote, "show-ref", "refs/heads/topic")).toContain("topic");
+  });
+
+  it("requests blob filtering while retaining full commit ancestry and caller refs", async () => {
+    const w = world();
+    git(w.remote, "config", "uploadpack.allowFilter", "true");
+    git(w.repo, "switch", "topic");
+    writeFileSync(join(w.repo, "history.txt"), "complete ancestry needed\n");
+    git(w.repo, "add", "history.txt"); git(w.repo, "commit", "-m", "topic descendant");
+    const tip = git(w.repo, "rev-parse", "HEAD");
+    git(w.repo, "push", "origin", "topic"); git(w.repo, "switch", "main");
+    git(w.remote, "update-ref", "refs/heads/main", tip);
+    const beforeLocal = git(w.repo, "show-ref");
+    const calls: string[][] = [];
+    const real = defaultSeams();
+    const seams: Seams = { ...real, run: (command, args, options) => {
+      if (command === "git") calls.push([...args]);
+      return real.run(command, args, options);
+    } };
+    const result = await run(w, [remoteItem], ["--run"], seams);
+    expect(result.code, result.err).toBe(0);
+    expect(result.report?.items[0]).toMatchObject({ status: "removed", baseProof: { commit: tip } });
+    const fetches = calls.filter((args) => args[0] === "fetch");
+    expect(fetches).toHaveLength(1);
+    expect(fetches[0]).toContain("--filter=blob:none");
+    expect(fetches[0]?.some((arg) => /^--(?:depth|shallow|deepen)/.test(arg))).toBe(false);
+    expect(git(w.repo, "show-ref")).toBe(beforeLocal);
+  });
+});
