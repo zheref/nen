@@ -1,6 +1,6 @@
 {
   "$schema": "nen.profile/v0.1",
-  "$comment": "A CATALOGUE ENTRY, NOT AN AUTHORITY. Every command below is verbatim from a product repository and cited in its own `source`; nothing here is invented. A target repository's own nen/contract.json is the only thing an execution path ever reads -- this file exists so a human writing that declaration has somewhere honest to start, and so docs/STACK-MATRIX.md can be generated instead of hand-maintained.",
+  "$comment": "A CATALOGUE ENTRY, NOT AN AUTHORITY. Every command below is verbatim from a product repository and cited in its own `source`; nothing here is invented. A target repository's own nen/contract.json is the only thing an execution path ever reads -- this file exists so a human writing that declaration has somewhere honest to start, and so docs/STACK-MATRIX.md can be generated instead of hand-maintained. Anonymized source aliases preserve the original snapshot observations and line references; they do not name live public repositories or assert new live verification.",
   "id": "xcode-ios",
   "displayName": "Xcode / iOS",
   "markers": [
@@ -21,9 +21,11 @@
     }
   ],
   "hosts": {
-    "*": ["darwin"]
+    "*": [
+      "darwin"
+    ]
   },
-  "hostNote": "darwin only -- `xcodebuild`, `xcrun` and CocoaPods exist nowhere else. KroApple further requires Xcode 26.5 with the iOS 26.5 simulator runtime and an `iPhone 17 Pro` device type (KroApple/docs/ci.md:84-86).",
+  "hostNote": "darwin only -- `xcodebuild`, `xcrun` and CocoaPods exist nowhere else. ExampleService further requires Xcode 26.5 with the iOS 26.5 simulator runtime and an `iPhone 17 Pro` device type (ExampleService/docs/ci.md:84-86).",
   "scaffoldTemplate": "minimal",
   "scaffoldNote": "a project skeleton plus nen/contract.json. nen never generates a `.pbxproj`.",
   "verbs": {
@@ -46,7 +48,7 @@
         "build"
       ],
       "why": "The repository's own build-execution rule. Its CI profile is the `test` row's form with `build` in place of `test` (`xcodebuild -project {project} -scheme {scheme} -destination id={simUdid} -enableCodeCoverage YES -skipMacroValidation build`) -- derived from the test row, not separately observed.",
-      "source": "KroApple/.claude/rules/13-build-execution.md:111-113"
+      "source": "ExampleService/.claude/rules/13-build-execution.md:111-113"
     },
     "test": {
       "exe": "xcodebuild",
@@ -62,28 +64,28 @@
         "-skipMacroValidation",
         "test"
       ],
-      "why": "CI runs this against a per-runner simulator created and booted BY UDID (`SCHEME: Kro`, tests.yml:58). The local snapshot-subset form is the same command with `-destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5'` and `-only-testing:{testTarget}/{name}` (KroApple/.claude/rules/07-testing.md:194-196). From the nen release that carries zheref/nen#207 (0.21.0) that subset form is declarable once, as this row's `select` block (`each: [\"-only-testing:<identifier token>\"]`, plus a required `results` test summary under `.nen/focused/` that nen counts executed tests from -- nen reads no .xcresult bundle, so the focused exe is the repository's own wrapper that runs xcodebuild and writes that summary), and `nen shu test --select` passes the identifiers; the pack proposes no `select`, because the identifier grammar is the repository's.",
-      "source": "KroApple/.github/workflows/tests.yml:194-209"
+      "why": "CI runs this against a per-runner simulator created and booted BY UDID (`SCHEME: FixtureApp`, tests.yml:58). The local snapshot-subset form is the same command with `-destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5'` and `-only-testing:{testTarget}/{name}` (ExampleService/.claude/rules/07-testing.md:194-196). From the nen release that carries zheref/nen#207 (0.21.0) that subset form is declarable once, as this row's `select` block (`each: [\"-only-testing:<identifier token>\"]`, plus a required `results` test summary under `.nen/focused/` that nen counts executed tests from -- nen reads no .xcresult bundle, so the focused exe is the repository's own wrapper that runs xcodebuild and writes that summary), and `nen shu test --select` passes the identifiers; the pack proposes no `select`, because the identifier grammar is the repository's.",
+      "source": "ExampleService/.github/workflows/tests.yml:194-209"
     },
     "ui-test": {
-      "unsupported": "UI-test TARGETS exist and are never run. KroApple's shared scheme lists only `KroTests` in its test action; `KroUITests/` and `PreviewHostUITests/` appear in no shared scheme and no workflow. In food-diary it is worse: the scheme's TestAction references `fooddiaryTests`, but `project.pbxproj` contains exactly one native target and no test target -- so `xcodebuild test` on that scheme FAILS on a clean checkout.",
+      "unsupported": "UI-test TARGETS exist and are never run. ExampleService's shared scheme lists only `KroTests` in its test action; `KroUITests/` and `PreviewHostUITests/` appear in no shared scheme and no workflow. In sourceworkspace it is worse: the scheme's TestAction references `fooddiaryTests`, but `project.pbxproj` contains exactly one native target and no test target -- so `xcodebuild test` on that scheme FAILS on a clean checkout.",
       "summary": "targets exist, never run",
-      "source": "KroApple/Kro.xcscheme:38-47; food-diary ios/.../fooddiary.xcscheme:31-40 and project.pbxproj:137-160"
+      "source": "ExampleService/FixtureApp.xcscheme:38-47; sourceworkspace ios/.../fooddiary.xcscheme:31-40 and project.pbxproj:137-160"
     },
     "lint": {
       "declaredOnly": "Two incompatible meanings in one repository: `bash ci_scripts/lint_architecture.sh` (pure grep/find/bash, no Xcode) and `sh ci_scripts/verify_codex_guidance.sh`. SwiftLint appears nowhere in the seven repositories. No default is defensible, so the pack proposes none and the declaration says which this repository means.",
       "summary": "two meanings, one repo",
-      "source": "KroApple/.github/workflows/lint.yml:42-43; KroApple/Makefile:16-17"
+      "source": "ExampleService/.github/workflows/lint.yml:42-43; ExampleService/Makefile:16-17"
     },
     "typecheck": {
       "unsupported": "The Swift compiler IS the type check, inside `xcodebuild build`; the repository runs no separate checking step and the stack has none.",
       "summary": "the compiler checks types",
-      "source": "KroApple/.github/workflows/ (inventory sweep)"
+      "source": "ExampleService/.github/workflows/ (inventory sweep)"
     },
     "archive": {
-      "unsupported": "No repository invokes `xcodebuild archive`. KroApple's Archive actions are scheme CONFIGURATION pinned to `Release`, and heavy builds are delegated to Xcode Cloud, whose workflows live server-side and have no command line here.",
+      "unsupported": "No repository invokes `xcodebuild archive`. ExampleService's Archive actions are scheme CONFIGURATION pinned to `Release`, and heavy builds are delegated to Xcode Cloud, whose workflows live server-side and have no command line here.",
       "summary": "no xcodebuild archive",
-      "source": "KroApple/Kro.xcscheme:92; KroApple/README.md:97"
+      "source": "ExampleService/FixtureApp.xcscheme:92; ExampleService/README.md:97"
     },
     "release": {
       "unsupported": "No fastlane, no `altool`, no `xcrun notarytool` and no App Store Connect step in any of the seven repositories.",
@@ -93,17 +95,17 @@
     "dev": {
       "unsupported": "Unsupported AS A SPAWNABLE COMMAND: the documented dev loop is a GUI gesture -- open the project, select the scheme, build and run with the IDE's own shortcut.",
       "summary": "a GUI gesture",
-      "source": "KroApple/README.md:53-56"
+      "source": "ExampleService/README.md:53-56"
     },
     "run": {
-      "unsupported": "Zero `xcrun simctl install` / `simctl launch` occurrences in KroApple.",
+      "unsupported": "Zero `xcrun simctl install` / `simctl launch` occurrences in ExampleService.",
       "summary": "no simctl install/launch",
-      "source": "KroApple (inventory sweep)"
+      "source": "ExampleService (inventory sweep)"
     },
     "deploy": {
-      "unsupported": "Unsupported AT THE APP LEVEL. KroApple's only deploy lane is a Supabase DATABASE MIGRATION via a reusable workflow, which is not an app deploy and must not be filed as one.",
+      "unsupported": "Unsupported AT THE APP LEVEL. ExampleService's only deploy lane is a Supabase DATABASE MIGRATION via a reusable workflow, which is not an app deploy and must not be filed as one.",
       "summary": "db migration, not an app",
-      "source": "KroApple/.github/workflows/db-migrate.yml:23-26"
+      "source": "ExampleService/.github/workflows/db-migrate.yml:23-26"
     },
     "coverage": {
       "steps": [
@@ -126,19 +128,28 @@
         },
         {
           "exe": "xcrun",
-          "argv": ["xccov", "view", "--report", "--json", "{resultBundle}"]
+          "argv": [
+            "xccov",
+            "view",
+            "--report",
+            "--json",
+            "{resultBundle}"
+          ]
         }
       ],
-      "why": "DERIVED, NOT OBSERVED, and the row says so rather than reading as a found command. Step 1 is the `test` row's real `-enableCodeCoverage YES` invocation plus `-resultBundlePath`, so a report exists to read; step 2 extracts it. NO REPOSITORY RUNS THE EXTRACTION STEP: KroApple's own coverage policy (80% on touched files) is read by hand from Xcode's Report Navigator.",
-      "source": "flag: KroApple/.github/workflows/tests.yml:194-209; policy: KroApple/.claude/rules/12-session-completion-checklist.md:23-33 and 07-testing.md:45-46"
+      "why": "DERIVED, NOT OBSERVED, and the row says so rather than reading as a found command. Step 1 is the `test` row's real `-enableCodeCoverage YES` invocation plus `-resultBundlePath`, so a report exists to read; step 2 extracts it. NO REPOSITORY RUNS THE EXTRACTION STEP: ExampleService's own coverage policy (80% on touched files) is read by hand from Xcode's Report Navigator.",
+      "source": "flag: ExampleService/.github/workflows/tests.yml:194-209; policy: ExampleService/.claude/rules/12-session-completion-checklist.md:23-33 and 07-testing.md:45-46"
     },
     "tools": {
-      "declaredOnly": "Every entry is verify-only: NOTHING IN THIS STACK CAN BE INSTALLED BY NEN. Xcode -- probe `xcodebuild -version` and `xcode-select -p`; a 10+ GB, Apple-ID-gated download with a licence agreement is not something a CLI performs on a human's behalf, so the row prints two paths (the Mac App Store, or `xcodes install <version>` if the machine already has `xcodes`). Simulator runtimes -- probe `xcrun simctl list runtimes --json`; `xcodebuild -downloadPlatform iOS` is PRINTED, never run. Device type -- KroApple needs an `iPhone 17 Pro`; nen reports present/absent and never creates one. CocoaPods -- probe `pod --version`; its common install is `sudo gem install`, and nen never elevates.",
+      "declaredOnly": "Every entry is verify-only: NOTHING IN THIS STACK CAN BE INSTALLED BY NEN. Xcode -- probe `xcodebuild -version` and `xcode-select -p`; a 10+ GB, Apple-ID-gated download with a licence agreement is not something a CLI performs on a human's behalf, so the row prints two paths (the Mac App Store, or `xcodes install <version>` if the machine already has `xcodes`). Simulator runtimes -- probe `xcrun simctl list runtimes --json`; `xcodebuild -downloadPlatform iOS` is PRINTED, never run. Device type -- ExampleService needs an `iPhone 17 Pro`; nen reports present/absent and never creates one. CocoaPods -- probe `pod --version`; its common install is `sudo gem install`, and nen never elevates.",
       "summary": "verify-only, all of it",
       "source": "probes only; nothing installed"
     },
     "warmup": {
-      "delegatesTo": ["build", "test"],
+      "delegatesTo": [
+        "build",
+        "test"
+      ],
       "why": "The git steps (classify, discard, fetch, branch) are stack-independent and run regardless. The verification half delegates to this profile's own `build` and `test` rows, both of which carry a command.",
       "source": "this profile's own build and test rows"
     }
@@ -146,36 +157,42 @@
   "toolchain": {
     "cocoapods": {
       "minimum": null,
-      "probe": ["pod", "--version"],
+      "probe": [
+        "pod",
+        "--version"
+      ],
       "versionFrom": "first-semver-on-stdout",
       "installer": "verify-only",
-      "why": "food-diary's iOS lane is a CocoaPods workspace, and no repository in the inventory pins a version -- so the pack states presence, not a minimum. Its common install is `sudo gem install`, and nen never elevates.",
-      "source": "food-diary ios/ (Podfile); no pin in any repository"
+      "why": "sourceworkspace's iOS lane is a CocoaPods workspace, and no repository in the inventory pins a version -- so the pack states presence, not a minimum. Its common install is `sudo gem install`, and nen never elevates.",
+      "source": "sourceworkspace ios/ (Podfile); no pin in any repository"
     },
     "xcode": {
       "minimum": "26.5",
-      "probe": ["xcodebuild", "-version"],
+      "probe": [
+        "xcodebuild",
+        "-version"
+      ],
       "versionFrom": "first-semver-on-stdout",
       "installer": "verify-only",
-      "why": "KroApple pins Xcode 26.5 with the matching iOS 26.5 simulator runtime. nen cannot install it and does not pretend otherwise: the row prints the Mac App Store path, or `xcodes install <version>` where the machine already has `xcodes`.",
-      "source": "KroApple/docs/ci.md:84-86"
+      "why": "ExampleService pins Xcode 26.5 with the matching iOS 26.5 simulator runtime. nen cannot install it and does not pretend otherwise: the row prints the Mac App Store path, or `xcodes install <version>` where the machine already has `xcodes`.",
+      "source": "ExampleService/docs/ci.md:84-86"
     }
   },
   "reportDefault": {
     "$comment": "ADVISORY ONLY, and the one thing `nen shu coverage` may say about a report location it was not given. That verb parses the report a DECLARATION names under the coverage verb's `artifacts`; when a repository names none, this path (or this reason) is quoted in the refusal and NEVER opened. `path: null` is the honest answer for a stack whose report location does not exist or is not conventional.",
     "path": null,
     "why": "The extraction step this profile proposes PRINTS its report to stdout (`xccov view --report --json <bundle>`), and nen parses a FILE -- there is still no shell in this family and therefore no redirection OPERATOR, but there is now a declared one: a lane that wants this parsed states `stdoutTo` on that step (a repo-relative path with `xccov` in its name, since the reader recognises a report by name) and names the same path under the verb's `artifacts`. nen writes the captured stdout to it itself. The `.xcresult` bundle itself is not a format nen reads.",
-    "source": "this profile's own `coverage` row, step 2 (KroApple/.github/workflows/tests.yml:194-209)"
+    "source": "this profile's own `coverage` row, step 2 (ExampleService/.github/workflows/tests.yml:194-209)"
   },
   "deployDefault": {
     "target": "testflight",
-    "why": "TestFlight is the one non-production destination an iOS build has: an upload puts a build in App Store Connect for the maintainer and internal testers and puts nothing on any App Store listing, while external testing and App Store submission are later, human actions. KroApple declares exactly this key, `project.targets.testflight`, its `why` stating it is non-production. PROPOSED ONLY WHERE THE REPOSITORY ALREADY DECLARES A `testflight` TARGET MARKED `\"nonProduction\": true` -- the name is the pack's, the destination is the repository's.",
-    "source": "KroApple/nen/contract.json -> project.targets.testflight (zheref/hatsu#146)"
+    "why": "TestFlight is the one non-production destination an iOS build has: an upload puts a build in App Store Connect for the maintainer and internal testers and puts nothing on any App Store listing, while external testing and App Store submission are later, human actions. ExampleService declares exactly this key, `project.targets.testflight`, its `why` stating it is non-production. PROPOSED ONLY WHERE THE REPOSITORY ALREADY DECLARES A `testflight` TARGET MARKED `\"nonProduction\": true` -- the name is the pack's, the destination is the repository's.",
+    "source": "ExampleService/nen/contract.json -> project.targets.testflight (zheref/hatsu#146)"
   },
   "notes": [
     "Physical-device launch declarations can consume devicectl JSON directly with device.extract: records `result.devices`; name fallbacks `properties.state.name`, `deviceProperties.name`; identifier fallbacks `identifier`, `hardwareProperties.udid`; readiness fallbacks `properties.connection.state`, `connectionProperties.tunnelState`. The executable and argv remain the consumer's declaration.",
-    "PRECONDITIONS THIS STACK ASSERTS AND NEVER PERFORMS (all from KroApple): a per-runner simulator created and booted by UDID (tests.yml:99-160, including the explicit prohibition on `xcrun simctl shutdown all` at :81-98); a gitignored `Kro/Config.xcconfig` written from secrets (:174-179); `defaults write com.apple.dt.Xcode IDESkipMacroFingerprintValidation -bool YES` (:186-188, and the whole of ci_scripts/ci_post_clone.sh:2); and, for food-diary, `pod install` plus an Expo prebuild.",
+    "PRECONDITIONS THIS STACK ASSERTS AND NEVER PERFORMS (all from ExampleService): a per-runner simulator created and booted by UDID (tests.yml:99-160, including the explicit prohibition on `xcrun simctl shutdown all` at :81-98); a gitignored `FixtureApp/Config.xcconfig` written from secrets (:174-179); `defaults write com.apple.dt.Xcode IDESkipMacroFingerprintValidation -bool YES` (:186-188, and the whole of ci_scripts/ci_post_clone.sh:2); and, for sourceworkspace, `pod install` plus an Expo prebuild.",
     "None of those preconditions becomes a `tools --install` action. They are assertions; `shu tools` installs host toolchains only.",
-    "A LOG-GROWTH WATCHDOG AROUND `nen shu` READS ONLY WHAT THE LOG CAN PROVE (zheref/nen#244). An xcodebuild compile runs for many minutes, and with `--heartbeat 0` and no `--stream` nen relays nothing until the step exits, so a watchdog that reads 'no new output for ~60s' as a hung `clang` (KroApple's build canon does) fires at a healthy compile and throws its work away. Under the default heartbeat (one `nen shu: ... still running` line on stderr every 30s) log growth proves NEN is alive, never that the child is: such a watchdog no longer kills a healthy compile, but it can never catch a hung one. Only `--stream`, which relays xcodebuild's own lines live, makes growth reflect the child. To detect a wedged grandchild, declare a `stall` guard: it judges the CHILD's silence, which the heartbeat never resets."
+    "A LOG-GROWTH WATCHDOG AROUND `nen shu` READS ONLY WHAT THE LOG CAN PROVE (zheref/nen#244). An xcodebuild compile runs for many minutes, and with `--heartbeat 0` and no `--stream` nen relays nothing until the step exits, so a watchdog that reads 'no new output for ~60s' as a hung `clang` (ExampleService's build canon does) fires at a healthy compile and throws its work away. Under the default heartbeat (one `nen shu: ... still running` line on stderr every 30s) log growth proves NEN is alive, never that the child is: such a watchdog no longer kills a healthy compile, but it can never catch a hung one. Only `--stream`, which relays xcodebuild's own lines live, makes growth reflect the child. To detect a wedged grandchild, declare a `stall` guard: it judges the CHILD's silence, which the heartbeat never resets."
   ]
 }

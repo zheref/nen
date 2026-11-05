@@ -1460,7 +1460,7 @@ App installation token) or an unreadable timeline makes no own-request claim.
 **Detail text only**: the row still fails, and the verdict and the exit code
 do not move. A row owing any reviewer a missing round keeps its reason byte for
 byte. Both reads are made only while a review request is pending. This is the
-case on [zheref/KroApple#577](https://github.com/zheref/KroApple/pull/577):
+case on [anonymized-source-exampleservice#577](https://github.com/anonymized-source-exampleservice/pull/577):
 every later "owed at the current head" there came from the agent's own request.
 These suffixes are the one place this gate's line differs from the original
 shell gate's (`src/gates/ready.ts` divergence (11)); the shadow harness strips
@@ -1527,7 +1527,7 @@ already has a verdict, or a start time, sorts as before.
 
 **Which head the verdict is about (zheref/nen#245).** The verdict concerns
 **GitHub's current head** for the pull request at the moment the verb reads
-it. That is not necessarily your local commit. On zheref/KroApple#577 a `ready`
+it. That is not necessarily your local commit. On anonymized-source-exampleservice#577 a `ready`
 was decided eight seconds before a push registered, so it judged the parent
 commit. Three things make that visible:
 
@@ -3351,7 +3351,7 @@ a non-User event that carries another id, but only as a fallback: the REST
 timeline names Copilot `Copilot` where GraphQL names it
 `copilot-pull-request-reviewer`, so for real bots the id does the counting. Every request counts, whoever made
 it and by whatever route, raw GraphQL included
-([zheref/KroApple#577](https://github.com/zheref/KroApple/pull/577) carries
+([anonymized-source-exampleservice#577](https://github.com/anonymized-source-exampleservice/pull/577) carries
 eight under a two-round ruling).
 
 - A request that would pass the ceiling refuses the **whole** call at exit
@@ -5536,7 +5536,7 @@ copies: [{ path, action }], removed: [{ path, action }], kept: [{ path, reason
 **Example**
 
 ```bash
-nen wc worktree --repo . --name kagutsuchi --base main --copy-from-core Kro/Config.xcconfig
+nen wc worktree --repo . --name kagutsuchi --base main --copy-from-core FixtureApp/Config.xcconfig
 ```
 ```text
 core:            /work/app
@@ -5544,7 +5544,7 @@ core-ignore:     .nen/worktrees/kagutsuchi is gitignored in core
 origin/main:   4f5c11a2b9e0d6c1a7f3e2b8d4c6a0f1e3b5d7c9
 worktree:        /work/app/.nen/worktrees/kagutsuchi (created)
 head:            4f5c11a2b9e0d6c1a7f3e2b8d4c6a0f1e3b5d7c9
-copied:          Kro/Config.xcconfig (from core, gitignored)
+copied:          FixtureApp/Config.xcconfig (from core, gitignored)
 ```
 
 ### `nen wc ahead`
@@ -6857,8 +6857,8 @@ nen warmup --repo src/schema/fixtures/bankai-repo --current v0.12.0
 ```
 ```text
 4 stale pin(s):
-  zheref/KroApple pinned: v0.11.2 -> v0.12.0
-  zheref/KroAndroid pinned: v0.11.2 -> v0.12.0
+  anonymized-source-exampleservice pinned: v0.11.2 -> v0.12.0
+  anonymized-source-sampledesktop pinned: v0.11.2 -> v0.12.0
   zheref/bankai-scaffold pinned: v0.10.0 -> v0.12.0
   zheref/bankai-scaffold db_migrate_pinned: v0.9.7 -> v0.12.0
 no unpinned consumers
@@ -8525,7 +8525,7 @@ when `--from` is combined with an explicit token.
 nen repo resolve KP --repo src/schema/fixtures/bankai-repo
 ```
 ```text
-zheref/KroApple  (KP)  via code
+anonymized-source-exampleservice  (KP)  via code
 ```
 (from a real run against the bundled fixture registry)
 
@@ -8561,7 +8561,7 @@ propagates as an uncaught error, generic exit 1).
 and was not run per this section's setup notes)
 
 ```bash
-nen repo inventory --target zheref/KroApple --epic-label type:epic --integration-prefix integration/ --trunk main
+nen repo inventory --target anonymized-source-exampleservice --epic-label type:epic --integration-prefix integration/ --trunk main
 ```
 ```text
 epics: 1
@@ -8628,7 +8628,7 @@ all (the same precondition [`repo resolve`](#nen-repo-resolve) refuses the same 
 **Example**
 
 ```bash
-nen repo scenario --repo src/schema/fixtures/bankai-repo --target zheref/KroApple
+nen repo scenario --repo src/schema/fixtures/bankai-repo --target anonymized-source-exampleservice
 ```
 ```text
 swiftui-tca-uzf-v2
@@ -9713,8 +9713,8 @@ nen fanout compute --repo . --range v0.11.2..v0.11.3
 ```
 ```text
 changed workflows in v0.11.2..v0.11.3: sasuke-review.yml
-AFFECTED  zheref/KroApple (KP)  -- consumes sasuke-review.yml, which changed in this range
-AFFECTED  zheref/KroAndroid (KN)  -- consumes sasuke-review.yml, which changed in this range
+AFFECTED  anonymized-source-exampleservice (KP)  -- consumes sasuke-review.yml, which changed in this range
+AFFECTED  anonymized-source-sampledesktop (KN)  -- consumes sasuke-review.yml, which changed in this range
 AFFECTED  zheref/bankai-scaffold (BS)  -- consumes sasuke-review.yml, which changed in this range
 ```
 (from a real run against a scratch git repo seeded with the bundled fixture's `nen/repos.json` and two tags, `v0.11.2` and `v0.11.3`, differing only in `sasuke-review.yml`)
@@ -9752,7 +9752,7 @@ nen fanout record --repo . --range v0.11.2..v0.11.3
 ```text
 recorded 3 row(s) to /path/to/repo/fanout-ledger.jsonl
 ```
-(from a real run, same scratch repo as `fanout compute`'s example; `fanout-ledger.jsonl` afterward held one JSON line per row, the first reading `{"range":"v0.11.2..v0.11.3","at":"2026-09-07T22:58:40.613Z","repo":"zheref/KroApple","code":"KP","status":"affected","matchedWorkflows":["sasuke-review.yml"],"basis":"consumes sasuke-review.yml, which changed in this range"}`)
+(from a real run, same scratch repo as `fanout compute`'s example; `fanout-ledger.jsonl` afterward held one JSON line per row, the first reading `{"range":"v0.11.2..v0.11.3","at":"2026-09-07T22:58:40.613Z","repo":"anonymized-source-exampleservice","code":"KP","status":"affected","matchedWorkflows":["sasuke-review.yml"],"basis":"consumes sasuke-review.yml, which changed in this range"}`)
 
 <a id="family-run"></a>
 
@@ -9844,12 +9844,12 @@ v0.25.0).
 **Example**
 
 ```bash
-nen run rerun-failed --target zheref/KroApple --run-id 42
+nen run rerun-failed --target anonymized-source-exampleservice --run-id 42
 ```
 ```text
-re-ran the failed job(s) of zheref/KroApple's run 42
+re-ran the failed job(s) of anonymized-source-exampleservice's run 42
 ```
-(from `src/run/command.test.ts`, which scripts `gh run rerun 42 --repo zheref/KroApple --failed` — this verb reaches GitHub, so it was not run live here)
+(from `src/run/command.test.ts`, which scripts `gh run rerun 42 --repo anonymized-source-exampleservice --failed` — this verb reaches GitHub, so it was not run live here)
 
 ### `nen run start`
 
@@ -14001,8 +14001,8 @@ nothing and behaves exactly as before:
 |---|---|
 | **the file a row addresses** | the tree does not resolve to exactly **one** candidate at any rank the pack lists. The candidates are an *ordered* list and the order is an argument: for `dotnet-winui`, a `*.sln` outranks a `*.csproj`, because a solution is your own list of the projects a build addresses and naming one project of a tree that has a solution would be `detect` choosing a subset you never chose. Two solutions, or two WinUI project files and no solution, are an **ambiguity** — both are named and neither is picked |
 | **evidence the row needs** | nothing in the lane carries what the row would run against. `dotnet test` is a real command for a .NET lane and a fiction in a tree with no test project, so the row is proposed only where some `*.csproj` references `Microsoft.NET.Test.Sdk`, `xunit`, `NUnit` or `MSTest`. **The evidence file is also what the row addresses** — pointing `dotnet test` at the application would propose a command that builds fine and tests nothing — and several of them are an ambiguity rather than a choice |
-| **a reference that leaves the repository** | a project file points at a path outside the tree. `zheref/KroWindows`'s `KroCore/KroCore.csproj` names a sibling clone of `zheref/Bankai`, and there is no submodule, no package and no restore step that fetches it. That is not a precondition `detect` can *write*: every path a declaration states is resolved against the repository root and one that escapes it exits **2** by name — so the row is withheld with the reference and its landing place quoted, never proposed with a precondition that could never hold. `detect` clones nothing. A reference that stays **inside** the tree becomes a `path` precondition instead, asserted before a verb runs and never performed |
-| **a toolchain pin the tree does not state** | the entry's version file is absent or silent. `.NET` states its SDK in a `global.json` (looked for in the lane and then up to the repository root); `zheref/KroWindows` has none, so the build floats on whatever SDK is installed. `detect` then proposes **no** `project.toolchain` entry and says so: assert the version CI would need and `detect` will use it, but it will not invent one — a toolchain entry with no `version` is one nen's own reader refuses, and a pin `detect` chose is a pin that pins nothing. The note carries the block to paste, probe and installer included |
+| **a reference that leaves the repository** | a project file points at a path outside the tree. `anonymized-source-samplewindows`'s `FixtureCore/FixtureCore.csproj` names a sibling clone of `zheref/Bankai`, and there is no submodule, no package and no restore step that fetches it. That is not a precondition `detect` can *write*: every path a declaration states is resolved against the repository root and one that escapes it exits **2** by name — so the row is withheld with the reference and its landing place quoted, never proposed with a precondition that could never hold. `detect` clones nothing. A reference that stays **inside** the tree becomes a `path` precondition instead, asserted before a verb runs and never performed |
+| **a toolchain pin the tree does not state** | the entry's version file is absent or silent. `.NET` states its SDK in a `global.json` (looked for in the lane and then up to the repository root); `anonymized-source-samplewindows` has none, so the build floats on whatever SDK is installed. `detect` then proposes **no** `project.toolchain` entry and says so: assert the version CI would need and `detect` will use it, but it will not invent one — a toolchain entry with no `version` is one nen's own reader refuses, and a pin `detect` chose is a pin that pins nothing. The note carries the block to paste, probe and installer included |
 
 A proposal you paste and then discover is fiction is worse than an empty map
 with a reason.
@@ -14122,12 +14122,12 @@ any tree** and is the clearest example of what a withheld row still gives you:
 | `gradle-android` | `build` (`{gw} assembleDebug --stacktrace`), `lint` (`{gw} :app:lintDebug --stacktrace`), and — **only where a module of your lane applies the Paparazzi plugin** — `ui-test` (`{gw} verifyPaparazziDebug` — screenshot verification; **recording** the baselines is the deliberately separate `{gw} recordPaparazziDebug`, which your declaration states if it wants it) and `test` (`{gw} verifyPaparazziDebug <your unit-test task> --stacktrace`), the latter additionally needing your settings file to name exactly one module `detect` can see is a library. Seats for `archive` (a `release` buildType with **no signingConfig**), `release`, `dev`, `run`, `deploy`, `typecheck` (the Kotlin compiler is the type check) and `coverage` (**no** JaCoCo or Kover is applied anywhere — and the observed repository's own checklist documents a task that does not exist on a clean checkout). `hosts` is every platform: the toolchain is cross-platform and the repository says so itself. **The `test` row's `why` is load-bearing and is carried verbatim into your declaration** — the task must be `verifyPaparazziDebug` and never `testDebugUnitTest`, because under the latter a snapshot test renders and discards: replacing a golden with a completely different image still reports PASSED. A note also reports a **conflict** the pack records and refuses to resolve: one canonical handbook binds its lint/test placeholder to exactly the forbidden task. Fix that upstream; nen encodes one side, cites it, and reports the other. A second note names the **plugin gate** on those two rows and why the markers cannot stand in for it. | `test` unless the lane's own `settings.gradle{,.kts}` names exactly **one** module `detect` can see is a library. Every included module is classified three ways — `application` (its build file carries the plugin that identified this lane), `library` (`detect` read the file, every plugin application in it is a literal id, and none of them is the plugin or a look-alike for it), and **`unknown`** — and a single `unknown` ends the row, naming the module and why. A module is `unknown` when its directory is not there, when its `projectDir` is remapped outside the repository, when its build file applies no plugin `detect` can see, when it applies one through an `alias(…)` or a dynamic `apply(…)` — the id then lives in a version catalogue `detect` does not read — or when it applies an id ending in the same word as the lane's plugin, which is how a **convention plugin** wrapping it is spelled. This is why `unknown` is not folded into `library`: an application module applying AGP through `id("myapp.android.application")` would otherwise be the one "library" the settings file named, and `{unitTestTask}` would be answered `:app:test` — the aggregate this row's own `why` exists to forbid. Also withheld: no `include(...)` `detect` can read, every module an application module, or two library candidates, in which case the note lists them and asks which. (`includeBuild` is deliberately not read: it names a separate build, not a module of this one.) And every row on a lane whose wrapper is missing for **this** host, naming the platform, the spelling it implies and what the lane carries instead. <br><br>**`test` *and* `ui-test` unless a module of this lane applies the Paparazzi plugin.** Both rows run `verifyPaparazziDebug`, which is that plugin's own task, and the markers that identify this stack confirm a wrapper, a settings file and the Android *application* plugin — none of the three says anything about Paparazzi, so a lane without it used to be handed a command whose first run is `Task 'verifyPaparazziDebug' not found in root project`. Four spellings count as applied — `id("app.cash.paparazzi")`, `id 'app.cash.paparazzi'`, `apply plugin: 'app.cash.paparazzi'`, and `alias(libs.plugins.paparazzi)` — and the id has to be the **argument of an application**, never merely present: a `testImplementation("app.cash.paparazzi:paparazzi-annotations:…")` names this plugin's artifacts and applies nothing. The alias is followed in the catalogue **its own accessor names**, among the `gradle/*.versions.toml` files at your lane root (`libs.` is `gradle/libs.versions.toml`; a second catalogue is addressed by its own file stem, and a `testLibs.` accessor is not answered by `libs`), matched on the **whole key** Gradle would generate — `libs.plugins.compose.paparazzi` is your `compose-paparazzi` entry or it is nothing. Every spelling is read with **comments stripped** (a commented-out application is not one, in either language — the catalogue by TOML's `#` rule and the build files by the script one), in a **module** build file your settings file `include(…)`s: a root `plugins` block naming the plugin `apply false` applies it nowhere, and a directory Gradle never configures creates no task whatever it applies — a build file in one is named as outside the build rather than counted. The answer is three-valued: `applied`, `absent`, or **`unknown`** — an `alias(…)` no catalogue of that name resolves, a settings file that builds its catalogues itself with `versionCatalogs {`, a dynamic `apply(…)`, a **root** build file that configures its modules from the top (`subprojects {`, `allprojects {`, `apply(…)` — the one thing `detect` reads the root for, and never for the id), or a `buildSrc/` or `build-logic/` whose convention plugins `detect` does not read and one of which may be applying it. `absent` and `unknown` both **withhold**, as a seat that says which of the two it was, names every file it opened and every file it deliberately did not, and states what to write instead: for `test`, the plain JVM row `{gw} :<module>:test` (never `testDebugUnitTest`); for `ui-test`, that there is no screenshot task to propose and instrumented UI tests are unsupported on this stack. A plugin applied inside a **nested build** (a directory with its own wrapper or settings file) is named and not counted — it is applied to a build your lane's wrapper never runs. |
 | `compose-desktop` | `run` (`{gw} run`) and nothing else — one observed lane, one observed command, and it exists only as an IDE run configuration. Seats for the other ten, each with the pack's sentence: `archive` in particular declares `Dmg`/`Msi`/`Deb` target formats, **so the tasks exist**, and no command string for them appears anywhere in the repository — proposing one would be nen inventing a release path. `hosts` is every platform *to run*; packaging is per-format and host-locked, which is a `hosts` constraint your declaration states rather than a tool nen can supply. | The `run` row on a lane whose wrapper is missing for this host, **and** every row when the `compose.desktop` block sits in a subdirectory the lane's settings file names no module for — that build is neither addressable as `:<module>:run` nor a build of its own. Where the settings file *does* include it, the row is proposed as `{gw} :<module>:run`, and a note says so. A note also carries the pack's own argument for **per-lane** stacks: this lane lives inside a repository whose every other verb is Android, with its own wrapper pinned to a different version than the root's. |
 | `expo` | The **Metro lane**, end to end: `dev` (`expo start`) and `lint` (`expo lint`), each proposed only where `expo` is a dependency the lane's own `package.json` declares — `expo` is invoked through the project, and Expo itself warns against a global install. Seats for `test`, `ui-test`, `typecheck` (TypeScript configured, never run), `archive`, `release`, `deploy`, `coverage` and — the one worth reading — **`build`**. `hosts` is every platform for a single-lane tree. | **`build`, always, and this is a rule rather than a withholding.** `expo run:ios` and `expo run:android` build *and launch*; there is no build-only invocation, and `expo start --web` is a dev server rather than an export. A `build` row mapped onto either would start an application on somebody's simulator the first time a script asked for a compile, so the pack carries no such row and `detect` will not manufacture one — the seat quotes that reason and `nen shu build` refuses at exit 4 with it. And **`run`**, because `expo run:{platform}` names a native lane and neither half is the other's default. The note goes further than naming the token: it names every value the lane's **own scripts** spell in that position (`ios` from `"ios": "expo run:ios"`, `android` from `"android": "expo run:android"`) and says where to state one — seeing a value and choosing one are different acts, and only the second is forbidden. Paste the pack's row in unedited and the executor refuses at exit **2**, naming `{platform}`. |
-| `xcode-ios` | **No command row, on any tree** — and the eight seats, the darwin-only `hosts` block, and everything the checkout says about the rows it could not write. `{project}` is answered from the one container of the kind **the reference row's own flag addresses** — a lone `.xcodeproj` behind `-project`, a lone `.xcworkspace` behind `-workspace`, and lane-relative either way; the flag is read out of the pack's argv, not assumed. `{scheme}` is answered from the one shared scheme whose cross-check was performed **in full** and passed: every testable is read against the container *its own* `ReferencedContainer` names, and a scheme that delegates its test action to a `<TestPlanReference>` — which is what every project a recent Xcode creates looks like — is followed into the `.xctestplan` and checked from there. `{resultBundle}` comes from nen's own `.nen/`. Every withheld row then says what it **did** answer — *"nen DID answer `{project} = Kro.xcodeproj`, `{scheme} = Kro` from this lane's own files, so what this row still needs stated is `{destination}` and nothing else"* — which is the whole value of the verb on this stack: it does the copying out of the checkout, and you add the one value it cannot know. Seats for `ui-test`, `lint` (**declared-only** — two incompatible scripts in the observed repository, and SwiftLint appears in none of the seven), `archive`, `release`, `dev`, `run`, `typecheck` (the Swift compiler is the type check) and `deploy` (the observed repository's only deploy lane is a **database migration**, which is not an app deploy). A `Podfile` beside the container is recorded as **evidence**, never as a marker. | **`build`, `test` and `coverage`, on every tree there will ever be**, and one reason covers all three: each names `{destination}` or `id={simUdid}`, which name a simulator that exists, is of the right device type and is **booted on the machine** — and `detect` reads a working tree and spawns nothing. That is the one withholding here that is not a gap in your repository, and the note says so rather than reading like something you could close. The pack's own rows CITE forms for the position (`-destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5'`, `-destination id=<udid>`); `detect` quotes those sentences once per lane and lifts no value out of them. `{project}` is withheld where the container is not the kind the reference row's flag addresses — a workspace-only lane behind a project flag, the CocoaPods shape where the workspace's own `contents.xcworkspacedata` references the project, a workspace whose contents file `detect` could not read at all (**fail closed**: a container it could not ask is not a container that answered), or a flag it knows no container kind for — because the flag is **part of the row** and a path of the wrong kind behind it fails on every machine; the note names the flag the pack's row carries and asks you for both halves. Also withheld, each with its own sentence because each is a different repair: two projects (or two workspaces); two shared schemes; an unreadable `project.pbxproj`, which withholds the cross-check for the **whole lane** rather than measuring schemes against a target list missing a project; a test plan `detect` could not read, which is a target list it has not got rather than a scheme that names nothing; a testable declared **outside** this lane's root projects — a local Swift package, a project one directory over — which is neither confirmed nor called broken, because `detect` reads the `.xcodeproj` bundles at the lane root and nothing else, and a *partial* check is not a check that passed; a scheme whose test action names a target the projects do not declare (**a finding about your checkout**, not about the proposal — `xcodebuild test` on that scheme fails before any token matters); and a scheme that names **no** target anywhere. |
-| `dotnet-winui` | `build` (`dotnet build <the project or solution your tree resolves to> -c Debug`) and, where a test project exists, `test` (`dotnet test <that test project>`). `hosts` is **`win32` only** — every verb, exit **3** everywhere else, and the pack's `hostNote` rides along as a lane note saying what that means in practice. A `path` precondition for each `ProjectReference` that resolves inside the tree **and names a file that is there today**, and a `project.toolchain.dotnet-sdk` entry when a `global.json` states `sdk.version` (searched from the lane up to the repository root; a `rollForward` beside the pin is carried into the reason, because it makes the pin a **floor** and a toolchain block has no field for one). Seats for the other nine (`typecheck` among them: the C# compiler is the type check), each with the pack's own sentence — *"NOTHING IN THE REPOSITORY INVOKES A COMMAND"* — plus a seat for any row a cross-check withholds, carrying the reason. **Read those two rows honestly:** the observed repository (`zheref/KroWindows`) runs no command anywhere — no Makefile, no `.cmd`/`.ps1`/`.sh`, no `.github/` at all. `dotnet build` is the maintainer's approved decision; `-c Debug` and the whole `test` row are argued in this PR and are **not** in that approval, which is why the pack's `source` fields say so and why deleting the `test` row returns the grid to the approved shape. | **`archive`, and MSIX packaging with it.** Packaging here is a Visual Studio gesture needing a platform, a signing identity and a publish profile the repository states nowhere, and the approval was `dotnet build` **alone**. `build` and `test` when the tree does not resolve to exactly one project or solution, with the candidates named — and a solution answers only when it **lists** the lane's WinUI project, so an unrelated, empty or stale one is named in a note and stands aside. Both rows when a `ProjectReference` in the graph the answer reaches **escapes the repository**, or is one `detect` cannot resolve at all — an MSBuild `$(property)`, a `*`/`?` wildcard, a `;`-list, an `&entity;` — or differs from disk only in **case**: each is quoted verbatim, no precondition is written, and nothing is guessed. A reference in a project file the answered graph does **not** reach is a finding and withholds nothing. `test` when nothing in the tree is a test project. And the SDK **version** when no `global.json` states one: assert the version CI would need and `detect` uses it; it will not invent one. |
+| `xcode-ios` | **No command row, on any tree** — and the eight seats, the darwin-only `hosts` block, and everything the checkout says about the rows it could not write. `{project}` is answered from the one container of the kind **the reference row's own flag addresses** — a lone `.xcodeproj` behind `-project`, a lone `.xcworkspace` behind `-workspace`, and lane-relative either way; the flag is read out of the pack's argv, not assumed. `{scheme}` is answered from the one shared scheme whose cross-check was performed **in full** and passed: every testable is read against the container *its own* `ReferencedContainer` names, and a scheme that delegates its test action to a `<TestPlanReference>` — which is what every project a recent Xcode creates looks like — is followed into the `.xctestplan` and checked from there. `{resultBundle}` comes from nen's own `.nen/`. Every withheld row then says what it **did** answer — *"nen DID answer `{project} = FixtureApp.xcodeproj`, `{scheme} = FixtureApp` from this lane's own files, so what this row still needs stated is `{destination}` and nothing else"* — which is the whole value of the verb on this stack: it does the copying out of the checkout, and you add the one value it cannot know. Seats for `ui-test`, `lint` (**declared-only** — two incompatible scripts in the observed repository, and SwiftLint appears in none of the seven), `archive`, `release`, `dev`, `run`, `typecheck` (the Swift compiler is the type check) and `deploy` (the observed repository's only deploy lane is a **database migration**, which is not an app deploy). A `Podfile` beside the container is recorded as **evidence**, never as a marker. | **`build`, `test` and `coverage`, on every tree there will ever be**, and one reason covers all three: each names `{destination}` or `id={simUdid}`, which name a simulator that exists, is of the right device type and is **booted on the machine** — and `detect` reads a working tree and spawns nothing. That is the one withholding here that is not a gap in your repository, and the note says so rather than reading like something you could close. The pack's own rows CITE forms for the position (`-destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5'`, `-destination id=<udid>`); `detect` quotes those sentences once per lane and lifts no value out of them. `{project}` is withheld where the container is not the kind the reference row's flag addresses — a workspace-only lane behind a project flag, the CocoaPods shape where the workspace's own `contents.xcworkspacedata` references the project, a workspace whose contents file `detect` could not read at all (**fail closed**: a container it could not ask is not a container that answered), or a flag it knows no container kind for — because the flag is **part of the row** and a path of the wrong kind behind it fails on every machine; the note names the flag the pack's row carries and asks you for both halves. Also withheld, each with its own sentence because each is a different repair: two projects (or two workspaces); two shared schemes; an unreadable `project.pbxproj`, which withholds the cross-check for the **whole lane** rather than measuring schemes against a target list missing a project; a test plan `detect` could not read, which is a target list it has not got rather than a scheme that names nothing; a testable declared **outside** this lane's root projects — a local Swift package, a project one directory over — which is neither confirmed nor called broken, because `detect` reads the `.xcodeproj` bundles at the lane root and nothing else, and a *partial* check is not a check that passed; a scheme whose test action names a target the projects do not declare (**a finding about your checkout**, not about the proposal — `xcodebuild test` on that scheme fails before any token matters); and a scheme that names **no** target anywhere. |
+| `dotnet-winui` | `build` (`dotnet build <the project or solution your tree resolves to> -c Debug`) and, where a test project exists, `test` (`dotnet test <that test project>`). `hosts` is **`win32` only** — every verb, exit **3** everywhere else, and the pack's `hostNote` rides along as a lane note saying what that means in practice. A `path` precondition for each `ProjectReference` that resolves inside the tree **and names a file that is there today**, and a `project.toolchain.dotnet-sdk` entry when a `global.json` states `sdk.version` (searched from the lane up to the repository root; a `rollForward` beside the pin is carried into the reason, because it makes the pin a **floor** and a toolchain block has no field for one). Seats for the other nine (`typecheck` among them: the C# compiler is the type check), each with the pack's own sentence — *"NOTHING IN THE REPOSITORY INVOKES A COMMAND"* — plus a seat for any row a cross-check withholds, carrying the reason. **Read those two rows honestly:** the observed repository (`anonymized-source-samplewindows`) runs no command anywhere — no Makefile, no `.cmd`/`.ps1`/`.sh`, no `.github/` at all. `dotnet build` is the maintainer's approved decision; `-c Debug` and the whole `test` row are argued in this PR and are **not** in that approval, which is why the pack's `source` fields say so and why deleting the `test` row returns the grid to the approved shape. | **`archive`, and MSIX packaging with it.** Packaging here is a Visual Studio gesture needing a platform, a signing identity and a publish profile the repository states nowhere, and the approval was `dotnet build` **alone**. `build` and `test` when the tree does not resolve to exactly one project or solution, with the candidates named — and a solution answers only when it **lists** the lane's WinUI project, so an unrelated, empty or stale one is named in a note and stands aside. Both rows when a `ProjectReference` in the graph the answer reaches **escapes the repository**, or is one `detect` cannot resolve at all — an MSBuild `$(property)`, a `*`/`?` wildcard, a `;`-list, an `&entity;` — or differs from disk only in **case**: each is quoted verbatim, no precondition is written, and nothing is guessed. A reference in a project file the answered graph does **not** reach is a finding and withholds nothing. `test` when nothing in the tree is a test project. And the SDK **version** when no `global.json` states one: assert the version CI would need and `detect` uses it; it will not invent one. |
 
 **A bare-workflow Expo repository is three lanes, and `detect` says so.** Where
 `ios/` and `android/` prebuild output is committed beside the manifest —
-`zheref/food-diary`, the repository the catalogue read for this stack — the
+`anonymized-source-sourceworkspace`, the repository the catalogue read for this stack — the
 scan finds a `.xcworkspace` under one and a Gradle wrapper plus
 `com.android.application` under the other, and proposes `ios` (`xcode-ios`,
 darwin) and `android` (`gradle-android`) as lanes of their own with those
@@ -14182,7 +14182,7 @@ answers from); a test action naming **no** target (nothing failed is not the
 same fact as it passed); and a test action naming a target the projects do not
 declare.
 
-That last one is the finding the check exists for. `food-diary`'s shared scheme
+That last one is the finding the check exists for. `SourceWorkspace`'s shared scheme
 names a test target (`fooddiaryTests`) its `project.pbxproj` does not contain,
 so a test run on that scheme **fails on a clean checkout** — the row is not one
 placeholder away from working, and a note that named only the placeholder would
@@ -14577,13 +14577,13 @@ declared results path. The wrapper is the repository's code, not nen's.
 ```json
 "test": {
   "exe": "xcodebuild",
-  "argv": ["-scheme", "Kro", "-destination", "platform=iOS Simulator,name=iPhone 17 Pro",
+  "argv": ["-scheme", "FixtureApp", "-destination", "platform=iOS Simulator,name=iPhone 17 Pro",
            "-enableCodeCoverage", "YES", "-resultBundlePath", ".nen/aka/regression.xcresult", "test"],
   "artifacts": [".nen/aka/regression.xcresult"],
   "select": {
     "exe": "scripts/focused-xctest",
     "argv": ["--summary", ".nen/focused/apple/summary.json", "--",
-             "-scheme", "Kro", "-destination", "platform=iOS Simulator,name=iPhone 17 Pro",
+             "-scheme", "FixtureApp", "-destination", "platform=iOS Simulator,name=iPhone 17 Pro",
              "-resultBundlePath", ".nen/focused-bundles/apple.xcresult", "test"],
     "each": ["-only-testing:{id}"],
     "pattern": "[A-Za-z_][A-Za-z0-9_]*(/[A-Za-z_][A-Za-z0-9_]*){0,2}",
@@ -14603,7 +14603,7 @@ verb:          test
 selection:     KroTests/CaptureTests/testInlinePills, KroTests/InboxTests  (2 identifiers, from project.verbs.apple.test.select; appends: -only-testing:KroTests/CaptureTests/testInlinePills -only-testing:KroTests/InboxTests)
 results:       .nen/focused/apple/summary.json (xcresult-summary)  -- not read
 …
-would run:     scripts/focused-xctest --summary .nen/focused/apple/summary.json -- -scheme Kro -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -resultBundlePath .nen/focused-bundles/apple.xcresult test -only-testing:KroTests/CaptureTests/testInlinePills -only-testing:KroTests/InboxTests
+would run:     scripts/focused-xctest --summary .nen/focused/apple/summary.json -- -scheme FixtureApp -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -resultBundlePath .nen/focused-bundles/apple.xcresult test -only-testing:KroTests/CaptureTests/testInlinePills -only-testing:KroTests/InboxTests
 …
 ```
 
@@ -15063,7 +15063,7 @@ root](#coverage-touched-roots) below:
 
 ```json
 "coverage": {
-  "exe": "pnpm", "argv": ["--filter", "@kro/core", "test:coverage"],
+  "exe": "pnpm", "argv": ["--filter", "@FixtureApp/core", "test:coverage"],
   "artifacts": ["coverage/coverage-summary.json"]
 }
 ```
@@ -15637,7 +15637,7 @@ never searches a tree for one:
 
 ```json
 "test": {
-  "exe": "pnpm", "argv": ["--filter", "@kro/core", "test", "--reporter=json",
+  "exe": "pnpm", "argv": ["--filter", "@FixtureApp/core", "test", "--reporter=json",
                           "--outputFile=reports/test-results.json"],
   "artifacts": ["reports/test-results.json"]
 }
@@ -15827,7 +15827,7 @@ exactly one character, never a `/`. `[...]` classes and brace expansion are
 not implemented; a pattern using either is matched literally, character by
 character.
 
-**Suite and scene**, generalised from KroApple's own `ci_scripts/
+**Suite and scene**, generalised from ExampleService's own `ci_scripts/
 pr_screenshots.sh` (`scene_of()`): walk a changed path's ancestor
 directories, nearest first, and the first one whose name ends with
 `suiteSuffix` (default `"SnapshotTests"`) names the **suite**, with the
@@ -15874,7 +15874,7 @@ nen shu evidence --base main
 evidence: 1 changed file across 1 suite (public-mirror), against main...HEAD
 
 suite: DateTimeField
-  added    disabled                 Kro/Tests/DateTimeFieldSnapshotTests/__Snapshots__/DateTimeFieldSnapshotTests/test_snapshot_disabled.1.png
+  added    disabled                 FixtureApp/Tests/DateTimeFieldSnapshotTests/__Snapshots__/DateTimeFieldSnapshotTests/test_snapshot_disabled.1.png
 ```
 (run against a KroApple-shaped fixture declaring
 `{"globs": ["**/__Snapshots__/**/*.png"], "mechanism": "public-mirror"}`; a
@@ -19501,7 +19501,7 @@ plan: 1 runner(s) for zheref/nen, pool windows-x64
 nen runner plan: warning: .\lordzheref already runs 11 runner service(s) on this host for repositories whose visibility differs from zheref/nen's (public) or cannot be told -- one account is one trust domain, so either repository's jobs can rewrite the other's runners (#330):
 nen runner plan:   actions.runner.example-alpha.NZ-BCR1 -- example/alpha, private
 ...
-nen runner plan:   actions.runner.zheref-KroWindows.NZ-KWIR5 -- zheref/KroWindows, private
+nen runner plan:   actions.runner.zheref-KroWindows.NZ-KWIR5 -- anonymized-source-samplewindows, private
 nen runner plan: recommended: a local account for zheref/nen alone, e.g. --service-account runner-nen (create it yourself first; nen never creates an account or handles its password).
 ```
 (run for real on the maintainer's Windows host, 2026-10-02: exit 0; the plan
@@ -20754,7 +20754,7 @@ launches*, so a `build` mapping would start an application when a script asked
 for a compile — and `run` withheld naming both values the repository's own
 scripts spell, because `expo run:{platform}` names a native lane neither of
 whose halves is the other's default. A **bare-workflow** Expo tree (`ios/` and
-`android/` prebuild output committed, as in `zheref/food-diary`) is proposed as
+`android/` prebuild output committed, as in `anonymized-source-sourceworkspace`) is proposed as
 **three** lanes, with the Apple one's shared scheme read and cross-checked
 against the project's own targets.
 

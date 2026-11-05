@@ -25,7 +25,7 @@ export const WINUI_LINKED = join(FIXTURES, "winui-linked");
 export const WINUI_NESTED = join(FIXTURES, "winui-nested");
 export const EMPTY_TREE = join(FIXTURES, "empty-tree");
 /** Two separate Gradle builds in one tree, the shape the inventory found. */
-export const KRO_SHAPED = join(FIXTURES, "kro-shaped");
+export const FIXTUREAPP_SHAPED = join(FIXTURES, "fixture-app-shaped");
 
 /** One `.xcodeproj`, one shared scheme whose test target exists. */
 export const XCODE_PROJECT = join(FIXTURES, "xcode-project");
