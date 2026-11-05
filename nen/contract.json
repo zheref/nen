@@ -5,6 +5,7 @@
   "project": {
     "lanes": {
       "nen": { "stack": "bun-cli", "cwd": "." },
+      "cleanup-verification": {"stack": "bun-cli", "cwd": ".", "$comment": "Bounded PR632 verification for cleanup/classification/public adapters and the #391 label/loop proof. Exactly one Vitest worker; only the named suites, no focused-retention or full-suite selection. Separate LCOV/JUnit artifacts; ordinary nen test/select declarations stay unchanged."},
       "device-records": { "stack": "bun-cli", "cwd": "." },
       "release-guard": {
         "stack": "bun-cli",
@@ -15,6 +16,7 @@
     "defaultLane": "nen",
 
     "preconditions": {
+      "cleanup-verification": [{"kind": "path", "value": "node_modules", "why": "Contained frozen-lockfile dependencies must be installed before verification (bun install --frozen-lockfile --ignore-scripts). No external dependency symlink or automatic install."}],
       "nen": [
         {
           "kind": "path",
@@ -25,6 +27,55 @@
     },
 
     "verbs": {
+      "cleanup-verification": {
+        "test": {
+          "exe": "bunx",
+          "argv": [
+            "vitest",
+            "run",
+            "--maxWorkers=1",
+            "--minWorkers=1",
+            "--coverage",
+            "--coverage.provider=v8",
+            "--coverage.reporter=lcov",
+            "--coverage.reportsDirectory=.nen/cleanup-verification-coverage",
+            "--coverage.include=src/wc/classify.ts",
+            "--coverage.include=src/wc/command.ts",
+            "--coverage.include=src/wc/prune.ts",
+            "--reporter=default",
+            "--reporter=junit",
+            "--outputFile.junit=.nen/cleanup-verification.junit.xml",
+            "src/wc/classify.test.ts",
+            "src/wc/command.test.ts",
+            "src/wc/prune.integration.test.ts",
+            "src/wc/prune.windows.test.ts",
+            "src/labels/sync.test.ts",
+            "src/labels/command.test.ts",
+            "src/label/command.test.ts",
+            "src/label/ledger.test.ts",
+            "src/loop/ledger.test.ts",
+            "src/loop/command.test.ts",
+            "src/cli/usage-contracts.test.ts",
+            "src/schema/contract.test.ts"
+          ],
+          "artifacts": [
+            ".nen/cleanup-verification.junit.xml",
+            ".nen/cleanup-verification-coverage/lcov.info"
+          ],
+          "why": "Refresh impacted proof for the complete PR632 diff: classification and all public wc adapters, disposable cleanup safety, existing #391 label batch/ledger/loop behaviors, usage catalogue and this contract schema. Named suites only, one worker, instrument changed production files; no full regression or #585 retention selection."
+        },
+        "coverage": {
+          "exe": "bun",
+          "argv": [
+            "--eval",
+            "const file = Bun.file('.nen/cleanup-verification-coverage/lcov.info'); if (!(await file.exists()) || file.size === 0) throw new Error('Missing or empty cleanup verification capture');"
+          ],
+          "artifacts": [
+            ".nen/cleanup-verification-coverage/lcov.info"
+          ],
+          "why": "Verify the lane-specific instrumented capture exists and parse it; this row never runs tests. Exact-tree capture provenance and unchanged touched-file 80/85/90 ladder still apply."
+        }
+      },
       "nen": {
         "build": {
           "exe": "bun",
