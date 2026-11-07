@@ -35,7 +35,7 @@ import { totalsOf } from "../usage/command.js";
 import { readUsageLedger } from "../usage/ledger.js";
 import {
   GITHUB_COMMENT_LIMIT,
-  ledgerParts, ledgerIndex, assembleLedger,
+  ledgerParts, ledgerIndex, assembleLedger, supersededParts, deleteComment,
   isMarkedFor,
   isOwn,
   LedgerReadError,
@@ -281,25 +281,41 @@ function post(context: CommandContext, target: Target, pr: number, effort: strin
   try { existingBody = assembleLedger(existingBody, effort, allPostComments, login); } catch { /* A damaged record is replaced, never read as complete. */ }
   const unchanged = existing !== null && existingBody.replace(/\r\n/g, "\n").split("\n", 1)[0] === body.split("\n", 1)[0] && parseComment(existingBody, effort, target.slug, pr).ok;
   const argv = writeArgv(target, pr, existing?.id ?? null);
+  // THE TRANSPORT IS PLANNED BEFORE THE DRY RUN decides what to print (Copilot on
+  // #614): an oversized slice previews every bounded part write and the index it
+  // would publish, with `<part N url>` standing for the URL GitHub assigns, so the
+  // preview names the writes a live post makes. A slice that fits keeps the
+  // single-comment preview unchanged.
+  const parts = size > GITHUB_COMMENT_LIMIT ? ledgerParts(body, effort) : null;
+  const transport = { transport: parts === null ? "single" : "multipart", parts: parts?.length ?? 1 };
   if (unchanged || dryRun) {
     const verdict = unchanged ? "unchanged" : "dry-run";
+    const where = existing === null ? "a new comment" : `editing ${existing.url}`;
     const lines = unchanged
       ? [`unchanged: ${existing?.url ?? ""} already holds effort '${effort}''s slice at head ${head.slice(0, 12)}.`]
-      : [`would run: gh ${argv.join(" ")}  (body on stdin, ${size} characters, ${existing === null ? "a new comment" : `editing ${existing.url}`})`, body];
-    emit(context.io, context.json, { contract: PR_LEDGER_CONTRACT, verdict, posted: false, url: existing?.url ?? null, size, slice, privateNameCheck: guard }, lines);
+      : parts === null
+        ? [`would run: gh ${argv.join(" ")}  (body on stdin, ${size} characters, ${where})`, body]
+        : [
+            ...parts.map((part, i): string => `would run: gh ${writeArgv(target, pr, null).join(" ")}  (part ${i + 1} of ${parts.length} on stdin, ${part.length} characters, a new comment)`),
+            `would run: gh ${argv.join(" ")}  (the multipart index on stdin, ${where}; <part N url> stands for the URL GitHub assigns to part N)`,
+            ledgerIndex(body, effort, parts.map((_, i): string => `<part ${i + 1} url>`)),
+            body,
+          ];
+    emit(context.io, context.json, { contract: PR_LEDGER_CONTRACT, verdict, posted: false, url: existing?.url ?? null, size, ...transport, slice, privateNameCheck: guard }, lines);
     return 0;
   }
   let url: string;
+  let partUrls: readonly string[] = [];
   try {
     let publishedBody = body;
-    if (size > GITHUB_COMMENT_LIMIT) {
-      const urls = ledgerParts(body, effort).map(part => {
-        const url = writeComment(context.seams, target, pr, null, part);
-        if (!url) throw new LedgerReadError("part publication returned no URL; the old index remains current");
-        return url;
+    if (parts !== null) {
+      partUrls = parts.map((part): string => {
+        const partUrl = writeComment(context.seams, target, pr, null, part);
+        if (!partUrl) throw new LedgerReadError("part publication returned no URL; the old index remains current");
+        return partUrl;
       });
-      if (new Set(urls).size !== urls.length) throw new LedgerReadError("part publication returned duplicate URLs; the old index remains current");
-      publishedBody = ledgerIndex(body, effort, urls);
+      if (new Set(partUrls).size !== partUrls.length) throw new LedgerReadError("part publication returned duplicate URLs; the old index remains current");
+      publishedBody = ledgerIndex(body, effort, partUrls);
       if (publishedBody.length > GITHUB_COMMENT_LIMIT) throw new LedgerReadError("multipart index exceeds the comment limit; parts remain inactive, nothing was committed");
     }
     url = writeComment(context.seams, target, pr, existing?.id ?? null, publishedBody);
@@ -308,8 +324,29 @@ function post(context: CommandContext, target: Target, pr: number, effort: strin
     context.io.err(`nen pr ledger post: ${error.message}`);
     return 1;
   }
+  // SUPERSEDED PARTS ARE RECLAIMED AFTER THE INDEX IS CURRENT, never before: until
+  // the write above returned, the previous index and its parts WERE the record.
+  // A reclaim that fails leaves one unreferenced part behind -- reported on
+  // stderr and in the JSON, never a failed post, because the record is already
+  // current. Without this, every re-publication would add parts for good, and
+  // listComments' 10,000-comment read would one day stop short of the index
+  // (Copilot on #614).
+  const superseded = existing === null ? [] : supersededParts(existing.body, effort, allPostComments, login).filter((part): boolean => !partUrls.includes(part.url));
+  const failed: string[] = [];
+  for (const part of superseded) {
+    try { deleteComment(context.seams, target, part.id); }
+    catch (error) {
+      if (!(error instanceof LedgerReadError)) throw error;
+      failed.push(`${part.url}: ${error.message}`);
+    }
+  }
+  if (failed.length > 0) context.io.err(`nen pr ledger post: ${failed.length} superseded part comment(s) could not be reclaimed and remain on the PR, unreferenced by the current index: ${failed.join("; ")}`);
   const verdict = existing === null ? "posted" : "updated";
-  emit(context.io, context.json, { contract: PR_LEDGER_CONTRACT, verdict, posted: true, url, size, slice, privateNameCheck: guard }, [`${verdict}: ${url} -- effort '${effort}', head ${head.slice(0, 12)}, ${phases.length} phase entr${phases.length === 1 ? "y" : "ies"}, ${proof.length} proof file(s)`]);
+  const reclaimed = { deleted: superseded.length - failed.length, failed: failed.length };
+  emit(context.io, context.json, { contract: PR_LEDGER_CONTRACT, verdict, posted: true, url, size, ...transport, reclaimed, slice, privateNameCheck: guard }, [
+    `${verdict}: ${url} -- effort '${effort}', head ${head.slice(0, 12)}, ${phases.length} phase entr${phases.length === 1 ? "y" : "ies"}, ${proof.length} proof file(s)`,
+    ...(superseded.length === 0 ? [] : [`reclaimed ${reclaimed.deleted} of ${superseded.length} superseded part comment(s)`]),
+  ]);
   return 0;
 }
 
