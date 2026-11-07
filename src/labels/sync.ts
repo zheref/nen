@@ -75,6 +75,14 @@ function readLabels(seams: Seams, target: Target): ReadonlyMap<string, Label> {
   return labels;
 }
 
+/** The dry-run diff of an update: only the fields that differ, as the remote has them now (zheref/nen#591). */
+function wasClause(remote: Label, label: Label): string {
+  const was: string[] = [];
+  if (remote.color.toLowerCase() !== label.color.toLowerCase()) was.push(`color #${remote.color}`);
+  if (remote.description !== label.description) was.push(`description ${JSON.stringify(remote.description)}`);
+  return `  (was: ${was.join("; ")})`;
+}
+
 export function syncLabels(
   seams: Seams, target: Target, taxonomy: LabelTaxonomy, dryRun: boolean,
   progress: (entry: SyncEntry, completed: number, total: number) => void = (): void => {},
@@ -87,7 +95,7 @@ export function syncLabels(
     if (remote !== undefined && remote.color.toLowerCase() === label.color.toLowerCase() && remote.description === label.description) {
       entry = { name: label.name, status: "unchanged", message: null };
     } else if (dryRun) {
-      entry = { name: label.name, status: "would-sync", message: `would ${remote === undefined ? "create" : "update"}: ${label.name} (#${label.color}) -- ${label.description}` };
+      entry = { name: label.name, status: "would-sync", message: `would ${remote === undefined ? "create" : "update"}: ${label.name} (#${label.color}) -- ${label.description}${remote === undefined ? "" : wasClause(remote, label)}` };
     } else {
       const argv = remote === undefined ? createArgv(target, label) : editArgv(target, label);
       const result = seams.run(GH, [...argv]);
