@@ -700,10 +700,11 @@ describe("the advisory comes from the pack, as data", () => {
       expect(advisory.why, stack).not.toBe("");
       expect(advisory.source, stack).not.toBe("");
     }
-    // One of the seven has a conventional location; the other six say why they
-    // do not, which is the finding rather than a gap in the data.
+    // Two of the seven have a conventional location (expo's from zheref/nen#502);
+    // the other five say why they do not, which is the finding rather than a
+    // gap in the data.
     const withPath = Object.entries(advisories).filter(([, entry]): boolean => entry.path !== null);
-    expect(withPath.map(([stack]): string => stack)).toEqual(["nextjs"]);
+    expect(withPath.map(([stack]): string => stack).sort()).toEqual(["expo", "nextjs"]);
   });
 
   it("answers for a stack the pack has never heard of", () => {

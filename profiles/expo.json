@@ -1,6 +1,6 @@
 {
   "$schema": "nen.profile/v0.1",
-  "$comment": "A CATALOGUE ENTRY, NOT AN AUTHORITY. The single observed repository is a BARE workflow -- `ios/` and `android/` prebuild output committed -- so this profile is three lanes wearing one name, and its host note says so rather than flattening them.",
+  "$comment": "A CATALOGUE ENTRY, NOT AN AUTHORITY. Two repositories were read. The first is a BARE workflow -- `ios/` and `android/` prebuild output committed -- so this profile is three lanes wearing one name, and its host note says so rather than flattening them; its `lint`, `dev`, `run` and toolchain rows are still that inventory's. The second, zheref/Market's `apps/mobile` (a managed Expo lane in a Next.js + Expo monorepo, read at 765c0d7 on 2026-11-09), is the maintained reference the `build`, `test`, `ui-test`, `archive` and `coverage` rows are cited to, each a command that repository's own nen/contract.json runs (zheref/nen#502).",
   "id": "expo",
   "displayName": "Expo",
   "markers": [
@@ -17,7 +17,7 @@
     {
       "pattern": "eas.json",
       "contains": null,
-      "why": "identifies an Expo project on its own. NOTE: no repository in the inventory has one, which is why `archive` is unsupported here."
+      "why": "identifies an Expo project on its own: the EAS build-profile file, which the reference's `archive` row reads (Market apps/mobile/eas.json:6-26)."
     },
     {
       "pattern": "ios",
@@ -33,7 +33,7 @@
   "hosts": {
     "*": ["darwin", "linux", "win32"]
   },
-  "hostNote": "SPLIT BY LANE, and the single `hosts` row cannot say it: `expo start` and `expo lint` run anywhere; `expo run:ios` needs macOS with Xcode and CocoaPods; `expo run:android` needs a JDK, the Android SDK and `node` on PATH for the Gradle configuration. The declaration narrows `run` to `darwin` for the iOS lane; the pack refuses to narrow it for a verb whose android half runs everywhere.",
+  "hostNote": "SPLIT BY LANE, and the single `hosts` row cannot say it: `expo start` and `expo lint` run anywhere; `expo run:ios` needs macOS with Xcode and CocoaPods; `expo run:android` needs a JDK, the Android SDK and `node` on PATH for the Gradle configuration. The declaration narrows `run` to `darwin` for the iOS lane; the pack refuses to narrow it for a verb whose android half runs everywhere. `archive` is as host-locked as the platform it builds: the reference's local EAS build targets iOS and needs macOS with Xcode and CocoaPods. `ui-test` needs the Maestro CLI installed on whatever host runs it.",
   "scaffoldTemplate": "minimal",
   "scaffoldNote": "`app.json`, `package.json`, an `app/` route skeleton and nen/contract.json. NATIVE DIRECTORIES ARE NOT TEMPLATED; an `expo prebuild` is a printed post-step.",
   "verbs": {
@@ -43,19 +43,22 @@
       "source": "markers"
     },
     "build": {
-      "unsupported": "UNSUPPORTED AS A DISTINCT VERB: `expo run:ios` / `expo run:android` build AND launch, there is no build-only invocation in the repository, and `expo start --web` is a dev server rather than an `expo export`. Conflating the two would make `nen shu build` launch an app.",
-      "summary": "run:* builds and launches",
-      "source": "food-diary/package.json:8-9, :11"
+      "exe": "{pm}",
+      "argv": ["run", "build"],
+      "why": "THE BUILD-ONLY INVOCATION, AND IT LAUNCHES NOTHING. The reference's `build` script is `expo export --platform ios --platform android --output-dir dist`: Metro bundles both native targets to Hermes bytecode in `dist/` without starting an app or a simulator. That is the distinction this row exists for -- `expo run:ios` / `expo run:android` build AND launch, and are this profile's `run` row, never this one. A native binary is `archive`'s. `{pm}` is the repository's package manager, from its own `packageManager` field.",
+      "source": "Market nen/contract.json:17-24 -> apps/mobile/package.json:8"
     },
     "test": {
-      "unsupported": "The repository has NO TEST RUNNER DEPENDENCY AT ALL: no jest, no `jest-expo`, no vitest.",
-      "summary": "no test runner at all",
-      "source": "food-diary/package.json:14-49"
+      "exe": "{pm}",
+      "argv": ["exec", "jest", "--ci"],
+      "why": "Jest with the `jest-expo` preset and React Native Testing Library -- the Expo-target logic layer of the `react-uzf-v1` quality baseline. The reference's jest.config.js selects `__tests__/` (screens from `app/`, which expo-router would otherwise route as pages) and `src/`, and its suite renders a real screen. `jest` is invoked through the project's own dependency, never a global install.",
+      "source": "Market nen/contract.json:25-33; apps/mobile/package.json:11, :37, :42-43; apps/mobile/jest.config.js:3-4"
     },
     "ui-test": {
-      "unsupported": "No Maestro, no Detox, nothing.",
-      "summary": "no UI runner at all",
-      "source": "food-diary (inventory sweep)"
+      "exe": "maestro",
+      "argv": ["test", ".maestro"],
+      "why": "Maestro flows under `.maestro/`, the Expo-target UI layer of the quality baseline, run against a DEV-CLIENT build (`expo-dev-client`; the flow's `appId` is the app's bundle id). PRECONDITIONS THIS ROW CANNOT SATISFY FOR ITSELF, and nen asserts rather than performs: the dev client installed on a booted simulator or emulator, and Metro serving on :8081 (this profile's `dev` row). The Maestro CLI is a host install, not a package dependency.",
+      "source": "Market nen/contract.json:34-41; apps/mobile/package.json:13, :23; apps/mobile/.maestro/sign-in.yaml:1-10"
     },
     "lint": {
       "exe": "expo",
@@ -64,19 +67,20 @@
       "source": "food-diary/package.json:12; eslint.config.js:5-9"
     },
     "typecheck": {
-      "unsupported": "TypeScript is configured -- a tsconfig.json and a `typescript` devDependency -- and nothing in the repository ever runs `tsc`: no script, no workflow. The pack seats no command a reference does not run; a repository that does check its types states that command here.",
+      "unsupported": "Neither repository's declaration runs a type check. The first configures TypeScript and never runs `tsc`: no script, no workflow. The reference carries a `typecheck` script (`tsc -p tsconfig.json --noEmit`) that its root fans out to through turbo, but its nen/contract.json seats no `typecheck` row on the mobile lane, so there is no declared run to cite. The pack seats no command a reference's declaration does not run; a repository that does check its types states that command here.",
       "summary": "configured, never run",
-      "source": "food-diary/tsconfig.json; package.json:5-13, :53"
+      "source": "food-diary/tsconfig.json; package.json:5-13, :53; Market apps/mobile/package.json:14; Market package.json:14 (root); turbo.json:16-17; nen/contract.json:16-84"
     },
     "archive": {
-      "unsupported": "NO `eas.json` AND NO EAS PROJECT ID in `app.json`. The pack must not propose `eas build`: nothing in the seven repositories has ever run it.",
-      "summary": "no eas.json anywhere",
-      "source": "food-diary (inventory sweep)"
+      "exe": "{pm}",
+      "argv": ["run", "archive"],
+      "why": "A LOCAL EAS BUILD. The reference's `archive` script is `eas build --local --platform ios --profile simulator --non-interactive --output dist-archive/market-ios-simulator.tar.gz`: a Release iOS simulator `.app` built on this machine from the `simulator` profile in `eas.json`, linked to the EAS project `app.json`'s `extra.eas.projectId` names. The pack seats the SCRIPT, not its flags, because the profile name and the output path are that repository's choices. The simulator profile needs no signing credentials; a device or store build does. PRECONDITIONS ASSERTED, NEVER PERFORMED: Xcode, CocoaPods, fastlane, a UTF-8 locale, and an EAS sign-in (`eas login` or `EXPO_TOKEN`), because a local build still checks the account. `eas-cli` is the project's own devDependency.",
+      "source": "Market nen/contract.json:47-57 -> apps/mobile/package.json:9, :41; apps/mobile/eas.json:17-22; apps/mobile/app.json:37-41"
     },
     "release": {
-      "unsupported": "No `eas submit`, no fastlane.",
+      "unsupported": "Nothing in the reference runs `eas submit` or fastlane. Its `eas.json` carries an empty `submit.production` block and no script submits a build; its declaration still carries `detect`'s unreplaced seat for `release`, which is not a ruling of its own. There is no observed publication step to cite.",
       "summary": "no release lane at all",
-      "source": "food-diary (inventory sweep)"
+      "source": "Market apps/mobile/eas.json:27-29; apps/mobile/package.json:6-15"
     },
     "dev": {
       "exe": "expo",
@@ -87,18 +91,19 @@
     "run": {
       "exe": "expo",
       "argv": ["run:{platform}"],
-      "why": "The repository declares three forms: `expo run:ios`, `expo run:ios --device` and `expo run:android`. `{platform}` selects the lane and `--device` is the declaration's own extra argument; neither native lane is the other's default, so the pack templates rather than picks. THESE BUILD AND LAUNCH, which is why this profile has no `build` row.",
+      "why": "The repository declares three forms: `expo run:ios`, `expo run:ios --device` and `expo run:android`. `{platform}` selects the lane and `--device` is the declaration's own extra argument; neither native lane is the other's default, so the pack templates rather than picks. THESE BUILD AND LAUNCH, which is why they are `run` and never `build` (the export).",
       "source": "food-diary/package.json:9, :10, :8"
     },
     "deploy": {
-      "unsupported": "No deployment target of any kind.",
+      "unsupported": "No deployment target of any kind in either repository: the reference's declaration names no `targets` (its `deploy` row is still `detect`'s unreplaced seat, not a ruling of its own). An EAS build profile is a build configuration, not a destination.",
       "summary": "no deploy target",
-      "source": "food-diary (inventory sweep)"
+      "source": "Market nen/contract.json:172; food-diary (inventory sweep)"
     },
     "coverage": {
-      "unsupported": "Same reason as `test`: no jest, no `jest-expo`, no vitest, and no `coverage` hit anywhere in the repository. There is nothing to instrument.",
-      "summary": "no tests to instrument",
-      "source": "food-diary/package.json:14-49"
+      "exe": "{pm}",
+      "argv": ["exec", "jest", "--ci", "--coverage"],
+      "why": "The same Jest run as `test`, instrumented. The reference's jest.config.js collects from `app/`, `src/` and `plugins/` and writes the `text`, `lcov` and `json-summary` reporters to the lane's own `coverage/` directory, which its declaration names as this row's artifact. `jest` is invoked through the project's own dependency.",
+      "source": "Market nen/contract.json:71-83; apps/mobile/package.json:12; apps/mobile/jest.config.js:11-18"
     },
     "tools": {
       "steps": [
@@ -109,9 +114,9 @@
       "source": "food-diary/package.json; start-ios.sh:5, :12; android/build.gradle:16-19"
     },
     "warmup": {
-      "declaredOnly": "The git steps run -- classify, discard, fetch and branch are stack-independent -- but the build-verification step reports `build` itself as unsupported for this lane: `expo run:*` builds AND launches, so there is nothing `warmup` can verify without also launching an app.",
-      "summary": "git half only",
-      "source": "this profile's own build row (unsupported)"
+      "delegatesTo": ["build", "test"],
+      "why": "The git steps are stack-independent and run regardless. The verification half delegates to this profile's own `build` and `test` rows, both of which carry a command -- and `build` is the export, which launches nothing, so verifying a warm tree never starts an app.",
+      "source": "this profile's own build and test rows"
     }
   },
   "toolchain": {
@@ -134,14 +139,14 @@
   },
   "reportDefault": {
     "$comment": "ADVISORY ONLY, and the one thing `nen shu coverage` may say about a report location it was not given. That verb parses the report a DECLARATION names under the coverage verb's `artifacts`; when a repository names none, this path (or this reason) is quoted in the refusal and NEVER opened. `path: null` is the honest answer for a stack whose report location does not exist or is not conventional.",
-    "path": null,
-    "why": "Nothing to instrument, so no report exists to locate: no jest, no `jest-expo`, no vitest, and no `coverage` hit anywhere in the repository.",
-    "source": "this profile's own `coverage` row (food-diary/package.json:14-49)"
+    "path": "apps/mobile/coverage/lcov.info",
+    "why": "REPO-ROOT-RELATIVE, AND THAT IS WHY IT NAMES A LANE DIRECTORY. The coverage row writes an LCOV tracefile in the lane's OWN `coverage/` directory, and `artifacts` is resolved against the repository root, so the path recorded is the reference's lane written out in full. A single-app Expo repository whose lane is the root writes `coverage/lcov.info`; a `json-summary` reporter writes `coverage-summary.json` beside it, and nen reads either.",
+    "source": "this profile's own `coverage` row (Market apps/mobile/jest.config.js:17-18; nen/contract.json:80-82)"
   },
   "deployDefault": {
     "target": null,
     "why": "No deployment target of any kind is observed, so there is no conventional name to propose. An EAS build profile is a build configuration, not a destination.",
-    "source": "food-diary (inventory sweep); this profile's own `deploy` row"
+    "source": "Market nen/contract.json:172; food-diary (inventory sweep); this profile's own `deploy` row"
   },
   "notes": [
     "Expo's selected native platform reuses that platform's device declaration: the xcode-ios JSON extractor for an iOS target and the gradle-android text extractor for an Android target. Expo contributes no third discovery schema and nen chooses neither platform.",
