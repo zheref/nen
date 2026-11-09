@@ -1,6 +1,6 @@
 {
   "$schema": "nen.profile/v0.1",
-  "$comment": "A CATALOGUE ENTRY, NOT AN AUTHORITY. Two repositories were read. The first is a BARE workflow -- `ios/` and `android/` prebuild output committed -- so this profile is three lanes wearing one name, and its host note says so rather than flattening them; its `lint`, `dev`, `run` and toolchain rows are still that inventory's. The second, zheref/Market's `apps/mobile` (a managed Expo lane in a Next.js + Expo monorepo, read at 765c0d7 on 2026-11-09), is the maintained reference the `build`, `test`, `ui-test`, `archive` and `coverage` rows are cited to, each a command that repository's own nen/contract.json runs (zheref/nen#502).",
+  "$comment": "A CATALOGUE ENTRY, NOT AN AUTHORITY. Two repositories were read. The first is a BARE workflow -- `ios/` and `android/` prebuild output committed -- so this profile is three lanes wearing one name, and its host note says so rather than flattening them; its `lint`, `dev`, `run` and toolchain rows are still that inventory's. The second, the `apps/mobile` lane of Market, the maintainer's private Next.js + Expo monorepo (a managed Expo lane in a Next.js + Expo monorepo, read at 765c0d7 on 2026-11-09), is the maintained reference the `build`, `test`, `ui-test`, `archive` and `coverage` rows are cited to, each a command that repository's own nen/contract.json runs (zheref/nen#502).",
   "id": "expo",
   "displayName": "Expo",
   "markers": [

@@ -6230,7 +6230,7 @@ describe("nen shu detect -- the expo proposal, executed", () => {
   });
 
   // THE MANAGED REFERENCE, END TO END (zheref/nen#502). Every row the pack now
-  // seats from zheref/Market's `apps/mobile` is proposed on a tree that carries
+  // seats from the `apps/mobile` lane of Market, the maintainer's private Next.js + Expo monorepo is proposed on a tree that carries
   // the same evidence, and each renders back to the reference's own argv.
   const MANAGED: Readonly<Record<string, readonly string[]>> = {
     archive: ["would run:     pnpm run archive"],
