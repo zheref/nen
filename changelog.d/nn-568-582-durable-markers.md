@@ -1,0 +1,1 @@
+- Explicit prompt receipts preserve handover across attention-marker consumption and bind local slot release to the effort, PR, live judged head and expected gate. Guarded review-cycle marker repair restores missing traces without modifying budgets or review history.

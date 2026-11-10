@@ -54,6 +54,7 @@ import { defaultWorkflowDocument } from "../scaffold/templates.js";
 import {
   EMPTY_TREE,
   EXPO_BARE,
+  EXPO_MANAGED,
   GATSBY_SITE,
   KRO_SHAPED,
   markerTree,
@@ -3727,11 +3728,13 @@ describe("nen shu detect -- the two Gradle lanes, end to end through the executo
 //
 // THE MUTANTS THESE KILL, each stated where it is killed:
 //
-//   1. `build` PROPOSED FOR expo. The reference `run` row builds AND launches,
-//      so a `build` row on this stack is a row that starts an application on
-//      somebody's simulator the first time a script asks for a compile. Two
-//      assertions hold it: the pack's cell must be `unsupported`, and no expo
-//      lane in any fixture may carry a `build` COMMAND row.
+//   1. A `build` ROW THAT LAUNCHES. The reference `run` row builds AND launches,
+//      so a `build` row on this stack that reached for `expo run:*` would start
+//      an application on somebody's simulator the first time a script asked for
+//      a compile. The pack's build row is the reference's EXPORT script
+//      (zheref/nen#502), and three assertions hold it: the pack's argv names no
+//      `run:` form, no expo lane proposes a `build` row its own manifest does
+//      not script, and the bare tree -- which scripts only `run:*` -- has none.
 //   2. `{platform}` PROPOSED UNSUBSTITUTED. The row must stay withheld even
 //      though this lane's own scripts spell both values -- SEEING a value and
 //      CHOOSING one are different acts, and only the second is forbidden.
@@ -3923,20 +3926,47 @@ describe("nen shu detect -- the expo stack, three lanes in one tree", () => {
   });
 
   // MUTANT 1.
-  it("NEVER proposes a build row for this stack, and seats the pack's reason instead", () => {
+  it("NEVER proposes a build row that launches an app, and none the lane does not script", () => {
     const cell = verbCell(profileById(loadProfilesPack(), "expo"), "build");
-    expect(cell.kind, "the catalogue's own cell is what makes this true").toBe("unsupported");
+    expect(cell.kind, "the catalogue's own cell is the export script").toBe("command");
+    expect(cell.kind === "command" ? cell.invocation.kind : cell.kind).toBe("command");
+    if (cell.kind === "command" && cell.invocation.kind === "command") {
+      expect(cell.invocation.argv).toEqual(["run", "build"]);
+      expect(cell.invocation.argv.join(" ")).not.toMatch(/run:/);
+      expect(cell.invocation.why).toMatch(/LAUNCHES NOTHING/);
+    }
     for (const tree of [EXPO_BARE, markerTree("expo")]) {
       for (const lane of detect(tree).lanes.filter((entry): boolean => entry.stack === "expo")) {
         expect(commandRows(lane.verbs), tree).not.toContain("build");
-        expect(unsupportedRows(lane.verbs), tree).toContain("build");
-        expect(reasonOf(lane.verbs, "build")).toMatch(
-          /build AND launch, there is no build-only invocation/,
-        );
-        expect(reasonOf(lane.verbs, "build")).toMatch(
-          /Conflating the two would make `nen shu build` launch an app/,
-        );
+        const note = lane.notes.find((entry): boolean => entry.startsWith("'build' withheld"));
+        expect(note, tree).toBeDefined();
       }
+    }
+    const bareNote = laneNamed("expo")?.notes.find((entry): boolean =>
+      entry.startsWith("'build' withheld"),
+    );
+    expect(bareNote).toMatch(/carries the evidence this row needs \('package\.json' carrying 'expo export'\)/);
+  });
+
+  // THE COUNTEREXAMPLE (zheref/nen#643): a lane whose `build` SCRIPT launches.
+  // The script key exists, so the script check alone would pass the row and
+  // `nen shu build` would quote the build-only reason over `expo run:ios`.
+  it("withholds build where the lane's build script is a launch, not the export", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-expo-launching-build-"));
+    try {
+      cpSync(EXPO_MANAGED, dir, { recursive: true });
+      const manifest = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as {
+        scripts: Record<string, string>;
+      };
+      manifest.scripts["build"] = "expo run:ios";
+      writeFileSync(join(dir, "package.json"), JSON.stringify(manifest, null, 2));
+      const lane = detect(dir).lanes.find((entry): boolean => entry.stack === "expo");
+      expect(commandRows(lane?.verbs)).not.toContain("build");
+      expect(lane?.notes.find((entry): boolean => entry.startsWith("'build' withheld"))).toMatch(
+        /'package\.json' carrying 'expo export'/,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
@@ -6095,12 +6125,11 @@ describe("nen shu detect -- the expo markers themselves", () => {
       expect(note).toMatch(
         /a seat whose quoted reason turns on its absence is the first row to distrust/,
       );
-      // The pack's own sentence for the marker carries the claim, and it is the
-      // sentence that explains the `archive` seat a few rows down.
-      expect(note).toMatch(
-        /no repository in the inventory has one, which is why `archive` is unsupported/,
-      );
-      expect(reasonOf(lane?.verbs, "archive")).toMatch(/NO `eas\.json` AND NO EAS PROJECT ID/);
+      // The pack's own sentence for the marker carries the claim: the file is
+      // what the reference's `archive` row reads.
+      expect(note).toMatch(/the EAS build-profile file, which the reference's `archive` row reads/);
+      // And with no manifest to script it, that row is withheld, not proposed.
+      expect(commandRows(lane?.verbs)).not.toContain("archive");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -6207,19 +6236,82 @@ describe("nen shu detect -- the expo proposal, executed", () => {
     }
   });
 
-  it("refuses the build seat at exit 4, quoting the pack's own sentence back", async () => {
+  it("seats the withheld build row with its reason, so build refuses at exit 4", async () => {
     const dir = mkdtempSync(join(tmpdir(), "nen-expo-seat-"));
     try {
       cpSync(EXPO_BARE, dir, { recursive: true });
       expect((await capture(["detect", "--write"], dir)).code).toBe(0);
       const result = await capture(["build", "--dry-run", "--lane", "expo"], dir);
       expect(result.code).toBe(4);
-      expect(result.err.join("\n")).toMatch(/PROPOSED SEAT -- replace it/);
       expect(result.err.join("\n")).toMatch(
-        /Conflating the two would make `nen shu build` launch an app/,
+        /'build' is unsupported on lane 'expo' \(expo\).*no file in this lane carries the evidence/,
       );
       // And nothing was spawned to find that out.
       expect(result.out).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // THE MANAGED REFERENCE, END TO END (zheref/nen#502). Every row the pack now
+  // seats from the `apps/mobile` lane of Market, the maintainer's private Next.js + Expo monorepo is proposed on a tree that carries
+  // the same evidence, and each renders back to the reference's own argv.
+  const MANAGED: Readonly<Record<string, readonly string[]>> = {
+    archive: ["would run:     pnpm run archive"],
+    build: ["would run:     pnpm run build"],
+    coverage: ["would run:     pnpm exec -- jest --ci --coverage"],
+    dev: ["would run:     expo start"],
+    lint: ["would run:     expo lint"],
+    test: ["would run:     pnpm exec -- jest --ci"],
+    "ui-test": ["would run:     maestro test .maestro"],
+  };
+
+  it("proposes the managed lane's five newer rows and renders each to the reference's argv", async () => {
+    const lane = detect(EXPO_MANAGED).lanes.find((entry): boolean => entry.stack === "expo");
+    expect(commandRows(lane?.verbs)).toEqual(Object.keys(MANAGED).sort());
+    expect(lane?.evidence).toEqual(["eas.json"]);
+    const dir = mkdtempSync(join(tmpdir(), "nen-golden-expo-managed-"));
+    try {
+      cpSync(EXPO_MANAGED, dir, { recursive: true });
+      expect((await capture(["detect", "--write"], dir)).code).toBe(0);
+      for (const [verb, lines] of Object.entries(MANAGED)) {
+        const result = await capture([verb, "--dry-run", "--lane", lane?.lane ?? ""], dir);
+        expect(result.code, verb).toBe(0);
+        expect(
+          result.out.filter((line): boolean => line.startsWith("would run:")),
+          verb,
+        ).toEqual(lines);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // THE NPM LANE (zheref/nen#643). `npm exec jest --ci` hands `--ci` to npm,
+  // not Jest; the separator is what forwards it, so the golden pins it.
+  it("renders the Jest rows with npm's separator on an npm-managed lane", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-golden-expo-npm-"));
+    try {
+      cpSync(EXPO_MANAGED, dir, { recursive: true });
+      const manifest = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as Record<
+        string,
+        unknown
+      >;
+      manifest["packageManager"] = "npm@11.13.0";
+      writeFileSync(join(dir, "package.json"), JSON.stringify(manifest, null, 2));
+      expect((await capture(["detect", "--write"], dir)).code).toBe(0);
+      const lane = detect(dir).lanes.find((entry): boolean => entry.stack === "expo")?.lane ?? "";
+      for (const [verb, line] of [
+        ["test", "would run:     npm exec -- jest --ci"],
+        ["coverage", "would run:     npm exec -- jest --ci --coverage"],
+      ] as const) {
+        const result = await capture([verb, "--dry-run", "--lane", lane], dir);
+        expect(result.code, verb).toBe(0);
+        expect(
+          result.out.filter((entry): boolean => entry.startsWith("would run:")),
+          verb,
+        ).toEqual([line]);
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -7431,7 +7523,7 @@ describe("nen shu detect -- the dotnet-winui rows live in the pack, not in this 
     // a rule the project reader acts on" -- and they agreed only by accident
     // while exactly one profile stated either. A borrowed list is a pin that
     // moves when something unrelated does.
-    const READS_THE_TREE: readonly string[] = ["dotnet-winui", "gradle-android"];
+    const READS_THE_TREE: readonly string[] = ["dotnet-winui", "expo", "gradle-android"];
     // And the other list is still what it was, so the divergence above is a
     // real one rather than a rename nobody noticed.
     expect(PACK_MATCHED_STACKS).toEqual(["dotnet-winui"]);

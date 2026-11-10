@@ -739,10 +739,11 @@ export interface PackMinimum {
  * seam-side half of that verb never sees this value -- ../shu/coverage-defaults
  * .ts reads it and hands it across as a STRING that lands in a message.
  *
- * `path` IS NULLABLE, AND FOR MOST STACKS IT IS NULL. Four of the seven have no
+ * `path` IS NULLABLE, AND FOR MOST STACKS IT IS NULL. Five of the seven have no
  * conventional location at all: two have no tests to instrument, one has no
- * coverage plugin declared, and one prints its report to STDOUT rather than to
- * a file. `why` carries that sentence, and a null with a reason is worth more
+ * coverage plugin declared, one prints its report to STDOUT rather than to a
+ * file, and one writes under a fresh GUID directory per run. `why` carries that
+ * sentence, and a null with a reason is worth more
  * than a plausible path nobody measured -- which is the same rule `minimum`
  * above follows.
  */

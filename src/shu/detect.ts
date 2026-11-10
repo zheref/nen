@@ -6311,7 +6311,7 @@ function evidenceNotes(profile: StackProfile, matches: readonly Match[]): readon
     /* c8 ignore next -- every evidence marker `matchesIn` records is one the pack declares */
     if (declared === undefined) continue;
     notes.push(
-      `this lane also carries ${match.marker}, which the reference pack names as a marker of this stack and which nen did NOT identify the lane from -- a lane proposed from that file alone would be nen deciding what kind of project this is from an ancillary one. It is reported because the pack's own seats below were written about repositories that had none, so a seat whose quoted reason turns on its absence is the first row to distrust here. The pack's reason for the marker: ${declared.why}`,
+      `this lane also carries ${match.marker}, which the reference pack names as a marker of this stack and which nen did NOT identify the lane from -- a lane proposed from that file alone would be nen deciding what kind of project this is from an ancillary one. It is reported because, where the pack's seats were written about repositories without it, a seat whose quoted reason turns on its absence is the first row to distrust here. The pack's reason for the marker: ${declared.why}`,
     );
   }
   return notes;
