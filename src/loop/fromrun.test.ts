@@ -46,6 +46,21 @@ describe("effortsFromRun", () => {
     expect(report.unread).toEqual([]);
   });
 
+  it("requires readiness for the same head as the prompt receipt", async () => {
+    const depsForOldHead = deps({ 480: open("main", "b480") }, {}, {
+      b480: { ok: true, present: true, where: "/wt/receipt.json" },
+    });
+    const report = await effortsFromRun(manifest([row(480)]), {
+      ...depsForOldHead,
+      readiness: async (pr, head) => {
+        expect([pr, head]).toEqual([480, "abcdef1"]);
+        return { ok: false, reason: "head moved from abcdef1 to fedcba1" };
+      },
+    });
+    expect(report.unread).toEqual([{ pr: 480, reason: "readiness unevaluated: head moved from abcdef1 to fedcba1" }]);
+    expect(computeSlots(report.efforts, { local: 2, ci: 2 }, "ready+prompted").local.occupied).toBe(1);
+  });
+
   it("frees a merged PR, drops a closed-unmerged one, and holds what it could not read", async () => {
     const report = await effortsFromRun(
       manifest([row(480), row(481), row(482), row(483)]),
@@ -327,7 +342,7 @@ describe("readinessInProcess", () => {
     // A checkout with no nen/gates.json and no --reviewers: pr ready refuses
     // before any network read, so this needs no token and no GitHub.
     const root = mkdtempSync(join(tmpdir(), "nen-ready-"));
-    const read = await readinessInProcess("o/r", 7, root);
+    const read = await readinessInProcess("o/r", 7, root, "a".repeat(40));
     expect(read.ok).toBe(false);
     expect(read.ok ? "" : read.reason).toMatch(/^pr ready produced no report \(exit 2\): .*no reviewer identities/);
   });

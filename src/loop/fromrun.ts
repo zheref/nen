@@ -50,7 +50,7 @@ export type MarkerRead = { readonly ok: true; readonly present: boolean; readonl
 
 export interface FromRunDeps {
   readonly readPr: (pr: number) => LiveRead;
-  readonly readiness: (pr: number) => Promise<ReadinessRead>;
+  readonly readiness: (pr: number, head: string) => Promise<ReadinessRead>;
   readonly marker: (headBranch: string, identity?: PromptIdentity) => MarkerRead;
   readonly promptGate?: string;
   /** The product code --repo's nen/repos.json assigns the run's repository, or null (none, or no registry). */
@@ -139,7 +139,7 @@ export async function effortsFromRun(manifest: RunManifest, deps: FromRunDeps): 
       continue;
     }
     const stacked = [...headBranches].some(([other, branch]): boolean => other !== row.pr && branch === read.pr.base);
-    const readiness = await deps.readiness(row.pr);
+    const readiness = await deps.readiness(row.pr, read.pr.head);
     if (!readiness.ok) unread.push({ pr: row.pr, reason: `readiness unevaluated: ${readiness.reason}` });
     const marker = deps.marker(read.pr.headRef, row.effort && deps.promptGate ? { effort: row.effort, pr: row.pr, head: read.pr.head, gate: deps.promptGate } : undefined);
     if (!marker.ok) unread.push({ pr: row.pr, reason: `prompt receipt unread: ${marker.reason}` });
@@ -205,18 +205,21 @@ export function markerForBranch(seams: Seams, root: string, branch: string, iden
  * disagree. `unevaluated`, or no report at all, is a failed read, never "not
  * ready": the effort stays held and the reason is named.
  */
-export async function readinessInProcess(slug: string, pr: number, repoRoot: string): Promise<ReadinessRead> {
+export async function readinessInProcess(slug: string, pr: number, repoRoot: string, head: string): Promise<ReadinessRead> {
   const out: string[] = [];
   const err: string[] = [];
   const code = await prReady(
-    { positionals: ["pr", "ready", String(pr)], values: { "gh-repo": slug }, booleans: new Set(["json"]), repoFlag: repoRoot },
+    { positionals: ["pr", "ready", String(pr)], values: { "gh-repo": slug, "require-head": head }, booleans: new Set(["json"]), repoFlag: repoRoot },
     { out: (line): void => void out.push(line), err: (line): void => void err.push(line) },
   );
-  let report: { verdict?: unknown; remedy?: unknown };
+  let report: { verdict?: unknown; remedy?: unknown; status?: unknown; message?: unknown };
   try {
     report = JSON.parse(out.join("\n")) as typeof report;
   } catch {
     return { ok: false, reason: `pr ready produced no report (exit ${code})${err.length === 0 ? "" : `: ${err.join(" ")}`}` };
+  }
+  if (report.status === "head-mismatch" && typeof report.message === "string") {
+    return { ok: false, reason: report.message };
   }
   if (report.verdict === "ready") return { ok: true, ready: true };
   if (report.verdict === "not-ready") return { ok: true, ready: false };

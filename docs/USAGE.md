@@ -20855,15 +20855,17 @@ the existing refusal without an invented correction; legacy scalar placeholders 
 merge prompt has already been shown. Run it only after displaying the prompt;
 creating an attention marker or attempting a notification is not proof. The
 receipt lives in the shared Git directory and survives `stop clear` and worktree
-removal. It names the exact effort, PR, judged head and gate; malformed or
-redirected receipts are refused rather than overwritten. Repeating the same
+removal. The `nen.stop.prompt/v0.1` receipt names the exact effort, PR, judged
+head and gate. Unversioned, unsupported, malformed or redirected receipts are
+refused rather than overwritten. Repeating the same
 receipt is idempotent. It grants no merge authority and emits no notification.
 
 Use `nen loop slots --from-run <run> --target <owner/repo> --repo <checkout>
 --local-cap <n> --prompt-gate G2|G4 [--json]` to count matching receipts against
 the live PR head. A missing effort id, expected gate or matching receipt holds
 the slot and names the unread evidence. Other heads, efforts and gates cannot
-release it; readiness must independently pass. Legacy attention markers never
+release it. Readiness must pass at that same head. A moved head makes the
+readiness read unavailable and holds the slot. Legacy attention markers never
 prove a prompt was shown.
 
 `nen review ledger repair-marker --branch <branch> [--pr <n>] --repo <checkout>

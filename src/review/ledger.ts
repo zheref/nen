@@ -102,7 +102,9 @@ function present(path: string): boolean {
   }
 }
 function git(options: CycleOptions, args: readonly string[]): string | null {
-  const result = options.seams.run("git", ["-C", options.root, ...args]);
+  const result = options.seams.run("git", ["-C", options.root, ...args], {
+    env: { GIT_DIR: undefined, GIT_COMMON_DIR: undefined, GIT_WORK_TREE: undefined },
+  });
   return result.code === 0 ? result.stdout : null;
 }
 export function cycleTraceDir(options: CycleOptions): string | null {

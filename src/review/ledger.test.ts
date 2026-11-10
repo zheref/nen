@@ -1,7 +1,7 @@
 // Port of Hatsu's ledger-guard cases: the roster is fixture data, never CLI
 // policy. Git-backed fixtures and separate Node processes pin durable traces
 // and read/modify/write serialization without network or a Python runtime.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -48,6 +48,19 @@ async function cli(o: CycleOptions, args: string[], json = true): Promise<{ code
 afterEach((): void => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 describe("review-cycle ledger — Hatsu lifecycle parity with a declared roster", () => {
+  it("locates durable cycle traces in the selected repository despite foreign Git environment", () => {
+    const target = fixture(roster, true);
+    const foreign = fixture(roster, true);
+    const traceDir = cycleTraceDir(target);
+    expect(traceDir).not.toBeNull();
+    vi.stubEnv("GIT_DIR", join(foreign.root, ".git"));
+    vi.stubEnv("GIT_COMMON_DIR", join(foreign.root, ".git"));
+    vi.stubEnv("GIT_WORK_TREE", foreign.root);
+    try {
+      expect(cycleTraceDir(target)).toBe(traceDir);
+      expect(cycleTraceDir(foreign)).not.toBe(traceDir);
+    } finally { vi.unstubAllEnvs(); }
+  });
   it("opens the same v0.1 path, stamps the roster and records budget sources", () => {
     const o = fixture(); const result = act(o, "init"); const doc = read(o);
     expect(doc.contract).toBe("hatsu.hanten.cycle/v0.1"); expect(doc.slug).toBe("app-feature"); expect(doc.pr).toBeNull();

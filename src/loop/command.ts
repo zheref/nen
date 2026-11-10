@@ -334,7 +334,7 @@ async function slotsFromRun(context: CommandContext, root: string, id: string, c
   }
   const built = await effortsFromRun(manifest, {
     readPr: (pr) => readLivePr(context.seams, target, pr),
-    readiness: (pr) => readinessInProcess(target.slug, pr, root),
+    readiness: (pr, head) => readinessInProcess(target.slug, pr, root, head),
     marker: (branch, identity) => markerForBranch(context.seams, root, branch, identity),
     promptGate: context.args.values["prompt-gate"],
     repoCode: repoCodeFor(root, manifest.repo),

@@ -1533,10 +1533,10 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
   },
   // `stop` GAINED A WRITE FORM, so its row gained a gate. The banner and the
   // table are still a pure render -- this verb fires no notification and never
-  // could (../stop/command.ts's header states why) -- but `--mark` writes
-  // `.nen/last-stop.json`, which is a file on disk and therefore not something
-  // a read-only loop may do on every iteration. The bare form stays read-only
-  // for the reason `nen wake fire` and `nen shu deploy` are: absent the flag,
+  // could (../stop/command.ts's header states why). Both `--mark` and
+  // `--prompt-shown` write evidence to disk, so a read-only loop refuses them.
+  // The bare form stays read-only for the same reason as `nen wake fire`
+  // and `nen shu deploy`: absent the write flags,
   // this verb provably writes nothing, which is a property of nen rather than a
   // claim about somebody else's file.
   stop: {
@@ -1545,7 +1545,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       // zheref/nen#513: lists the per-gate markers and the single file; writes nothing.
       list: RO("lists every unrung per-gate marker under the git common directory's .nen/marks/ and the single .nen/last-stop.json; writes nothing"),
       // `answer` IS A SUBCOMMAND WITH ITS OWN WRITE, so it must never fall to
-      // the "*" row below: that row is gated on --mark alone and would certify
+      // the "*" row below: that row checks the banner flags and would certify
       // `nen stop answer --record ...` read-only while it reserves an id and
       // creates a record under the git common directory. The two-token key is
       // tried first, so `answer show` (a pure read of those records) keeps its
@@ -1553,8 +1553,8 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       "answer show": RO("lists the stop-answer records under the git common directory's .nen/stops/<effort>/; writes nothing"),
       answer: DRY("reserves an id under .nen/stop-ids/ and creates one record under .nen/stops/<effort>/ in the git common directory unless --dry-run is given"),
       "*": GATED(
-        ["--mark"],
-        "renders the gate-stop banner and fires nothing itself; --mark additionally writes the .nen/last-stop.json marker a host hook reads and its per-gate twin under the git common directory's .nen/marks/",
+        ["--mark", "--prompt-shown"],
+        "renders the gate-stop banner; --mark writes attention markers and --prompt-shown writes a durable prompt receipt",
       ),
     },
   },
