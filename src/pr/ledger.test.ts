@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runFamily, type Io } from "../index.js";
+import { ledgerIndex, ledgerParts } from "./ledger.js";
 import { FULL_REACH_ROW, privateListRow, visibilityRow, withPrivateTarget } from "../issue/privacy.testkit.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import { prCommand } from "./command.js";
@@ -105,14 +106,72 @@ describe("nen pr ledger post (zheref/nen#510)", () => {
     expect(result.seams.calls.some((call) => call.args.includes("POST"))).toBe(false);
   });
 
-  it("AC-4: refuses a slice over GitHub's comment limit, naming both sizes, never truncating", async () => {
+  it("large slices publish bounded parts before the index", async () => {
     const root = effortRepo();
     writeFileSync(join(root, "findings.json"), JSON.stringify({ scopes: [], findings: [], notes: "x".repeat(70_000) }));
     writeFileSync(join(root, "open.schema.json"), JSON.stringify({ type: "object" }));
-    const result = await run([...POST, "--findings", "findings.json", "--findings-schema", "open.schema.json"], root, [pull(), me, comments([])]);
+    const result = await run([...POST, "--findings", "findings.json", "--findings-schema", "open.schema.json"], root, [pull(), me, comments([]), ...Array.from({ length: 8 }, (_, i) => ({ ...created, result: { stdout: JSON.stringify({ html_url: `https://github.com/zheref/nen/pull/7#issuecomment-${900+i}` }) } })), created]);
+    expect(result.code).toBe(0);
+    expect(result.err).toBe("");
+    expect(result.seams.calls.filter((call) => call.args.includes("POST"))).toHaveLength(9);
+  });
+
+  it("a failed part write never replaces the existing root index", async () => {
+    const root = effortRepo();
+    writeFileSync(join(root, "findings.json"), JSON.stringify({ notes: "x".repeat(70_000) }));
+    writeFileSync(join(root, "open.schema.json"), JSON.stringify({ type: "object" }));
+    const result = await run([...POST, "--findings", "findings.json", "--findings-schema", "open.schema.json"], root, [pull(MOVED), me, comments([{ id: 55, login: "maintainer", body: renderComment(sliceFor()) }]), { ...created, result: { code: 1, stderr: "write refused" } }]);
     expect(result.code).toBe(1);
-    expect(result.err).toMatch(/renders to \d+ characters, over GitHub's 65536-character comment limit/);
-    expect(result.seams.calls.some((call) => call.args.includes("POST"))).toBe(false);
+    expect(result.seams.calls.some(call => call.args.includes("PATCH"))).toBe(false);
+  });
+
+  it("--dry-run on an oversized slice previews every part write and the placeholder index, writing nothing (Copilot on #614)", async () => {
+    const root = effortRepo();
+    writeFileSync(join(root, "findings.json"), JSON.stringify({ notes: "x".repeat(70_000) }));
+    writeFileSync(join(root, "open.schema.json"), JSON.stringify({ type: "object" }));
+    const result = await run([...POST, "--findings", "findings.json", "--findings-schema", "open.schema.json", "--dry-run"], root, [pull(), me, comments([])]);
+    expect(result.code).toBe(0);
+    expect(result.out.match(/would run: gh api -X POST repos\/zheref\/nen\/issues\/7\/comments --input -  \(part \d+ of 8 on stdin/g)).toHaveLength(8);
+    expect(result.out).toMatch(/the multipart index on stdin, a new comment; <part N url> stands for/);
+    expect(result.out).toMatch(/"urls":\["<part 1 url>","<part 2 url>"/);
+    expect(result.seams.calls.some((call) => call.args.includes("POST") || call.args.includes("PATCH"))).toBe(false);
+    const json = await run([...POST, "--findings", "findings.json", "--findings-schema", "open.schema.json", "--dry-run", "--json"], root, [pull(), me, comments([])]);
+    expect(JSON.parse(json.out) as unknown).toMatchObject({ verdict: "dry-run", transport: "multipart", parts: 8 });
+  });
+
+  it("a re-publication reclaims the parts the previous index named, only after the new index is current (Copilot on #614)", async () => {
+    const root = effortRepo();
+    writeFileSync(join(root, "findings.json"), JSON.stringify({ notes: "x".repeat(70_000) }));
+    writeFileSync(join(root, "open.schema.json"), JSON.stringify({ type: "object" }));
+    const old = renderComment(sliceFor(MOVED));
+    const oldParts = ledgerParts(old, "HA/12").map((body, i) => ({ id: 700 + i, login: "maintainer", body }));
+    const oldIndex = ledgerIndex(old, "HA/12", oldParts.map((row) => `https://github.com/zheref/nen/pull/7#issuecomment-${row.id}`));
+    const newParts = Array.from({ length: 8 }, (_, i) => ({ ...created, result: { stdout: JSON.stringify({ html_url: `https://github.com/zheref/nen/pull/7#issuecomment-${900 + i}` }) } }));
+    const deletes = oldParts.map((row) => ({ match: `gh api -X DELETE repos/zheref/nen/issues/comments/${row.id}`, result: { stdout: "" } }));
+    const result = await run([...POST, "--findings", "findings.json", "--findings-schema", "open.schema.json"], root, [pull(), me, comments([{ id: 55, login: "maintainer", body: oldIndex }, ...oldParts]), ...newParts, edited(55), ...deletes]);
+    expect(result.code).toBe(0);
+    expect(result.err).toBe("");
+    const calls = result.seams.calls.map((call) => call.args.join(" "));
+    const patchAt = calls.findIndex((call) => call.includes("PATCH"));
+    expect(patchAt).toBeGreaterThan(-1);
+    expect(calls.filter((call) => call.includes("DELETE"))).toHaveLength(oldParts.length);
+    expect(calls.findIndex((call) => call.includes("DELETE"))).toBeGreaterThan(patchAt);
+    expect(result.out).toMatch(new RegExp(`reclaimed ${oldParts.length} of ${oldParts.length} superseded part comment`));
+  });
+
+  it("a refused reclaim is reported and never fails the post (Copilot on #614)", async () => {
+    const root = effortRepo();
+    writeFileSync(join(root, "findings.json"), JSON.stringify({ notes: "x".repeat(70_000) }));
+    writeFileSync(join(root, "open.schema.json"), JSON.stringify({ type: "object" }));
+    const old = renderComment(sliceFor(MOVED));
+    const oldParts = ledgerParts(old, "HA/12").map((body, i) => ({ id: 700 + i, login: "maintainer", body }));
+    const oldIndex = ledgerIndex(old, "HA/12", oldParts.map((row) => `https://github.com/zheref/nen/pull/7#issuecomment-${row.id}`));
+    const newParts = Array.from({ length: 8 }, (_, i) => ({ ...created, result: { stdout: JSON.stringify({ html_url: `https://github.com/zheref/nen/pull/7#issuecomment-${900 + i}` }) } }));
+    const refused = oldParts.map((row) => ({ match: `gh api -X DELETE repos/zheref/nen/issues/comments/${row.id}`, result: { code: 1, stderr: "HTTP 403: forbidden" } }));
+    const result = await run([...POST, "--findings", "findings.json", "--findings-schema", "open.schema.json", "--json"], root, [pull(), me, comments([{ id: 55, login: "maintainer", body: oldIndex }, ...oldParts]), ...newParts, edited(55), ...refused]);
+    expect(result.code).toBe(0);
+    expect(result.err).toMatch(/1 superseded part comment\(s\) could not be reclaimed .* forbidden/);
+    expect(JSON.parse(result.out) as unknown).toMatchObject({ verdict: "updated", transport: "multipart", parts: 8, reclaimed: { deleted: 0, failed: 1 } });
   });
 
   it("AC-8: --dry-run prints the gh call and the body and writes nothing", async () => {
@@ -170,6 +229,17 @@ describe("nen pr ledger read (zheref/nen#510)", () => {
     expect(result.out).toMatch(/could-not-read: .*edited/);
     const broken = await run(READ, root, [pull(), me, comments([{ id: 55, login: "maintainer", body: "<!-- nen:ledger effort=HA%2F12 sha256=zz -->\nnothing" }])]);
     expect(broken.out).toMatch(/could-not-read: .*marker line is malformed/);
+  });
+
+  it("multipart restore uses the complete indexed slice on a fresh clone", async () => {
+    const fresh = mkdtempSync(join(tmpdir(), "nen-pr-multipart-fresh-"));
+    const slice = sliceFor(HEAD, Array.from({ length: 80 }, () => ({ ...PHASE, note: "verification ".repeat(100) })));
+    const body = renderComment(slice);
+    const rows = ledgerParts(body, "HA/12").map((body, i) => ({ id: 100 + i, login: "maintainer", body }));
+    const index = ledgerIndex(body, "HA/12", rows.map(row => `https://github.com/zheref/nen/pull/7#issuecomment-${row.id}`));
+    const result = await run([...READ, "--restore", "--json"], fresh, [pull(), me, comments([{ id: 55, login: "maintainer", body: index }, ...rows])]);
+    expect(result.code).toBe(0);
+    expect((JSON.parse(readFileSync(join(fresh, ".nen/phases/HA%2F12.json"), "utf8")) as { phases: unknown[] }).phases).toEqual(slice.phases);
   });
 
   it("AC-6: --restore writes the phase ledger on a fresh clone, agrees with itself, refuses a disagreeing local ledger", async () => {

@@ -4096,7 +4096,7 @@ nen pr ledger read --target <owner/name> --pr <n> --effort <id> [--restore] [--l
 | `--findings-schema <path>` | post, with `--findings` | The caller's own JSON Schema for it (nen carries no consumer's contract). | A **subset** of draft 2020-12 is asserted (`type`, `enum`, `const`, `required`, `properties`, `additionalProperties`, `items`, `minItems`, `maxItems`, `minLength`, `maxLength`, `pattern`, `minimum`, `maximum`, `allOf`, `anyOf`, `oneOf`, `not`, `if`/`then`/`else`, local `$ref`); annotations are accepted. Refused at exit 2 rather than skipped: **any other keyword** (`format` included); **a supported keyword whose value is malformed** (`required` not an array of distinct strings, `enum` not a non-empty array, `properties`/`$defs` not an object, a `min*`/`max*` length or count that is not a non-negative integer, a `minimum`/`maximum` that is not a number, a tuple `items`); and **a `$ref` that does not point through subschema positions** (`$defs`/`definitions`/`properties/<name>`, `items`, `not`, `if`, `then`, `else`, `additionalProperties`, `allOf`/`anyOf`/`oneOf/<i>`), so `#/examples/0` is refused, as is a pointer that does not decode. |
 | `--proof <path>` | no, repeatable | A file to index: `{ path, sha256, bytes }`. | Relative to `--repo`, recorded repository-relative; a path outside `--repo` (absolute or `../`) or an unreadable file is exit 2. |
 | `--login <name>` | no | The login whose comment is the record, instead of `gh api user`. | For a token that cannot read `user` (an Actions installation token: `app-slug[bot]`). A value that is not a login is exit 2. |
-| `--dry-run` | no (post) | Print the `gh` call and the body; write nothing. | The reads and the private-name guard still run. |
+| `--dry-run` | no (post) | Print every `gh` call a live post would make and the body; write nothing. | The reads and the private-name guard still run. An oversized slice previews one `POST` per bounded part and the index write, with `<part N url>` standing for the URL GitHub would assign to part N. |
 | `--restore` | no (read) | Write the slice's phases as the effort's phase ledger. | Only where none exists (`restored`), `unchanged` where it agrees; a local ledger that disagrees is exit 1 naming both, nothing overwritten. On a **stale** slice the phases ARE restored and the exit is still 1 (stale); the line says so. |
 
 **post**: reads the PR's head, the authenticated login (`gh api user`, or `--login`) and every
@@ -4122,7 +4122,7 @@ an empty ledger: a slice with `phases: []` that reads is `ok`.
 **Output and exit codes** — post prints `<verdict>: <url> -- effort '<id>', head <sha>, <n> phase entries,
 <m> proof file(s)` (the dry run prints `would run:` and the body); read prints `<verdict>: <url> by <login> --
 …; foreign: <n>` and, with `--restore`, `restored|unchanged: <path>`. `--json`: `{ contract, verdict, … }` —
-post adds `posted`, `url`, `size`, `slice`, `privateNameCheck`; read adds `login`, `foreign`, `url`,
+post adds `posted`, `url`, `size`, `transport` (`single` \| `multipart`), `parts`, `reclaimed` `{ deleted, failed }` (a live post), `slice`, `privateNameCheck`; read adds `login`, `foreign`, `url`,
 `slice`, `restored`. Exit 2 on a missing or malformed flag, an unknown action, the other action's flag, an
 unreadable input file or a schema keyword it cannot assert.
 
@@ -20878,3 +20878,34 @@ cycle. It preserves the cycle bytes, history and budgets exactly, reports an
 unchanged trace idempotently, and refuses malformed, conflicting or redirected
 state. An unresolved write returns exit 1 naming the trace; the original cycle
 remains usable. This never initializes a lost cycle.
+
+### Oversized durable ledger records
+
+`pr ledger post` keeps records that fit GitHub's comment limit unchanged. Larger
+records use bounded `nen:ledger-part` comments and one active `nen:ledger` index.
+The index is written last, after every part has a publication URL. An interrupted
+write therefore leaves the previous index current. Parts not referenced by the
+current index are superseded and must not be used to resume an effort.
+
+`pr ledger read` joins only the indexed parts written and last edited by the
+selected login. It checks their numbered markers and the complete record digest,
+then performs the ordinary slice validation and optional phase restoration.
+Missing, foreign or changed parts refuse the read with their part or URL named.
+Secret and private-name checks run against the complete caller content before
+any part is published. Multipart transport does not bypass either guard.
+
+A re-publication **reclaims** the parts the previous index named — the comments
+this login owns that carry the effort's part marker — only after the new index
+is written, so the previous record stays readable until the new one is current.
+A reclaim GitHub refuses leaves that part behind, unreferenced: the post still
+exits 0, stderr names each one, and `--json` counts them in `reclaimed.failed`.
+Without reclaiming, every re-publication would add parts for good, and the read's
+10,000-comment ceiling would one day stop short of the index.
+
+Markers are matched after CRLF line endings are normalised, as the single-comment
+parse already does, so a comment GitHub hands back CRLF-converted still reads;
+the decoded content is base64 and is never altered by it. An index whose
+`digest` is not a 64-hex string is `could-not-read` (malformed), never an
+uncaught error. `--dry-run` on an oversized slice previews every part write and
+the index with `<part N url>` placeholders, so the preview names the writes a
+live post makes.

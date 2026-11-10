@@ -265,3 +265,109 @@ export function writeComment(seams: Seams, target: Target, pr: number, existing:
     return "";
   }
 }
+
+/** Delete one comment this login owns; a refused delete is a LedgerReadError carrying gh's words. */
+export function deleteComment(seams: Seams, target: Target, id: number): void {
+  const result = seams.run(GH, ["api", "-X", "DELETE", `repos/${target.slug}/issues/comments/${id}`]);
+  if (result.spawnFailed) throw new LedgerReadError(`gh could not be started to delete comment ${id}.`);
+  if (result.code !== 0) throw new LedgerReadError(`gh refused to delete comment ${id}: ${outputLines(result.stderr).join(" ") || `exit ${result.code}`}.`);
+}
+
+// ── Multipart transport ─────────────────────────────────────────────────────
+//
+// LINE ENDINGS ARE NORMALISED BEFORE ANY MARKER IS MATCHED (Copilot on #614):
+// GitHub may hand a comment back CRLF-converted, and the single-comment parse
+// above already tolerates that. The index and every part are matched on LF, and
+// the decoded content is untouched by it -- it is base64, which carries no
+// newline of its own.
+
+/** The first line of a multipart index for `effort`, newline included. */
+function multipartMarker(effort: string): string {
+  return `${markerPrefix(effort)}multipart -->\n`;
+}
+
+/** The marker line of one part, newline included. */
+function partMarker(effort: string, digest: string, part: number): string {
+  return `<!-- nen:ledger-part effort=${encodeEffortId(effort)} sha256=${digest} part=${part} -->\n`;
+}
+
+function lf(text: string): string {
+  return text.replace(/\r\n/g, "\n");
+}
+
+export interface MultipartIndex {
+  readonly digest: string;
+  readonly urls: readonly string[];
+}
+
+/**
+ * The index `body` carries for `effort`, or null when `body` is not a multipart
+ * index at all. An index that IS one but does not parse -- not JSON, not an
+ * object, a digest that is not a 64-hex string (an object there used to escape
+ * as a TypeError, Copilot on #614), no URLs, a non-string or repeated URL -- is
+ * a LedgerReadError naming it malformed, never any other throw.
+ */
+export function parseMultipartIndex(body: string, effort: string): MultipartIndex | null {
+  const text = lf(body);
+  if (!text.startsWith(multipartMarker(effort))) return null;
+  const malformed = (): LedgerReadError => new LedgerReadError("multipart index is malformed");
+  let index: unknown;
+  try { index = JSON.parse(text.slice(text.indexOf("\n") + 1)); }
+  catch { throw malformed(); }
+  if (index === null || typeof index !== "object" || Array.isArray(index)) throw malformed();
+  const { digest, urls } = index as { digest?: unknown; urls?: unknown };
+  if (typeof digest !== "string" || !SHA256.test(digest)) throw malformed();
+  if (!Array.isArray(urls) || urls.length === 0 || urls.some((url): boolean => typeof url !== "string") || new Set(urls).size !== urls.length) throw malformed();
+  return { digest, urls: urls as string[] };
+}
+
+/** Content-addressed chunks: only the active index makes a part current. */
+export function ledgerParts(body: string, effort: string): readonly string[] {
+  const digest = sha256Hex(body);
+  const chunks = body.match(/[\s\S]{1,10000}/gu) ?? [];
+  return chunks.map((chunk, i) => `${partMarker(effort, digest, i + 1)}${Buffer.from(chunk, "utf8").toString("base64")}`);
+}
+
+export function ledgerIndex(body: string, effort: string, urls: readonly string[]): string {
+  return `${multipartMarker(effort)}${JSON.stringify({ digest: sha256Hex(body), urls })}`;
+}
+
+export function assembleLedger(body: string, effort: string, comments: readonly PrComment[], login: string): string {
+  const index = parseMultipartIndex(body, effort);
+  if (index === null) return body;
+  const chunks = index.urls.map((url, i) => {
+    const part = comments.find((comment): boolean => comment.url === url);
+    if (!part || !isOwn(part, login)) throw new LedgerReadError(`part ${i + 1} (${url}) is missing or foreign`);
+    const prefix = partMarker(effort, index.digest, i + 1);
+    const text = lf(part.body);
+    if (!text.startsWith(prefix)) throw new LedgerReadError(`part ${i + 1} (${url}) has an edited marker`);
+    const payload = text.slice(prefix.length).trim();
+    const decoded = Buffer.from(payload, "base64");
+    if (decoded.toString("base64") !== payload) throw new LedgerReadError(`part ${i + 1} (${url}) has malformed encoding`);
+    return decoded.toString("utf8");
+  });
+  const joined = chunks.join("");
+  if (sha256Hex(joined) !== index.digest) throw new LedgerReadError(`multipart parts ${index.urls.join(", ")} fail the recorded digest`);
+  return joined;
+}
+
+/**
+ * The part comments a PREVIOUS index named that this login still owns -- what a
+ * new publication supersedes and may reclaim. Every re-publication adds fresh
+ * parts, and `listComments` reads at most 10,000 comments, so a record left to
+ * accumulate its history would one day make itself unreadable (Copilot on #614).
+ * A body that is not an index, or a malformed one, names nothing: nothing there
+ * is proven to be ours. Only a comment that carries this effort's part marker
+ * qualifies -- a URL an index named that points at anything else is left alone.
+ */
+export function supersededParts(previousBody: string, effort: string, comments: readonly PrComment[], login: string): readonly PrComment[] {
+  let index: MultipartIndex | null;
+  try { index = parseMultipartIndex(previousBody, effort); }
+  catch { return []; }
+  if (index === null) return [];
+  const anyPart = `<!-- nen:ledger-part effort=${encodeEffortId(effort)} `;
+  return index.urls.flatMap((url): PrComment[] => {
+    const part = comments.find((comment): boolean => comment.url === url);
+    return part !== undefined && isOwn(part, login) && lf(part.body).startsWith(anyPart) ? [part] : [];
+  });
+}
