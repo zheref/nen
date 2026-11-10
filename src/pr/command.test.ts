@@ -1326,7 +1326,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
   // FIRST -- against this pull request's own known bots, then against
   // --target's collaborators -- before either route is called.
   const KNOWN_BOTS_TARGET: Target = { owner: "zheref", repo: "nen", slug: "zheref/nen" };
-  const NO_KNOWN_BOTS = { stdout: JSON.stringify({ data: { repository: { defaultBranchRef: { name: "main", target: { oid: "BASE1" } }, pullRequest: { id: "PR_1", baseRefOid: "BASE1", reviewRequests: { nodes: [] }, timelineItems: { nodes: [] } } } } }) };
+  const NO_KNOWN_BOTS = { stdout: JSON.stringify({ data: { repository: { defaultBranchRef: { name: "main", target: { oid: "BASE1" } }, pullRequest: { id: "PR_1", baseRefOid: "BASE1", headRefOid: "a".repeat(40), reviewRequests: { nodes: [] }, timelineItems: { nodes: [] } } } } }) };
   const KNOWN_BOT_COPILOT = {
     stdout: JSON.stringify({
       data: {
@@ -1542,6 +1542,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
     const report = JSON.parse(result.out.join("\n")) as { ok: boolean; unrecordedBots: unknown; message: string; routing: unknown };
     expect(report.ok).toBe(false);
     expect(report.unrecordedBots).toEqual([{ id: "BOT_kgDOCnlnWA", login: null }]);
+    expect(report).toMatchObject({ repo: "zheref/nen", pr: 9, requestHead: "a".repeat(40) });
     expect(report.message).toContain("cannot determine allowance exhaustion");
     expect(report.message).toMatch(/its response did not list it for BOT_kgDOCnlnWA/);
     expect(report.routing).toEqual([{ name: "BOT_kgDOCnlnWA", via: "add-bots", route: "bot", id: "BOT_kgDOCnlnWA" }]);
@@ -1592,6 +1593,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
     const report = JSON.parse(result.out.join("\n")) as { ok: boolean; unrecordedBots: unknown; message: string };
     expect(report.ok).toBe(false);
     expect(report.unrecordedBots).toEqual([{ id: "BOT_kgDOCnlnWA", login: null }]);
+    expect(report).toMatchObject({ repo: "zheref/nen", pr: 9, requestHead: "a".repeat(40) });
     expect(report.message).toContain("cannot determine allowance exhaustion");
   });
 

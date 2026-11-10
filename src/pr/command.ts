@@ -611,8 +611,8 @@ request-reviews:
   -- named in the message, and in --json's 'unrecordedBots' ([{ id, login
   }], login null for a bot this pull request has never seen). The response cannot determine allowance exhaustion versus an otherwise
   unrecorded request; its first:100 page may omit a pending bot. When a call also failed outright, 1 wins and
-  'unrecordedBots' still names the bot. --json: '{ ok, routing, message,
-  unrecordedBots }'.
+  'unrecordedBots' still names the bot. Actual calls add repo, pr and
+  requestHead to --json so another command can bind evidence to the delivery.
 
 edit-body:
   Replaces the pull request's body OUTRIGHT with the file's bytes -- no
@@ -2302,6 +2302,7 @@ function doRequestReviews(context: CommandContext): number {
   if (userLogins.length > 0) {
     results.push(requestReviews(context.seams, target, prNumber, userLogins));
   }
+  let requestHead: string | null = null;
   if (botIds.length > 0) {
     // `known` is already populated whenever any --add-reviewers login
     // resolved to a bot; a caller who named bots ONLY via --add-bots never
@@ -2310,6 +2311,7 @@ function doRequestReviews(context: CommandContext): number {
     // bot list rides along so an unrecorded bot (zheref/nen#277) is named by
     // its login where this pull request already knows it, not only by id.
     const bots = knownBots ?? fetchPrAndKnownBots(context.seams, target, prNumber);
+    requestHead = bots.headRefOid;
     results.push(requestBotReviews(context.seams, target, prNumber, bots.pullRequestId, botIds, bots.bots));
   }
 
@@ -2330,7 +2332,7 @@ function doRequestReviews(context: CommandContext): number {
   // prints two lines to the terminal, and `--json`'s `message` field
   // silently collapsing them with a space would be a fact the human
   // rendering states plainly and the JSON rendering blurs.
-  emit(context.io, context.json, { ok, skipped, routing: routes, message: lines.join("\n"), unrecordedBots, ...ceilingJson }, lines);
+  emit(context.io, context.json, { ok, skipped, routing: routes, message: lines.join("\n"), unrecordedBots, repo: target.slug, pr: prNumber, requestHead, ...ceilingJson }, lines);
   return code;
 }
 

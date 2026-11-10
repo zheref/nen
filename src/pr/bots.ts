@@ -89,6 +89,8 @@ export interface KnownBot {
 export interface PrAndKnownBots {
   /** The pull request's own GraphQL node id -- `requestReviews`'s `pullRequestId`. */
   readonly pullRequestId: string;
+  /** The live head read with the request target. */
+  readonly headRefOid: string | null;
   /**
    * Every Bot this pull request has ALREADY SEEN, from either direction: one
    * still owed a review (`reviewRequests`) or one that already posted a
@@ -112,7 +114,7 @@ export interface PrAndKnownBots {
 }
 
 const PR_AND_KNOWN_BOTS_QUERY =
-  "query($owner:String!,$name:String!,$pr:Int!){repository(owner:$owner,name:$name){defaultBranchRef{name target{oid}} pullRequest(number:$pr){id baseRefOid " +
+  "query($owner:String!,$name:String!,$pr:Int!){repository(owner:$owner,name:$name){defaultBranchRef{name target{oid}} pullRequest(number:$pr){id baseRefOid headRefOid " +
   "reviewRequests(first:100){nodes{requestedReviewer{__typename ... on Bot{login id}}}} " +
   "timelineItems(first:100,itemTypes:[PULL_REQUEST_REVIEW]){nodes{... on PullRequestReview{author{__typename ... on Bot{login id}}}}}}}}";
 
@@ -190,7 +192,7 @@ export function parsePrAndKnownBots(raw: string, what: string): PrAndKnownBots {
     data?: {
       repository?: {
         defaultBranchRef?: { name?: unknown; target?: { oid?: unknown } | null } | null;
-        pullRequest?: { id?: unknown; baseRefOid?: unknown; reviewRequests?: unknown; timelineItems?: unknown };
+        pullRequest?: { id?: unknown; baseRefOid?: unknown; headRefOid?: unknown; reviewRequests?: unknown; timelineItems?: unknown };
       };
     };
   };
@@ -221,6 +223,7 @@ export function parsePrAndKnownBots(raw: string, what: string): PrAndKnownBots {
   );
   return {
     pullRequestId: pr.id,
+    headRefOid: typeof pr.headRefOid === "string" ? pr.headRefOid : null,
     bots: [...byId.values()],
     baseRefOid: typeof pr.baseRefOid === "string" ? pr.baseRefOid : "",
     defaultBranch: defaultBranchOf(parsed.data?.repository?.defaultBranchRef),

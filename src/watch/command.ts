@@ -28,6 +28,7 @@ import { observePr, parsePrPredicate, type PrPredicate } from "./pr.js";
 import { observeLifecycle, readLifecycle, resolveLifecycleRef, type LifecycleRead } from "./merged.js";
 import { defaultDeps, PR_READY_FLAGS, readReady, renderDeclaredExclusions, type PrReadyDeps, type ReadyRead, type ReadyReport } from "../verbs/pr_ready.js";
 import { plainLine } from "../cli/plain.js";
+import { sixthStopObservation } from "../stop/sixth-stop.js";
 import { loadWorkflow } from "../schema/workflow.js";
 import { resolveRepoRoot } from "../repo/root.js";
 import { PROGRAM } from "../version.js";
@@ -169,6 +170,9 @@ usage:
                   final read's verdict, gateLine, judgedHead, warnings, notes,
                   declaredExclusions and settlement: checksSettled,
                   pendingChecks, roundsAtHead [{reviewer, via}]) to the result.
+                  A head-pinned ready watch with --require-base-gates and no
+                  caller gate overrides also reports intervalMs and one
+                  structured sixthStopObservations entry per poll.
 
 Exits 0 when the condition became true, 1 on an error streak or a bound
 reached -- a caller piping this into further automation stops rather than
@@ -330,12 +334,21 @@ async function runPr(context: CommandContext, deps: WatchDeps): Promise<number> 
   // The final read, for --json's `last`. A box rather than a bare `let`, so
   // the narrowing after the loop is not lost to the closure that assigns it.
   const last: { read: ReadyRead | null } = { read: null };
+  const overrideFlags = ["gates", "reviewers", "approvers", "round-policy", "exclude-run", "exclude-check", "reviewer-login"];
+  const captureSixthStop = context.json && predicate === "ready" && context.args.values["require-head"] !== undefined
+    && context.args.booleans.has("require-base-gates")
+    && !overrideFlags.some((flag) => context.args.values[flag] !== undefined || (context.args.lists[flag]?.length ?? 0) > 0);
+  const sixthStopObservations: (Record<string, unknown> | null)[] = [];
   // What the read said beside its verdict -- warnings, notes, declared
   // exclusions -- printed on the first poll and whenever it changes (F3).
   let printedContext: string | null = null;
   const result = await watchUntilAsync({
     observe: async () => {
       last.read = await readReady(typedRef, input, deps.prReady);
+      if (captureSixthStop) {
+        const read = last.read;
+        sixthStopObservations.push(read.kind === "verdict" && read.settlement?.checksSettled === true ? sixthStopObservation(read.report) : null);
+      }
       if (last.read.kind === "verdict") {
         const lines = contextLines(last.read.report);
         const key = JSON.stringify(lines);
@@ -367,6 +380,7 @@ async function runPr(context: CommandContext, deps: WatchDeps): Promise<number> 
           ...result,
           until: predicate,
           pr: typedRef,
+          ...(captureSixthStop ? { intervalMs, sixthStopObservations } : {}),
           // What the final read's verdict was when the watch stopped -- NOT a
           // merge signal on its own (F5): only `--until ready` or a fresh
           // `nen pr ready` is. `null` when that read decided no verdict.

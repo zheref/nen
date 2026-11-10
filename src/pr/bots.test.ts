@@ -120,7 +120,7 @@ describe("prAndKnownBotsArgv / parsePrAndKnownBots", () => {
         },
       },
     ]);
-    expect(fetchPrAndKnownBots(seams, TARGET, 158)).toEqual({ pullRequestId: "PR_1", bots: [], baseRefOid: "", defaultBranch: null });
+    expect(fetchPrAndKnownBots(seams, TARGET, 158)).toEqual({ pullRequestId: "PR_1", headRefOid: null, bots: [], baseRefOid: "", defaultBranch: null });
   });
 
   it("fetchPrAndKnownBots throws (never returns a partial result) when gh itself fails", () => {
