@@ -19,6 +19,8 @@ export const NEXTJS_WORKSPACES = join(FIXTURES, "nextjs-workspaces");
 export const NEXTJS_UNTOOLED = join(FIXTURES, "nextjs-untooled");
 export const GATSBY_SITE = join(FIXTURES, "gatsby-site");
 export const EXPO_BARE = join(FIXTURES, "expo-bare");
+/** A MANAGED Expo lane shaped like the `apps/mobile` lane of Market, the maintainer's private Next.js + Expo monorepo: every row the pack seats is evidenced. */
+export const EXPO_MANAGED = join(FIXTURES, "expo-managed");
 export const WINUI_APP = join(FIXTURES, "winui-app");
 export const WINUI_LINKED = join(FIXTURES, "winui-linked");
 /** A `dotnet-winui` lane that is NOT the repository root, and an XML solution. */
