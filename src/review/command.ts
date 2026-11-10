@@ -26,11 +26,11 @@ import { assertRepoRoot } from "../repo/root.js";
 import { assertBase } from "../report/data.js";
 import { loadWorkflow, WORKFLOW_FILE } from "../schema/workflow.js";
 import { assembleScopes, readChangedPaths, renderScopes } from "./scopes.js";
-import { CYCLE_CONTRACT, CYCLE_MARKER_DIRECTORY, ensureCycle, runCycle } from "./ledger.js";
+import { CYCLE_CONTRACT, CYCLE_MARKER_DIRECTORY, ensureCycle, repairCycleMarker, runCycle } from "./ledger.js";
 import { plainLine } from "../cli/plain.js";
 
 const USAGE = `nen review scopes --base <ref> [--repo <path>] [--json]
-nen review ledger init|ensure|decide|record|show|recover-first --branch <name> [--repo <path>] [--pr <n>] [--json]
+nen review ledger init|ensure|decide|record|show|recover-first|repair-marker --branch <name> [--repo <path>] [--pr <n>] [--json]
 
 ledger:
   Own the review-cycle ledger under .nen/hanten/<branch-slug>[-pr<N>].cycle.json,
@@ -93,7 +93,7 @@ const SUBCOMMANDS: readonly string[] = ["scopes", "ledger"];
 
 function runLedger(context: CommandContext): number {
   const action = context.args.positionals[2];
-  const known = ["init", "ensure", "decide", "record", "show", "recover-first"];
+  const known = ["init", "ensure", "decide", "record", "show", "recover-first", "repair-marker"];
   if (action === undefined || !known.includes(action)) throw new VerbUsageError(`review ledger needs one of: ${known.join(", ")}.`);
   refuseExtraPositionals(context.args, 3);
   const values = context.args.values;
@@ -113,7 +113,7 @@ function runLedger(context: CommandContext): number {
   }
   const root = assertRepoRoot({ repoFlag: context.repoFlag });
   const options = { root, branch, pr: rawPr === undefined ? undefined : Number(rawPr), base: values["base"], seams: context.seams, warn: context.io.err };
-  const result = action === "ensure" ? ensureCycle(options) : { code: 0, report: runCycle(options, action, { applicable: values["applicable"], persona: values["persona"], outcome: values["outcome"], confirmed }) };
+  const result = action === "repair-marker" ? repairCycleMarker(options) : action === "ensure" ? ensureCycle(options) : { code: 0, report: runCycle(options, action, { applicable: values["applicable"], persona: values["persona"], outcome: values["outcome"], confirmed }) };
   const report = result.report;
   emit(context.io, context.json, report, [plainLine(`review ledger ${String(report["ensure"] ?? action)}: ${String(report["path"])}`), ...(report["reason"] === undefined ? [] : [plainLine(String(report["reason"]))]), ...(Array.isArray(report["reviewers"]) ? report["reviewers"].map((row): string => plainLine(`${row.persona}: ${row.used}/${row.max} ${row.action}`)) : [])]);
   return result.code;
