@@ -92,6 +92,7 @@ import {
 import {
   EXIT_BOT_REQUEST_UNRECORDED,
   botLoginKey,
+  matchesBotLogin,
   isReviewerNodeId,
   isBotLoginInput,
   isBotLoginAlias,
@@ -609,10 +610,11 @@ request-reviews:
   call was ACCEPTED but at least one requested bot is absent from the
   response's pending-review page
   -- named in the message, and in --json's 'unrecordedBots' ([{ id, login
-  }], login null for a bot this pull request has never seen). The response cannot determine allowance exhaustion versus an otherwise
+  }], login null when a bot cannot be named). Exit-9 JSON resolves an unseen bot by node ID when possible. The response cannot determine allowance exhaustion versus an otherwise
   unrecorded request; its first:100 page may omit a pending bot. When a call also failed outright, 1 wins and
-  'unrecordedBots' still names the bot. --json: '{ ok, routing, message,
-  unrecordedBots }'.
+  'unrecordedBots' still names the bot. Actual calls add repo, pr and
+  requestHead and exitCode to --json so another command can bind evidence
+  to the delivery and distinguish exit 9 from a failed mixed-route call.
 
 edit-body:
   Replaces the pull request's body OUTRIGHT with the file's bytes -- no
@@ -2171,7 +2173,7 @@ function doRequestReviews(context: CommandContext): number {
     : canonicalBotLogins(context.seams, explicitBots.filter(isReviewerNodeId));
   const requestable = (name: string): boolean => {
     const login = canonicalIds.get(name) ?? name;
-    const identity = eventIdentities.find((candidate): boolean => candidate.loginPattern.test(login) || candidate.loginPattern.test(`${botLoginKey(login)}[bot]`));
+    const identity = eventIdentities.find((candidate): boolean => matchesBotLogin(candidate.loginPattern, login));
     if (identity === undefined) return true;
     skipped.push({ name, reviewer: identity.name, reason: "event-driven, not requested" });
     return false;
@@ -2302,6 +2304,7 @@ function doRequestReviews(context: CommandContext): number {
   if (userLogins.length > 0) {
     results.push(requestReviews(context.seams, target, prNumber, userLogins));
   }
+  let requestHead: string | null = null;
   if (botIds.length > 0) {
     // `known` is already populated whenever any --add-reviewers login
     // resolved to a bot; a caller who named bots ONLY via --add-bots never
@@ -2310,7 +2313,9 @@ function doRequestReviews(context: CommandContext): number {
     // bot list rides along so an unrecorded bot (zheref/nen#277) is named by
     // its login where this pull request already knows it, not only by id.
     const bots = knownBots ?? fetchPrAndKnownBots(context.seams, target, prNumber);
-    results.push(requestBotReviews(context.seams, target, prNumber, bots.pullRequestId, botIds, bots.bots));
+    const result = requestBotReviews(context.seams, target, prNumber, bots.pullRequestId, botIds, bots.bots);
+    requestHead = result.observedHead === bots.headRefOid ? bots.headRefOid : null;
+    results.push(result);
   }
 
   const ok = results.every((result): boolean => result.ok);
@@ -2324,14 +2329,34 @@ function doRequestReviews(context: CommandContext): number {
   // least one requested bot is absent from the response's pending-review page.
   const failedOutright = results.some((result): boolean => !result.ok && (result.unrecordedBots ?? []).length === 0);
   const code = ok ? 0 : failedOutright ? 1 : EXIT_BOT_REQUEST_UNRECORDED;
+  const evidenceBots = context.json && code === EXIT_BOT_REQUEST_UNRECORDED
+    ? nameUnrecordedBots(context.seams, unrecordedBots, canonicalIds, ceiling?.rounds ?? [])
+    : unrecordedBots;
   const lines = [...skippedLines, ...results.map((result): string => result.message), ...ceilingLines];
   // JOINED WITH A NEWLINE, matching the human rendering line for line
   // (Copilot review, PR #174) -- both routes running in the same call
   // prints two lines to the terminal, and `--json`'s `message` field
   // silently collapsing them with a space would be a fact the human
   // rendering states plainly and the JSON rendering blurs.
-  emit(context.io, context.json, { ok, skipped, routing: routes, message: lines.join("\n"), unrecordedBots, ...ceilingJson }, lines);
+  emit(context.io, context.json, { ok, skipped, routing: routes, message: lines.join("\n"), unrecordedBots: evidenceBots, repo: target.slug, pr: prNumber, requestHead, exitCode: code, ...ceilingJson }, lines);
   return code;
+}
+
+/** Keep a successful mutation's exit code even if the evidence lookup is unreadable. */
+function nameUnrecordedBots(
+  seams: Seams, bots: readonly UnrecordedBot[], canonical: ReadonlyMap<string, string>, rounds: readonly BotRound[],
+): readonly UnrecordedBot[] {
+  const named = bots.map((bot): UnrecordedBot => ({
+    id: bot.id,
+    login: bot.login ?? canonical.get(bot.id) ?? rounds.find((round) => round.id === bot.id)?.login ?? null,
+  }));
+  try {
+    const resolved = canonicalBotLogins(seams, named.filter((bot) => bot.login === null).map((bot) => bot.id));
+    return named.map((bot): UnrecordedBot => ({ ...bot, login: bot.login ?? resolved.get(bot.id) ?? null }));
+  } catch (error) {
+    if (!(error instanceof RoundCeilingError)) throw error;
+    return named;
+  }
 }
 
 /**

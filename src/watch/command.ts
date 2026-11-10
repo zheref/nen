@@ -28,7 +28,8 @@ import { observePr, parsePrPredicate, type PrPredicate } from "./pr.js";
 import { observeLifecycle, readLifecycle, resolveLifecycleRef, type LifecycleRead } from "./merged.js";
 import { defaultDeps, PR_READY_FLAGS, readReady, renderDeclaredExclusions, type PrReadyDeps, type ReadyRead, type ReadyReport } from "../verbs/pr_ready.js";
 import { plainLine } from "../cli/plain.js";
-import { loadWorkflow } from "../schema/workflow.js";
+import { sixthStopObservation } from "../stop/sixth-stop.js";
+import { DEFAULT_WATCH_INTERVAL_MS, PR_MIN_INTERVAL_MS, readWatchMonitor } from "./policy.js";
 import { resolveRepoRoot } from "../repo/root.js";
 import { PROGRAM } from "../version.js";
 
@@ -169,6 +170,9 @@ usage:
                   final read's verdict, gateLine, judgedHead, warnings, notes,
                   declaredExclusions and settlement: checksSettled,
                   pendingChecks, roundsAtHead [{reviewer, via}]) to the result.
+                  A head-pinned ready watch with --require-base-gates and no
+                  caller gate overrides also reports intervalMs and one
+                  structured sixthStopObservations entry per poll.
 
 Exits 0 when the condition became true, 1 on an error streak or a bound
 reached -- a caller piping this into further automation stops rather than
@@ -276,8 +280,6 @@ function runCommand(context: CommandContext): number {
   return result.outcome === "condition-true" ? 0 : 1;
 }
 
-/** The `--pr` form's pacing floor: every poll is several GitHub API calls (F4 on zheref/nen#264). */
-export const PR_MIN_INTERVAL_MS = 30_000;
 /** The `--pr` form's bound when neither a flag nor a monitor policy states one (N6). */
 export const PR_DEFAULT_BOUND_MS = 2 * 60 * 60 * 1000;
 
@@ -330,12 +332,21 @@ async function runPr(context: CommandContext, deps: WatchDeps): Promise<number> 
   // The final read, for --json's `last`. A box rather than a bare `let`, so
   // the narrowing after the loop is not lost to the closure that assigns it.
   const last: { read: ReadyRead | null } = { read: null };
+  const overrideFlags = ["gates", "reviewers", "approvers", "round-policy", "exclude-run", "exclude-check", "reviewer-login"];
+  const captureSixthStop = context.json && predicate === "ready" && context.args.values["require-head"] !== undefined
+    && context.args.booleans.has("require-base-gates")
+    && !overrideFlags.some((flag) => context.args.values[flag] !== undefined || (context.args.lists[flag]?.length ?? 0) > 0);
+  const sixthStopObservations: (Record<string, unknown> | null)[] = [];
   // What the read said beside its verdict -- warnings, notes, declared
   // exclusions -- printed on the first poll and whenever it changes (F3).
   let printedContext: string | null = null;
   const result = await watchUntilAsync({
     observe: async () => {
       last.read = await readReady(typedRef, input, deps.prReady);
+      if (captureSixthStop) {
+        const read = last.read;
+        sixthStopObservations.push(read.kind === "verdict" && read.settlement?.checksSettled === true ? sixthStopObservation(read.report) : null);
+      }
       if (last.read.kind === "verdict") {
         const lines = contextLines(last.read.report);
         const key = JSON.stringify(lines);
@@ -367,6 +378,7 @@ async function runPr(context: CommandContext, deps: WatchDeps): Promise<number> 
           ...result,
           until: predicate,
           pr: typedRef,
+          ...(captureSixthStop ? { intervalMs, sixthStopObservations } : {}),
           // What the final read's verdict was when the watch stopped -- NOT a
           // merge signal on its own (F5): only `--until ready` or a fresh
           // `nen pr ready` is. `null` when that read decided no verdict.
@@ -509,10 +521,10 @@ function readPace(
   // and through v0.10.0 this verb parsed neither: the file said 300 s and
   // the watch polled every 5 s. A flag still wins -- a caller who types
   // --interval-ms meant it -- and an absent policy keeps the old 5000.
-  const monitor = readMonitor(context);
+  const monitor = readWatchMonitor(resolveRepoRoot({ repoFlag: context.repoFlag }));
   const intervalRaw = context.args.values["interval-ms"];
   const intervalMs =
-    intervalRaw === undefined ? (monitor === null || monitor.pollSeconds === null ? 5000 : monitor.pollSeconds * 1000) : Number(intervalRaw);
+    intervalRaw === undefined ? (monitor === null || monitor.pollSeconds === null ? DEFAULT_WATCH_INTERVAL_MS : monitor.pollSeconds * 1000) : Number(intervalRaw);
   if (!Number.isInteger(intervalMs) || intervalMs < 0) {
     throw new VerbUsageError("--interval-ms must be a non-negative integer.");
   }
@@ -533,30 +545,6 @@ function readPace(
 
   const intervalSource = intervalRaw !== undefined ? "flag" : monitor !== null && monitor.pollSeconds !== null ? "policy" : "default";
   return { intervalMs, intervalSource, maxIterations };
-}
-
-/**
- * The target's `monitor` block, or null when the checkout declares no policy
- * file. A present-but-malformed policy throws, exactly as every other reader
- * of that file lets it: a watch paced by a file it could not read is a watch
- * paced by a guess.
- */
-function readMonitor(context: CommandContext): { pollSeconds: number | null; maxCycles: number | null } | null {
-  const root = resolveRepoRoot({ repoFlag: context.repoFlag });
-  const loaded = loadWorkflow(root);
-  if (!loaded.present) return null;
-  // ONLY WHAT THE FILE DECLARES, KEY BY KEY. `loadWorkflow` fills an absent
-  // block with nen's own defaults (300 s, 20 cycles); a watch that read those
-  // as the repository's policy would turn a 5-second unbounded watch into a
-  // 300-second one that exits after 20 observations, in a repository that
-  // said nothing (review finding on zheref/nen#216).
-  const raw = loaded.workflow.monitor.raw;
-  const declared = (key: "pollSeconds" | "maxCycles"): number | null =>
-    typeof raw[key] === "number" ? loaded.workflow.monitor[key] : null;
-  const pollSeconds = declared("pollSeconds");
-  const maxCycles = declared("maxCycles");
-  if (pollSeconds === null && maxCycles === null) return null;
-  return { pollSeconds, maxCycles };
 }
 
 function printOutcome(context: CommandContext, result: WatchResult): void {

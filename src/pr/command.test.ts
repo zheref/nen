@@ -1326,7 +1326,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
   // FIRST -- against this pull request's own known bots, then against
   // --target's collaborators -- before either route is called.
   const KNOWN_BOTS_TARGET: Target = { owner: "zheref", repo: "nen", slug: "zheref/nen" };
-  const NO_KNOWN_BOTS = { stdout: JSON.stringify({ data: { repository: { defaultBranchRef: { name: "main", target: { oid: "BASE1" } }, pullRequest: { id: "PR_1", baseRefOid: "BASE1", reviewRequests: { nodes: [] }, timelineItems: { nodes: [] } } } } }) };
+  const NO_KNOWN_BOTS = { stdout: JSON.stringify({ data: { repository: { defaultBranchRef: { name: "main", target: { oid: "BASE1" } }, pullRequest: { id: "PR_1", baseRefOid: "BASE1", headRefOid: "a".repeat(40), reviewRequests: { nodes: [] }, timelineItems: { nodes: [] } } } } }) };
   const KNOWN_BOT_COPILOT = {
     stdout: JSON.stringify({
       data: {
@@ -1366,6 +1366,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
       data: {
         requestReviews: {
           pullRequest: {
+            headRefOid: "a".repeat(40),
             reviewRequests: {
               nodes: logins.map((login, index): unknown => ({
                 requestedReviewer: { __typename: "Bot", login, id: ids?.[index] ?? `BOT_${index + 1}` },
@@ -1506,9 +1507,10 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
   // zheref/nen#277: the call zheref/hatsu#123, #128 and #130 made on
   // 2026-09-29 -- accepted, answered, and recording nothing. It used to exit 0
   // with "(none reported back)" while no review was ever coming.
-  const BOT_MUTATION_RECORDS_NOTHING = {
-    stdout: JSON.stringify({ data: { requestReviews: { pullRequest: { reviewRequests: { nodes: [] } } } } }),
-  };
+  const botMutationRecordsNothing = (head = "a".repeat(40)): { stdout: string } => ({
+    stdout: JSON.stringify({ data: { requestReviews: { pullRequest: { headRefOid: head, reviewRequests: { nodes: [] } } } } }),
+  });
+  const BOT_MUTATION_RECORDS_NOTHING = botMutationRecordsNothing();
 
   it("exits 9 naming the bot when GitHub accepts an --add-bots request but records no pending review for it (zheref/nen#277)", async () => {
     const script: readonly ScriptedCall[] = [
@@ -1527,11 +1529,15 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
     expect(out).not.toMatch(/none reported back/);
   });
 
-  it("--json carries the same fact: ok false, unrecordedBots naming the bot, under exit 9", async () => {
+  it.each([["a".repeat(40), "a".repeat(40)], ["b".repeat(40), null]] as const)("--json binds an exit-9 response to a matching mutation head (%s)", async (mutationHead, requestHead) => {
     const script: readonly ScriptedCall[] = [
       { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS },
       ...NO_BASE_GATES,
-      { match: `gh ${requestBotReviewsArgv("PR_1", ["BOT_kgDOCnlnWA"]).join(" ")}`, result: BOT_MUTATION_RECORDS_NOTHING },
+      { match: `gh ${requestBotReviewsArgv("PR_1", ["BOT_kgDOCnlnWA"]).join(" ")}`, result: botMutationRecordsNothing(mutationHead) },
+      {
+        match: `gh ${botNodesArgv(["BOT_kgDOCnlnWA"]).join(" ")}`,
+        result: { stdout: JSON.stringify({ data: { nodes: [{ __typename: "Bot", id: "BOT_kgDOCnlnWA", login: "reviewer-bot" }] } }) },
+      },
     ];
     const result = await capture(
       ["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-bots", "BOT_kgDOCnlnWA", "--json"],
@@ -1541,7 +1547,8 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
     expect(result.code).toBe(9);
     const report = JSON.parse(result.out.join("\n")) as { ok: boolean; unrecordedBots: unknown; message: string; routing: unknown };
     expect(report.ok).toBe(false);
-    expect(report.unrecordedBots).toEqual([{ id: "BOT_kgDOCnlnWA", login: null }]);
+    expect(report.unrecordedBots).toEqual([{ id: "BOT_kgDOCnlnWA", login: "reviewer-bot" }]);
+    expect(report).toMatchObject({ repo: "zheref/nen", pr: 9, exitCode: 9, requestHead });
     expect(report.message).toContain("cannot determine allowance exhaustion");
     expect(report.message).toMatch(/its response did not list it for BOT_kgDOCnlnWA/);
     expect(report.routing).toEqual([{ name: "BOT_kgDOCnlnWA", via: "add-bots", route: "bot", id: "BOT_kgDOCnlnWA" }]);
@@ -1592,6 +1599,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
     const report = JSON.parse(result.out.join("\n")) as { ok: boolean; unrecordedBots: unknown; message: string };
     expect(report.ok).toBe(false);
     expect(report.unrecordedBots).toEqual([{ id: "BOT_kgDOCnlnWA", login: null }]);
+    expect(report).toMatchObject({ repo: "zheref/nen", pr: 9, exitCode: 1, requestHead: "a".repeat(40) });
     expect(report.message).toContain("cannot determine allowance exhaustion");
   });
 
@@ -1610,6 +1618,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
     const report = JSON.parse(result.out.join("\n")) as { ok: boolean; unrecordedBots: unknown; message: string };
     expect(report.ok).toBe(true);
     expect(report.unrecordedBots).toEqual([]);
+    expect(report).toMatchObject({ exitCode: 0, requestHead: "a".repeat(40) });
   });
 
   // ── the round ceiling, round_policy.maxRounds (zheref/nen#240) ───────────
