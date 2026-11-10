@@ -1366,6 +1366,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
       data: {
         requestReviews: {
           pullRequest: {
+            headRefOid: "a".repeat(40),
             reviewRequests: {
               nodes: logins.map((login, index): unknown => ({
                 requestedReviewer: { __typename: "Bot", login, id: ids?.[index] ?? `BOT_${index + 1}` },
@@ -1533,6 +1534,10 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
       { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS },
       ...NO_BASE_GATES,
       { match: `gh ${requestBotReviewsArgv("PR_1", ["BOT_kgDOCnlnWA"]).join(" ")}`, result: botMutationRecordsNothing(mutationHead) },
+      {
+        match: `gh ${botNodesArgv(["BOT_kgDOCnlnWA"]).join(" ")}`,
+        result: { stdout: JSON.stringify({ data: { nodes: [{ __typename: "Bot", id: "BOT_kgDOCnlnWA", login: "reviewer-bot" }] } }) },
+      },
     ];
     const result = await capture(
       ["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-bots", "BOT_kgDOCnlnWA", "--json"],
@@ -1542,7 +1547,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
     expect(result.code).toBe(9);
     const report = JSON.parse(result.out.join("\n")) as { ok: boolean; unrecordedBots: unknown; message: string; routing: unknown };
     expect(report.ok).toBe(false);
-    expect(report.unrecordedBots).toEqual([{ id: "BOT_kgDOCnlnWA", login: null }]);
+    expect(report.unrecordedBots).toEqual([{ id: "BOT_kgDOCnlnWA", login: "reviewer-bot" }]);
     expect(report).toMatchObject({ repo: "zheref/nen", pr: 9, exitCode: 9, requestHead });
     expect(report.message).toContain("cannot determine allowance exhaustion");
     expect(report.message).toMatch(/its response did not list it for BOT_kgDOCnlnWA/);
@@ -1613,6 +1618,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
     const report = JSON.parse(result.out.join("\n")) as { ok: boolean; unrecordedBots: unknown; message: string };
     expect(report.ok).toBe(true);
     expect(report.unrecordedBots).toEqual([]);
+    expect(report).toMatchObject({ exitCode: 0, requestHead: "a".repeat(40) });
   });
 
   // ── the round ceiling, round_policy.maxRounds (zheref/nen#240) ───────────

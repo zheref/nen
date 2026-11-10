@@ -549,5 +549,6 @@ export function requestBotReviews(
     }`,
     pendingBotLogins,
     unrecordedBots: [],
+    ...(typeof pr?.headRefOid === "string" ? { observedHead: pr.headRefOid } : {}),
   };
 }

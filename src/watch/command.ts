@@ -29,7 +29,7 @@ import { observeLifecycle, readLifecycle, resolveLifecycleRef, type LifecycleRea
 import { defaultDeps, PR_READY_FLAGS, readReady, renderDeclaredExclusions, type PrReadyDeps, type ReadyRead, type ReadyReport } from "../verbs/pr_ready.js";
 import { plainLine } from "../cli/plain.js";
 import { sixthStopObservation } from "../stop/sixth-stop.js";
-import { loadWorkflow } from "../schema/workflow.js";
+import { DEFAULT_WATCH_INTERVAL_MS, PR_MIN_INTERVAL_MS, readWatchMonitor } from "./policy.js";
 import { resolveRepoRoot } from "../repo/root.js";
 import { PROGRAM } from "../version.js";
 
@@ -280,8 +280,6 @@ function runCommand(context: CommandContext): number {
   return result.outcome === "condition-true" ? 0 : 1;
 }
 
-/** The `--pr` form's pacing floor: every poll is several GitHub API calls (F4 on zheref/nen#264). */
-export const PR_MIN_INTERVAL_MS = 30_000;
 /** The `--pr` form's bound when neither a flag nor a monitor policy states one (N6). */
 export const PR_DEFAULT_BOUND_MS = 2 * 60 * 60 * 1000;
 
@@ -523,10 +521,10 @@ function readPace(
   // and through v0.10.0 this verb parsed neither: the file said 300 s and
   // the watch polled every 5 s. A flag still wins -- a caller who types
   // --interval-ms meant it -- and an absent policy keeps the old 5000.
-  const monitor = readMonitor(context);
+  const monitor = readWatchMonitor(resolveRepoRoot({ repoFlag: context.repoFlag }));
   const intervalRaw = context.args.values["interval-ms"];
   const intervalMs =
-    intervalRaw === undefined ? (monitor === null || monitor.pollSeconds === null ? 5000 : monitor.pollSeconds * 1000) : Number(intervalRaw);
+    intervalRaw === undefined ? (monitor === null || monitor.pollSeconds === null ? DEFAULT_WATCH_INTERVAL_MS : monitor.pollSeconds * 1000) : Number(intervalRaw);
   if (!Number.isInteger(intervalMs) || intervalMs < 0) {
     throw new VerbUsageError("--interval-ms must be a non-negative integer.");
   }
@@ -547,30 +545,6 @@ function readPace(
 
   const intervalSource = intervalRaw !== undefined ? "flag" : monitor !== null && monitor.pollSeconds !== null ? "policy" : "default";
   return { intervalMs, intervalSource, maxIterations };
-}
-
-/**
- * The target's `monitor` block, or null when the checkout declares no policy
- * file. A present-but-malformed policy throws, exactly as every other reader
- * of that file lets it: a watch paced by a file it could not read is a watch
- * paced by a guess.
- */
-function readMonitor(context: CommandContext): { pollSeconds: number | null; maxCycles: number | null } | null {
-  const root = resolveRepoRoot({ repoFlag: context.repoFlag });
-  const loaded = loadWorkflow(root);
-  if (!loaded.present) return null;
-  // ONLY WHAT THE FILE DECLARES, KEY BY KEY. `loadWorkflow` fills an absent
-  // block with nen's own defaults (300 s, 20 cycles); a watch that read those
-  // as the repository's policy would turn a 5-second unbounded watch into a
-  // 300-second one that exits after 20 observations, in a repository that
-  // said nothing (review finding on zheref/nen#216).
-  const raw = loaded.workflow.monitor.raw;
-  const declared = (key: "pollSeconds" | "maxCycles"): number | null =>
-    typeof raw[key] === "number" ? loaded.workflow.monitor[key] : null;
-  const pollSeconds = declared("pollSeconds");
-  const maxCycles = declared("maxCycles");
-  if (pollSeconds === null && maxCycles === null) return null;
-  return { pollSeconds, maxCycles };
 }
 
 function printOutcome(context: CommandContext, result: WatchResult): void {

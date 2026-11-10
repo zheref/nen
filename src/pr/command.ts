@@ -610,7 +610,7 @@ request-reviews:
   call was ACCEPTED but at least one requested bot is absent from the
   response's pending-review page
   -- named in the message, and in --json's 'unrecordedBots' ([{ id, login
-  }], login null for a bot this pull request has never seen). The response cannot determine allowance exhaustion versus an otherwise
+  }], login null when a bot cannot be named). Exit-9 JSON resolves an unseen bot by node ID when possible. The response cannot determine allowance exhaustion versus an otherwise
   unrecorded request; its first:100 page may omit a pending bot. When a call also failed outright, 1 wins and
   'unrecordedBots' still names the bot. Actual calls add repo, pr and
   requestHead and exitCode to --json so another command can bind evidence
@@ -2329,14 +2329,34 @@ function doRequestReviews(context: CommandContext): number {
   // least one requested bot is absent from the response's pending-review page.
   const failedOutright = results.some((result): boolean => !result.ok && (result.unrecordedBots ?? []).length === 0);
   const code = ok ? 0 : failedOutright ? 1 : EXIT_BOT_REQUEST_UNRECORDED;
+  const evidenceBots = context.json && code === EXIT_BOT_REQUEST_UNRECORDED
+    ? nameUnrecordedBots(context.seams, unrecordedBots, canonicalIds, ceiling?.rounds ?? [])
+    : unrecordedBots;
   const lines = [...skippedLines, ...results.map((result): string => result.message), ...ceilingLines];
   // JOINED WITH A NEWLINE, matching the human rendering line for line
   // (Copilot review, PR #174) -- both routes running in the same call
   // prints two lines to the terminal, and `--json`'s `message` field
   // silently collapsing them with a space would be a fact the human
   // rendering states plainly and the JSON rendering blurs.
-  emit(context.io, context.json, { ok, skipped, routing: routes, message: lines.join("\n"), unrecordedBots, repo: target.slug, pr: prNumber, requestHead, exitCode: code, ...ceilingJson }, lines);
+  emit(context.io, context.json, { ok, skipped, routing: routes, message: lines.join("\n"), unrecordedBots: evidenceBots, repo: target.slug, pr: prNumber, requestHead, exitCode: code, ...ceilingJson }, lines);
   return code;
+}
+
+/** Keep a successful mutation's exit code even if the evidence lookup is unreadable. */
+function nameUnrecordedBots(
+  seams: Seams, bots: readonly UnrecordedBot[], canonical: ReadonlyMap<string, string>, rounds: readonly BotRound[],
+): readonly UnrecordedBot[] {
+  const named = bots.map((bot): UnrecordedBot => ({
+    id: bot.id,
+    login: bot.login ?? canonical.get(bot.id) ?? rounds.find((round) => round.id === bot.id)?.login ?? null,
+  }));
+  try {
+    const resolved = canonicalBotLogins(seams, named.filter((bot) => bot.login === null).map((bot) => bot.id));
+    return named.map((bot): UnrecordedBot => ({ ...bot, login: bot.login ?? resolved.get(bot.id) ?? null }));
+  } catch (error) {
+    if (!(error instanceof RoundCeilingError)) throw error;
+    return named;
+  }
 }
 
 /**

@@ -7,9 +7,9 @@ import { withLedgerLock, writeLedgerAtomically } from "../ledger/lock.js";
 import { realContainment } from "../repo/contain.js";
 import { gitCommonDir } from "../run/manifest.js";
 import { isRecord } from "../schema/errors.js";
-import { loadWorkflow } from "../schema/workflow.js";
 import type { Seams } from "../seam/exec.js";
 import type { ReadyReport } from "../verbs/pr_ready.js";
+import { DEFAULT_WATCH_INTERVAL_MS, PR_MIN_INTERVAL_MS, readWatchMonitor } from "../watch/policy.js";
 import { readPrompt, type PromptIdentity } from "./prompt.js";
 
 const CONTRACT = "nen.stop.sixth-stop/v0.1";
@@ -210,7 +210,8 @@ function checkedIdentity(identity: PromptIdentity): PromptIdentity {
 }
 
 function policyInterval(root: string): number {
-  return Math.max(30_000, loadWorkflow(root).workflow.monitor.pollSeconds * 1000);
+  const declared = readWatchMonitor(root)?.pollSeconds;
+  return Math.max(PR_MIN_INTERVAL_MS, declared == null ? DEFAULT_WATCH_INTERVAL_MS : declared * 1000);
 }
 
 export function readSixthStop(seams: Seams, root: string, identity: PromptIdentity, repo: string, repairOnly: boolean): SixthStopRead {

@@ -205,17 +205,18 @@ interface HandoffCheck {
 }
 
 function checkHandoff(deps: FromRunDeps, identity: PromptIdentity | undefined, prompted: boolean, readiness: ReadinessRead): HandoffCheck {
-  if (identity === undefined || deps.sixthStop === undefined || !readiness.ok) return {};
-  const report = readiness.report;
-  if (report?.judgedHead !== identity.head) {
-    const reason = "sixth-stop readiness was judged at a different head";
-    return { slots: { repairHold: true }, fact: reason, unread: reason };
-  }
-  const quorum = readiness.ready ? null : sixthStopQuorum(report);
+  if (identity === undefined || deps.sixthStop === undefined) return {};
+  const report = readiness.ok ? readiness.report : undefined;
+  const quorum = report?.judgedHead === identity.head && report.verdict !== "ready" ? sixthStopQuorum(report) : null;
   const evidence = deps.sixthStop(identity, quorum?.ok !== true || !prompted);
   if (evidence.status === "repair-hold") return { slots: { repairHold: true }, fact: "sixth-stop repair hold recorded" };
   if (evidence.status === "unread") {
     return { slots: { repairHold: true }, fact: "sixth-stop evidence unread", unread: evidence.reason };
+  }
+  if (!readiness.ok) return {};
+  if (report?.judgedHead !== identity.head) {
+    const reason = "sixth-stop readiness was judged at a different head";
+    return { slots: { repairHold: true }, fact: reason, unread: reason };
   }
   if (quorum === null) return {};
   if (!quorum.ok) return { fact: quorum.reason, ...(quorum.unread === true ? { unread: quorum.reason, slots: { repairHold: true } } : {}) };

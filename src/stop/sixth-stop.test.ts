@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -58,13 +58,13 @@ function verdict(head = HEAD, members = [requested, event], failing: SixthStopRe
   };
 }
 
-function watch(start: number, head = HEAD, absentReviewers = ["event"]): unknown {
+function watch(start: number, head = HEAD, absentReviewers = ["event"], intervalMs = 300_000): unknown {
   return {
     until: "ready",
     outcome: "max-iterations",
-    intervalMs: 300_000,
+    intervalMs,
     iterations: [1, 2].map((iteration) => ({ iteration, errored: false, conditionTrue: false })),
-    sixthStopObservations: [start, start + 300_000].map((at) => ({
+    sixthStopObservations: [start, start + intervalMs].map((at) => ({
       repo: REPO, pr: 7, head, absentReviewers, at: new Date(Date.parse(now) + at).toISOString(),
     })),
   };
@@ -148,7 +148,9 @@ describe("run-derived sixth-stop slot accounting", () => {
     for (const windows of [[watch(0)], [watch(0), watch(0)], [watch(0), watch(300_000, NEXT)]]) {
       expect(() => recordSixthStop(seams, root, identity, REPO, "handoff", { ...evidence, windows })).toThrow();
     }
-    const short = { ...(watch(0) as Record<string, unknown>), intervalMs: 30_000 };
+    mkdirSync(join(root, "nen"));
+    writeFileSync(join(root, "nen", "workflow.json"), JSON.stringify({ monitor: { pollSeconds: 300 } }));
+    const short = watch(0, HEAD, ["event"], 30_000);
     const future = Date.parse("2099-01-01T00:00:00Z") - Date.parse(now);
     for (const windows of [[short, watch(300_000)], [watch(future), watch(future + 300_000)]]) {
       expect(() => recordSixthStop(seams, root, identity, REPO, "handoff", { ...evidence, windows })).toThrow();
@@ -159,6 +161,29 @@ describe("run-derived sixth-stop slot accounting", () => {
     expect((await count(verdict(HEAD, [requested, pending]))).slots.occupied).toBe(1);
     expect(sixthStopObservation(verdict(HEAD, [requested, absent]))).toMatchObject({ head: HEAD, absentReviewers: ["event"] });
     expect(sixthStopObservation(verdict(HEAD, [requested, absent], ["checks-green", "rounds-owed"]))).toBeNull();
+  });
+
+  it("accepts the PR watch floor without a declared poll interval", async () => {
+    await stop("--prompt-shown");
+    const windows = [watch(0, HEAD, ["event"], 30_000), watch(30_000, HEAD, ["event"], 30_000)];
+    recordSixthStop(seams, root, identity, REPO, "handoff", { ...evidence, windows });
+    expect((await count(verdict(HEAD, [requested, absent]))).slots.occupied).toBe(0);
+  });
+
+  it("keeps a stacked slot occupied after a readiness read failure if repair was recorded", async () => {
+    expect(await stop("--repair-hold", "--target", REPO)).toBe(0);
+    const parent = { ...manifest.prs[0]!, pr: 8, branch: "parent", head: NEXT };
+    const built = await effortsFromRun({ ...manifest, prs: [...manifest.prs, parent] }, {
+      readPr: (pr) => ({ ok: true, pr: pr === 7
+        ? { state: "open", base: "parent", headRef: "topic", head: HEAD, createdAt: null }
+        : { state: "merged", base: "main", headRef: "parent", head: NEXT, createdAt: null } }),
+      readiness: async () => ({ ok: false, reason: "GitHub is unavailable" }),
+      marker: (branch, proof) => markerForBranch(seams, root, branch, proof),
+      sixthStop: (proof, repairOnly) => readSixthStop(seams, root, proof, REPO, repairOnly),
+      promptGate: "G4",
+    });
+    expect(built.efforts[0]).toMatchObject({ stacked: true, repairHold: true });
+    expect(computeSlots(built.efforts, { local: 7, ci: 2 }, "stacked-open").local.occupied).toBe(1);
   });
 
   it("keeps slots held when checks are unevaluated or the request names another reviewer", async () => {
