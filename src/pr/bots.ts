@@ -259,6 +259,10 @@ export function botLoginKey(login: string): string {
   return isBotLoginAlias(short) ? GITHUB_BOT_LOGIN_ALIASES[short]! : short;
 }
 
+export function matchesBotLogin(pattern: RegExp, login: string): boolean {
+  return pattern.test(login) || pattern.test(`${botLoginKey(login)}[bot]`);
+}
+
 /** Bot reviewer IDs only. Modern payloads stay opaque; legacy IDs must be
  * canonical base64 of the exact Bot form, never a User or another node type. */
 export function isReviewerNodeId(value: string): boolean {
@@ -360,7 +364,7 @@ export function isCollaborator(seams: Seams, target: Target, login: string): boo
 // reader that silently accepted a Bot fragment missing it would be a second,
 // looser definition of "this is a bot" living beside the first.
 const REQUEST_BOT_REVIEWS_MUTATION =
-  "mutation($prId:ID!,$botIds:[ID!]!){requestReviews(input:{pullRequestId:$prId,botIds:$botIds,union:true}){pullRequest{" +
+  "mutation($prId:ID!,$botIds:[ID!]!){requestReviews(input:{pullRequestId:$prId,botIds:$botIds,union:true}){pullRequest{headRefOid " +
   "reviewRequests(first:100){nodes{requestedReviewer{__typename ... on Bot{login id}}}}}}}";
 
 export function requestBotReviewsArgv(pullRequestId: string, botIds: readonly string[]): readonly string[] {
@@ -419,6 +423,8 @@ export interface UnrecordedBot {
 
 export interface RequestBotReviewsResult {
   readonly ok: boolean;
+  /** The head returned by the mutation, when GitHub reported it. */
+  readonly observedHead?: string;
   readonly message: string;
   /** The bot logins `gh`'s OWN response says are now pending review -- see the module header. */
   readonly pendingBotLogins: readonly string[];
@@ -478,7 +484,7 @@ export function requestBotReviews(
   }
   let parsed: {
     data?: {
-      requestReviews?: { pullRequest?: { reviewRequests?: { nodes?: unknown } } } | null;
+      requestReviews?: { pullRequest?: { headRefOid?: unknown; reviewRequests?: { nodes?: unknown } } } | null;
     };
   };
   try {
@@ -491,7 +497,8 @@ export function requestBotReviews(
       unrecordedBots: [],
     };
   }
-  const nodes = parsed.data?.requestReviews?.pullRequest?.reviewRequests?.nodes;
+  const pr = parsed.data?.requestReviews?.pullRequest;
+  const nodes = pr?.reviewRequests?.nodes;
   // NO LIST AT ALL IS "COULD NOT READ", NOT "READ, AND THE BOT IS ABSENT".
   // A response with no `reviewRequests.nodes` array (a null `requestReviews`,
   // a missing pull request) says nothing about which bot landed, so it is the
@@ -532,6 +539,7 @@ export function requestBotReviews(
       }.`,
       pendingBotLogins,
       unrecordedBots,
+      ...(typeof pr?.headRefOid === "string" ? { observedHead: pr.headRefOid } : {}),
     };
   }
   return {

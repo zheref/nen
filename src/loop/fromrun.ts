@@ -1,3 +1,4 @@
+import { matchesBotLogin } from "../pr/bots.js";
 import { readPrompt, type PromptIdentity } from "../stop/prompt.js";
 import { sixthStopQuorum, unprovenReviewer, type SixthStopRead, type SixthStopReadiness } from "../stop/sixth-stop.js";
 // src/loop/fromrun.ts -- `nen loop slots --from-run`: the efforts document
@@ -251,6 +252,9 @@ export async function readinessInProcess(slug: string, pr: number, repoRoot: str
   if (read.report.verdict === "unevaluated") return { ok: false, reason: read.report.remedy ?? read.report.gateLine };
   return {
     ok: true, ready: read.report.verdict === "ready", report: read.report,
-    reviewerMatches: (reviewer, login) => read.identities?.reviewer(reviewer)?.loginPattern.test(login) === true,
+    reviewerMatches: (reviewer, login): boolean => {
+      const identity = read.identities?.reviewer(reviewer);
+      return identity !== undefined && matchesBotLogin(identity.loginPattern, login);
+    },
   };
 }

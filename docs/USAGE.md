@@ -20884,7 +20884,8 @@ The evidence file has `requests` and `windows` arrays. A request entry
 records the configured reviewer name, the full pre-request `head`,
 `exitCode: 9`, and the verbatim `request-reviews --json` object as `result`.
 Each request can prove unavailability for one bot. Nen checks its returned
-repository, PR and request head, and matches the bot route login to the live
+repository, PR, producer exit code and head. The mutation response and
+pre-request read must name the same head. Nen matches the bot route login to the live
 base-gate reviewer. A window is the verbatim
 JSON from a head-pinned `nen watch until --pr <ref> --until ready --require-base-gates
 --require-head <sha> --max-iterations 2 --json` call. The two windows must

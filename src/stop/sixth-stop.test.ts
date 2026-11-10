@@ -30,7 +30,7 @@ const absent: QuorumMember = {
   ...event, roundCheck: { pattern: "^Round$", name: null, state: "absent", conclusion: null, from: null, sha: null },
 };
 const evidence = {
-  requests: [{ reviewer: "requested", head: HEAD, exitCode: 9, result: { ok: false, repo: REPO, pr: 7, requestHead: HEAD, routing: [{ route: "bot", id: "BOT_1", name: "requested-bot" }], unrecordedBots: [{ id: "BOT_1", login: null }] } }],
+  requests: [{ reviewer: "requested", head: HEAD, exitCode: 9, result: { ok: false, repo: REPO, pr: 7, requestHead: HEAD, exitCode: 9, routing: [{ route: "bot", id: "BOT_1", name: "requested-bot" }], unrecordedBots: [{ id: "BOT_1", login: null }] } }],
   windows: [],
 };
 const manifest: RunManifest = {
@@ -164,9 +164,11 @@ describe("run-derived sixth-stop slot accounting", () => {
   it("keeps slots held when checks are unevaluated or the request names another reviewer", async () => {
     await stop("--prompt-shown");
     const request = evidence.requests[0]!;
-    expect(() => recordSixthStop(seams, root, identity, REPO, "handoff", {
-      requests: [{ ...request, result: { ...request.result, pr: 9 } }], windows: [],
-    })).toThrow(/exact delivery/);
+    for (const invalid of [{ pr: 9 }, { requestHead: NEXT }, { exitCode: 1 }]) {
+      expect(() => recordSixthStop(seams, root, identity, REPO, "handoff", {
+        requests: [{ ...request, result: { ...request.result, ...invalid } }], windows: [],
+      })).toThrow(/exact delivery/);
+    }
     const path = recordSixthStop(seams, root, identity, REPO, "handoff", evidence);
     const current = verdict();
     const unread = await count({ ...current, conjuncts: [...current.conjuncts, { id: "checks-green", status: "unevaluated" }] });

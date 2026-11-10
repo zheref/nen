@@ -150,7 +150,7 @@ function parseEvidence(value: unknown, identity: PromptIdentity, context: Eviden
       throw new Error("sixth-stop request evidence needs an exit-9 request at the judged head");
     }
     const result = request["result"];
-    if (!isRecord(result) || result["ok"] !== false || result["requestHead"] !== identity.head || result["pr"] !== identity.pr
+    if (!isRecord(result) || result["ok"] !== false || result["exitCode"] !== 9 || result["requestHead"] !== identity.head || result["pr"] !== identity.pr
       || !isName(result["repo"]) || (context.repo !== undefined && result["repo"].toLowerCase() !== context.repo.toLowerCase())
       || !Array.isArray(result["unrecordedBots"]) || result["unrecordedBots"].length !== 1) {
       throw new Error("sixth-stop request evidence needs one unrecorded bot on the exact delivery");
