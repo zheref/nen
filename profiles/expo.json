@@ -30,6 +30,20 @@
       "why": "the other half of the same conjunction, and it is a marker for the same reason: `android/` beside `ios/` is what makes the workflow BARE. Stated as its own row because the rule is an AND, and a table that names only one of the two directories reads as if either alone were enough."
     }
   ],
+  "crossChecks": [
+    {
+      "verbs": ["build"],
+      "markers": [
+        {
+          "pattern": "package.json",
+          "contains": "expo export",
+          "why": "THE BUILD-ONLY COMMAND, SPELLED IN THE LANE'S OWN MANIFEST. `{pm} run build` runs whatever the `build` script says, and a script saying `expo run:ios` builds AND launches -- the `run` row's work, under this row's build-only reason. The reference's script is `expo export` (Market apps/mobile/package.json:8), so a lane whose manifest never spells that command does not get this row's reason quoted at it."
+        }
+      ],
+      "answers": null,
+      "why": "`build` is the export, never the launch: proposed only where the lane's package.json spells `expo export`."
+    }
+  ],
   "hosts": {
     "*": ["darwin", "linux", "win32"]
   },
@@ -50,8 +64,8 @@
     },
     "test": {
       "exe": "{pm}",
-      "argv": ["exec", "jest", "--ci"],
-      "why": "Jest with the `jest-expo` preset and React Native Testing Library -- the Expo-target logic layer of the `react-uzf-v1` quality baseline. The reference's jest.config.js selects `__tests__/` (screens from `app/`, which expo-router would otherwise route as pages) and `src/`, and its suite renders a real screen. `jest` is invoked through the project's own dependency, never a global install.",
+      "argv": ["exec", "--", "jest", "--ci"],
+      "why": "Jest with the `jest-expo` preset and React Native Testing Library -- the Expo-target logic layer of the `react-uzf-v1` quality baseline. The reference's jest.config.js selects `__tests__/` (screens from `app/`, which expo-router would otherwise route as pages) and `src/`, and its suite renders a real screen. `jest` is invoked through the project's own dependency, never a global install, and after `--` so `npm exec` forwards `--ci` to Jest instead of reading it as its own option (pnpm, yarn and `bun x` accept the same separator).",
       "source": "Market nen/contract.json:25-33; apps/mobile/package.json:11, :37, :42-43; apps/mobile/jest.config.js:3-4"
     },
     "ui-test": {
@@ -101,8 +115,8 @@
     },
     "coverage": {
       "exe": "{pm}",
-      "argv": ["exec", "jest", "--ci", "--coverage"],
-      "why": "The same Jest run as `test`, instrumented. The reference's jest.config.js collects from `app/`, `src/` and `plugins/` and writes the `text`, `lcov` and `json-summary` reporters to the lane's own `coverage/` directory, which its declaration names as this row's artifact. `jest` is invoked through the project's own dependency.",
+      "argv": ["exec", "--", "jest", "--ci", "--coverage"],
+      "why": "The same Jest run as `test`, instrumented. The reference's jest.config.js collects from `app/`, `src/` and `plugins/` and writes the `text`, `lcov` and `json-summary` reporters to the lane's own `coverage/` directory, which its declaration names as this row's artifact. `jest` is invoked through the project's own dependency, after the same `--` as `test`.",
       "source": "Market nen/contract.json:71-83; apps/mobile/package.json:12; apps/mobile/jest.config.js:11-18"
     },
     "tools": {

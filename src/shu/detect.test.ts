@@ -3945,7 +3945,29 @@ describe("nen shu detect -- the expo stack, three lanes in one tree", () => {
     const bareNote = laneNamed("expo")?.notes.find((entry): boolean =>
       entry.startsWith("'build' withheld"),
     );
-    expect(bareNote).toMatch(/declares no such script/);
+    expect(bareNote).toMatch(/carries the evidence this row needs \('package\.json' carrying 'expo export'\)/);
+  });
+
+  // THE COUNTEREXAMPLE (zheref/nen#643): a lane whose `build` SCRIPT launches.
+  // The script key exists, so the script check alone would pass the row and
+  // `nen shu build` would quote the build-only reason over `expo run:ios`.
+  it("withholds build where the lane's build script is a launch, not the export", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-expo-launching-build-"));
+    try {
+      cpSync(EXPO_MANAGED, dir, { recursive: true });
+      const manifest = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as {
+        scripts: Record<string, string>;
+      };
+      manifest.scripts["build"] = "expo run:ios";
+      writeFileSync(join(dir, "package.json"), JSON.stringify(manifest, null, 2));
+      const lane = detect(dir).lanes.find((entry): boolean => entry.stack === "expo");
+      expect(commandRows(lane?.verbs)).not.toContain("build");
+      expect(lane?.notes.find((entry): boolean => entry.startsWith("'build' withheld"))).toMatch(
+        /'package\.json' carrying 'expo export'/,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   // MUTANT 2.
@@ -6214,14 +6236,16 @@ describe("nen shu detect -- the expo proposal, executed", () => {
     }
   });
 
-  it("leaves the withheld build row out of the written file, so build refuses at exit 4", async () => {
+  it("seats the withheld build row with its reason, so build refuses at exit 4", async () => {
     const dir = mkdtempSync(join(tmpdir(), "nen-expo-seat-"));
     try {
       cpSync(EXPO_BARE, dir, { recursive: true });
       expect((await capture(["detect", "--write"], dir)).code).toBe(0);
       const result = await capture(["build", "--dry-run", "--lane", "expo"], dir);
       expect(result.code).toBe(4);
-      expect(result.err.join("\n")).toMatch(/lane 'expo' \(expo\) declares no 'build'/);
+      expect(result.err.join("\n")).toMatch(
+        /'build' is unsupported on lane 'expo' \(expo\).*no file in this lane carries the evidence/,
+      );
       // And nothing was spawned to find that out.
       expect(result.out).toEqual([]);
     } finally {
@@ -6235,10 +6259,10 @@ describe("nen shu detect -- the expo proposal, executed", () => {
   const MANAGED: Readonly<Record<string, readonly string[]>> = {
     archive: ["would run:     pnpm run archive"],
     build: ["would run:     pnpm run build"],
-    coverage: ["would run:     pnpm exec jest --ci --coverage"],
+    coverage: ["would run:     pnpm exec -- jest --ci --coverage"],
     dev: ["would run:     expo start"],
     lint: ["would run:     expo lint"],
-    test: ["would run:     pnpm exec jest --ci"],
+    test: ["would run:     pnpm exec -- jest --ci"],
     "ui-test": ["would run:     maestro test .maestro"],
   };
 
@@ -6257,6 +6281,36 @@ describe("nen shu detect -- the expo proposal, executed", () => {
           result.out.filter((line): boolean => line.startsWith("would run:")),
           verb,
         ).toEqual(lines);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // THE NPM LANE (zheref/nen#643). `npm exec jest --ci` hands `--ci` to npm,
+  // not Jest; the separator is what forwards it, so the golden pins it.
+  it("renders the Jest rows with npm's separator on an npm-managed lane", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-golden-expo-npm-"));
+    try {
+      cpSync(EXPO_MANAGED, dir, { recursive: true });
+      const manifest = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as Record<
+        string,
+        unknown
+      >;
+      manifest["packageManager"] = "npm@11.13.0";
+      writeFileSync(join(dir, "package.json"), JSON.stringify(manifest, null, 2));
+      expect((await capture(["detect", "--write"], dir)).code).toBe(0);
+      const lane = detect(dir).lanes.find((entry): boolean => entry.stack === "expo")?.lane ?? "";
+      for (const [verb, line] of [
+        ["test", "would run:     npm exec -- jest --ci"],
+        ["coverage", "would run:     npm exec -- jest --ci --coverage"],
+      ] as const) {
+        const result = await capture([verb, "--dry-run", "--lane", lane], dir);
+        expect(result.code, verb).toBe(0);
+        expect(
+          result.out.filter((entry): boolean => entry.startsWith("would run:")),
+          verb,
+        ).toEqual([line]);
       }
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -7469,7 +7523,7 @@ describe("nen shu detect -- the dotnet-winui rows live in the pack, not in this 
     // a rule the project reader acts on" -- and they agreed only by accident
     // while exactly one profile stated either. A borrowed list is a pin that
     // moves when something unrelated does.
-    const READS_THE_TREE: readonly string[] = ["dotnet-winui", "gradle-android"];
+    const READS_THE_TREE: readonly string[] = ["dotnet-winui", "expo", "gradle-android"];
     // And the other list is still what it was, so the divergence above is a
     // real one rather than a rename nobody noticed.
     expect(PACK_MATCHED_STACKS).toEqual(["dotnet-winui"]);
