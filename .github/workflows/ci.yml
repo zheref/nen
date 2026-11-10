@@ -155,7 +155,9 @@ jobs:
           - os: Windows
             runner: '["self-hosted","Windows","X64","pool-windows-x64"]'
     runs-on: ${{ fromJSON(matrix.runner) }}
-    timeout-minutes: 15
+    # 25, not 15: alone, this leg's suite takes ~11.5 min on the pool's host,
+    # too close to 15 to absorb a slow minute (zheref/nen#601's runs).
+    timeout-minutes: 25
     # Every run: step here is bash, the shell the windows-x64 pool's preflight proves
     # (nen/workflow.json -> runners.pools[windows-x64].tools: git bash gh). Without it the
     # runner writes each step to a .ps1 and runs it under Windows PowerShell as the service
@@ -193,8 +195,17 @@ jobs:
       # The whole harness, including the cases that drive bootstrap/nen.sh
       # through `bash`. Those skip themselves on a host with no bash; the guard
       # below makes sure that never silently becomes "the shell is untested".
+      #
+      # --maxWorkers=8: the windows-x64 pool's runners share ONE 16-thread host.
+      # (--minWorkers=1 too: vitest 2 refuses a max below its default minimum,
+      # threads - 1.) Uncapped, vitest takes a worker per thread, so two jobs ran
+      # ~30 workers (each spawning git, bash and bun) and both overran the
+      # timeout or tripped a 5 s test timeout -- all but one concurrent run on
+      # zheref/nen#601 failed or was cancelled, while a lone job passed in
+      # ~11.5 min. 8 per job keeps two jobs at the host's 16 threads. Retune
+      # to threads / runners if the pool's size changes.
       - name: Test
-        run: bun run test
+        run: bun run test -- --minWorkers=1 --maxWorkers=8
 
       # A skip is invisible in a summary, and the shell coverage is exactly the
       # part a cross-platform difference lives in. On ubuntu and macOS, bash

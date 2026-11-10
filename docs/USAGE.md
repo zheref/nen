@@ -480,7 +480,7 @@ verb does by default:
 | [`issue edit-body`](#nen-issue-edit-body) | no | `--dry-run` | **still reads GitHub** to certify the number is an issue, not a PR, before printing the byte count, first/last line, `current body sha256:` and a `body check:` line saying what was and was not checked; with `--expect-body-sha256` it also compares, and a mismatch exits **3** (conflict, nothing written) exactly as a real run would; `--current-body-out <path>` writes the read's exact bytes |
 | [`issue attach-sub`](#nen-issue-attach-sub) | no | `--dry-run` | **still reads GitHub** to certify every number is an issue, not a PR |
 | [`issue consolidate-close`](#nen-issue-consolidate-close) | no | `--dry-run` | **still reads GitHub** for the object-class check and the open-PR guard |
-| [`labels sync`](#nen-labels-sync) | no | `--dry-run` | reads remote labels, without mutations |
+| [`labels sync`](#nen-labels-sync) | no | `--dry-run` | reads remote labels, without mutations; `--ref <ref>` and `--working-tree` invert it — a dry run unless `--apply` |
 | [`labels rename`](#nen-labels-rename) | no | `--dry-run` | **still calls `gh label list`** to decide idempotence |
 | [`label apply`](#nen-label-apply) | yes | `--run` | the ledger line is written either way, with `outcome: "dry-run"` |
 | [`wake verify`](#nen-wake-verify) | yes | `--run` | despite the name, `--run` reruns workflows and posts comments; the dry run also runs the [private-name guard](#the-private-name-guard) ([#363](https://github.com/zheref/nen/issues/363)) |
@@ -948,8 +948,8 @@ retryable exit `4` ([#228](https://github.com/zheref/nen/issues/228)). Fetch
 the bootstrap script, then run it:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.29.0/bootstrap/nen.sh -o nen-bootstrap.sh
-bash nen-bootstrap.sh --ref v0.29.0
+curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.30.0/bootstrap/nen.sh -o nen-bootstrap.sh
+bash nen-bootstrap.sh --ref v0.30.0
 ```
 
 It verifies the downloaded binary against that manifest, caches it under
@@ -957,7 +957,7 @@ It verifies the downloaded binary against that manifest, caches it under
 executable binary on stdout and nothing else — so it composes directly:
 
 ```bash
-nen="$(bash nen-bootstrap.sh --ref v0.29.0)"
+nen="$(bash nen-bootstrap.sh --ref v0.30.0)"
 "$nen" --version
 ```
 
@@ -7510,12 +7510,28 @@ without a failed-create retry. One label's failure does not prevent later labels
 
 ```text
 nen labels sync --target <owner/name> --repo <path> [--dry-run] [--json]
+nen labels sync --target <owner/name> --repo <path> (--ref <ref> | --working-tree) [--apply] [--json]
 ```
 
 Both `--target` and `--repo` are required (missing/malformed target or missing repo:
 exit 2). The checkout supplies `nen/labels.json`; the target independently names
 the GitHub repository. `--dry-run` reads remote labels too, but never mutates them.
 A failed or malformed remote read refuses before any mutation.
+
+**Reading the file from a branch, before it merges** ([#591](https://github.com/zheref/nen/issues/591)).
+`--ref <ref>` reads `nen/labels.json` as a branch, tag or commit in the `--repo` checkout has it
+(`git cat-file blob <ref>:nen/labels.json`, no fetch), so a pull request that adds or changes the labels file
+can diff — and, on purpose, sync — its labels while it is still open. `--working-tree` names the
+checkout's own file explicitly, the file the plain form reads. **Both modes preview by default**:
+nothing is mutated unless `--apply` is given, and stderr opens with `source: <where> (dry run;
+--apply syncs)`. The plain form keeps its behaviour (it syncs unless `--dry-run`). Refused as usage
+errors (exit 2) before any read: `--ref` beside `--working-tree`, `--apply` beside `--dry-run`,
+`--apply` without either mode, and a ref that opens with `-` or carries `:` or whitespace. A ref the
+checkout cannot show, a `--repo` that is not the top of a git work tree (nen never walks up to an
+enclosing repository), or a file there that is not a valid taxonomy, refuses at exit 1 before GitHub
+is read. [`parse izanami`](#nen-parse-izanami) still classifies `labels sync` without `--dry-run` as mutating,
+the conservative reading of the preview modes. `classify install --sync`'s default-branch refusal
+names this mode.
 
 Progress goes to stderr: `[0/N] reading remote labels`, then `[1/N] created: name`,
 `[2/N] unchanged: name`, and so on as each entry finishes, including with `--json`.
@@ -7530,7 +7546,9 @@ There are no timing or progress fields in this document. A failed remote read
 produces no report; its error goes to stderr.
 
 Human stdout prints one result per label; dry-run differences say `would create`
-or `would update` and carry the `would-sync` status in JSON. Exit 0 includes a
+or `would update` and carry the `would-sync` status in JSON. A `would update` line ends with the
+remote's current values of only the fields that differ — `(was: color #000000)`,
+`(was: description "old")`, or both separated by `;` — so a preview is a diff. Exit 0 includes a
 complete no-op; exit 1 names failed reads or mutations. A no-op uses only the
 paginated read, independent of how many
 labels are already declared; GitHub response time is outside Nen's control.
@@ -11320,6 +11338,8 @@ It still never generates scenario-specific project *code* — a framework's own 
 **Templates are data, not code.** Each stack the [profiles pack](#nen-shu-detect) gives a `scaffoldTemplate` name gets that template's files from `templates/<name>/template.json` at the repository root — versioned with nen, readable end to end by a reviewer, and static-imported so `bun build --compile` embeds it. No module under `src/scaffold/` names a build tool, a package manager or a test runner; a test sweeps for one. Two stacks (`compose-desktop`, `dotnet-winui`) carry `scaffoldTemplate: null` and get no workflow, and two more (`gradle-android`, `xcode-ios`) have a workflow but **no fresh-tree form**, because their stack marker is a downloaded jar or an IDE-authored project document and a fabricated marker is a declaration that lies.
 
 **The CI workflow's `toolchain` step reads `shu tools`'s exit code.** It runs the check and fails the job on any non-zero code **except 7** — [behind `pinned_ref`](#behind-the-pinned-ref), meaning the workflow's own `NEN_REF` is older than the `dependency.pinned_ref` in `nen/contract.json`. That is drift in the CI file rather than a broken runner, so the step prints a `::warning::` naming it (repin `NEN_REF`) and the job goes on. Exit 5 — a pinned tool missing or out of range — still fails it.
+
+**More than one lane gets one job per lane** ([#586](https://github.com/zheref/nen/issues/586)). When the proposal declares several lanes — two stacks such as a Next.js app and an Expo app in one monorepo, or one stack in several directories — there is no `defaultLane`, and a verb run without `--lane` refuses. So `init` writes `.github/workflows/nen-shu.yml` from `templates/ci-lanes.json` instead of the stack template: one `shu-<lane>` job per lane, each on the runner its own stack's template names, each running `nen shu tools` then `build`/`test`/`lint` with `--lane <lane>`. Because `project.toolchain` is repository-wide (`--lane` picks the directory, not the pins), a lane job's `toolchain` step treats exit 5 — a pinned tool missing on that runner, possibly another lane's — as a `::warning::`; the lane's own verbs still fail on a tool it really lacks. It is **all or nothing**: when a lane cannot have a job — its stack has no template (the pack's `scaffoldTemplate` is `null`), or its name is not a plain token — **no workflow is written** and the report prints a `no CI workflow:` note naming each such lane, why, and the manual step (one job per lane, each verb with `--repo . --lane <lane>`). A workflow that silently skipped a lane would be a green check over code nothing built. The note is not a refusal: the exit code is unchanged. **The jobs are the declaration's lanes**: when a different `nen/contract.json` is already there (refused, and left standing), its own lanes name the jobs, since that file is what CI's verbs read; job ids ignore case and take no `.` (it becomes `_`), so two lanes whose ids would collide count as lanes without a job.
 
 ### `nen scaffold init`
 
@@ -17107,10 +17127,10 @@ nen bootstrap --ref <tag> [--source <owner/name>] [--cache-dir <dir>] [--script 
 **Example**
 
 ```bash
-nen bootstrap --ref v0.29.0 --source zheref/nen
+nen bootstrap --ref v0.30.0 --source zheref/nen
 ```
 ```text
-/home/me/.cache/nen/zheref_nen/v0.29.0/nen-linux-x64
+/home/me/.cache/nen/zheref_nen/v0.30.0/nen-linux-x64
 ```
 (shape derived from `bootstrap/nen.sh`'s own header and `src/supply/bootstrap.ts`/`bootstrap.test.ts` -- not run live, this needs the network and a real published release)
 
@@ -20555,8 +20575,8 @@ notification or an audible cue, because it only ever shells out to `git` and
 
 ```bash
 # 1. Two-step fetch, pinned. Never `latest`.
-curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.29.0/bootstrap/nen.sh -o nen-bootstrap.sh
-nen="$(bash nen-bootstrap.sh --ref v0.29.0)"
+curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.30.0/bootstrap/nen.sh -o nen-bootstrap.sh
+nen="$(bash nen-bootstrap.sh --ref v0.30.0)"
 "$nen" --version
 ```
 
@@ -20567,7 +20587,7 @@ retried. Once a `nen` exists, the in-CLI form pins a second one — pass
 find `bootstrap/nen.sh` relative to itself:
 
 ```bash
-nen bootstrap --ref v0.29.0 --source zheref/nen --script ./nen-bootstrap.sh
+nen bootstrap --ref v0.30.0 --source zheref/nen --script ./nen-bootstrap.sh
 ```
 
 ```bash

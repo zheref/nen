@@ -275,6 +275,8 @@ describe("nen classify install --sync -- the LANDED declaration is the gate", ()
     const result = await capture(argv, landedCalls(landed));
     expect(result.code).toBe(1);
     expect(result.err.join("\n")).toMatch(/not landed on zheref\/nen's default branch 'main'.*lang\/beta, job\/build, job\/test/);
+    // zheref/nen#591: the default-branch-only refusal names the mode that reads the unmerged branch.
+    expect(result.err.join("\n")).toMatch(/nen labels sync --target zheref\/nen --repo <checkout> --ref <branch>' \(a dry run; --apply syncs\)/);
     expect(result.seams.calls.every((call): boolean => call.args[0] === "api")).toBe(true);
   });
 

@@ -406,7 +406,17 @@ describe("ci runs the same three commands a developer runs", () => {
     ]);
     const windows = jobs["check-windows"] as Record<string, YamlValue>;
     expect(windows["name"]).toBe("check");
-    expect(windows["steps"]).toEqual((jobs["check"] as Record<string, YamlValue>)["steps"]);
+    // The same steps as `check`, save ONE declared difference: the Windows
+    // leg's Test step caps vitest's workers, because that pool's runners share
+    // one host (the comment above the step in ci.yml says why). Anything else
+    // that drifts between the two legs still fails here.
+    const shared = (jobs["check"] as Record<string, YamlValue>)["steps"] as Array<Record<string, YamlValue>>;
+    const own = windows["steps"] as Array<Record<string, YamlValue>>;
+    const test = shared.find((step) => step["name"] === "Test");
+    expect(test?.["run"]).toBe("bun run test");
+    expect(own).toEqual(
+      shared.map((step) => (step === test ? { ...step, run: "bun run test -- --minWorkers=1 --maxWorkers=8" } : step)),
+    );
   });
 
   it("pins every third-party action to a commit SHA", () => {
