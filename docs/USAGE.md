@@ -11883,9 +11883,10 @@ drift: yes
 A canon repository's prose held to a **rules contract the caller owns**,
 behind a **shrink-only baseline** (zheref/nen#481; SDD piece N9; Hatsu rulings
 HR-13 — the ratchet — and HR-4 — the one open-question marker). It is the port
-of Hatsu's interim guard `scripts/prose_ambiguity_check.mts`, and that guard's
-fixture is this verb's test suite (`src/canon/lint.test.ts`), so the two cannot
-disagree on a verdict and the guard retires at Hatsu's repin.
+of Hatsu's interim guard `scripts/prose_ambiguity_check.mts`. Its fixture
+cases live in `src/canon/lint.test.ts`. Valid rendered ruling rows retain
+the record-cell exemption; native lint rejects additional malformed marker
+and delimiter shapes. The interim guard retires at Hatsu's repin.
 
 **Nen detects and reports; it decides nothing.** The rules — their ids,
 severities and patterns, the paths linted, which paths are dated records, where
@@ -11899,13 +11900,21 @@ picks the check; nothing dispatches on an id, so a contract may renumber:
 | `stale-residue` | a match in a paragraph without the `requires` reference | `pattern`, `requires` |
 | `stale-version` | a pin claim (`patterns[0]`) or floor claim (the rest) that is neither the contract's `versionSource` minimum nor its pinned ref, read at run time; a pin claim near `otherPins` or after a `pastWords` word is history | `patterns[]`, `otherPins` (`pastWords` optional) |
 | `citation` | a relative link to no file, to a file outside the root, to a missing `#anchor`, or a linked `§ N` / `§ *Title*` that resolves to no heading or bold lead — exactly as [`ref resolve`](#nen-ref-resolve) reads it | none |
-| `bare-ref` | a match outside a link target | `pattern` |
+| `bare-ref` | a match outside a link target and the rendered record cells described below | `pattern` |
 | `unverified-claim` | a match in a paragraph without both a `date` and an `evidence` match | `pattern`, `date`, `evidence` |
 | `hedge`, `adjective` | every match | `pattern` |
 | `number-not-declared` | a captured number on a `nen …` line that no `declaredValues` JSON file carries | `pattern` |
 | `residue-unfiled` | a list item under a `## Residue…` section (`section` overrides) without the `requires` reference | `requires` |
 | `open-question-shape` | a match not in the `marker` shape; a marker naming a human-gate row of `decisionsFile` or a row outside `markerRows`; a marker without a `ledger` reference; more than `markerLimit` markers in one file of `skillPaths` | `pattern`, `marker`, `ledger` |
 | `reading-cited-as-ruled` | a clause id (`pattern`, capture 1) whose status in `rulingsFile` is `reading`, in a `skillPaths` file, in a paragraph without the word *reading* | `pattern` (`prefix` optional, default `HR`) |
+
+**Rendered record cells.** In the declared `rulingsFile`, the `bare-ref`
+class exempts the question, options and answer cells of a six-cell rendered
+ruling row. Its anchor must match the bold clause id, its record label must
+match the `ruling-records/<label>.json` filename, and its seven unescaped
+pipe delimiters must include the closing pipe. Status, settlement and other
+prose remain checked. Citation checks and the consumer's ruling-record guard
+still own linked-record existence, required cell contents and provenance.
 
 **Exemptions.** Fenced code is never read; quoted words (`"…"`, `“…”`, so also
 `*"…"*`) are blanked unless `exemptions.quotedWords` is `false` — a quotation
