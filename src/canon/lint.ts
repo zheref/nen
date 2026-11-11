@@ -476,6 +476,26 @@ function insideSpan(spans: readonly (readonly [number, number])[], offset: numbe
   return false;
 }
 
+// The rendered answer record identifies the first cell. The row's next
+// three cells preserve the captured question, options and answer.
+const RENDERED_RULING = /^\| <a id="([a-z][a-z0-9]*-\d+)"><\/a>\*\*([A-Z][A-Z0-9]*-\d+)\*\* · \[([A-Za-z0-9._-]+--R-\d{4}-\d{2}-\d{2}-\d{2,})\]\(ruling-records\/\3\.json\) \|/;
+
+function renderedRecordCells(para: Para): readonly [number, number] | null {
+  if (para.kind !== "table") return null;
+  const marker = RENDERED_RULING.exec(para.text);
+  if (marker === null || marker[1] !== marker[2]?.toLowerCase()) return null;
+  // Read the original delimiters. The quotation mask preserves offsets
+  // but may blank a pipe, and the renderer escapes pipes inside cells.
+  const bars: number[] = [];
+  for (const bar of para.text.matchAll(/(?<!\\)\|/g)) {
+    if (bars.length === 7) return null;
+    bars.push(bar.index);
+  }
+  const [, start, , , end, , last] = bars;
+  if (bars.length !== 7 || last !== para.text.trimEnd().length - 1 || start === undefined || end === undefined) return null;
+  return [start + 1, end];
+}
+
 function checkDoc(ctx: Ctx, doc: Doc): Finding[] {
   const out: Finding[] = [];
   const c = ctx.contract;
@@ -497,6 +517,7 @@ function checkDoc(ctx: Ctx, doc: Doc): Finding[] {
       if (match !== null) section = match[1] ?? "";
       continue;
     }
+    const recordCells = doc.path === c.rulingsFile ? renderedRecordCells(para) : null;
     const masked = c.quotedWords ? exemptQuoted(para.text) : para.text;
     const flat = masked.replace(/\n/g, " ");
     const around = (offset: number, length: number): string => flat.slice(Math.max(0, offset - 24), offset + length + 24);
@@ -562,6 +583,7 @@ function checkDoc(ctx: Ctx, doc: Doc): Finding[] {
           const spans = linkTargetSpans(flat);
           for (const m of flat.matchAll(re(rule))) {
             if (insideSpan(spans, m.index)) continue; // inside a link target
+            if (recordCells !== null && m.index >= recordCells[0] && m.index + m[0].length <= recordCells[1]) continue;
             add(rule, para, m.index, around(m.index, m[0].length));
           }
           break;
