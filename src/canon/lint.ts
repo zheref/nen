@@ -288,7 +288,11 @@ export function parseLintContract(raw: unknown, rel: string): LintContract {
     if (raw["markerLimit"] !== undefined && (!Number.isInteger(raw["markerLimit"]) || (raw["markerLimit"] as number) < 0)) wiring(`${rel}: markerLimit is not a whole number`);
     markerLimit = (raw["markerLimit"] as number | undefined) ?? null;
   }
-  if (has("reading-cited-as-ruled") && typeof raw["rulingsFile"] !== "string") wiring(`${rel} lacks rulingsFile`);
+  const rulingsFile = raw["rulingsFile"];
+  if (rulingsFile === undefined && has("reading-cited-as-ruled")) return wiring(`${rel} lacks rulingsFile`);
+  if (rulingsFile !== undefined && (typeof rulingsFile !== "string" || rulingsFile.trim() === "")) {
+    return wiring(`${rel}: rulingsFile must be a nonempty string`);
+  }
   const declaredValues = has("number-not-declared") ? stringList(raw["declaredValues"], `${rel}: declaredValues`) : [];
   const emptyBaseline = raw["emptyBaseline"] === undefined ? [] : stringList(raw["emptyBaseline"], `${rel}: emptyBaseline`);
   const skillPaths = raw["skillPaths"] === undefined ? null : stringList(raw["skillPaths"], `${rel}: skillPaths`);
@@ -310,7 +314,7 @@ export function parseLintContract(raw: unknown, rel: string): LintContract {
     markerRows,
     markerLimit,
     emptyBaseline,
-    rulingsFile: has("reading-cited-as-ruled") ? (raw["rulingsFile"] as string) : null,
+    rulingsFile: rulingsFile ?? null,
     declaredValues,
     skillPaths,
     rules,
@@ -853,11 +857,11 @@ export function canonLint(options: LintOptions, seams: Seams): { readonly report
   }
   const docs = new Map<string, Doc>();
   let reading = new Set<string>();
-  if (contract.rulingsFile !== null) {
+  const readingRule = contract.rules.find((rule): boolean => rule.class === "reading-cited-as-ruled");
+  if (readingRule !== undefined && contract.rulingsFile !== null) {
     const rulings = loadDoc({ root, realRoot, docs }, contract.rulingsFile);
-    if (rulings === null) wiring(`rulings file ${contract.rulingsFile} is missing`);
-    const rule = contract.rules.find((r): boolean => r.class === "reading-cited-as-ruled");
-    reading = readingClauses(rulings as Doc, (rule?.["prefix"] as string | undefined) ?? "HR");
+    if (rulings === null) return wiring(`rulings file ${contract.rulingsFile} is missing`);
+    reading = readingClauses(rulings, (readingRule["prefix"] as string | undefined) ?? "HR");
   }
   const ctx: Ctx = {
     root,
