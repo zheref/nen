@@ -40,6 +40,9 @@ export interface Command {
   readonly usage: string;
   /** Flags this family accepts, ON TOP of the global ones. */
   readonly flags: FlagSpec;
+  /** A protocol adapter may translate parser errors before its run method.
+   * Return null to keep the ordinary CLI refusal; other families are unchanged. */
+  readonly parseFailure?: (argv: readonly string[], message: string, io: Io) => number | null;
   /**
    * The subcommands this family answers, when it declares them. Read by
    * ../index.ts's `runFamily` so that `--help` on a subcommand the family does

@@ -964,6 +964,7 @@ describe("write-flag-gated rows -- coupled to what ../cli/args.ts accepts (#31 r
     "classify install": "nen classify install --taxonomy t.json --repo .",
     "direct resolve": "nen direct resolve --registry r.json --taxonomy t.json --repo . --lang a --job b --kind product",
     "epic next-wave": "nen epic next-wave --body-file b.md",
+    "goal check": "nen goal check --spec goal.json",
     // zheref/nen#510: read writes the phase ledger only under --restore.
     "pr ledger read": "nen pr ledger read --target o/r --pr 1 --effort a",
     "runner plan": "nen runner plan --target o/r --pool p --machine-code NZ --count 1",
@@ -2157,5 +2158,16 @@ describe("izanami's read-only row for wc ahead is tied to doAhead's refusals (zh
     }
     // A flag no wc verb declares never reaches doAhead: the parser refuses it.
     expect(await runFamily(wcCommand, ["wc", "ahead", "--repo", ".", "--of", "HEAD", "--out", "x"], process.cwd(), false, io, never)).toBe(2);
+  });
+});
+
+describe("goal commands are read-only only without local writes", () => {
+  it("permits ordinary checks but refuses freeze and hook state writes", () => {
+    expect(classifyCommand("nen goal check --spec goal.json").classification).toBe("read-only");
+    expect(classifyCommand("nen goal freeze --spec goal.json --session-id s").classification).toBe("mutating");
+    for (const flag of ["--hook codex", "--hook=codex", "-hook codex", "-hook=codex"]) {
+      expect(classifyCommand(`nen goal check --spec goal.json ${flag}`).classification).toBe("mutating");
+    }
+    expect(classifyCommand("nen goal check --spec goal.json '--hook' codex").classification).not.toBe("read-only");
   });
 });
