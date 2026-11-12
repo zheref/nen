@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, statSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily } from "../index.js";
@@ -19,7 +19,7 @@ const definition = (conditions: unknown[] = [{ kind: "issues-closed", numbers: [
 const spec = parseSpec(definition());
 function tracker(items: Item[], query: Item[] = items): Tracker { return { items: (ns) => items.filter((i) => ns.includes(i.number)), query: vi.fn(() => query) }; }
 const rawItem = (i: Item): unknown => ({ ...i, __typename: i.kind === "issue" ? "Issue" : "PullRequest" });
-function seams(data: unknown): ScriptedSeams { return new ScriptedSeams([{ match: "gh api graphql --input -", result: { code: 0, stdout: JSON.stringify({ data }), stderr: "" } }]); }
+function seams(data: unknown): ScriptedSeams { return new ScriptedSeams([{ match: "gh api graphql --hostname github.com --input -", result: { code: 0, stdout: JSON.stringify({ data }), stderr: "" } }]); }
 
 describe("goal evidence", () => {
   it("names every open fixed item and ignores later matching issues", () => {
@@ -110,8 +110,15 @@ describe("GitHub reads", () => {
       expect(() => evaluate(querySpec,githubTracker(seams({repository,search}),"o/r","."),at)).toThrow();
     }
   });
+  it("pins github.com and rejects same-slug evidence from another host", () => {
+    const s = seams({repository:{n1:rawItem(item(1))}});
+    githubTracker(s,"o/r",".").items([1]);
+    expect(JSON.stringify(s.calls)).toContain("--hostname");
+    const foreign = {...rawItem(item(1,"CLOSED")) as object,url:"https://enterprise.example/o/r/issues/1"};
+    expect(() => githubTracker(seams({repository:{n1:foreign}}),"o/r",".").items([1])).toThrow("outside");
+  });
   it("rejects partial GraphQL data and missing fixed nodes", () => {
-    const s = new ScriptedSeams([{match:"gh api graphql --input -",result:{code:0,stdout:JSON.stringify({errors:[{}],data:{}}),stderr:""}}]);
+    const s = new ScriptedSeams([{match:"gh api graphql --hostname github.com --input -",result:{code:0,stdout:JSON.stringify({errors:[{}],data:{}}),stderr:""}}]);
     expect(() => githubTracker(s,"o/r",".").items([1])).toThrow("GraphQL");
     expect(() => githubTracker(seams({repository:{n1:null}}),"o/r",".").items([1])).toThrow();
   });
@@ -144,9 +151,21 @@ describe("command outcomes", () => {
   it.each(["claude-code","codex","cursor"])("always allows stopping on evaluation errors in %s", (hook) => {
     const r=invoke(["check","--spec","missing","--hook",hook]); expect(r.code).toBe(0); if (hook !== "cursor") expect(JSON.parse(r.out[0]!).systemMessage).toContain("could not evaluate"); else expect(JSON.parse(r.out[0]!)).toEqual({}); expect(r.err[0]).toContain("could not evaluate");
   });
+  it("does not publish new evidence when hook state is corrupt", () => {
+    const root = temp(); const path = join(root,"state.json");
+    writeFileSync(join(root,"goal.json"),JSON.stringify(spec)); writeFileSync(path,"{}");
+    const out: string[] = [];
+    const code = runGoal({args:parseArgs(["goal","check","--spec","goal.json","--hook","codex","--state","state.json"],mergeFlags(goalCommand.flags)),repoFlag:root,json:true,io:{out:(s)=>{out.push(s);},err:()=>{}},seams:seams({repository:{n1:rawItem(item(1,"CLOSED")),n2:rawItem(item(2,"CLOSED"))}})},()=>({session_id:"s",stop_hook_active:false}));
+    expect(code).toBe(0); expect(JSON.parse(out[0]!).systemMessage).toContain("could not evaluate");
+    expect(existsSync(`${path}.evidence.json`)).toBe(false);
+  });
   it("writes evidence and blocks only on evaluated not-met conditions", () => {
     const r=invoke(["check","--spec","goal.json","--hook","codex","--state","s.json"]); expect(r.code).toBe(0); expect(JSON.parse(r.out[0]!).decision).toBe("block");
     expect(JSON.parse(readFileSync(join(r.root,"s.json.evidence.json"),"utf8")).verdict).toBe("not-met");
+    if (process.platform !== "win32") {
+      expect(statSync(join(r.root,"s.json")).mode & 0o777).toBe(0o600);
+      expect(statSync(join(r.root,"s.json.evidence.json")).mode & 0o777).toBe(0o600);
+    }
     expect(invoke(["check","--spec","goal.json","--hook","codex"],{},{}).code).toBe(0);
   });
   it.each([["check"],["unknown"],["check","--spec","goal.json","--hook","bad"],["check","--spec","goal.json","--state","x"],["check","--spec","goal.json","--out","x"],["freeze","--spec","goal.json","--frozen","x"]].map((args) => ({args})))("refuses invalid combinations $args", ({args}) => { expect(invoke(args).code).toBe(2); });

@@ -20983,7 +20983,7 @@ never overwritten. Use a different output path for each new session. Default
 output is the spec path with `.json` replaced by `.frozen.json`.
 
 Exits: `0` captured, `2` could not capture. Requires authenticated `gh`; reads
-GitHub only. Search results beyond 1000, incomplete pages, missing items and
+GitHub.com only (the API hostname is pinned). Search results beyond 1000, incomplete pages, missing items and
 changing pagination counts are errors rather than partial scopes.
 
 ### `nen goal check`
@@ -21001,9 +21001,11 @@ Fixed reads use GraphQL batches of 50. Results describe a bounded reading of the
 tracker, not an atomic transaction across all requests.
 
 Exits: `0` met, `1` not met, `2` could not evaluate. `--json` emits
-an object with top-level keys: `contract` (`nen.goal-check/v1`), verdict, scope, target, reading time, freeze time,
-condition counts, each observed item's state and URL, all unmet numbers and an
-evidence fingerprint. Error records carry `verdict: error` and the reason.
+an object with top-level keys `contract` (`nen.goal-check/v1`), `verdict`,
+`target`, `scope`, `readAt`, `frozenAt`, `conditions` and `fingerprint`.
+Each condition carries `kind`, `met`, `items`, `count` and `unmet`; each item
+carries `number`, `kind`, `state`, `url` and `closedAt`. Error records instead
+carry `contract`, `verdict` (`error`), `readAt` and `error` (the reason).
 Neither verb closes, labels, comments on, or otherwise mutates tracker items.
 
 Consumers install hooks explicitly; Nen and Hatsu enable none automatically.

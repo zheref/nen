@@ -6,7 +6,7 @@ const FIELDS = "__typename ... on Issue { number state url closedAt } ... on Pul
 export function githubTracker(seams: Seams, target: string, cwd: string): Tracker {
   const [owner, name] = target.split("/");
   function graphql(query: string, variables: Record<string, unknown>): Record<string, unknown> {
-    const result = seams.run("gh", ["api", "graphql", "--input", "-"], { cwd, stdin: JSON.stringify({ query, variables }) });
+    const result = seams.run("gh", ["api", "graphql", "--hostname", "github.com", "--input", "-"], { cwd, stdin: JSON.stringify({ query, variables }) });
     if (result.spawnFailed || result.code !== 0) throw new Error("GitHub could not be read; check gh authentication and connectivity");
     const response = object(JSON.parse(result.stdout) as unknown);
     if (response.errors !== undefined) throw new Error("GitHub returned GraphQL errors");
@@ -16,7 +16,7 @@ export function githubTracker(seams: Seams, target: string, cwd: string): Tracke
     const item = parseItem(raw);
     const url = new URL(item.url);
     const parts = url.pathname.split("/");
-    if (url.protocol !== "https:" || `${parts[1]}/${parts[2]}`.toLowerCase() !== target.toLowerCase() || !["issues", "pull"].includes(parts[3] ?? "") || parts[4] !== String(item.number)) throw new Error("Tracker returned an item outside the requested repository");
+    if (url.protocol !== "https:" || url.hostname !== "github.com" || `${parts[1]}/${parts[2]}`.toLowerCase() !== target.toLowerCase() || !["issues", "pull"].includes(parts[3] ?? "") || parts[4] !== String(item.number)) throw new Error("Tracker returned an item outside the requested repository");
     return item;
   }
   return {
