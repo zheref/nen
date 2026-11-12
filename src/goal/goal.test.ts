@@ -8,11 +8,12 @@ import { mergeFlags } from "../cli/command.js";
 import { ScriptedSeams } from "../seam/scripted.js";
 import { evaluate, freeze, hash, parseFrozen, parseItem, parseSpec, type Item, type Tracker } from "./model.js";
 import { goalCommand, hookInput, hookOutput, runGoal } from "./command.js";
+import * as ledger from "../ledger/lock.js";
 import { githubTracker } from "./tracker.js";
 
 const dirs: string[] = [];
 function temp(): string { const d = mkdtempSync(join(tmpdir(), "nen-goal-")); dirs.push(d); return d; }
-afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
+afterEach(() => { vi.restoreAllMocks(); for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
 const at = "2026-11-11T12:00:00Z";
 const item = (number: number, state: Item["state"] = "OPEN", kind: Item["kind"] = "issue"): Item => ({ number, state, kind, url: `https://github.com/o/r/issues/${number}`, closedAt: state === "OPEN" ? null : at });
 const definition = (conditions: unknown[] = [{ kind: "issues-closed", numbers: [1, 2] }]): unknown => ({ contract: "nen.goal/v1", target: "o/r", conditions, all: true });
@@ -30,6 +31,11 @@ describe("goal evidence", () => {
     const s = parseSpec(definition([{ kind:"query-count",query:"is:open",op,value:0 }]));
     const v = evaluate(s,tracker([], [item(1),item(2)]),at);
     expect(v.verdict).toBe("not-met"); expect(v.conditions[0]?.unmet).toEqual([1,2]); expect(v.conditions[0]?.count).toBe(2);
+  });
+  it("does not name matches as unmet when a live threshold is satisfied", () => {
+    const s = parseSpec(definition([{kind:"query-count",query:"is:open",op:"<=",value:5}]));
+    const v = evaluate(s,tracker([], [item(1)]),at);
+    expect(v.verdict).toBe("met"); expect(v.conditions[0]?.items).toHaveLength(1); expect(v.conditions[0]?.unmet).toEqual([]);
   });
   it("freezes once, never reruns the query, validates definition identity", () => {
     const s = parseSpec(definition([{kind:"query-count",query:"is:open",op:"==",value:0}]));
@@ -73,6 +79,23 @@ describe("hook continuation guard", () => {
     expect(hookOutput(v,hook,{session:"s",active:true},path,3).systemMessage).toContain("remains not met");
     expect(hookOutput(v,hook,{session:"new",active:true},path,3).systemMessage).toBeUndefined();
     expect(hookOutput(evaluate(spec,tracker([item(1,"CLOSED"),item(2,"CLOSED")]),at),hook,{session:"new",active:true},path,3)).toEqual({});
+  });
+  it("publishes matching state and evidence while holding the same lock", () => {
+    const path = join(temp(),"state.json");
+    const write = ledger.writeLedgerAtomically;
+    const observed: string[] = [];
+    vi.spyOn(ledger,"writeLedgerAtomically").mockImplementation((file,document,mode) => {
+      if (file === `${path}.evidence.json`) {
+        expect(existsSync(`${path}.lock`)).toBe(true);
+        const state = JSON.parse(readFileSync(path,"utf8"));
+        expect(state.fingerprint).toBe((document as {fingerprint:string}).fingerprint);
+        observed.push(state.fingerprint as string);
+      }
+      write(file,document,mode);
+    });
+    hookOutput(evaluate(spec,tracker([item(1),item(2)]),at),"codex",{session:"s",active:true},path,3);
+    hookOutput(evaluate(spec,tracker([item(1,"CLOSED"),item(2)]),at),"codex",{session:"s",active:true},path,3);
+    expect(observed).toHaveLength(2); expect(observed[0]).not.toBe(observed[1]);
   });
   it("resets on changed evidence and refuses corrupt state", () => {
     const path = join(temp(),"s");
@@ -150,6 +173,16 @@ describe("command outcomes", () => {
   });
   it.each(["claude-code","codex","cursor"])("always allows stopping on evaluation errors in %s", (hook) => {
     const r=invoke(["check","--spec","missing","--hook",hook]); expect(r.code).toBe(0); if (hook !== "cursor") expect(JSON.parse(r.out[0]!).systemMessage).toContain("could not evaluate"); else expect(JSON.parse(r.out[0]!)).toEqual({}); expect(r.err[0]).toContain("could not evaluate");
+  });
+  it.each(["spec", "snapshot"])("protects a %s file from state-lock collision", (which) => {
+    const root = temp(); const lockedPath = join(root,"goal.lock");
+    const specPath = which === "spec" ? lockedPath : join(root,"goal.json");
+    writeFileSync(specPath,JSON.stringify(spec));
+    if (which === "snapshot") writeFileSync(lockedPath,JSON.stringify(freeze(spec,tracker([item(1),item(2)]),at,"s")));
+    const original = readFileSync(lockedPath,"utf8"); const out: string[] = [];
+    const argv = ["goal","check","--spec",specPath,"--hook","codex","--state","goal",...(which === "snapshot" ? ["--frozen",lockedPath] : [])];
+    const code = runGoal({args:parseArgs(argv,mergeFlags(goalCommand.flags)),repoFlag:root,json:true,io:{out:(s)=>{out.push(s);},err:()=>{}},seams:seams({repository:{n1:rawItem(item(1)),n2:rawItem(item(2))}})},()=>({session_id:"s",stop_hook_active:false}));
+    expect(code).toBe(0); expect(JSON.parse(out[0]!).systemMessage).toContain("cannot overwrite"); expect(readFileSync(lockedPath,"utf8")).toBe(original);
   });
   it("does not publish new evidence when hook state is corrupt", () => {
     const root = temp(); const path = join(root,"state.json");

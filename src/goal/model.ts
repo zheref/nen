@@ -85,7 +85,7 @@ export function evaluate(spec: Spec, tracker: Tracker, at: string, frozen?: Froz
       return c.kind === "prs-merged" ? item.state !== "MERGED" : item.state === "OPEN";
     }).map((i) => i.number);
     const met = c.kind === "query-count" && !frozen ? (c.op === "==" ? items.length === c.value : c.op === "<=" ? items.length <= c.value : items.length < c.value) : unmet.length === 0;
-    return { kind: c.kind, met, items, count: items.length, unmet: c.kind === "query-count" && !frozen && !met ? items.map((i) => i.number) : unmet };
+    return { kind: c.kind, met, items, count: items.length, unmet: c.kind === "query-count" && !frozen ? met ? [] : items.map((i) => i.number) : unmet };
   });
   const scope = frozen ? "frozen" : spec.conditions.some((c) => c.kind === "query-count") ? "live" : "fixed";
   return { contract: "nen.goal-check/v1", verdict: conditions.every((c) => c.met) ? "met" : "not-met", target: spec.target, scope, readAt: at, frozenAt: frozen?.frozenAt ?? null, conditions, fingerprint: hash({ spec, scope, frozenAt: frozen?.frozenAt, conditions }) };
