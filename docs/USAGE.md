@@ -258,7 +258,7 @@ including every refusal reason. The raw NUL-delimited stream
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **108 shapes** and **112 ids** (`nen.runner.plan`
+binary carries**, writing or reading — **112 shapes** and **116 ids** (`nen.runner.plan`
 and `nen.wc.worktree.copies` each have two versions, `nen.stop.mark` three, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -302,6 +302,7 @@ file formats).
 - **`dev`** — `nen.dev.release-publish/v0.1`
 - **`exits`** — `nen.exits/v0.1`
 - **`direct`** — `nen.direct.answer/v0.1` · `nen.direct.matrix/v0.1` · `nen.direct.registry/v0.1` · `nen.direct.resolve/v0.1`
+- **`goal`** — `nen.goal/v1` · `nen.goal-check/v1` · `nen.goal-frozen/v1` · `nen.goal-hook/v1`
 - **`issue`** — `nen.issue.body-check/v0.1` · `nen.issue.criteria/v0.1` · `nen.issue.edit-body/v0.3` · `nen.issue.questions/v0.1` · `nen.issue.questions.batch/v0.1` · `nen.issue.reconcile/v0.1`
 - **`loop`** — `nen.loop.iterate/v0.1`
 - **`phase`** — `nen.phase.ledger/v0.1`
@@ -1034,6 +1035,8 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`pr`](#family-pr) | [`nen pr open`](#nen-pr-open) | open exactly one pull request from a head the remote already holds at the local sha, refusing an unpushed head at exit 2; one already open for the head against the same base is returned as `opened: existing` at exit 0, against another base at exit 1 | git (symbolic-ref, rev-parse, ls-remote), github (gh pr list always; gh pr create unless --dry-run) | yes |
 | [`pr`](#family-pr) | [`nen pr ledger`](#nen-pr-ledger) | post an effort's ledger slice (phases, usage totals, schema-checked findings, proof index; `nen.pr.ledger/v0.1`) as ONE PR comment, edited in place on a re-post; read it back from the authenticated login's comment only (`ok` / `stale` / `could-not-read`), and `--restore` the phase ledger on a fresh clone | github (gh api pulls, user, graphql comments with author and editor; POST or PATCH a comment unless --dry-run), `<git-common-dir>/.nen/phases|usage/`, the --findings, --findings-schema and --proof files | yes |
 | [`pr`](#family-pr) | [`nen pr merge`](#nen-pr-merge) | the bounded merge, two forms. `--release-unit`: `pr ready` (in-process) + head pin + `pr body-check` (live body, one fetch) + `release unit-check` (policy from the PR's base) + whose-pr. `--delivery`: a run's own PR into a non-main, unprotected base — a protected base is refused by ruling (exit 2), then base + `pr ready` + head pin + `pr body-check` + whose-pr (viewer and run-form head). Every gate must pass; `gh pr merge --merge --match-head-commit` only under `--run` | github (gh pr view, gh repo view, gh pr list, gh api contents/trees/user/branches/rules, gh pr merge unless plan-only), nen/gates.json, nen/workflow.json, nen/repos.json (a `CODE#n` ref) | yes |
+| [`goal`](#family-goal) | [`nen goal freeze`](#nen-goal-freeze) | capture immutable session scope | goal definition, GitHub; writes snapshot | yes |
+| [`goal`](#family-goal) | [`nen goal check`](#nen-goal-check) | evaluate live or frozen tracker evidence | goal definition, GitHub, optional snapshot; hooks write state/evidence | yes |
 | [`gate`](#family-gate) | [`nen gate derive`](#nen-gate-derive) | derive G2 vs G4 from a changed-file set against two caller-supplied path sets | git diff (for --range), no schema file -- path sets are flags | yes |
 | [`split`](#family-split) | [`nen split verify`](#nen-split-verify) | prove the union of per-axis branch diffs equals one original diff | caller-supplied --original/--branches diff files, no git/gh | yes |
 | [`wc`](#family-wc) | [`nen wc classify`](#nen-wc-classify) | classify the working copy as must-move / on-branch-dirty / on-branch-clean | git (branch, status, ahead-count) | yes |
@@ -20940,9 +20943,11 @@ uncaught error. `--dry-run` on an oversized slice previews every part write and
 the index with `<part N url>` placeholders, so the preview names the writes a
 live post makes.
 
+<a id="family-goal"></a>
+
 ### `nen goal freeze`
 
-Capture the scope of a tracker goal once at session start:
+Capture the scope of a tracker goal once at session start. `--json` emits an object with top-level keys `contract`, `specHash`, `target`, `frozenAt`, `sessionId`, `conditions` and `path`:
 
 ```sh
 nen goal freeze --spec .nen/goals/backlog.json --session-id session-123 --out .nen/goals/session-123.frozen.json --json
@@ -20996,7 +21001,7 @@ Fixed reads use GraphQL batches of 50. Results describe a bounded reading of the
 tracker, not an atomic transaction across all requests.
 
 Exits: `0` met, `1` not met, `2` could not evaluate. `--json` emits
-`nen.goal-check/v1` with verdict, scope, target, reading time, freeze time,
+an object with top-level keys: `contract` (`nen.goal-check/v1`), verdict, scope, target, reading time, freeze time,
 condition counts, each observed item's state and URL, all unmet numbers and an
 evidence fingerprint. Error records carry `verdict: error` and the reason.
 Neither verb closes, labels, comments on, or otherwise mutates tracker items.
