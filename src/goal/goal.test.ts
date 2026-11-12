@@ -49,6 +49,14 @@ describe("goal evidence", () => {
     expect(() => evaluate(s,tracker([item(1)]),at)).toThrow("Wrong item type");
     expect(() => evaluate(spec,tracker([]),at)).toThrow("did not return");
   });
+  it.each([["=="], ["<="], ["<"], {toString: (): string => "=="}].map((op) => ({op})))("rejects non-string query operators %#", ({op}) => {
+    expect(() => parseSpec(definition([{kind:"query-count",query:"is:open",op,value:1}]))).toThrow("Invalid query-count");
+  });
+  it.each([{state:["OPEN"]}, {state:["CLOSED"]}, {__typename:["Issue"]}, {__typename:["PullRequest"]}])("rejects coerced tracker fields %#", (fields) => {
+    expect(() => parseItem({...rawItem(item(1)) as object,...fields})).toThrow("unreadable item");
+    const result = invoke(["check","--spec","goal.json"],{repository:{n1:{...rawItem(item(1)) as object,...fields},n2:rawItem(item(2,"CLOSED"))}});
+    expect(result.code).toBe(2); expect(JSON.parse(result.out[0]!).verdict).toBe("error");
+  });
   it("fingerprints evidence independently of check time and input order", () => {
     expect(evaluate(spec,tracker([item(1),item(2)]),at).fingerprint).toBe(evaluate(spec,tracker([item(2),item(1)]),"2026-11-12T12:00:00Z").fingerprint);
   });
@@ -89,10 +97,18 @@ describe("GitHub reads", () => {
     expect(s.calls).toHaveLength(1);
   });
   it("checks complete search results and rejects count truncation", () => {
-    const data = {search:{issueCount:1,nodes:[rawItem(item(1))],pageInfo:{hasNextPage:false,endCursor:null}}};
+    const data = {repository:{nameWithOwner:"o/r"},search:{issueCount:1,nodes:[rawItem(item(1))],pageInfo:{hasNextPage:false,endCursor:null}}};
     expect(githubTracker(seams(data),"o/r",".").query("is:open")).toHaveLength(1);
-    expect(() => githubTracker(seams({search:{...data.search,issueCount:2}}),"o/r",".").query("is:open")).toThrow("incomplete");
-    expect(() => githubTracker(seams({search:{...data.search,issueCount:1001}}),"o/r",".").query("is:open")).toThrow("limit");
+    expect(() => githubTracker(seams({repository:data.repository,search:{...data.search,issueCount:2}}),"o/r",".").query("is:open")).toThrow("incomplete");
+    expect(() => githubTracker(seams({repository:data.repository,search:{...data.search,issueCount:1001}}),"o/r",".").query("is:open")).toThrow("limit");
+  });
+  it("accepts empty search only after verifying the repository exists and is accessible", () => {
+    const search = {issueCount:0,nodes:[],pageInfo:{hasNextPage:false,endCursor:null}};
+    const querySpec = parseSpec(definition([{kind:"query-count",query:"is:open",op:"==",value:0}]));
+    expect(evaluate(querySpec,githubTracker(seams({repository:{nameWithOwner:"o/r"},search}),"o/r","."),at).verdict).toBe("met");
+    for (const repository of [null, undefined, {}, {nameWithOwner:"other/repo"}]) {
+      expect(() => evaluate(querySpec,githubTracker(seams({repository,search}),"o/r","."),at)).toThrow();
+    }
   });
   it("rejects partial GraphQL data and missing fixed nodes", () => {
     const s = new ScriptedSeams([{match:"gh api graphql --input -",result:{code:0,stdout:JSON.stringify({errors:[{}],data:{}}),stderr:""}}]);
@@ -112,6 +128,12 @@ describe("command outcomes", () => {
     expect(invoke(["check","--spec","goal.json"]).code).toBe(1);
     const error = invoke(["check","--spec","missing"]); expect(error.code).toBe(2); expect(JSON.parse(error.out[0]!).verdict).toBe("error");
     expect(invoke(["check","--spec","goal.json"],{repository:{}}).code).toBe(2);
+  });
+  it("refuses ignored passthrough flags instead of checking a different scope", () => {
+    const r = invoke(["check","--spec","goal.json","--","--frozen","missing.json"]);
+    expect(r.code).toBe(2); expect(JSON.parse(r.out[0]!).verdict).toBe("error");
+    const hook = invoke(["check","--spec","goal.json","--hook","codex","--","--frozen","missing.json"]);
+    expect(hook.code).toBe(0); expect(JSON.parse(hook.out[0]!).systemMessage).toContain("could not evaluate");
   });
   it("creates a frozen record and requires its session identity", () => {
     const r=invoke(["freeze","--spec","goal.json","--session-id","s"]); expect(r.code).toBe(0);
@@ -136,6 +158,16 @@ describe("hook parser boundary", () => {
     const out: string[] = [];
     const code = await runFamily(goalCommand, ["goal","check",hook,"--typo"], null, false, {out:(s)=>{out.push(s);},err:()=>{}},new ScriptedSeams([]));
     expect(code).toBe(0); expect(() => JSON.parse(out[0]!)).not.toThrow();
+  });
+  it.each([["-hook","codex"], ["-hook=cursor"], ["--hook","bad","--hook","codex"]].map((args) => ({args})))("translates malformed argv for recognized hook spellings $args", async ({args}) => {
+    const out: string[] = [];
+    const code = await runFamily(goalCommand,["goal","check",...args,"--typo"],null,false,{out:(s)=>{out.push(s);},err:()=>{}},new ScriptedSeams([]));
+    expect(code).toBe(0); expect(() => JSON.parse(out[0]!)).not.toThrow();
+  });
+  it("does not discover a hook flag after the passthrough boundary", async () => {
+    const out: string[] = [];
+    const code = await runFamily(goalCommand,["goal","check","--typo","--","--hook","codex"],null,false,{out:(s)=>{out.push(s);},err:()=>{}},new ScriptedSeams([]));
+    expect(code).toBe(2); expect(out).toEqual([]);
   });
   it("retains ordinary parser errors outside hook mode", async () => {
     expect(await runFamily(goalCommand,["goal","check","--typo"],null,false,{out:()=>{},err:()=>{}},new ScriptedSeams([]))).toBe(2);

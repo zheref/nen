@@ -40,7 +40,10 @@ export function githubTracker(seams: Seams, target: string, cwd: string): Tracke
       const cursors = new Set<string>();
       let expected: number | null = null;
       do {
-        const data = object(graphql(`query($q:String!,$cursor:String) { search(query:$q,type:ISSUE,first:100,after:$cursor) { issueCount nodes { ${FIELDS} } pageInfo { hasNextPage endCursor } } }`, { q: `repo:${target} ${query}`, cursor }).search);
+        const response = graphql(`query($q:String!,$cursor:String,$owner:String!,$name:String!) { repository(owner:$owner,name:$name) { nameWithOwner } search(query:$q,type:ISSUE,first:100,after:$cursor) { issueCount nodes { ${FIELDS} } pageInfo { hasNextPage endCursor } } }`, { q: `repo:${target} ${query}`, cursor, owner, name });
+        const repository = object(response.repository);
+        if (typeof repository.nameWithOwner !== "string" || repository.nameWithOwner.toLowerCase() !== target.toLowerCase()) throw new Error("Requested repository could not be verified");
+        const data = object(response.search);
         if (!Number.isSafeInteger(data.issueCount) || (data.issueCount as number) < 0 || (data.issueCount as number) > 1000 || !Array.isArray(data.nodes)) throw new Error("Search is unreadable or exceeds GitHub's 1000-result limit");
         if (expected !== null && expected !== data.issueCount) throw new Error("Search changed during pagination; retry");
         expected = data.issueCount as number;

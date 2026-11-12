@@ -32,7 +32,7 @@ export function parseSpec(raw: unknown): Spec {
       return { kind: c.kind, numbers: numbers(c.numbers) };
     }
     keys(c, ["kind", "query", "op", "value"]);
-    if (c.kind !== "query-count" || typeof c.query !== "string" || !c.query.trim() || !["==", "<=", "<"].includes(String(c.op)) || !Number.isSafeInteger(c.value) || (c.value as number) < 0) throw new Error("Invalid query-count condition");
+    if (c.kind !== "query-count" || typeof c.query !== "string" || !c.query.trim() || (c.op !== "==" && c.op !== "<=" && c.op !== "<") || !Number.isSafeInteger(c.value) || (c.value as number) < 0) throw new Error("Invalid query-count condition");
     // The target is supplied separately. Refuse extra scopes/OR rather than
     // accidentally counting a different repository or a second search branch.
     if (/(?:^|\s)(?:repo:|org:|user:|OR\b)/i.test(c.query)) throw new Error("Query must not override repository scope or use OR");
@@ -42,7 +42,7 @@ export function parseSpec(raw: unknown): Spec {
 }
 export function parseItem(raw: unknown): Item {
   const r = object(raw);
-  if (!Number.isSafeInteger(r.number) || (r.number as number) <= 0 || !["Issue", "PullRequest"].includes(String(r.__typename)) || !["OPEN", "CLOSED", "MERGED"].includes(String(r.state)) || typeof r.url !== "string" || (r.closedAt !== null && typeof r.closedAt !== "string") || (r.__typename === "Issue" && r.state === "MERGED")) throw new Error("Tracker returned an unreadable item");
+  if (!Number.isSafeInteger(r.number) || (r.number as number) <= 0 || (r.__typename !== "Issue" && r.__typename !== "PullRequest") || (r.state !== "OPEN" && r.state !== "CLOSED" && r.state !== "MERGED") || typeof r.url !== "string" || (r.closedAt !== null && typeof r.closedAt !== "string") || (r.__typename === "Issue" && r.state === "MERGED")) throw new Error("Tracker returned an unreadable item");
   return { number: r.number as number, kind: r.__typename === "Issue" ? "issue" : "pr", state: r.state as Item["state"], url: r.url, closedAt: r.closedAt as string | null };
 }
 export function parseFrozen(raw: unknown, spec: Spec): Frozen {

@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { emit, requireSubcommand, requireValue, type Command, type CommandContext } from "../cli/command.js";
+import { emit, refuseExtraPositionals, requireSubcommand, requireValue, type Command, type CommandContext } from "../cli/command.js";
 import { resolveRepoRoot } from "../repo/root.js";
 import { withLedgerLock, writeLedgerAtomically } from "../ledger/lock.js";
 import { evaluate, freeze, hash, object, parseFrozen, parseSpec, type Verdict } from "./model.js";
@@ -41,7 +41,7 @@ export function runGoal(context: CommandContext, readInput: () => unknown = () =
   const hook = hookRaw === "claude-code" || hookRaw === "codex" || hookRaw === "cursor" ? hookRaw : null;
   try {
     const sub = requireSubcommand("goal", context.args, ["check", "freeze"]);
-    if (context.args.positionals.length !== 2) throw new Error("Unexpected goal positional arguments");
+    refuseExtraPositionals(context.args, 2);
     if (hookRaw !== undefined && hook === null) throw new Error("Unknown hook; expected claude-code, codex or cursor");
     if (sub === "freeze" && hook !== null) throw new Error("--hook is only supported by goal check");
     const root = resolveRepoRoot({ repoFlag: context.repoFlag });
@@ -119,8 +119,13 @@ last successful evaluation. Consumers install their own hooks; none are enabled
 by this command. Recognized --hook modes also translate family parser errors to allow-stop JSON.`,
   flags: { values: ["spec", "frozen", "session-id", "out", "hook", "state", "unchanged-limit"] },
   parseFailure(argv, message, io): number | null {
-    const hookAt = argv.indexOf("--hook");
-    const hook = hookAt < 0 ? argv.find((v) => v.startsWith("--hook="))?.slice(7) : argv[hookAt + 1];
+    const boundary = argv.indexOf("--");
+    const options = boundary < 0 ? argv : argv.slice(0, boundary);
+    const hook = options.flatMap((token, index) => {
+      if (!/^--?hook(?:=|$)/.test(token)) return [];
+      const equals = token.indexOf("=");
+      return [equals < 0 ? options[index + 1] : token.slice(equals + 1)];
+    }).find((value) => value === "claude-code" || value === "codex" || value === "cursor");
     if (hook !== "claude-code" && hook !== "codex" && hook !== "cursor") return null;
     const text = `nen goal check could not evaluate: ${message}`;
     io.out(JSON.stringify(hook === "cursor" ? {} : { systemMessage: text }));
