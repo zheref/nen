@@ -11,8 +11,8 @@ binary](#getting-the-binary)), or as `bun src/index.ts` from a checkout of this
 repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
-what each version changed: 49 command
-families, 177 verbs, every flag checked against that binary.
+what each version changed: 50 command
+families, 179 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -1006,7 +1006,9 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 177 verbs, grouped as the README groups them. **Reads** is what a
+[Goal freeze](#nen-goal-freeze) captures a session scope; [goal check](#nen-goal-check) evaluates it.
+
+All 179 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -20937,3 +20939,110 @@ the decoded content is base64 and is never altered by it. An index whose
 uncaught error. `--dry-run` on an oversized slice previews every part write and
 the index with `<part N url>` placeholders, so the preview names the writes a
 live post makes.
+
+### `nen goal freeze`
+
+Capture the scope of a tracker goal once at session start:
+
+```sh
+nen goal freeze --spec .nen/goals/backlog.json --session-id session-123 --out .nen/goals/session-123.frozen.json --json
+```
+
+The definition is strict JSON. Paths resolve against `--repo` (default cwd).
+
+```json
+{
+  "contract": "nen.goal/v1",
+  "target": "owner/repo",
+  "all": true,
+  "conditions": [
+    { "kind": "issues-closed", "numbers": [12, 34] },
+    { "kind": "query-count", "query": "is:issue is:open label:bug", "op": "==", "value": 0 }
+  ]
+}
+```
+
+Supported fixed conditions: `issues-closed`, `prs-closed`, `prs-merged`.
+`prs-closed` accepts closed or merged PRs; `prs-merged` requires merged state.
+Numbers are unique positive integers; an explicitly empty fixed set is met.
+Live `query-count` supports `==`, `<=`, `<` and a nonnegative integer threshold.
+Queries cannot override the target repository or use `OR`. All conditions must
+hold. Unknown fields and malformed definitions are errors.
+
+Freezing resolves queries into item numbers. Later frozen checks require all
+those captured items to close, irrespective of the query's count threshold;
+fixed conditions retain their original meaning. New matching items never enter
+the snapshot. The snapshot carries the definition hash, session identity, capture
+time and observed item states. It is created exclusively: existing files are
+never overwritten. Use a different output path for each new session. Default
+output is the spec path with `.json` replaced by `.frozen.json`.
+
+Exits: `0` captured, `2` could not capture. Requires authenticated `gh`; reads
+GitHub only. Search results beyond 1000, incomplete pages, missing items and
+changing pagination counts are errors rather than partial scopes.
+
+### `nen goal check`
+
+```sh
+nen goal check --spec .nen/goals/backlog.json --json
+nen goal check --spec .nen/goals/backlog.json --frozen .nen/goals/session-123.frozen.json --session-id session-123 --json
+```
+
+Without `--frozen`, explicit numbers stay fixed while query conditions run against
+current tracker results. With it, only the snapshot's numbers are read. A changed
+definition, missing snapshot or supplied session mismatch is an error. A CLI
+check may omit `--session-id` for inspection; hook checks always verify identity.
+Fixed reads use GraphQL batches of 50. Results describe a bounded reading of the
+tracker, not an atomic transaction across all requests.
+
+Exits: `0` met, `1` not met, `2` could not evaluate. `--json` emits
+`nen.goal-check/v1` with verdict, scope, target, reading time, freeze time,
+condition counts, each observed item's state and URL, all unmet numbers and an
+evidence fingerprint. Error records carry `verdict: error` and the reason.
+Neither verb closes, labels, comments on, or otherwise mutates tracker items.
+
+Consumers install hooks explicitly; Nen and Hatsu enable none automatically.
+For a live goal in Claude Code's `.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "Stop": [{ "hooks": [{
+      "type": "command",
+      "command": "nen goal check --spec .nen/goals/backlog.json --hook claude-code",
+      "timeout": 60
+    }] }]
+  }
+}
+```
+
+For frozen goals, arrange a session-start wrapper that reads the host session ID,
+runs `goal freeze --session-id <id> --out <session-specific-file>` once, and passes
+that same file via `--frozen` to Stop. Never run freeze on each Stop event.
+
+The adapter reads Stop JSON on stdin and always exits `0` once invoked: met
+allows stopping; not-met supplies `decision: block` and an evidence-based reason;
+evaluation errors allow stopping with a visible `systemMessage` and stderr
+message, never a claim that the goal was met. Recognized `--hook` modes also translate family parser errors into allow-stop
+JSON. Validate installation with `--help` and a test invocation. Errors before
+family dispatch and hook timeouts remain the host's responsibility.
+
+`--hook codex` uses the same input fields (`session_id`, `stop_hook_active`) and
+output shape. Install a `Stop` command in `.codex/hooks.json` and review/trust it
+through the host's hooks UI. `--hook cursor` reads `conversation_id` and
+`loop_count`, returns `followup_message` for continuation and `{}` for stopping;
+errors and guard-stop explanations go to stderr because Cursor does not document
+`systemMessage` on Stop. Configure `stop` in `.cursor/hooks.json` (`version: 1`).
+These are protocol-tested adapters, not claims of end-to-end host validation.
+See the [Claude Code](https://code.claude.com/docs/en/hooks#stop),
+[Codex](https://learn.chatgpt.com/docs/hooks), and
+[Cursor](https://cursor.com/docs/hooks#stop) references, checked 2026-11-11.
+
+State defaults to a session/definition-specific file beside the spec; `--state`
+overrides it. Its `.evidence.json` companion contains the last successful full
+check record. With `stop_hook_active: true` (Cursor: `loop_count > 0`), unchanged
+evidence allows stopping on the third consecutive check by default, explicitly
+saying the goal remains unmet. `--unchanged-limit <positive integer>` changes the
+limit. Changed evidence, another session, or a fresh non-continuation resets the
+count. State updates are locked and atomic; corrupt or unwritable state is an
+evaluation error. Keep state separate from the spec and snapshot.
