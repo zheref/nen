@@ -19,7 +19,10 @@
 // THE COMMENT. Line 1 is the marker `<!-- nen:ledger effort=<encoded id>
 // sha256=<digest> -->`; the digest is of the fenced JSON text, so a comment
 // edited by hand after it was posted reads as `could-not-read` (edited), by
-// name. A one-line summary follows, then the document in a ```json fence.
+// name. A one-line summary follows, then the document in a ```json fence
+// inside a collapsed <details> block (zheref/hatsu PR-review readability): the
+// reader keys on the fence, never the wrapper, so a slice posted before the
+// wrapper still reads, and a pre-wrapper nen reads this one.
 //
 // WHOSE COMMENT IS READ (SEC-15). Only one the AUTHENTICATED login wrote AND
 // that nobody else edited (GitHub's `editor`): a marked comment by anyone
@@ -80,9 +83,13 @@ export function renderComment(slice: LedgerSlice): string {
     `${markerPrefix(slice.effort)}sha256=${sha256Hex(json)} -->`,
     `**nen ledger** · effort \`${slice.effort}\` · head \`${slice.head.slice(0, 12)}\` · ${slice.phases.length} phase entr${slice.phases.length === 1 ? "y" : "ies"} · ${findings} · ${slice.proof.length} proof file(s)`,
     "",
+    "<details><summary>Ledger slice — machine-read by <code>nen pr ledger read</code>; do not edit</summary>",
+    "",
     "```json",
     json,
     "```",
+    "",
+    "</details>",
     "",
   ].join("\n");
 }

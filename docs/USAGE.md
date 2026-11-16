@@ -4099,6 +4099,12 @@ nen pr ledger read --target <owner/name> --pr <n> --effort <id> [--restore] [--l
 | `--dry-run` | no (post) | Print every `gh` call a live post would make and the body; write nothing. | The reads and the private-name guard still run. An oversized slice previews one `POST` per bounded part and the index write, with `<part N url>` standing for the URL GitHub would assign to part N. |
 | `--restore` | no (read) | Write the slice's phases as the effort's phase ledger. | Only where none exists (`restored`), `unchanged` where it agrees; a local ledger that disagrees is exit 1 naming both, nothing overwritten. On a **stale** slice the phases ARE restored and the exit is still 1 (stale); the line says so. |
 
+**The comment's shape**: line 1 is the marker, line 2 a one-line summary a reviewer reads, then the slice
+in a ```` ```json ```` fence inside a collapsed `<details>` block, so the JSON takes no vertical space on the PR
+until it is opened. The reader keys on the marker and the fence, never the wrapper: a slice posted before the
+wrapper still reads, and so does this one under an older nen. The marker digest covers only the fenced JSON, so
+an earlier comment whose slice is unchanged stays `unchanged` (and expanded) until its facts move.
+
 **post**: reads the PR's head, the authenticated login (`gh api user`, or `--login`) and every
 conversation comment with its author and last **editor** (`gh api graphql`, page by page). With no marked comment of **this login** for the effort it posts one (`POST
 .../issues/<n>/comments`); with one it **edits it in place** (`PATCH .../issues/comments/<id>`); with the

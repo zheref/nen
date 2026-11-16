@@ -72,6 +72,16 @@ describe("nen pr ledger post (zheref/nen#510)", () => {
     const body = (JSON.parse(posted?.stdin ?? "{}") as { body: string }).body;
     expect(body.split("\n")[0]).toMatch(/^<!-- nen:ledger effort=HA%2F12 sha256=[0-9a-f]{64} -->$/);
     expect(body).toContain("```json");
+    // The JSON is collapsed for a human reader; the summary line stays visible above it.
+    expect(body).toMatch(/\n\n<details><summary>[^\n]*<\/summary>\n\n```json\n[\s\S]*\n```\n\n<\/details>\n$/);
+  });
+
+  it("reads a slice posted before the <details> wrapper (zheref/hatsu PR readability)", async () => {
+    const root = effortRepo();
+    const legacy = renderComment(sliceFor()).replace(/<details><summary>[^\n]*<\/summary>\n\n/, "").replace(/\n<\/details>\n$/, "");
+    expect(legacy).not.toContain("<details>");
+    const result = await run([...READ, "--json"], root, [pull(), me, comments([{ id: 55, login: "maintainer", body: legacy }])]);
+    expect(result.code).toBe(0);
   });
 
   it("AC-3: posting again edits the marked comment in place, and the same bytes are 'unchanged'", async () => {
