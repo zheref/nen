@@ -75,10 +75,20 @@ export function markerPrefix(effort: string): string {
 /** Any nen ledger marker, of any effort. */
 const ANY_MARKER = /^<!-- nen:ledger effort=(\S+) sha256=([0-9a-f]{64}) -->$/;
 
+/**
+ * The caller schema's `$id` as text the one-line summary can carry inertly: the summary sits
+ * outside the fence and the digest, so a newline, a control character or a backtick there could
+ * open a fence, close the <details> block or render the caller's text as the poster's prose
+ * (hanten F1 on the collapse, SEC-7). Each such character becomes a space.
+ */
+export function inertSummaryText(text: string): string {
+  return text.replace(/[\u0000-\u001f\u007f\u2028\u2029`]/gu, " ");
+}
+
 /** The whole comment body for `slice`. */
 export function renderComment(slice: LedgerSlice): string {
   const json = JSON.stringify(slice, null, 2);
-  const findings = slice.findings === null ? "no findings recorded" : `findings validated against ${slice.findings.schema.id ?? "the caller's schema"}`;
+  const findings = slice.findings === null ? "no findings recorded" : `findings validated against ${slice.findings.schema.id === null ? "the caller's schema" : `\`${inertSummaryText(slice.findings.schema.id)}\``}`;
   return [
     `${markerPrefix(slice.effort)}sha256=${sha256Hex(json)} -->`,
     `**nen ledger** · effort \`${slice.effort}\` · head \`${slice.head.slice(0, 12)}\` · ${slice.phases.length} phase entr${slice.phases.length === 1 ? "y" : "ies"} · ${findings} · ${slice.proof.length} proof file(s)`,
@@ -108,7 +118,10 @@ export function parseComment(body: string, effort: string, repo: string, pr: num
   const marker = ANY_MARKER.exec(first);
   if (marker === null) return { ok: false, reason: "the marker line is malformed" };
   if (marker[1] !== encodeEffortId(effort)) return { ok: false, reason: `the marker names effort '${marker[1]}'` };
-  const open = text.indexOf("\n```json\n");
+  // The fence is looked for only after the marker and summary lines, so nothing in the
+  // summary can move where the document is read from (hanten F1 on the collapse).
+  const summaryEnd = text.indexOf("\n", first.length + 1);
+  const open = summaryEnd === -1 ? -1 : text.indexOf("\n```json\n", summaryEnd);
   const close = text.lastIndexOf("\n```");
   if (open === -1 || close <= open) return { ok: false, reason: "no ```json fence holds the document" };
   const json = text.slice(open + "\n```json\n".length, close);
