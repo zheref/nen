@@ -694,8 +694,8 @@ describe("the shared include", () => {
 });
 
 describe("hook scripts: symlinks and modes (S4, N6)", () => {
-  const withHooks = (): readonly GeneratedFile[] =>
-    generateSurfaceMirror({ row: row("antigravity"), skills: readSourceSkills(SKILLS), agents: [], invocationPrefix: null, hooks: readHooksManifest(join(FIXTURES, "packs", "hooks.json")) });
+  const withHooks = (surface = "antigravity"): readonly GeneratedFile[] =>
+    generateSurfaceMirror({ row: row(surface), skills: readSourceSkills(SKILLS), agents: [], invocationPrefix: null, hooks: readHooksManifest(join(FIXTURES, "packs", "hooks.json")) });
 
   it("refuses a destination that is a symbolic link before writing anything", () => {
     const out = tempDir();
@@ -715,34 +715,44 @@ describe("hook scripts: symlinks and modes (S4, N6)", () => {
   const declared = WIN32 ? 0o666 : 0o755;
   const wrong = WIN32 ? 0o444 : 0o644;
 
-  it("re-applies a declared mode on unchanged bytes, and check calls a wrong mode hand-edited", () => {
+  it.each(["codex", "cursor", "antigravity"])("%s: re-applies a declared mode on unchanged bytes, and check calls a wrong mode hand-edited", (surface) => {
     const out = tempDir();
-    const files = withHooks();
-    writeSurfaceMirror(out, files, row("antigravity"));
+    const files = withHooks(surface);
+    writeSurfaceMirror(out, files, row(surface));
     const script = join(out, "hooks", "bell.hook");
     expect(statSync(script).mode & 0o777).toBe(declared);
     // Freshly written, it checks clean and regenerates as unchanged -- on win32
     // too, where the 0o755 it declares cannot be held.
-    expect(mirrorReportOk(checkSurfaceMirror(out, files, row("antigravity")))).toBe(true);
-    expect(writeSurfaceMirror(out, files, row("antigravity")).unchanged).toContain("hooks/bell.hook");
+    expect(mirrorReportOk(checkSurfaceMirror(out, files, row(surface)))).toBe(true);
+    expect(writeSurfaceMirror(out, files, row(surface)).unchanged).toContain("hooks/bell.hook");
     try {
       chmodSync(script, wrong);
-      const drifted = checkSurfaceMirror(out, files, row("antigravity"));
+      const drifted = checkSurfaceMirror(out, files, row(surface));
       expect(drifted.handEdited).toEqual(["hooks/bell.hook"]);
       // A regenerate repairs the mode without rewriting the bytes, and reports the file written.
-      const repaired = writeSurfaceMirror(out, files, row("antigravity"));
+      const repaired = writeSurfaceMirror(out, files, row(surface));
       expect(repaired.written).toEqual(["hooks/bell.hook"]);
       expect(statSync(script).mode & 0o777).toBe(declared);
-      expect(mirrorReportOk(checkSurfaceMirror(out, files, row("antigravity")))).toBe(true);
+      expect(mirrorReportOk(checkSurfaceMirror(out, files, row(surface)))).toBe(true);
       // --dry-run reports it and touches nothing.
       chmodSync(script, wrong);
-      expect(writeSurfaceMirror(out, files, row("antigravity"), true).written).toEqual(["hooks/bell.hook"]);
+      expect(writeSurfaceMirror(out, files, row(surface), true).written).toEqual(["hooks/bell.hook"]);
       expect(statSync(script).mode & 0o777).toBe(wrong);
     } finally {
       // Leave it writable even when an assertion fails, so the temp directory's
       // cleanup can remove it on win32 (a read-only file there refuses delete).
       chmodSync(script, 0o644);
     }
+  });
+
+  it.each(["codex", "cursor", "antigravity"])("%s: reports edited hook content even when its host mode is correct", (surface) => {
+    const out = tempDir();
+    const files = withHooks(surface);
+    writeSurfaceMirror(out, files, row(surface));
+    const script = join(out, "hooks", "bell.hook");
+    writeFileSync(script, `${readFileSync(script, "utf8")}\necho changed\n`);
+    expect(statSync(script).mode & 0o777).toBe(declared);
+    expect(checkSurfaceMirror(out, files, row(surface)).handEdited).toEqual(["hooks/bell.hook"]);
   });
 
   it("compares a declared mode in the terms the host can hold: the mode itself on POSIX, the read-only attribute alone on win32", () => {
@@ -772,23 +782,66 @@ describe("a markerless hook script (N12)", () => {
     writeFileSync(join(dir, "bell.js"), "#!/usr/bin/env node\nconsole.log('bell');\n");
     return readHooksManifest(join(dir, "hooks.json"));
   };
-  const files = (): ReturnType<typeof generateSurfaceMirrorReport> =>
-    generateSurfaceMirrorReport({ row: row("antigravity"), skills: readSourceSkills(SKILLS), agents: [], invocationPrefix: null, hooks: nodeHooks() });
+  const files = (surface = "antigravity"): ReturnType<typeof generateSurfaceMirrorReport> =>
+    generateSurfaceMirrorReport({ row: row(surface), skills: readSourceSkills(SKILLS), agents: [], invocationPrefix: null, hooks: nodeHooks() });
 
-  it("is carried byte for byte, noted in the report, written and re-written without a marker guard, and checked by bytes", () => {
-    const report = files();
+  it.each(["codex", "cursor", "antigravity"])("%s: carries markerless hooks byte for byte and detects content drift", (surface) => {
+    const report = files(surface);
     const script = report.files.find((file): boolean => file.path === "hooks/bell.js");
     expect(script).toMatchObject({ content: "#!/usr/bin/env node\nconsole.log('bell');\n", mode: 0o755, markerless: true });
     expect(report.notes).toContain("hooks/bell.js carries no marker: its interpreter does not read # comments, and the manifest beside it carries the marker");
     const out = tempDir();
-    writeSurfaceMirror(out, report.files, row("antigravity"));
-    expect(mirrorReportOk(checkSurfaceMirror(out, report.files, row("antigravity")))).toBe(true);
+    writeSurfaceMirror(out, report.files, row(surface));
+    expect(mirrorReportOk(checkSurfaceMirror(out, report.files, row(surface)))).toBe(true);
     // A second generate over it is not a clobber refusal: the manifest beside it is the guarded file.
-    expect(writeSurfaceMirror(out, report.files, row("antigravity")).unchanged).toContain("hooks/bell.js");
+    expect(writeSurfaceMirror(out, report.files, row(surface)).unchanged).toContain("hooks/bell.js");
     writeFileSync(join(out, "hooks", "bell.js"), "#!/usr/bin/env node\nconsole.log('changed');\n");
-    expect(checkSurfaceMirror(out, report.files, row("antigravity")).handEdited).toEqual(["hooks/bell.js"]);
+    expect(checkSurfaceMirror(out, report.files, row(surface)).handEdited).toEqual(["hooks/bell.js"]);
     // Outside the orphan universe: with the manifest gone it is neither extra nor deleted.
-    expect(universeFiles(out, row("antigravity"))).not.toContain("hooks/bell.js");
+    expect(universeFiles(out, row(surface))).not.toContain("hooks/bell.js");
+  });
+
+  it.each(["codex", "cursor", "antigravity"])("%s: checks and repairs a markerless hook's declared mode without changing its bytes", (surface) => {
+    const out = tempDir();
+    const generated = files(surface).files;
+    writeSurfaceMirror(out, generated, row(surface));
+    const script = join(out, "hooks", "bell.js");
+    const original = readFileSync(script, "utf8");
+    expect(statSync(script).mode & 0o777).toBe(hostMode(0o755));
+    try {
+      // Windows exposes read-only drift; POSIX exposes the lost executable bit.
+      const wrong = process.platform === "win32" ? 0o444 : 0o644;
+      chmodSync(script, wrong);
+      expect(checkSurfaceMirror(out, generated, row(surface)).handEdited).toEqual(["hooks/bell.js"]);
+      expect(writeSurfaceMirror(out, generated, row(surface), true).written).toEqual(["hooks/bell.js"]);
+      expect(statSync(script).mode & 0o777).toBe(wrong);
+      expect(writeSurfaceMirror(out, generated, row(surface)).written).toEqual(["hooks/bell.js"]);
+      expect(readFileSync(script, "utf8")).toBe(original);
+      expect(statSync(script).mode & 0o777).toBe(hostMode(0o755));
+      expect(mirrorReportOk(checkSurfaceMirror(out, generated, row(surface)))).toBe(true);
+    } finally {
+      chmodSync(script, 0o644);
+    }
+  });
+
+  it("checks declared modes on verbatim files and imposes none when no mode was declared", () => {
+    const out = tempDir();
+    const script = join(out, "bell.js");
+    const file: GeneratedFile = { path: "bell.js", content: "console.log('bell');\n", mode: 0o755 };
+    writeFileSync(script, file.content);
+    chmodSync(script, 0o755);
+    expect(mirrorReportOk(checkSurfaceMirror(out, [file], row("claude-code")))).toBe(true);
+    try {
+      chmodSync(script, process.platform === "win32" ? 0o444 : 0o644);
+      expect(checkSurfaceMirror(out, [file], row("claude-code")).handEdited).toEqual([file.path]);
+      const undeclared: GeneratedFile = { path: file.path, content: file.content };
+      expect(mirrorReportOk(checkSurfaceMirror(out, [undeclared], row("claude-code")))).toBe(true);
+      chmodSync(script, 0o755);
+      writeFileSync(script, "console.log('edited');\n");
+      expect(checkSurfaceMirror(out, [undeclared], row("claude-code")).handEdited).toEqual([file.path]);
+    } finally {
+      chmodSync(script, 0o644);
+    }
   });
 });
 
