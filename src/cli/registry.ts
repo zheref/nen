@@ -40,6 +40,7 @@ import { effortCommand } from "../effort/command.js";
 import { epicCommand } from "../epic/command.js";
 import { exitsCommand } from "../exits/command.js";
 import { fanoutCommand } from "../fanout/command.js";
+import { goalCommand } from "../goal/command.js";
 import { gateCommand } from "../gate/command.js";
 import { ideaCommand } from "../idea/command.js";
 import { issueCommand } from "../issue/command.js";
@@ -90,6 +91,7 @@ export const COMMANDS: readonly Command[] = [
   exitsCommand,
   fanoutCommand,
   gateCommand,
+  goalCommand,
   ideaCommand,
   issueCommand,
   labelCommand,

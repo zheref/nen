@@ -519,6 +519,8 @@ export async function runFamily(
     args = parseArgs(argv, mergeFlags(family.flags));
   } catch (error) {
     if (error instanceof UsageError) {
+      const translated = family.parseFailure?.(argv, error.message, io);
+      if (translated !== undefined && translated !== null) return translated;
       // A family's opted-in verb refuses in JSON under --json (Hatsu SDD plan
       // N5): the parse failed, so the subcommand and --json are read off argv.
       const hint = argv.map((token): string => token.split("=")[0] ?? token).find((name): boolean => family.hints?.[name] !== undefined);
