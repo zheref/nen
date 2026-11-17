@@ -4067,7 +4067,8 @@ totals[] }, findings { schema { id, sha256 }, document } | null, proof[] { path,
 model, both read from the [durable home](#effort-ids-and-the-ledgers-durable-home)
 (`<git-common-dir>/.nen/`). It carries no posting instant, so the same facts are the same bytes. The
 comment is the marker line `<!-- nen:ledger effort=<encoded id> sha256=<digest> -->` (the digest is of the
-fenced JSON text), a one-line summary, and the document in a ```` ```json ```` fence.
+fenced JSON text), a one-line summary, and the document in a ```` ```json ```` fence inside a collapsed
+`<details>` block (*The comment's shape*, below).
 
 **What the comment carries, and who sees it** (SEC-8). Everyone who can read the pull request reads the
 comment, so on a public repository it is public. It carries the effort id, the PR's head commit, every
@@ -4098,6 +4099,15 @@ nen pr ledger read --target <owner/name> --pr <n> --effort <id> [--restore] [--l
 | `--login <name>` | no | The login whose comment is the record, instead of `gh api user`. | For a token that cannot read `user` (an Actions installation token: `app-slug[bot]`). A value that is not a login is exit 2. |
 | `--dry-run` | no (post) | Print every `gh` call a live post would make and the body; write nothing. | The reads and the private-name guard still run. An oversized slice previews one `POST` per bounded part and the index write, with `<part N url>` standing for the URL GitHub would assign to part N. |
 | `--restore` | no (read) | Write the slice's phases as the effort's phase ledger. | Only where none exists (`restored`), `unchanged` where it agrees; a local ledger that disagrees is exit 1 naming both, nothing overwritten. On a **stale** slice the phases ARE restored and the exit is still 1 (stale); the line says so. |
+
+**The comment's shape**: line 1 is the marker, line 2 a one-line summary a reviewer reads, then the slice
+in a ```` ```json ```` fence inside a collapsed `<details>` block, so the JSON takes no vertical space on the PR
+until it is opened. The reader keys on the marker and the fence, never the wrapper: a slice posted before the
+wrapper still reads, and so does this one under an older nen. The marker digest covers only the fenced JSON, so
+an earlier comment whose slice is unchanged stays `unchanged` (and expanded) until its facts move. The wrapper adds
+117 characters, so a slice within that of GitHub's limit now publishes as parts. The caller schema's `$id` is printed
+in the summary as a code span with every control character and backtick replaced by a space, and the fence is looked
+for only after the summary line.
 
 **post**: reads the PR's head, the authenticated login (`gh api user`, or `--login`) and every
 conversation comment with its author and last **editor** (`gh api graphql`, page by page). With no marked comment of **this login** for the effort it posts one (`POST
