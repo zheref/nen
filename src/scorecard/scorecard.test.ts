@@ -23,7 +23,7 @@ const catalogue = (aspects: unknown): Buffer => Buffer.from(JSON.stringify({ con
 const table = (rows: readonly (readonly [string, string])[]): string => ["## 📈 What this improves", "", "| Aspect | Delta | Why it moves |", "|---|---|---|", ...rows.map(([a, d]) => `| ${a} | ${d} | |`)].join("\n");
 
 describe("parseAspectCatalogue", () => {
-  it("keeps the catalogue's aspects in its own order and hashes its bytes (zheref/hatsu#619/AC-3)", () => {
+  it("keeps the catalogue's aspects in its own order and hashes its bytes (zheref/nen#669/AC-3, zheref/hatsu#619/AC-3)", () => {
     const parsed = parseAspectCatalogue("c.json", catalogue(["Zeta", "Alpha"]));
     expect(parsed.aspects).toEqual(["Zeta", "Alpha"]);
     expect(parsed.contract).toBe("test.sections/v1");
@@ -35,6 +35,7 @@ describe("parseAspectCatalogue", () => {
     ["an empty list", { aspects: [] }],
     ["a duplicate, case-folded", { aspects: ["Cost", "cost"] }],
     ["a pipe", { aspects: ["a|b"] }],
+    ["an emphasis character", { aspects: ["Dev_experience"] }],
     ["a non-string", { aspects: [3] }],
   ])("refuses %s", (_, raw) => {
     expect(() => parseAspectCatalogue("c.json", Buffer.from(JSON.stringify(raw)))).toThrow(SchemaError);
@@ -57,7 +58,7 @@ describe("readDelta", () => {
 });
 
 describe("readAspects", () => {
-  it("reads every catalogue aspect, absent ones included, in catalogue order (zheref/hatsu#619/AC-1)", () => {
+  it("reads every catalogue aspect, absent ones included, in catalogue order (zheref/nen#669/AC-1, zheref/hatsu#619/AC-1)", () => {
     const readings = readAspects(table([["Security", "⬇"], ["Observability", "⬆"]]), ASPECTS);
     expect(Object.entries(readings)).toEqual([["Observability", "improves"], ["Security", "regresses"], ["End-user experience", "absent"]]);
   });
@@ -70,6 +71,20 @@ describe("readAspects", () => {
       "| Observability | ⬇ |",
     ].join("\n");
     expect(readAspects(body, ASPECTS)).toEqual({ Observability: "improves", Security: "unchanged", "End-user experience": "unreadable" });
+  });
+
+  it("closes a fence only on a bare fence line, CommonMark's rule", () => {
+    const body = ["```bash", "x", "```js", "| Security | ⬇ |", "```", "| Security | ⬆ |", "| Observability | ⬆ |"].join("\n");
+    expect(readAspects(body, ASPECTS)).toMatchObject({ Security: "improves", Observability: "improves" });
+  });
+
+  it("reads inline code at a line's start as text, not a fence", () => {
+    expect(readAspects("```nen pr ready``` first\n| Security | ⬆ |", ASPECTS).Security).toBe("improves");
+  });
+
+  it("leaves a comment opener inside code alone, and reads a comment that spans lines as a comment", () => {
+    expect(readAspects("```\n<!--\n```\n| Security | ⬆ |", ASPECTS).Security).toBe("improves");
+    expect(readAspects("<!-- start\n| Security | ⬇ |\nend --> | Observability | ⬆ |\n| Security | ⬆ |", ASPECTS)).toMatchObject({ Security: "improves", Observability: "improves" });
   });
 
   it("reads a CRLF body and ignores a row with a single cell", () => {
@@ -87,7 +102,7 @@ describe("weeks", () => {
     expect(parseWeek("2026-47")).toBeNull();
   });
 
-  it("names the running week and the last completed one from a clock (zheref/hatsu#619/AC-2)", () => {
+  it("names the running week and the last completed one from a clock (zheref/nen#669/AC-2, zheref/hatsu#619/AC-2)", () => {
     const friday = new Date("2026-11-20T21:00:00Z");
     expect(currentWeek(friday).id).toBe("2026-W47");
     expect(lastCompletedWeek(friday).id).toBe("2026-W46");
@@ -108,7 +123,7 @@ describe("repoTrend", () => {
     pull(9, "2026-11-01T09:00:00Z", [["Observability", "⬆"]]),
   ];
 
-  it("tallies each aspect per week in catalogue order, and every aspect appears (zheref/hatsu#619/AC-2)", () => {
+  it("tallies each aspect per week in catalogue order, and every aspect appears (zheref/nen#669/AC-2, zheref/hatsu#619/AC-2)", () => {
     const trend = repoTrend("o/r", ASPECTS, weeks, now, pulls);
     expect(trend.weeks.map((week) => [week.week, week.merged, week.scored, week.pulls, week.partial])).toEqual([
       ["2026-W46", 2, 2, [1, 3], false],

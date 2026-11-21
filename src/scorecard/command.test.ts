@@ -43,7 +43,7 @@ const W46 = ["2026-W46"];
 const W45_46 = ["2026-W45", "2026-W46"];
 
 describe("nen scorecard trend", () => {
-  it("reads every repository's merged PRs with gh pr list only, and writes nothing (zheref/hatsu#619/AC-1)", async () => {
+  it("reads every repository's merged PRs with gh pr list only, and writes nothing (zheref/nen#669/AC-1, zheref/hatsu#619/AC-1)", async () => {
     const root = repo();
     const result = await run(root, ["trend", "--catalogue", "pr-sections.json", "--target", "o/a,o/b", "--weeks", "2"], [
       call("o/a", W45_46, pulls([{ number: 1, mergedAt: "2026-11-10T00:00:00Z", body: body({ Observability: "⬆", Security: "⬇" }) }])),
@@ -65,7 +65,7 @@ describe("nen scorecard trend", () => {
     expect(trend.repositories[1]!.aspects.every((row) => row.tallies.every((t) => t.net === null))).toBe(true);
   });
 
-  it("takes the aspects and their order from the catalogue file at run time (zheref/hatsu#619/AC-3)", async () => {
+  it("takes the aspects and their order from the catalogue file at run time (zheref/nen#669/AC-3, zheref/hatsu#619/AC-3)", async () => {
     const root = repo(["Traceability", "Cost"]);
     const result = await run(root, ["trend", "--catalogue", "pr-sections.json", "--target", "o/a", "--weeks", "1"], [
       call("o/a", W46, pulls([{ number: 2, mergedAt: "2026-11-18T00:00:00Z", body: "" }, { number: 1, mergedAt: "2026-11-11T00:00:00Z", body: body({ Cost: "⬇", Traceability: "⬆", Observability: "⬆" }) }])),
@@ -75,7 +75,7 @@ describe("nen scorecard trend", () => {
     expect(rows).toEqual(["Traceability  +1", "Cost          -1"]);
   });
 
-  it("prints a review page with every aspect for every repository, the running week marked (zheref/hatsu#619/AC-2)", async () => {
+  it("prints a review page with every aspect for every repository, the running week marked (zheref/nen#669/AC-2, zheref/hatsu#619/AC-2)", async () => {
     const root = repo();
     const result = await run(root, ["trend", "--catalogue", "pr-sections.json", "--target", "o/a", "--weeks", "2", "--through", "current", "--markdown"], [
       call("o/a", ["2026-W46", "2026-W47"], pulls([{ number: 7, mergedAt: "2026-11-20T21:00:00Z", body: body({ Security: "⬆" }) }])),
@@ -149,7 +149,7 @@ describe("nen scorecard trend", () => {
 describe("nen scorecard snapshot", () => {
   const script = (): ScriptedCall[] => [call("o/a", W46, pulls([{ number: 5, mergedAt: "2026-11-12T00:00:00Z", body: body({ Observability: "⬆", Traceability: "➖" }) }]))];
 
-  it("writes the last completed week once, then reads unchanged on a rerun (zheref/hatsu#619/AC-2)", async () => {
+  it("writes the last completed week once, then reads unchanged on a rerun (zheref/nen#669/AC-2, zheref/hatsu#619/AC-2)", async () => {
     const root = repo();
     const first = await run(root, ["snapshot", "--catalogue", "pr-sections.json", "--target", "o/a", "--out", "scorecard"], script(), true);
     expect(first.code).toBe(0);
@@ -174,6 +174,14 @@ describe("nen scorecard snapshot", () => {
     const result = await run(root, ["snapshot", "--catalogue", "pr-sections.json", "--target", "o/a", "--out", "scorecard", "--through", "2026-W45"], [call("o/a", ["2026-W45"], "[]")]);
     expect(result.code).toBe(0);
     expect(result.out).toContain("updated:");
+  });
+
+  it("refuses at exit 2, naming the path, when the existing snapshot cannot be read", async () => {
+    const root = repo();
+    mkdirSync(join(root, "scorecard", "2026-W46.json"), { recursive: true });
+    const result = await run(root, ["snapshot", "--catalogue", "pr-sections.json", "--target", "o/a", "--out", "scorecard"], script());
+    expect(result.code).toBe(2);
+    expect(result.err).toContain("EISDIR");
   });
 
   it("writes nothing and exits 1 when the repository cannot be read", async () => {

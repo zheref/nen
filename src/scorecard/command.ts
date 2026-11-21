@@ -74,7 +74,8 @@ aspect. Every catalogue aspect appears in every repository, recorded or not.
   snapshot   one completed week for ONE --target, written to
              <out>/<YYYY-Www>.json (--out resolves against --repo). The file
              carries no generation time: re-running over unchanged pull
-             requests writes the same bytes. A running week is refused.
+             requests and an unchanged catalogue file (its sha256 is
+             recorded) writes the same bytes. A running week is refused.
 
 The only GitHub call is 'gh pr list --repo <target> --state merged --search
 "merged:<from>..<to>" --json number,title,url,mergedAt,body --limit ${PULL_LIMIT}';
@@ -209,8 +210,8 @@ function runSnapshot(context: CommandContext): number {
   let previous: string | null = null;
   try {
     previous = readFileSync(file, "utf8");
-  } catch {
-    previous = null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new VerbUsageError(`--out: the existing snapshot '${file}' could not be read (${(error as NodeJS.ErrnoException).code ?? String(error)}); nothing written.`);
   }
   const written = previous === text ? "unchanged" : previous === null ? "created" : "updated";
   if (written !== "unchanged") {

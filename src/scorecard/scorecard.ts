@@ -45,7 +45,7 @@ export function parseAspectCatalogue(path: string, bytes: Buffer): AspectCatalog
   const root = requireRecord(path, "$", raw);
   const aspects = requireArray(path, "aspects", root.aspects).map((value, index): string => requireString(path, `aspects[${index}]`, value).trim());
   if (aspects.length === 0) throw new SchemaError(path, "aspects", "expected at least one aspect");
-  if (aspects.some((name): boolean => name.length === 0 || name.includes("|"))) throw new SchemaError(path, "aspects", "an aspect must be nonempty and carry no '|'");
+  if (aspects.some((name): boolean => name.length === 0 || /[|*_`]/.test(name))) throw new SchemaError(path, "aspects", "an aspect must be nonempty and carry no '|', '*', '_' or '`' (a table cell's emphasis is stripped before matching)");
   const folded = aspects.map((name): string => name.toLowerCase());
   if (new Set(folded).size !== folded.length) throw new SchemaError(path, "aspects", "duplicate aspect (compared case-insensitively)");
   return {
@@ -77,22 +77,40 @@ function cells(line: string): string[] | null {
  * ignored, so a quoted older table further down cannot overwrite the PR's own.
  * Rows inside fenced code and HTML comments are not rows. A row naming an
  * aspect whose delta cell is no glyph reads `unreadable`; an aspect with no row
- * reads `absent`.
+ * reads `absent`. Fences follow CommonMark's open/close rules, and an HTML
+ * comment may span lines, outside fences only.
  */
 export function readAspects(body: string, aspects: readonly string[]): Record<string, AspectReading> {
   const index = new Map(aspects.map((name): [string, string] => [name.toLowerCase(), name]));
   const found = new Map<string, AspectReading>();
-  const text = body.replace(/\r\n?/g, "\n").replace(/<!--[\s\S]*?-->/g, "");
   let fence: string | null = null;
-  for (const line of text.split("\n")) {
-    const opener = /^\s{0,3}(`{3,}|~{3,})/.exec(line);
-    if (opener !== null) {
-      const marker = opener[1] as string;
-      if (fence === null) fence = marker;
-      else if (marker[0] === fence[0] && marker.length >= fence.length) fence = null;
+  let comment = false;
+  for (const raw of body.replace(/\r\n?/g, "\n").split("\n")) {
+    if (fence !== null) {
+      // CommonMark: a closing fence is the same character, at least as long, and carries no info string.
+      const closer = /^\s{0,3}(`{3,}|~{3,})\s*$/.exec(raw);
+      if (closer !== null && (closer[1] as string)[0] === fence[0] && (closer[1] as string).length >= fence.length) fence = null;
       continue;
     }
-    if (fence !== null) continue;
+    let line = raw;
+    if (comment) {
+      const end = line.indexOf("-->");
+      if (end === -1) continue;
+      line = line.slice(end + 3);
+      comment = false;
+    }
+    line = line.replace(/<!--[\s\S]*?-->/g, "");
+    const open = line.indexOf("<!--");
+    if (open !== -1) {
+      line = line.slice(0, open);
+      comment = true;
+    }
+    // A backtick opener's info string carries no backtick, so ```code``` at a line's start is inline code.
+    const opener = /^\s{0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (opener !== null && !((opener[1] as string)[0] === "`" && (opener[2] as string).includes("`"))) {
+      fence = opener[1] as string;
+      continue;
+    }
     const row = cells(line);
     if (row === null || row.length < 2) continue;
     const name = index.get((row[0] as string).replace(/[*_`]/g, "").trim().toLowerCase());
@@ -318,7 +336,7 @@ export interface Snapshot {
 /**
  * One repository's one-week score snapshot, the record the scheduled workflow
  * commits. It carries no generation time, so re-running it over the same
- * merged PRs writes the same bytes and the commit step has nothing to commit.
+ * merged PRs and the same catalogue file writes the same bytes and the commit step has nothing to commit.
  */
 export function snapshotOf(repo: RepoTrend, catalogue: AspectCatalogue): Snapshot {
   const week = repo.weeks[0] as WeekColumn;

@@ -316,8 +316,8 @@ file formats).
 - **`run`** — `nen.run.record/v0.1` · `nen.run/v0.1`
 - **`runner`** — `nen.runner.plan/v0.1` · `nen.runner.plan/v0.2`
 - **`scaffold`** — `nen.scaffold.init/v0.1` · `nen.scaffold.migrate/v0.1` · `nen.scaffold.new/v0.1` · `nen.scaffold.template/v0.1`
-- **`scorecard`** — `nen.scorecard.snapshot/v0.1` · `nen.scorecard.trend/v0.1`
 - **`schema`** — `nen.schema.set/v0.1`
+- **`scorecard`** — `nen.scorecard.snapshot/v0.1` · `nen.scorecard.trend/v0.1`
 - **`session`** — `nen.session.ledger/v0.1`
 - **`shu`** — `nen.shu.<verb>/v0.1` · `nen.shu.coverage-capture/v0.1` · `nen.shu.coverage/v0.1` · `nen.shu.detect/v0.1` · `nen.shu.evidence/v0.1` · `nen.shu.proof/v0.1` · `nen.shu.test-report/v0.1` · `nen.shu.tools/v0.1` · `nen.shu.warmup/v0.1`
 - **`spec`** — `nen.spec.check/v0.1` · `nen.spec.cite-check/v0.1` · `nen.spec.converge/v0.1` · `nen.spec.coverage/v0.1` · `nen.spec.diff/v0.1` · `nen.spec.index/v0.1` · `nen.spec.inventory/v0.1` · `nen.spec.number/v0.1` · `nen.spec.parity/v0.1` · `nen.spec.tasks/v0.1` · `nen.spec.trace/v0.1`
@@ -1098,7 +1098,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`report`](#family-report) | [`nen report render`](#nen-report-render) | fill a template with a data document and write the result: {{token}}, {{{token}}}, {{#each}}, {{#if}} and nothing else, refusing an unknown token by name; --variant injects a declared variant's section flags and --graph injects a validated architecture-delta graph | caller-named --template + --data (+ --graph) files, nen/workflow.json's reports.sections under --variant; writes --out, inside --repo, unless --dry-run | yes |
 | [`report`](#family-report) | [`nen report mermaid`](#nen-report-mermaid) | print the mermaid text for a graph document and nothing else | a caller-named --graph file; writes nothing; no git/gh | no |
 | [`scorecard`](#family-scorecard) | [`nen scorecard trend`](#nen-scorecard-trend) | each repository's merged pull requests scored per ISO week on the aspects a caller's section catalogue declares, every aspect in catalogue order, net = improves − regresses; plain or `--markdown` review page | caller-named --catalogue JSON, github (gh pr list --state merged, read only); writes nothing | yes |
-| [`scorecard`](#family-scorecard) | [`nen scorecard snapshot`](#nen-scorecard-snapshot) | one repository's completed-week score snapshot, written as &lt;out&gt;/&lt;YYYY-Www&gt;.json with no generation time, so a rerun over unchanged pull requests writes the same bytes | caller-named --catalogue JSON, github (gh pr list --state merged, read only); writes --out inside --repo | yes |
+| [`scorecard`](#family-scorecard) | [`nen scorecard snapshot`](#nen-scorecard-snapshot) | one repository's completed-week score snapshot, written as &lt;out&gt;/&lt;YYYY-Www&gt;.json with no generation time, so a rerun over unchanged pull requests and catalogue writes the same bytes | caller-named --catalogue JSON, github (gh pr list --state merged, read only); writes --out inside --repo | yes |
 | [`review`](#family-review) | [`nen review scopes`](#nen-review-scopes) | which review scopes a branch diff raises, off the repository's own review.scopes block, plus the changed paths no scope claims | nen/workflow.json's review block, git diff --name-only; writes nothing; no gh | yes |
 | [`audit`](#family-audit) | [`nen audit deps`](#nen-audit-deps) | a directory's dependency pins read from its lockfile or Package.resolved (never by running its package manager) and, with --query, asked about at the declaring contract's OSV querybatch endpoint; four exits: clean, findings, wiring, not scanned | the --contract row (an absolute JSON file), package.json and the lockfile directly under --repo (pnpm, yarn, npm) or Package.resolved (root, .xcodeproj, .xcworkspace), OSV over https (with --query); never git, gh or the package manager | yes |
 | [`surface`](#family-surface) | [`nen surface mirror generate`](#nen-surface-mirror-generate) | render every &lt;name&gt;/SKILL.md under a skills directory into another agent surface's own layout (codex, cursor, antigravity): the body verbatim but for its relative links, re-aimed for the depth each copy lands at, the frontmatter reduced to the keys that surface documents, invocation mentions respelled, personas written where the surface keeps them — plus, per flag, the surface's hook manifest (`--hooks`), rules file (`--rules`), permission pack (`--permissions`) and model aliases (`--models`), and a `--stamp` in the marker | caller-named --source + --agents directories and pack files; writes --out; no git/gh | yes |
@@ -17833,7 +17833,7 @@ pull request is commented on, labelled or edited.
 **The aspects are the caller's.** `--catalogue` names a section catalogue read
 **at run time**; its top-level `aspects` array is the list and the order (a
 non-empty array of unique strings, compared case-insensitively, none holding
-`|`). No aspect is compiled into nen, so a consumer adding a fourteenth aspect
+`|`, `*`, `_` or `` ` ``, which a table cell's emphasis loses). No aspect is compiled into nen, so a consumer adding a fourteenth aspect
 changes data, never a nen release, and nen takes no build-time dependency on
 the catalogue's owner. A relative path resolves against `--repo`.
 
@@ -17894,8 +17894,8 @@ running week is refused) for **one** `--target`, written to
 `<out>/<YYYY-Www>.json`, `--out` resolving against `--repo`. The file carries
 the repository, the period, the catalogue's `contract` and `sha256`, the merged
 and scored counts, the pull request numbers and every aspect's tally, and **no
-generation time**: a rerun over unchanged pull requests reads `unchanged` and
-writes nothing, so the workflow that commits it has nothing to commit. A pull
+generation time**: a rerun over unchanged pull requests and an unchanged
+catalogue file (its `sha256` is recorded) reads `unchanged` and writes nothing, so the workflow that commits it has nothing to commit. A pull
 request body edited after the fact reads `updated`. When the repository cannot
 be read, nothing is written.
 
