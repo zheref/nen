@@ -479,10 +479,10 @@ it stays pending and holds every pull request's checks with it.
 
 ## The verb surface
 
-`nen --help` lists every command family (49); each
+`nen --help` lists every command family (50); each
 family's own `--help` (`nen pr --help`, `nen board --help`, ...) documents
 its verbs and flags in full. [`docs/USAGE.md`](docs/USAGE.md) documents all
-177 verbs outside the binary — each one's purpose, arguments, exit codes and
+179 verbs outside the binary — each one's purpose, arguments, exit codes and
 `--json` shape — plus the conventions they share and the developer workflows
 they compose into. The families group roughly as:
 
@@ -527,7 +527,9 @@ they compose into. The families group roughly as:
   manager) and queried at the OSV endpoint a caller's declaring contract
   names, on four exits: clean, findings, wiring, not scanned
 - **Reports** — `report` (`data`, `render`): the facts an effort's report is
-  made of, and the fill that turns them into one
+  made of, and the fill that turns them into one; `scorecard` (`trend`,
+  `snapshot`): merged pull requests scored per ISO week on the improvement
+  aspects a caller's section catalogue declares, read at run time
 - **Surfaces** — `surface` (`mirror generate`, `mirror check`, `install`,
   `status`, `capabilities`): one skills directory rendered into another agent
   surface's own layout, the drift check that says whether the committed copy is
