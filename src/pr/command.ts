@@ -817,8 +817,8 @@ ledger:
     step argv, refuses a credential's shape anywhere in the slice
     (secret-shape, exit 1, the field named), runs the private-name guard,
     then posts a new comment, or EDITS this login's one marked comment for
-    the effort in place. The comment is as visible as the PR. Verdicts: posted | updated | unchanged (the same
-    bytes are already there) | dry-run (prints the gh call and the body,
+    the effort in place. The comment is as visible as the PR. Verdicts: posted | updated | unchanged (the marker
+    already carries this slice's digest; the wrapper around it is not compared) | dry-run (prints the gh call and the body,
     writes nothing) | findings-invalid (exit 1, the first failing JSON pointer
     named, nothing posted) | too-large (exit 1: over GitHub's ${GITHUB_COMMENT_LIMIT}-
     character limit, both sizes named, never truncated) | refused (exit 4,
