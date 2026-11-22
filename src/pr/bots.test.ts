@@ -5,6 +5,7 @@ import {
   BotResolutionError,
   botLoginArgv,
   botLoginKey,
+  matchesBotLogin,
   isReviewerNodeId,
   isBotLoginInput,
   isBotLoginAlias,
@@ -120,7 +121,7 @@ describe("prAndKnownBotsArgv / parsePrAndKnownBots", () => {
         },
       },
     ]);
-    expect(fetchPrAndKnownBots(seams, TARGET, 158)).toEqual({ pullRequestId: "PR_1", bots: [], baseRefOid: "", defaultBranch: null });
+    expect(fetchPrAndKnownBots(seams, TARGET, 158)).toEqual({ pullRequestId: "PR_1", headRefOid: null, bots: [], baseRefOid: "", defaultBranch: null });
   });
 
   it("fetchPrAndKnownBots throws (never returns a partial result) when gh itself fails", () => {
@@ -344,6 +345,12 @@ describe("bot logins resolved without prior PR history (#160)", () => {
     expect(botLoginArgv(login)).toEqual(["api", "--method", "GET", "users/copilot-pull-request-reviewer%5Bbot%5D"]);
     const seams = new ScriptedSeams([{ match: `gh ${botLoginArgv(login).join(" ")}`, result: { stdout: JSON.stringify({ type: "Bot", login: "Copilot", node_id: "BOT_real" }) } }]);
     expect(resolveBotLogin(seams, login)).toEqual({ login: "copilot-pull-request-reviewer", id: "BOT_real" });
+  });
+
+  it("matches verified bot logins against short and REST patterns", () => {
+    expect(matchesBotLogin(/^github-actions$/i, "github-actions")).toBe(true);
+    expect(matchesBotLogin(/^github-actions\[bot\]$/i, "github-actions")).toBe(true);
+    expect(matchesBotLogin(/^other\[bot\]$/i, "github-actions")).toBe(false);
   });
 
   it("treats only own API data entries as aliases", () => {

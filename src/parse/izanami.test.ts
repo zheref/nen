@@ -288,6 +288,7 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     expect(classifyCommand("nen wc worktree --repo . --name kg --base main --dry-run --json").classification).toBe("read-only");
     expect(classifyCommand("nen loop slots --report r.json").classification).toBe("read-only");
     expect(classifyCommand("nen stop --gate G4").classification).toBe("read-only");
+    expect(classifyCommand(`nen stop --prompt-shown --effort e --pr 7 --head ${"a".repeat(40)} --gate G4`).classification).toBe("mutating");
     expect(classifyCommand("nen schema check").classification).toBe("read-only");
     expect(classifyCommand("nen version").classification).toBe("read-only");
     expect(classifyCommand("nen --version").classification).toBe("read-only");

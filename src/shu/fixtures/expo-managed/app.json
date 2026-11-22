@@ -1,0 +1,10 @@
+{
+  "expo": {
+    "name": "placeholder",
+    "slug": "placeholder",
+    "plugins": ["expo-router", "expo-dev-client"],
+    "ios": { "bundleIdentifier": "io.example.placeholder" },
+    "android": { "package": "io.example.placeholder" },
+    "extra": { "eas": { "projectId": "00000000-0000-0000-0000-000000000000" } }
+  }
+}

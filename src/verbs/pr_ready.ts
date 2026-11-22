@@ -1537,7 +1537,7 @@ export async function prReady(
 export type ReadyRead =
   | { readonly kind: "usage"; readonly message: string }
   | { readonly kind: "head-mismatch"; readonly report: HeadMismatchReport }
-  | { readonly kind: "verdict"; readonly report: ReadyReport; readonly settlement: Settlement | null };
+  | { readonly kind: "verdict"; readonly report: ReadyReport; readonly settlement: Settlement | null; readonly identities?: GateIdentities };
 
 export async function readReady(
   typedRef: string,
@@ -2079,6 +2079,7 @@ export async function readReady(
     report:
       mismatch === null ? report : { ...report, meta: { ...report.meta, warnings: [...report.meta.warnings, mismatch] } },
     settlement: evaluation.context.settlement,
+    identities: applied.identities,
   };
 }
 
