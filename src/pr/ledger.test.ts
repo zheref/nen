@@ -11,7 +11,7 @@ import { ledgerIndex, ledgerParts } from "./ledger.js";
 import { FULL_REACH_ROW, privateListRow, visibilityRow, withPrivateTarget } from "../issue/privacy.testkit.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import { prCommand } from "./command.js";
-import { commentsArgv, renderComment, type LedgerSlice } from "./ledger.js";
+import { commentsArgv, parseComment, renderComment, type LedgerSlice } from "./ledger.js";
 
 const TARGET = { owner: "zheref", repo: "nen", slug: "zheref/nen" };
 
@@ -72,6 +72,44 @@ describe("nen pr ledger post (zheref/nen#510)", () => {
     const body = (JSON.parse(posted?.stdin ?? "{}") as { body: string }).body;
     expect(body.split("\n")[0]).toMatch(/^<!-- nen:ledger effort=HA%2F12 sha256=[0-9a-f]{64} -->$/);
     expect(body).toContain("```json");
+    // The JSON is collapsed for a human reader; the summary line stays visible above it.
+    expect(body).toMatch(/\n\n<details><summary>[^\n]*<\/summary>\n\n```json\n[\s\S]*\n```\n\n<\/details>\n$/);
+  });
+
+  it("reads a slice posted before the <details> wrapper (zheref/hatsu PR readability)", async () => {
+    const root = effortRepo();
+    const legacy = renderComment(sliceFor()).replace(/<details><summary>[^\n]*<\/summary>\n\n/, "").replace(/\n<\/details>\n$/, "");
+    expect(legacy).not.toContain("<details>");
+    const result = await run([...READ, "--json"], root, [pull(), me, comments([{ id: 55, login: "maintainer", body: legacy }])]);
+    expect(result.code).toBe(0);
+    // Posting the same facts over it is `unchanged`, no write; new facts rewrite it wrapped.
+    const same = await run(POST, root, [pull(), me, comments([{ id: 55, login: "maintainer", body: legacy }])]);
+    expect(same.out).toMatch(/^unchanged:/);
+    expect(same.seams.calls.some((call) => call.args.includes("PATCH") || call.args.includes("POST"))).toBe(false);
+    const moved = await run([...POST, "--json"], root, [pull(MOVED), me, comments([{ id: 55, login: "maintainer", body: legacy }]), edited(55)]);
+    expect(JSON.parse(moved.out).verdict).toBe("updated");
+    const patched = moved.seams.calls.find((call) => call.args.includes("PATCH"));
+    expect((JSON.parse(patched?.stdin ?? "{}") as { body: string }).body).toContain("<details><summary>");
+  });
+
+  it("reads a CRLF-converted wrapped comment", async () => {
+    const root = effortRepo();
+    const crlf = renderComment(sliceFor()).replace(/\n/g, "\r\n");
+    const result = await run([...READ, "--json"], root, [pull(), me, comments([{ id: 55, login: "maintainer", body: crlf }])]);
+    expect(result.code).toBe(0);
+  });
+
+  it("keeps a hostile schema $id inert in the summary and the fence where nen put it (hanten F1)", () => {
+    const base = sliceFor();
+    const hostile = "x\n```\n</details>\n# SPOOF\n```json\n";
+    const slice: LedgerSlice = { ...base, findings: { schema: { id: hostile, sha256: "0".repeat(64) }, document: { scopes: [], findings: [] } } };
+    const body = renderComment(slice);
+    const lines = body.split("\n");
+    expect(lines[1]).toMatch(/ · findings validated against `x [^`\n]*SPOOF[^`\n]*` · 0 proof file\(s\)$/);
+    expect(lines.filter((line) => line.startsWith("```"))).toEqual(["```json", "```"]);
+    expect(parseComment(body, "HA/12", "zheref/nen", 7).ok).toBe(true);
+    const injected = body.replace(lines[1] as string, `${lines[1]}\n\n\`\`\`json\n{}\n\`\`\``);
+    expect(parseComment(injected, "HA/12", "zheref/nen", 7)).toMatchObject({ ok: false });
   });
 
   it("AC-3: posting again edits the marked comment in place, and the same bytes are 'unchanged'", async () => {

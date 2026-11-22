@@ -258,7 +258,7 @@ including every refusal reason. The raw NUL-delimited stream
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **107 shapes** and **111 ids** (`nen.runner.plan`
+binary carries**, writing or reading — **108 shapes** and **112 ids** (`nen.runner.plan`
 and `nen.wc.worktree.copies` each have two versions, `nen.stop.mark` three, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -320,7 +320,7 @@ file formats).
 - **`session`** — `nen.session.ledger/v0.1`
 - **`shu`** — `nen.shu.<verb>/v0.1` · `nen.shu.coverage-capture/v0.1` · `nen.shu.coverage/v0.1` · `nen.shu.detect/v0.1` · `nen.shu.evidence/v0.1` · `nen.shu.proof/v0.1` · `nen.shu.test-report/v0.1` · `nen.shu.tools/v0.1` · `nen.shu.warmup/v0.1`
 - **`spec`** — `nen.spec.check/v0.1` · `nen.spec.cite-check/v0.1` · `nen.spec.converge/v0.1` · `nen.spec.coverage/v0.1` · `nen.spec.diff/v0.1` · `nen.spec.index/v0.1` · `nen.spec.inventory/v0.1` · `nen.spec.number/v0.1` · `nen.spec.parity/v0.1` · `nen.spec.tasks/v0.1` · `nen.spec.trace/v0.1`
-- **`stop`** — `nen.stop.answer/v0.1` · `nen.stop.list/v0.1` · `nen.stop.mark/v0.1` · `nen.stop.mark/v0.2` · `nen.stop.mark/v0.3` · `nen.stop.prompt/v0.1` · `nen.stop.proposed-issue/v0.1`
+- **`stop`** — `nen.stop.answer/v0.1` · `nen.stop.list/v0.1` · `nen.stop.mark/v0.1` · `nen.stop.mark/v0.2` · `nen.stop.mark/v0.3` · `nen.stop.prompt/v0.1` · `nen.stop.proposed-issue/v0.1` · `nen.stop.sixth-stop/v0.1`
 - **`surface`** — `nen.surface.capabilities/v0.1` · `nen.surface.install/v0.1` · `nen.surface.mirror.check-installed/v0.1` · `nen.surface.mirror.check-plugin/v0.1` · `nen.surface.mirror.check/v0.1` · `nen.surface.mirror.generate/v0.1` · `nen.surface.status/v0.1`
 - **`tests`** — `nen.tests.map/v0.1`
 - **`usage`** — `nen.usage.ledger/v0.1`
@@ -511,7 +511,7 @@ verb does by default:
 | [`shu build`](#nen-shu-build), [`shu test`](#nen-shu-test), [`shu ui-test`](#nen-shu-ui-test), [`shu lint`](#nen-shu-lint), [`shu typecheck`](#nen-shu-typecheck), [`shu archive`](#nen-shu-archive), [`shu release`](#nen-shu-release), [`shu dev`](#nen-shu-dev), [`shu run`](#nen-shu-run), [`shu coverage`](#nen-shu-coverage), [`shu test-report`](#nen-shu-test-report) | no | `--dry-run` | prints every step's exact argv, cwd and env NAMES and spawns **nothing**. All eleven are `dry-run-gated` in izanami's automation-policy table: the bare form classifies **mutating** — the argv comes from a file in the *target* repository, and certifying it read-only sight unseen would certify whatever it happens to contain — and the `--dry-run` form classifies **read-only**, because nen renders and spawns nothing whatever that file says. On `dev` and `run`, `--json` is **refused** without `--dry-run`. `coverage` and `test-report` additionally **parse** what their run produced — and their `--dry-run` parses nothing either, so the report sitting on disk from a previous run is never read. `test-report` and `coverage` each carry a **second** read gate — `--from-artifacts` and `--from-capture` ([#250](https://github.com/zheref/nen/issues/250)) — which never reach the executor at all; `--from-capture` starts only nen's own fixed-argv git reads, and a `--base` beginning with `-` is refused before any of them |
 | [`shu deploy`](#nen-shu-deploy) | **yes** | `--run` | the one executing verb in this family that is **dry-run-first**, and the only one whose blast radius is *other people's users*: every other verb here spawns something inside a directory and can be undone by running it again, and a deploy cannot. Without `--run` it prints the fully resolved plan — the destination substituted into the argv, every precondition asserted, each step as `would run:` — and spawns **nothing**, at exit 0. `--dry-run` is the explicit spelling of that same form, and `--run --dry-run` together is exit 2 rather than a guess about which of two contradicting instructions was meant. **Two flags and no single-flag path to acting**: `--target <name>` says *where* (required, no default ever, resolved after the lane, the verb and the host, so a lane that declares no deploy answers its own refusal first) and `--run` says *now*. So this row is `write-flag-gated` on `--run` in izanami's table — like [`label apply`](#nen-label-apply) and [`wake fire`](#nen-wake-fire), and unlike the eleven above: the bare form classifies **read-only** because nen spawns nothing whatever the declaration says, which is a property of nen rather than a claim about that file |
 | [`shu tools`](#nen-shu-tools) | yes — nen writes nothing, but see the note | `--install` | the **only verb in this CLI whose blast radius is the developer's machine**, and the only row with three izanami answers rather than two. The bare check form spawns the version probes the *target repository* declares, so it classifies **`unknown`** — refused, and honestly labelled "not provably a read" rather than mislabelled "writes"; `--install` classifies **mutating**; and `--dry-run` classifies **read-only**, because that form spawns nothing at all, probes included. `--install --dry-run` is refused anyway: the write flag is decisive, because a read-only claim that hinges on one adjacent token still being present is exactly what the write-flag rule exists for |
-| [`stop`](#nen-stop) | **yes** | `--mark` | The bare banner and table only render. `--mark` writes the attention markers. `--prompt-shown` records a durable prompt receipt. Both flags are refused by the read-only watch classifier. |
+| [`stop`](#nen-stop) | **yes** | `--mark` | The bare banner and table only render. `--mark` writes the attention markers. `--prompt-shown` records a durable prompt receipt. `--sixth-stop-from` and `--repair-hold` write sixth-stop evidence. The read-only watch classifier refuses these write forms. |
 | [`stop answer`](#nen-stop-answer) | no | `--dry-run` | reserves an id and creates one record under the git common directory; the dry form still runs `git rev-parse --git-common-dir` and reads the question and typed files, prints the record and the next free id, and writes nothing. `answer show` writes nothing and refuses `--dry-run`. A `stop` subcommand typed after a flag (`nen stop --gate G5 answer ...`) classifies **unknown** in izanami's table, never as the family-wide `--mark` row |
 | [`shu warmup`](#nen-shu-warmup) | no | `--dry-run` | **the only verb in the `shu` family that mutates git state.** `--dry-run` prints every git command *and* every delegated toolchain command, in order, and runs **none** of them — not even the fetch. Unlike the ten rows above, that form still classifies **mutating** in izanami's table, dry run included: nobody watches a warm-up, so the fail-closed answer costs nothing. `--discard` is its *other* dangerous flag, and it is the destructive one: without it a dirty tree is refused at exit 2 with every path listed, and with it the tree is reset and cleaned (`git reset --hard`, then `git clean -fd`) and then **read again**, refusing at 2 if anything survived — but **never** `git clean -x` and never a second `-f`, because an ignored file is the developer's own cache and a nested repository is not this verb's to delete |
 
@@ -4067,7 +4067,8 @@ totals[] }, findings { schema { id, sha256 }, document } | null, proof[] { path,
 model, both read from the [durable home](#effort-ids-and-the-ledgers-durable-home)
 (`<git-common-dir>/.nen/`). It carries no posting instant, so the same facts are the same bytes. The
 comment is the marker line `<!-- nen:ledger effort=<encoded id> sha256=<digest> -->` (the digest is of the
-fenced JSON text), a one-line summary, and the document in a ```` ```json ```` fence.
+fenced JSON text), a one-line summary, and the document in a ```` ```json ```` fence inside a collapsed
+`<details>` block (*The comment's shape*, below).
 
 **What the comment carries, and who sees it** (SEC-8). Everyone who can read the pull request reads the
 comment, so on a public repository it is public. It carries the effort id, the PR's head commit, every
@@ -4098,6 +4099,15 @@ nen pr ledger read --target <owner/name> --pr <n> --effort <id> [--restore] [--l
 | `--login <name>` | no | The login whose comment is the record, instead of `gh api user`. | For a token that cannot read `user` (an Actions installation token: `app-slug[bot]`). A value that is not a login is exit 2. |
 | `--dry-run` | no (post) | Print every `gh` call a live post would make and the body; write nothing. | The reads and the private-name guard still run. An oversized slice previews one `POST` per bounded part and the index write, with `<part N url>` standing for the URL GitHub would assign to part N. |
 | `--restore` | no (read) | Write the slice's phases as the effort's phase ledger. | Only where none exists (`restored`), `unchanged` where it agrees; a local ledger that disagrees is exit 1 naming both, nothing overwritten. On a **stale** slice the phases ARE restored and the exit is still 1 (stale); the line says so. |
+
+**The comment's shape**: line 1 is the marker, line 2 a one-line summary a reviewer reads, then the slice
+in a ```` ```json ```` fence inside a collapsed `<details>` block, so the JSON takes no vertical space on the PR
+until it is opened. The reader keys on the marker and the fence, never the wrapper: a slice posted before the
+wrapper still reads, and so does this one under an older nen. The marker digest covers only the fenced JSON, so
+an earlier comment whose slice is unchanged stays `unchanged` (and expanded) until its facts move. The wrapper adds
+117 characters, so a slice within that of GitHub's limit now publishes as parts. The caller schema's `$id` is printed
+in the summary as a code span with every control character and backtick replaced by a space, and the fence is looked
+for only after the summary line.
 
 **post**: reads the PR's head, the authenticated login (`gh api user`, or `--login`) and every
 conversation comment with its author and last **editor** (`gh api graphql`, page by page). With no marked comment of **this login** for the effort it posts one (`POST
@@ -20871,6 +20881,34 @@ the slot and names the unread evidence. Other heads, efforts and gates cannot
 release it. Readiness must pass at that same head. A moved head makes the
 readiness read unavailable and holds the slot. Legacy attention markers never
 prove a prompt was shown.
+
+After showing a verified sixth-stop merge prompt, record its prompt receipt
+and write a separate `nen.stop.sixth-stop/v0.1` record:
+
+```bash
+nen stop --sixth-stop-from <evidence.json> --target <owner/name> --effort <id> --pr <n> --head <sha> --gate G2|G4 --repo <checkout>
+nen stop --repair-hold --target <owner/name> --effort <id> --pr <n> --head <sha> --gate G2|G4 --repo <checkout>
+```
+
+The evidence file has `requests` and `windows` arrays. A request entry
+records the configured reviewer name, the full pre-request `head`,
+`exitCode: 9`, and the verbatim `request-reviews --json` object as `result`.
+Each request can prove unavailability for one bot. Nen checks its returned
+repository, PR, producer exit code and head. The mutation response and
+pre-request read must name the same head. Nen matches the bot route login to the live
+base-gate reviewer. A window is the verbatim
+JSON from a head-pinned `nen watch until --pr <ref> --until ready --require-base-gates
+--require-head <sha> --max-iterations 2 --json` call. The two windows must
+run sequentially after the checks settle. Each must contain two paced,
+error-free observations with only rounds owed and no round check for that
+reviewer. Use empty arrays when live terminal checks supply the evidence.
+
+Run-derived counts require the same live and judged head, a matching prompt
+receipt, a base-gated verdict failing only on rounds owed, and proof for every
+unavailable quorum member. A verified handoff frees the slot while readiness
+stays not-ready. A moved head, extra failure, missing or unreadable evidence,
+or a repair hold keeps the slot occupied. A repair hold stays with that head.
+The caller-written efforts file has no sixth-stop field.
 
 `nen review ledger repair-marker --branch <branch> [--pr <n>] --repo <checkout>
 [--json]` restores a missing durable opened-cycle trace from a valid existing

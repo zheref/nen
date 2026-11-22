@@ -21,6 +21,7 @@ import { parseIzanagiInvocation } from "../parse/izanagi.js";
 import { computeSlots, parseEfforts, DEFAULT_CI_CAP, type PlaneReport } from "./slots.js";
 import { loadWorkflow, type LocalSlotRule } from "../schema/workflow.js";
 import { claimIteration, loopIdSegment, parseLedger, type LoopLedger } from "./ledger.js";
+import { readSixthStop } from "../stop/sixth-stop.js";
 import { effortsFromRun, markerForBranch, readinessInProcess, type FromRunReport } from "./fromrun.js";
 import { gitCommonDir, locateRunManifest, readRunManifest, runIdSegment } from "../run/manifest.js";
 import { readLivePr } from "../run/verify.js";
@@ -41,7 +42,7 @@ const USAGE = `nen loop slots -- how many concurrency slots each plane has free.
 usage:
   nen loop slots --efforts <path.json> --local-cap <n> [--ci-cap <n>] [--repo <path>] [--json]
   nen loop slots --from-run <run-id> --target <owner/name> --local-cap <n>
-                 [--ci-cap <n>] [--repo <path>] [--json]
+                 [--ci-cap <n>] [--prompt-gate G2|G4] [--repo <path>] [--json]
 
 The efforts file is a JSON array of
   {"id": "...", "plane": "ci"|"local", "prOpen": bool, "ready": bool, "prompted": bool,
@@ -69,9 +70,10 @@ other.
 manifest ('nen run start') names the efforts -- its delivery PRs; integration
 and release PRs hold no slot -- and every field is read, none typed: prOpen and
 merged from the PR's live state, ready from 'nen pr ready' in process, prompted
-from a valid stop marker (.nen/last-stop.json) in the worktree checked out on
-the PR's head branch, stacked when the PR's base is another recorded delivery PR's head
-branch. A PR closed without a merge frees its slot. Anything that could not be
+from a durable receipt for its effort, live head and --prompt-gate. A
+verified sixth-stop record can free a not-ready delivery with only rounds owed.
+A same-head repair hold prevents that release. A delivery is stacked when its
+base is another recorded delivery PR's head branch. A PR closed without a merge frees its slot. Anything that could not be
 read keeps its effort HELD and is listed under 'unread'. A CLAIMED effort
 (the manifest's 'claims[]') whose issue has no delivery PR yet holds a local
 slot too; one the run parked at or after its latest claim frees it. A manifest
@@ -336,6 +338,7 @@ async function slotsFromRun(context: CommandContext, root: string, id: string, c
     readPr: (pr) => readLivePr(context.seams, target, pr),
     readiness: (pr, head) => readinessInProcess(target.slug, pr, root, head),
     marker: (branch, identity) => markerForBranch(context.seams, root, branch, identity),
+    sixthStop: (identity, repairOnly) => readSixthStop(context.seams, root, identity, target.slug, repairOnly),
     promptGate: context.args.values["prompt-gate"],
     repoCode: repoCodeFor(root, manifest.repo),
   });

@@ -51,6 +51,9 @@ export interface Effort {
   readonly merged?: boolean;
   /** The PR is stacked onto another effort's branch. Read by `stacked-open`; optional, absent reads false. */
   readonly stacked?: boolean;
+  /** Internal run-derived evidence. The caller-written effort parser never reads these fields. */
+  readonly sixthStopHead?: string;
+  readonly repairHold?: boolean;
 }
 
 export interface Caps {
@@ -130,11 +133,15 @@ export function occupancy(
     return { occupied: false, why: "merged locally with no PR -- integrated, nothing left to hand over" };
   }
   if (!effort.prOpen) return { occupied: true, why: "authored locally, no PR yet" };
+  if (effort.repairHold === true) return { occupied: true, why: "sixth-stop evidence unread or held for repair" };
   if (rule === "stacked-open" && effort.stacked === true) {
     return {
       occupied: false,
       why: `PR open and stacked -- the stack's owner drives it from here (${ruleKey}: stacked-open)`,
     };
+  }
+  if (effort.sixthStopHead !== undefined && effort.prompted) {
+    return { occupied: false, why: "verified sixth-stop handoff at " + effort.sixthStopHead };
   }
   if (!effort.ready) {
     return {

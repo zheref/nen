@@ -1533,8 +1533,8 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
   },
   // `stop` GAINED A WRITE FORM, so its row gained a gate. The banner and the
   // table are still a pure render -- this verb fires no notification and never
-  // could (../stop/command.ts's header states why). Both `--mark` and
-  // `--prompt-shown` write evidence to disk, so a read-only loop refuses them.
+  // could (../stop/command.ts's header states why). The marker and durable
+  // record forms write to disk, so a read-only loop refuses them.
   // The bare form stays read-only for the same reason as `nen wake fire`
   // and `nen shu deploy`: absent the write flags,
   // this verb provably writes nothing, which is a property of nen rather than a
@@ -1553,8 +1553,8 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       "answer show": RO("lists the stop-answer records under the git common directory's .nen/stops/<effort>/; writes nothing"),
       answer: DRY("reserves an id under .nen/stop-ids/ and creates one record under .nen/stops/<effort>/ in the git common directory unless --dry-run is given"),
       "*": GATED(
-        ["--mark", "--prompt-shown"],
-        "renders the gate-stop banner; --mark writes attention markers and --prompt-shown writes a durable prompt receipt",
+        ["--mark", "--prompt-shown", "--sixth-stop-from", "--repair-hold"],
+        "renders the gate-stop banner. The marker and durable record flags write evidence",
       ),
     },
   },

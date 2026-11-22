@@ -1,4 +1,6 @@
 import { recordPrompt } from "./prompt.js";
+import { parseTarget, TargetError } from "../github/target.js";
+import { recordSixthStop } from "./sixth-stop.js";
 // src/stop/command.ts -- `nen stop`: the gate-stop ceremony.
 //
 // PORTED FROM bankai-core's `scripts/gate_stop.sh` + `scripts/ichigo_prompt.sh`
@@ -63,7 +65,7 @@ import {
   type Command,
   type CommandContext,
 } from "../cli/command.js";
-import { readTextFile } from "../cli/inputs.js";
+import { readJsonFile, readTextFile } from "../cli/inputs.js";
 import { parsePipeTable, renderPipeTable } from "../cli/table.js";
 import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
 import { normalizeEol } from "../seam/exec.js";
@@ -88,6 +90,8 @@ nen stop clear [--gate <g> [--effort <id>] | --all] [--repo <path>] [--json]
 nen stop list  [--repo <path>] [--json]
 nen stop show  [--repo <path>] [--json]
 nen stop --template
+nen stop --sixth-stop-from <file.json> --target <owner/name> --effort <id> --pr <n> --head <sha> --gate G2|G4 [--repo <path>] [--json]
+nen stop --repair-hold --target <owner/name> --effort <id> --pr <n> --head <sha> --gate G2|G4 [--repo <path>] [--json]
 nen stop answer --record <effort-id> (--gate G1|G1-M|G2|G3|G4|G5 | --row <id>) [--row <id>] --who <name>
          --question-file <path> --option <key>=<label>::<consequence> [--option ...]
          (--pick <key> | --typed-file <path>) [--dry-run] [--repo <path>] [--json]
@@ -97,6 +101,8 @@ Render the gate-stop banner and the padded-markdown efforts table. The
 embedded python3 this was ported from is removed -- there is only ever this
 one renderer.
 
+  --sixth-stop-from  Record separate reviewer evidence after recording a prompt receipt at this head.
+  --repair-hold      Invalidate a sixth-stop release at this head.
   --who <name>       Who is asking, stated by the caller. Nen ships no
                       built-in persona name.
   --gate <g>          The human gate being asked for.
@@ -229,23 +235,44 @@ export const stopCommand: Command = {
   // as an unknown subcommand (review finding on zheref/nen#216). `clear` and
   // `show` are recognised in run() instead.
   flags: {
-    values: ["pr", "head", "who", "gate", "title", "body", "report-url", "options", "propose-issue", "effort", ...ANSWER_VALUE_FLAGS],
-    booleans: ["prompt-shown", "notified", "template", "mark", "all", ...ANSWER_BOOLEAN_FLAGS],
+    values: ["sixth-stop-from", "target", "pr", "head", "who", "gate", "title", "body", "report-url", "options", "propose-issue", "effort", ...ANSWER_VALUE_FLAGS],
+    booleans: ["repair-hold", "prompt-shown", "notified", "template", "mark", "all", ...ANSWER_BOOLEAN_FLAGS],
     lists: [...ANSWER_LIST_FLAGS],
   },
   run(context: CommandContext): number {
-    if (context.args.booleans.has("prompt-shown")) {
-      if (context.args.positionals.length !== 1 || context.args.passthrough.length) throw new VerbUsageError("--prompt-shown is a standalone stop form, with no subcommand or file.");
-      for (const flag of Object.keys(context.args.values)) if (!["repo", "effort", "pr", "head", "gate"].includes(flag)) throw new VerbUsageError(`--${flag} is not read by --prompt-shown.`);
-      for (const flag of context.args.booleans) if (!["prompt-shown", "json"].includes(flag)) throw new VerbUsageError(`--${flag} is not read by --prompt-shown.`);
-      for (const [flag, values] of Object.entries(context.args.lists)) if (values.length) throw new VerbUsageError(`--${flag} is not read by --prompt-shown.`);
+    const prompt = context.args.booleans.has("prompt-shown");
+    const evidenceFile = context.args.values["sixth-stop-from"];
+    const hold = context.args.booleans.has("repair-hold");
+    if (prompt || evidenceFile !== undefined || hold) {
+      const form = prompt ? "--prompt-shown" : hold ? "--repair-hold" : "--sixth-stop-from";
+      if (context.args.positionals.length !== 1 || context.args.passthrough.length) throw new VerbUsageError(`${form} is a standalone stop form, with no subcommand or file.`);
+      const allowedValues = ["repo", "effort", "pr", "head", "gate", ...(prompt ? [] : ["target"]), ...(form === "--sixth-stop-from" ? ["sixth-stop-from"] : [])];
+      for (const flag of Object.keys(context.args.values)) if (!allowedValues.includes(flag)) throw new VerbUsageError(`--${flag} is not read by ${form}.`);
+      for (const flag of context.args.booleans) if (`--${flag}` !== form && flag !== "json") throw new VerbUsageError(`--${flag} is not read by ${form}.`);
+      for (const [flag, values] of Object.entries(context.args.lists)) if (values.length) throw new VerbUsageError(`--${flag} is not read by ${form}.`);
       const root = resolveRepoRoot({ repoFlag: context.repoFlag });
-      const value = (name: string): string => { const given = context.args.values[name]; if (!given) throw new VerbUsageError(`--${name} is required by --prompt-shown.`); return given; };
-      const path = recordPrompt(context.seams, root, { effort: value("effort"), pr: Number(value("pr")), head: value("head"), gate: value("gate") });
-      emit(context.io, context.json, { prompted: true, path }, [`prompt recorded: ${path}`]);
+      const value = (name: string): string => {
+        const given = context.args.values[name];
+        if (!given) throw new VerbUsageError(`--${name} is required by ${form}.`);
+        return given;
+      };
+      const identity = { effort: value("effort"), pr: Number(value("pr")), head: value("head"), gate: value("gate") };
+      if (prompt) {
+        const path = recordPrompt(context.seams, root, identity);
+        emit(context.io, context.json, { prompted: true, path }, [`prompt recorded: ${path}`]);
+      } else {
+        const kind = hold ? "repair-hold" : "handoff";
+        const evidence = hold ? undefined : readJsonFile<unknown>(value("sixth-stop-from"), root, "The sixth-stop evidence file is required.");
+        let target: string;
+        try { target = parseTarget(value("target")).slug; }
+        catch (error) { if (error instanceof TargetError) throw new VerbUsageError(error.message); throw error; }
+        const path = recordSixthStop(context.seams, root, identity, target, kind, evidence);
+        emit(context.io, context.json, { recorded: kind, path }, [`sixth-stop ${kind} recorded: ${path}`]);
+      }
       return 0;
     }
-    if (context.args.values["pr"] !== undefined || context.args.values["head"] !== undefined) throw new VerbUsageError("--pr and --head belong to --prompt-shown.");
+    if (context.args.values["target"] !== undefined) throw new VerbUsageError("--target belongs to the sixth-stop record forms.");
+    if (context.args.values["pr"] !== undefined || context.args.values["head"] !== undefined) throw new VerbUsageError("--pr and --head belong to the durable stop record forms.");
     if (context.args.positionals[1] === "answer") return runAnswer(context);
     // THE ANSWER FLAGS ARE `stop answer`'s ALONE. This family declares one
     // flag spec for every form, so a flag only `answer` reads would otherwise
