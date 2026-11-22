@@ -157,17 +157,30 @@ describe("GitHub Actions runner policy", () => {
     // Each job gets its own temp dir and removes it last, so temp dirs the suite leaves
     // behind cannot pile up in the service account's %TEMP% (zheref/nen#635). Not
     // runner.temp, which sits under the runner root `nen runner script` refuses.
+    expect(windows.env).toBeUndefined();
     const steps = windows.steps as Row[];
     const first = steps[0]!;
     expect(first.name).toBe("Give the job its own temp dir");
-    for (const name of ["NEN_CI_TEMP", "TMP", "TEMP", "TMPDIR"]) {
-      expect(String(first.run)).toContain(`echo "${name}=`);
+    expect(first.shell).toBe("bash");
+    expect(first.env).toBeUndefined();
+    expect(String(first.run)).toContain('d="$(cygpath -m "$d")"');
+    expect(String(first.run)).toContain('w="$(cygpath -w "$d")"');
+    const expectedEnv = [
+      ["NEN_CI_TEMP", "$d"],
+      ["TMP", "$w"],
+      ["TEMP", "$w"],
+      ["TMPDIR", "$d"],
+    ] as const;
+    for (const [name, value] of expectedEnv) {
+      expect(String(first.run)).toContain(`echo "${name}=${value}"`);
     }
     expect(String(first.run)).toContain('>> "$GITHUB_ENV"');
     expect(String(first.run)).not.toContain("RUNNER_TEMP");
+    expect(String(first.run)).not.toContain("runner.temp");
     const last = steps[steps.length - 1]!;
     expect(last.name).toBe("Remove the job's temp dir");
     expect(last.if).toBe("always()");
+    expect(last.shell).toBe("bash");
     expect(String(last.run)).toBe('rm -rf "$NEN_CI_TEMP"');
     expect(windows.name).toBe("check");
     expect(rows("check-windows").map((row) => (row as Row).runner)).toEqual(['["self-hosted","Windows","X64","pool-windows-x64"]']);
