@@ -60,6 +60,12 @@ function workflowAt(root: string): ReturnType<typeof loadWorkflow> {
   }
 }
 
+/** The refusal for a name that is no declared persona; a declared SCOPE name (zheref/nen#561) is answered with its persona. */
+function undeclared(name: string, budgets: Budgets): string {
+  const owner = Object.entries(budgets).find(([, budget]): boolean => (/review\.scopes\.([^ ]+)\.budget/.exec(budget.source)?.[1] ?? "").split("+").includes(name));
+  return `persona '${name}' is not declared in review.scopes.${owner === undefined ? "" : ` '${name}' is a scope: name its persona '${owner[0]}'.`}`;
+}
+
 export function readBudgets(root: string): Budgets {
   const loaded = workflowAt(root);
   const budgets: Budgets = Object.create(null) as Budgets;
@@ -287,7 +293,7 @@ export function runCycle(options: CycleOptions, action: string, args: { applicab
     if (action === "show") return { ...doc, path };
     if (action === "decide") {
       const applicable = [...new Set((args.applicable ?? "").split(",").map((p): string => p.trim().toLowerCase()).filter(Boolean))];
-      for (const persona of applicable) if (!Object.hasOwn(budgets, persona)) refuse(`persona '${persona}' is not declared in review.scopes.`);
+      for (const persona of applicable) if (!Object.hasOwn(budgets, persona)) refuse(undeclared(persona, budgets));
       const reviewers = Object.entries(budgets).map(([persona, budget]): Record<string, unknown> => {
         const used = doc.reviewers[persona]!.used;
         return { persona, applicable: applicable.includes(persona), used, max: budget.max, remaining: Math.max(0, budget.max - used), action: !applicable.includes(persona) ? "not-applicable" : used >= budget.max ? "skip-exhausted" : "raise" };
@@ -295,7 +301,7 @@ export function runCycle(options: CycleOptions, action: string, args: { applicab
       return { contract: CYCLE_CONTRACT, branch: doc.branch, pr: doc.pr, path, reviewers, raise: reviewers.filter((row): boolean => row["action"] === "raise").map((row): unknown => row["persona"]), skippedExhausted: reviewers.filter((row): boolean => row["action"] === "skip-exhausted").map((row): unknown => row["persona"]) };
     }
     const persona = args.persona!.toLowerCase();
-    if (!Object.hasOwn(budgets, persona)) refuse(`persona '${persona}' is not declared in review.scopes.`);
+    if (!Object.hasOwn(budgets, persona)) refuse(undeclared(persona, budgets));
     const row = doc.reviewers[persona]!;
     if (args.outcome !== "ran" && args.outcome !== "skipped-exhausted") refuse("--outcome is ran or skipped-exhausted.");
     if (args.outcome === "ran" && row.used >= row.max) refuse(`${persona} is exhausted (${row.used}/${row.max}); record skipped-exhausted, do not raise.`);
