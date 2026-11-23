@@ -1126,6 +1126,12 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
     },
   },
   gate: { subcommands: { derive: RO("derives a gate from a changed-file set -- pure computation") } },
+  goal: {
+    subcommands: {
+      check: GATED(["--hook"], "hook adapters write session state and evidence; ordinary checks only read"),
+      freeze: MUT("creates an immutable session scope snapshot"),
+    },
+  },
   idea: { subcommands: { file: DRY("creates a GitHub issue unless --dry-run is given") } },
   issue: {
     subcommands: {
