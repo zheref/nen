@@ -1,8 +1,9 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { describe, expect, it } from "vitest";
-import { makeTempDir } from "./tempdir.js";
+import { describe, expect, it, vi } from "vitest";
+import setup from "./global-setup.js";
+import { cleanupTempDirs, makeTempDir } from "./tempdir.js";
 import { openTempSandbox, pidAlive, removeTree, SANDBOX_PREFIX, sweepStaleSandboxes, TEMP_VARIABLES } from "./temp-sandbox.js";
 
 describe("the run's temp sandbox (zheref/nen#635)", () => {
@@ -28,7 +29,7 @@ describe("the run's temp sandbox (zheref/nen#635)", () => {
     expect(readdirSync(base)).toEqual([]);
   });
 
-  it("AC-2: a run that failed after creating its temp dirs still removes them, read-only trees included", () => {
+  it("AC-2: the teardown removes the sandbox whatever the tests left in it, read-only trees included", () => {
     const base = makeTempDir("nen-sbx-base-");
     const sandbox = openTempSandbox(base, {});
     const locked = join(sandbox.dir, "nen-locked");
@@ -36,23 +37,22 @@ describe("the run's temp sandbox (zheref/nen#635)", () => {
     writeFileSync(join(locked, "inner", "file"), "x");
     chmodSync(join(locked, "inner"), 0o500);
     chmodSync(locked, 0o500);
-    try {
-      throw new Error("the test failed after creating its temp dir");
-    } catch {
-      // The teardown runs whatever the tests did.
-    }
-    sandbox.close();
+    expect(sandbox.close()).toEqual({ leftover: 1 });
     expect(existsSync(sandbox.dir)).toBe(false);
   });
 
-  it("sweeps a dead run's sandbox and keeps a live one's and anything unrelated", () => {
+  it("sweeps a dead run's old sandbox and keeps a live one's, a fresh one's and anything unrelated", () => {
     const base = makeTempDir("nen-sbx-base-");
     const dead = mkdtempSync(join(base, `${SANDBOX_PREFIX}999999-`));
+    const fresh = mkdtempSync(join(base, `${SANDBOX_PREFIX}999998-`));
     const live = mkdtempSync(join(base, `${SANDBOX_PREFIX}${process.pid}-`));
     const other = join(base, "nen-test-run-notapid");
     mkdirSync(other);
+    const old = new Date(Date.now() - 60 * 60 * 1000);
+    for (const dir of [dead, live, other]) utimesSync(dir, old, old);
     expect(sweepStaleSandboxes(base, (pid) => pid === process.pid)).toBe(1);
     expect(existsSync(dead)).toBe(false);
+    expect(existsSync(fresh)).toBe(true);
     expect(existsSync(live)).toBe(true);
     expect(existsSync(other)).toBe(true);
     expect(pidAlive(process.pid)).toBe(true);
@@ -70,18 +70,44 @@ describe("the run's temp sandbox (zheref/nen#635)", () => {
   });
 });
 
-describe("makeTempDir (zheref/nen#635)", () => {
-  const made: string[] = [];
+describe("the globalSetup (zheref/nen#635)", () => {
+  it("binds the temp variables for the run, reports what tests left and puts everything back", () => {
+    const before = TEMP_VARIABLES.map((name) => process.env[name]);
+    const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const teardown = setup();
+      const bound = process.env["TMPDIR"] as string;
+      expect(bound).not.toBe(before[0]);
+      expect(tmpdir().startsWith(bound.replace(/[\\/]$/, ""))).toBe(true);
+      mkdirSync(join(bound, "nen-left-behind"));
+      teardown();
+      expect(existsSync(bound)).toBe(false);
+      expect(TEMP_VARIABLES.map((name) => process.env[name])).toEqual(before);
+      expect(write).toHaveBeenCalledWith(expect.stringMatching(/removed 1 entries the tests left behind/));
+    } finally {
+      write.mockRestore();
+    }
+  });
+});
 
-  it("creates the directory under the temp dir the run is bound to", () => {
-    const dir = makeTempDir("nen-helper-");
-    made.push(dir);
-    expect(existsSync(dir)).toBe(true);
-    expect(dir.startsWith(tmpdir())).toBe(true);
+describe("makeTempDir (zheref/nen#635)", () => {
+  // Made while the file is collected, long before any test runs: it must outlive the first test.
+  const shared = makeTempDir("nen-helper-shared-");
+
+  it("keeps a directory made at describe scope for the first test", () => {
+    expect(existsSync(shared)).toBe(true);
   });
 
-  it("has removed the previous test's directory by the next test", () => {
-    expect(made).toHaveLength(1);
-    expect(existsSync(made[0] as string)).toBe(false);
+  it("keeps it for the second too", () => {
+    expect(existsSync(shared)).toBe(true);
+  });
+
+  it("creates under the temp dir the run is bound to, and cleanupTempDirs (the afterAll hook) removes it", () => {
+    const dir = makeTempDir("nen-helper-");
+    expect(existsSync(dir)).toBe(true);
+    expect(dir.startsWith(tmpdir())).toBe(true);
+    cleanupTempDirs();
+    expect(existsSync(dir)).toBe(false);
+    expect(existsSync(shared)).toBe(false);
   });
 });

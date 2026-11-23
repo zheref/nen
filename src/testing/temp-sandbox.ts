@@ -1,7 +1,7 @@
 // The test run's own temp directory (zheref/nen#635).
 //
 // `bun run test` creates thousands of `nen-*` directories and most of them are
-// never removed (194 files call mkdtemp, 85 mention removing one). On the
+// never removed (at filing: 194 files call mkdtemp, 85 mention removing one). On the
 // self-hosted Windows pool they piled up in the runner service account's
 // %TEMP% -- 1.27 million entries -- and the Test step grew past its timeout.
 //
@@ -13,8 +13,10 @@
 //
 // A run killed outright (SIGKILL, power loss) cannot run its own teardown, so
 // the sandbox name carries the owning pid and the next run removes the sandboxes
-// whose pid is gone -- one directory to sweep, never thousands.
-import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+// whose pid is gone and that have sat untouched for a few minutes (a pid is not
+// meaningful across containers sharing one temp volume, and a live run keeps
+// touching its sandbox) -- one directory to sweep, never thousands.
+import { chmodSync, lstatSync, statSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -27,8 +29,12 @@ export const SANDBOX_PREFIX = "nen-test-run-";
 export interface TempSandbox {
   /** The sandbox directory every temp dir of the run is created in. */
   readonly dir: string;
-  /** Restores the temp variables, removes the sandbox and returns how many entries tests left in it. */
-  close(): { leftover: number };
+  /**
+   * Restores the temp variables, removes the sandbox and returns how many entries tests left in it.
+   * A removal that fails (Windows holds a handle open while a worker is still alive) is reported in
+   * `error` and never thrown: the next run's sweep takes the directory, and a green suite stays green.
+   */
+  close(): { leftover: number; error?: string };
 }
 
 type Env = Record<string, string | undefined>;
@@ -71,8 +77,11 @@ function makeWritable(path: string): void {
   for (const entry of readdirSync(path)) makeWritable(join(path, entry));
 }
 
-/** Removes the sandboxes under `base` whose owning process is gone; returns how many it removed. */
-export function sweepStaleSandboxes(base: string, alive: (pid: number) => boolean = pidAlive): number {
+/** A dead pid's sandbox younger than this is left alone: the pid may be another container's. */
+export const STALE_AFTER_MS = 10 * 60 * 1000;
+
+/** Removes the sandboxes under `base` whose owning process is gone and that are older than `minAgeMs`; returns how many it removed. */
+export function sweepStaleSandboxes(base: string, alive: (pid: number) => boolean = pidAlive, minAgeMs: number = STALE_AFTER_MS): number {
   let removed = 0;
   let names: string[];
   try {
@@ -85,6 +94,7 @@ export function sweepStaleSandboxes(base: string, alive: (pid: number) => boolea
     const pid = Number(/^(\d+)-/.exec(name.slice(SANDBOX_PREFIX.length))?.[1]);
     if (!Number.isInteger(pid) || pid <= 0 || alive(pid)) continue;
     try {
+      if (Date.now() - statSync(join(base, name)).mtimeMs < minAgeMs) continue;
       removeTree(join(base, name));
       removed += 1;
     } catch {
@@ -106,7 +116,7 @@ export function openTempSandbox(base: string = tmpdir(), env: Env = process.env)
   for (const name of TEMP_VARIABLES) env[name] = dir;
   return {
     dir,
-    close(): { leftover: number } {
+    close(): { leftover: number; error?: string } {
       for (const [name, value] of previous) {
         if (value === undefined) delete env[name];
         else env[name] = value;
@@ -117,7 +127,11 @@ export function openTempSandbox(base: string = tmpdir(), env: Env = process.env)
       } catch {
         // Already gone.
       }
-      removeTree(dir);
+      try {
+        removeTree(dir);
+      } catch (error) {
+        return { leftover, error: error instanceof Error ? error.message : String(error) };
+      }
       return { leftover };
     },
   };
