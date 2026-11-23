@@ -87,11 +87,19 @@ jobs:
       - name: Give the job its own temp dir
         shell: bash
         run: |
-          d="$(mktemp -d /tmp/nen-ci-XXXXXX)"
+          base=/tmp
+          # Not /tmp on Windows: Git Bash derives /tmp once per account, so two
+          # jobs on the pool at the same time (two PRs) can resolve /tmp to the
+          # SAME job's directory and nest theirs inside it, and one job's cleanup
+          # then deletes the other's files mid-run (runs 45231948867 and
+          # 45231952848, 2026-11-23). The account's own temp, named from its
+          # profile, is the same for every job and never goes through /tmp.
+          if command -v cygpath >/dev/null; then base="$(cygpath -u "${LOCALAPPDATA:-$USERPROFILE/AppData/Local}")/Temp"; mkdir -p "$base"; fi
+          d="$(mktemp -d "$base/nen-ci-XXXXXX")"
           w="$d"
-          # Git Bash maps /tmp through TEMP, so once TEMP names this dir a POSIX
-          # /tmp/... path no longer reaches it: on Windows every name carries
-          # the drive-letter form (C:/... for bash, C:\... for TMP and TEMP).
+          # Once TEMP names this dir a POSIX /tmp/... path no longer reaches it: on
+          # Windows every name carries the drive-letter form (C:/... for bash,
+          # C:\... for TMP and TEMP).
           if command -v cygpath >/dev/null; then d="$(cygpath -m "$d")"; w="$(cygpath -w "$d")"; fi
           {
             echo "NEN_CI_TEMP=$d"
@@ -207,11 +215,19 @@ jobs:
       - name: Give the job its own temp dir
         shell: bash
         run: |
-          d="$(mktemp -d /tmp/nen-ci-XXXXXX)"
+          base=/tmp
+          # Not /tmp on Windows: Git Bash derives /tmp once per account, so two
+          # jobs on the pool at the same time (two PRs) can resolve /tmp to the
+          # SAME job's directory and nest theirs inside it, and one job's cleanup
+          # then deletes the other's files mid-run (runs 45231948867 and
+          # 45231952848, 2026-11-23). The account's own temp, named from its
+          # profile, is the same for every job and never goes through /tmp.
+          if command -v cygpath >/dev/null; then base="$(cygpath -u "${LOCALAPPDATA:-$USERPROFILE/AppData/Local}")/Temp"; mkdir -p "$base"; fi
+          d="$(mktemp -d "$base/nen-ci-XXXXXX")"
           w="$d"
-          # Git Bash maps /tmp through TEMP, so once TEMP names this dir a POSIX
-          # /tmp/... path no longer reaches it: on Windows every name carries
-          # the drive-letter form (C:/... for bash, C:\... for TMP and TEMP).
+          # Once TEMP names this dir a POSIX /tmp/... path no longer reaches it: on
+          # Windows every name carries the drive-letter form (C:/... for bash,
+          # C:\... for TMP and TEMP).
           if command -v cygpath >/dev/null; then d="$(cygpath -m "$d")"; w="$(cygpath -w "$d")"; fi
           {
             echo "NEN_CI_TEMP=$d"
