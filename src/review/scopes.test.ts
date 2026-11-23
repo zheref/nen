@@ -383,3 +383,34 @@ describe("this repository's own review.scopes -- the runner and the host-credent
     expect(classified.scopes.find((scope): boolean => scope.scope === "security")?.paths).toEqual(guard);
   });
 });
+
+describe("this repository's own review.scopes -- the architecture scope (zheref/nen#561)", () => {
+  const declared = (): ReturnType<typeof loadWorkflow>["workflow"]["review"]["scopes"] => loadWorkflow(process.cwd()).workflow.review.scopes;
+
+  it("declares one architecture reviewer on a declared tier with a positive, finite budget", () => {
+    const { workflow } = loadWorkflow(process.cwd());
+    const row = workflow.review.scopes["architecture"];
+    expect(row).toBeDefined();
+    expect(row?.persona).toBe("chrollo");
+    expect(Object.keys(workflow.models.surfaces["claude"] ?? {})).toContain(row?.tier);
+    expect(Number.isInteger(row?.budget)).toBe(true);
+    expect(row?.budget).toBeGreaterThanOrEqual(1);
+    expect(row?.budget).toBeLessThan(10);
+  });
+
+  it("keeps code and security as they were", () => {
+    const scopes = declared();
+    expect([scopes["code"]?.persona, scopes["code"]?.budget, scopes["code"]?.paths]).toEqual(["nobunaga", 2, ["**"]]);
+    expect([scopes["security"]?.persona, scopes["security"]?.budget]).toEqual(["feitan", 1]);
+  });
+
+  it("does not path-raise the scope on the hook-shape routing diff of NN-PR-#560 -- hanten raises it by content", () => {
+    const classified = classifyScopes(["src/surface/hookshape.ts", "src/surface/hookshape.test.ts"], declared());
+    expect(classified.scopes.map((scope): string => scope.scope)).toEqual(["code"]);
+  });
+
+  it("path-raises the scope on a change to the gate declarations it owns", () => {
+    const classified = classifyScopes(["nen/workflow.json"], declared());
+    expect(classified.scopes.map((scope): string => scope.scope)).toContain("architecture");
+  });
+});

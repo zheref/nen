@@ -2,7 +2,7 @@
 // policy. Git-backed fixtures and separate Node processes pin durable traces
 // and read/modify/write serialization without network or a Python runtime.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
@@ -66,6 +66,18 @@ describe("review-cycle ledger — Hatsu lifecycle parity with a declared roster"
     expect(doc.contract).toBe("hatsu.hanten.cycle/v0.1"); expect(doc.slug).toBe("app-feature"); expect(doc.pr).toBeNull();
     expect(doc.personasAtOpen).toEqual(Object.keys(roster)); expect(result["openedAs"]).toBe("normal-init");
     expect(doc.reviewers.alpha).toMatchObject({ max: 2, used: 0, invocations: [], budgetSource: "nen/workflow.json review.scopes.scope0.budget" });
+  });
+  it("resolves nen's own architecture reviewer by content and reports its exhaustion, never a review that did not run (zheref/nen#561)", () => {
+    const o = fixture(); copyFileSync(join(process.cwd(), "nen", "workflow.json"), join(o.root, "nen", "workflow.json")); act(o, "init");
+    const plan = act(o, "decide", { applicable: "nobunaga,chrollo" });
+    expect(plan["raise"]).toEqual(["nobunaga", "chrollo"]);
+    expect(read(o).reviewers.chrollo).toMatchObject({ max: 1, used: 0, budgetSource: "nen/workflow.json review.scopes.architecture.budget" });
+    expect([read(o).reviewers.nobunaga!.max, read(o).reviewers.feitan!.max]).toEqual([2, 1]);
+    act(o, "record", { persona: "chrollo", outcome: "ran" });
+    const spent = act(o, "decide", { applicable: "chrollo" });
+    expect(spent["raise"]).toEqual([]); expect(spent["skippedExhausted"]).toEqual(["chrollo"]);
+    expect(() => act(o, "record", { persona: "chrollo", outcome: "ran" })).toThrow(/skipped-exhausted/);
+    expect(read(o).reviewers.chrollo!.used).toBe(1);
   });
   it("runs all four passes, keeping counts across resumes and remediation", () => {
     const o = fixture(); act(o, "init"); const all = Object.keys(roster).join(",");
