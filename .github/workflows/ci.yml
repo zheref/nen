@@ -94,7 +94,7 @@ jobs:
           # then deletes the other's files mid-run (runs 45231948867 and
           # 45231952848, 2026-11-23). The account's own temp, named from its
           # profile, is the same for every job and never goes through /tmp.
-          if command -v cygpath >/dev/null; then base="$(cygpath -u "${LOCALAPPDATA:-$USERPROFILE/AppData/Local}")/Temp"; mkdir -p "$base"; fi
+          if command -v cygpath >/dev/null; then base="$(cygpath -u "${LOCALAPPDATA:-${USERPROFILE:?}/AppData/Local}")/Temp"; mkdir -p "$base"; fi
           d="$(mktemp -d "$base/nen-ci-XXXXXX")"
           w="$d"
           # Once TEMP names this dir a POSIX /tmp/... path no longer reaches it: on
@@ -222,7 +222,7 @@ jobs:
           # then deletes the other's files mid-run (runs 45231948867 and
           # 45231952848, 2026-11-23). The account's own temp, named from its
           # profile, is the same for every job and never goes through /tmp.
-          if command -v cygpath >/dev/null; then base="$(cygpath -u "${LOCALAPPDATA:-$USERPROFILE/AppData/Local}")/Temp"; mkdir -p "$base"; fi
+          if command -v cygpath >/dev/null; then base="$(cygpath -u "${LOCALAPPDATA:-${USERPROFILE:?}/AppData/Local}")/Temp"; mkdir -p "$base"; fi
           d="$(mktemp -d "$base/nen-ci-XXXXXX")"
           w="$d"
           # Once TEMP names this dir a POSIX /tmp/... path no longer reaches it: on
