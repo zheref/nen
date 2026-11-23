@@ -186,7 +186,7 @@ describe("GitHub Actions runner policy", () => {
     expect(last.name).toBe("Remove the job's temp dir");
     expect(last.if).toBe("always()");
     expect(last.shell).toBe("bash");
-    expect(String(last.run)).toBe('rm -rf "$NEN_CI_TEMP"');
+    expect(String(last.run)).toBe('rm -rf "$NEN_CI_TEMP" || echo "::warning::could not remove $NEN_CI_TEMP"');
     expect(windows.name).toBe("check");
     expect(rows("check-windows").map((row) => (row as Row).runner)).toEqual(['["self-hosted","Windows","X64","pool-windows-x64"]']);
   });

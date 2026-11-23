@@ -167,7 +167,9 @@ jobs:
       - name: Remove the job's temp dir
         if: always()
         shell: bash
-        run: rm -rf "$NEN_CI_TEMP"
+        # Best effort: a file another job still holds open (Windows, concurrent PRs)
+        # must not turn a green run red; the leftover is one directory, not thousands.
+        run: rm -rf "$NEN_CI_TEMP" || echo "::warning::could not remove $NEN_CI_TEMP"
 
 
   # The Windows leg of `check`, split out so it runs ONLY while a Windows runner
@@ -304,7 +306,9 @@ jobs:
       - name: Remove the job's temp dir
         if: always()
         shell: bash
-        run: rm -rf "$NEN_CI_TEMP"
+        # Best effort: a file another job still holds open (Windows, concurrent PRs)
+        # must not turn a green run red; the leftover is one directory, not thousands.
+        run: rm -rf "$NEN_CI_TEMP" || echo "::warning::could not remove $NEN_CI_TEMP"
 
   # Proves the three release-target platforms still compile from ONE host on every change,
   # rather than discovering it at release time. It does NOT upload anything and
