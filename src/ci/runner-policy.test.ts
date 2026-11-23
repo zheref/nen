@@ -163,6 +163,11 @@ describe("GitHub Actions runner policy", () => {
     expect(first.name).toBe("Give the job its own temp dir");
     expect(first.shell).toBe("bash");
     expect(first.env).toBeUndefined();
+    // The directory is made under the account's own temp, never under /tmp: Git Bash derives
+    // /tmp once per account, so concurrent jobs nested theirs in each other's (2026-11-23).
+    expect(String(first.run)).toContain('mktemp -d "$base/nen-ci-XXXXXX"');
+    expect(String(first.run)).not.toContain("mktemp -d /tmp");
+    expect(String(first.run)).toContain('base="$(cygpath -u "${LOCALAPPDATA:-${USERPROFILE:?}/AppData/Local}")/Temp"');
     expect(String(first.run)).toContain('d="$(cygpath -m "$d")"');
     expect(String(first.run)).toContain('w="$(cygpath -w "$d")"');
     const expectedEnv = [
@@ -181,7 +186,7 @@ describe("GitHub Actions runner policy", () => {
     expect(last.name).toBe("Remove the job's temp dir");
     expect(last.if).toBe("always()");
     expect(last.shell).toBe("bash");
-    expect(String(last.run)).toBe('rm -rf "$NEN_CI_TEMP"');
+    expect(String(last.run)).toBe('rm -rf "$NEN_CI_TEMP" || echo "::warning::could not remove $NEN_CI_TEMP"');
     expect(windows.name).toBe("check");
     expect(rows("check-windows").map((row) => (row as Row).runner)).toEqual(['["self-hosted","Windows","X64","pool-windows-x64"]']);
   });

@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { makeTempDir } from "../testing/tempdir.js";
 import { devTestArgv, runDevTest } from "./test.js";
 
 // NOTE: this suite deliberately never CALLS `runDevTest` in a way that would
@@ -29,7 +27,7 @@ describe("devTestArgv", () => {
 
 describe("runDevTest", () => {
   it("refuses a directory with no package.json, and says why a binary cannot do this", () => {
-    const empty = mkdtempSync(join(tmpdir(), "nen-dev-"));
+    const empty = makeTempDir("nen-dev-");
     const result = runDevTest({ repoFlag: empty });
     expect(result.code).toBe(2);
     expect(result.message).toMatch(/no package\.json/);

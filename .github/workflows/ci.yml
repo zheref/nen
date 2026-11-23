@@ -87,11 +87,19 @@ jobs:
       - name: Give the job its own temp dir
         shell: bash
         run: |
-          d="$(mktemp -d /tmp/nen-ci-XXXXXX)"
+          base=/tmp
+          # Not /tmp on Windows: Git Bash derives /tmp once per account, so two
+          # jobs on the pool at the same time (two PRs) can resolve /tmp to the
+          # SAME job's directory and nest theirs inside it, and one job's cleanup
+          # then deletes the other's files mid-run (runs 45231948867 and
+          # 45231952848, 2026-11-23). The account's own temp, named from its
+          # profile, is the same for every job and never goes through /tmp.
+          if command -v cygpath >/dev/null; then base="$(cygpath -u "${LOCALAPPDATA:-${USERPROFILE:?}/AppData/Local}")/Temp"; mkdir -p "$base"; fi
+          d="$(mktemp -d "$base/nen-ci-XXXXXX")"
           w="$d"
-          # Git Bash maps /tmp through TEMP, so once TEMP names this dir a POSIX
-          # /tmp/... path no longer reaches it: on Windows every name carries
-          # the drive-letter form (C:/... for bash, C:\... for TMP and TEMP).
+          # Once TEMP names this dir a POSIX /tmp/... path no longer reaches it: on
+          # Windows every name carries the drive-letter form (C:/... for bash,
+          # C:\... for TMP and TEMP).
           if command -v cygpath >/dev/null; then d="$(cygpath -m "$d")"; w="$(cygpath -w "$d")"; fi
           {
             echo "NEN_CI_TEMP=$d"
@@ -159,7 +167,9 @@ jobs:
       - name: Remove the job's temp dir
         if: always()
         shell: bash
-        run: rm -rf "$NEN_CI_TEMP"
+        # Best effort: a file another job still holds open (Windows, concurrent PRs)
+        # must not turn a green run red; the leftover is one directory, not thousands.
+        run: rm -rf "$NEN_CI_TEMP" || echo "::warning::could not remove $NEN_CI_TEMP"
 
 
   # The Windows leg of `check`, split out so it runs ONLY while a Windows runner
@@ -207,11 +217,19 @@ jobs:
       - name: Give the job its own temp dir
         shell: bash
         run: |
-          d="$(mktemp -d /tmp/nen-ci-XXXXXX)"
+          base=/tmp
+          # Not /tmp on Windows: Git Bash derives /tmp once per account, so two
+          # jobs on the pool at the same time (two PRs) can resolve /tmp to the
+          # SAME job's directory and nest theirs inside it, and one job's cleanup
+          # then deletes the other's files mid-run (runs 45231948867 and
+          # 45231952848, 2026-11-23). The account's own temp, named from its
+          # profile, is the same for every job and never goes through /tmp.
+          if command -v cygpath >/dev/null; then base="$(cygpath -u "${LOCALAPPDATA:-${USERPROFILE:?}/AppData/Local}")/Temp"; mkdir -p "$base"; fi
+          d="$(mktemp -d "$base/nen-ci-XXXXXX")"
           w="$d"
-          # Git Bash maps /tmp through TEMP, so once TEMP names this dir a POSIX
-          # /tmp/... path no longer reaches it: on Windows every name carries
-          # the drive-letter form (C:/... for bash, C:\... for TMP and TEMP).
+          # Once TEMP names this dir a POSIX /tmp/... path no longer reaches it: on
+          # Windows every name carries the drive-letter form (C:/... for bash,
+          # C:\... for TMP and TEMP).
           if command -v cygpath >/dev/null; then d="$(cygpath -m "$d")"; w="$(cygpath -w "$d")"; fi
           {
             echo "NEN_CI_TEMP=$d"
@@ -288,7 +306,9 @@ jobs:
       - name: Remove the job's temp dir
         if: always()
         shell: bash
-        run: rm -rf "$NEN_CI_TEMP"
+        # Best effort: a file another job still holds open (Windows, concurrent PRs)
+        # must not turn a green run red; the leftover is one directory, not thousands.
+        run: rm -rf "$NEN_CI_TEMP" || echo "::warning::could not remove $NEN_CI_TEMP"
 
   # Proves the three release-target platforms still compile from ONE host on every change,
   # rather than discovering it at release time. It does NOT upload anything and
