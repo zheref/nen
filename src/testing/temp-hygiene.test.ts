@@ -56,6 +56,11 @@ describe("test temp directories (zheref/nen#635)", () => {
     expect(grown, `call makeTempDir() from src/testing/tempdir.ts instead of mkdtemp in: ${grown.join(", ")}`).toEqual([]);
   });
 
+  it("refuses an aliased mkdtemp import, which would hide later calls from the line count", () => {
+    const aliased = [...actual.keys(), ...Object.keys(baseline)].filter((file) => /\bmkdtemp(?:Sync)?\s+as\b/.test(readFileSync(join(process.cwd(), file), "utf8")));
+    expect(aliased, `import mkdtemp under its own name, or use makeTempDir(), in: ${aliased.join(", ")}`).toEqual([]);
+  });
+
   it("records every step down: a listed file that mentions mkdtemp less often is lowered or removed", () => {
     const shrunk = Object.entries(baseline)
       .filter(([file, count]) => (actual.get(file) ?? 0) < count)

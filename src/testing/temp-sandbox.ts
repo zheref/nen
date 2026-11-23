@@ -9,7 +9,7 @@
 // sandbox directory under the real temp dir, points TMPDIR, TMP and TEMP at it
 // for the run, and removes it when the run ends, whether the tests passed,
 // failed or threw. os.tmpdir() reads those variables at call time, so every
-// test worker and every child process a test spawns lands inside the sandbox.
+// test worker and every child process that inherits the environment lands inside the sandbox.
 //
 // A run killed outright (SIGKILL, power loss) cannot run its own teardown, so
 // the sandbox name carries the owning pid and the next run removes the sandboxes

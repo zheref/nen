@@ -29,7 +29,7 @@ describe("the run's temp sandbox (zheref/nen#635)", () => {
     expect(readdirSync(base)).toEqual([]);
   });
 
-  it("AC-2: the teardown removes the sandbox whatever the tests left in it, read-only trees included", () => {
+  it("the teardown removes the sandbox whatever the tests left in it, read-only trees included", () => {
     const base = makeTempDir("nen-sbx-base-");
     const sandbox = openTempSandbox(base, {});
     const locked = join(sandbox.dir, "nen-locked");
