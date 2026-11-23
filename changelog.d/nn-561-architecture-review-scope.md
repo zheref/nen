@@ -1,4 +1,2 @@
-### Added
-
-- This repository's `nen/workflow.json` now declares an `architecture` review scope (Chrollo, `deep` tier, one pass), so the mandatory content-raised totality pass has a declared reviewer and a finite budget instead of being reported as a configuration gap. Code and security keep their budgets; an exhausted architecture budget reads `skipped-exhausted` in `nen review ledger`, never a review that did not run.
+- This repository's `nen/workflow.json` now declares an `architecture` review scope (Chrollo, `deep` tier, one pass), so the mandatory content-raised totality pass has a declared reviewer and a finite budget instead of being reported as a configuration gap. Code and security keep their budgets; once the pass is spent `nen review ledger decide` reports `skip-exhausted` and the ledger records `skipped-exhausted`, never a review that did not run.
 - `nen review ledger decide` and `record` now answer a scope name given as a persona (`--applicable architecture`) with the persona to name instead (`chrollo`).

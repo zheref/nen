@@ -392,6 +392,7 @@ describe("this repository's own review.scopes -- the architecture scope (zheref/
     const row = workflow.review.scopes["architecture"];
     expect(row).toBeDefined();
     expect(row?.persona).toBe("chrollo");
+    expect(row?.tier).toBe("deep");
     expect(Object.keys(workflow.models.surfaces["claude"] ?? {})).toContain(row?.tier);
     expect(Number.isInteger(row?.budget)).toBe(true);
     expect(row?.budget).toBeGreaterThanOrEqual(1);

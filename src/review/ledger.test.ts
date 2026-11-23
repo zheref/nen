@@ -80,6 +80,13 @@ describe("review-cycle ledger — Hatsu lifecycle parity with a declared roster"
     expect(read(o).reviewers.chrollo!.used).toBe(1);
     expect(() => act(o, "decide", { applicable: "architecture" })).toThrow(/'architecture' is a scope: name its persona 'chrollo'/);
     expect(() => act(o, "decide", { applicable: "nobody" })).toThrow(/persona 'nobody' is not declared in review.scopes\.$/);
+    expect(() => act(o, "record", { persona: "architecture", outcome: "ran" })).toThrow(/'architecture' is a scope: name its persona 'chrollo'/);
+  });
+  it("answers a scope name with the persona that several scopes share (zheref/nen#561)", () => {
+    const o = fixture({ alpha: 1 }); act(o, "init");
+    writeFileSync(join(o.root, "nen", "workflow.json"), JSON.stringify({ review: { scopes: { first: { persona: "alpha", tier: "deep", budget: 2, paths: ["**"] }, second: { persona: "alpha", tier: "deep", budget: 1, paths: ["x/**"] } } } }));
+    expect(() => act(o, "decide", { applicable: "second" })).toThrow(/'second' is a scope: name its persona 'alpha'/);
+    expect(() => act(o, "decide", { applicable: "first" })).toThrow(/'first' is a scope: name its persona 'alpha'/);
   });
   it("runs all four passes, keeping counts across resumes and remediation", () => {
     const o = fixture(); act(o, "init"); const all = Object.keys(roster).join(",");
