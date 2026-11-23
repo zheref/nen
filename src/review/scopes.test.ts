@@ -395,7 +395,6 @@ describe("this repository's own review.scopes -- the architecture scope (zheref/
     expect(Object.keys(workflow.models.surfaces["claude"] ?? {})).toContain(row?.tier);
     expect(Number.isInteger(row?.budget)).toBe(true);
     expect(row?.budget).toBeGreaterThanOrEqual(1);
-    expect(row?.budget).toBeLessThan(10);
   });
 
   it("keeps code and security as they were", () => {

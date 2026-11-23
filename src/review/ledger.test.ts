@@ -78,6 +78,8 @@ describe("review-cycle ledger — Hatsu lifecycle parity with a declared roster"
     expect(spent["raise"]).toEqual([]); expect(spent["skippedExhausted"]).toEqual(["chrollo"]);
     expect(() => act(o, "record", { persona: "chrollo", outcome: "ran" })).toThrow(/skipped-exhausted/);
     expect(read(o).reviewers.chrollo!.used).toBe(1);
+    expect(() => act(o, "decide", { applicable: "architecture" })).toThrow(/'architecture' is a scope: name its persona 'chrollo'/);
+    expect(() => act(o, "decide", { applicable: "nobody" })).toThrow(/persona 'nobody' is not declared in review.scopes\.$/);
   });
   it("runs all four passes, keeping counts across resumes and remediation", () => {
     const o = fixture(); act(o, "init"); const all = Object.keys(roster).join(",");
