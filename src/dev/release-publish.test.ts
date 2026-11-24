@@ -23,12 +23,15 @@ import {
 } from "./release-publish.js";
 
 describe("release-publish --self-test", () => {
+  // An explicit budget (zheref/nen#598): this synchronous test spawns real programs and runs
+  // 4.3 to 5.1 s on the Windows and macOS runners. vitest 2 could not time out a test that never
+  // yields, so it passed past the 5 s default; vitest 4 checks the elapsed time when the test returns.
   it("is all green", () => {
     const result = selfTest();
     expect(result.lines.filter((line): boolean => line.includes("FAIL"))).toEqual([]);
     expect(result.failed).toBe(0);
     expect(result.ran).toBeGreaterThan(40);
-  });
+  }, 30_000);
 });
 
 describe("release-publish helpers", () => {

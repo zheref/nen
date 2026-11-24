@@ -22,5 +22,11 @@ export default defineConfig({
     // name locally. Sequence, not parallelism, is what these tests need: they
     // are pure functions and a fixture directory, not a server.
     sequence: { shuffle: false },
+    // The coverage report lists every source file, loaded by a test or not
+    // (zheref/nen#598). vitest 4 dropped `coverage.all`: without `include` a
+    // file no test imports is absent from the report instead of listed at 0%,
+    // and a touched-file gate cannot measure a row that is not there. The
+    // pattern also keeps imported JSON out of the report.
+    coverage: { include: ["src/**/*.ts"] },
   },
 });
