@@ -16819,7 +16819,7 @@ nen dev test -- src/commit
 ```text
 $ vitest run src/commit
 
- RUN  v2.1.8 <checkout>
+ RUN  v4.1.12 <checkout>
 
  ✓ src/commit/format.test.ts (12 tests) 3ms
  ✓ src/commit/command.test.ts (5 tests) 2ms
