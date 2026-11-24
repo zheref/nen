@@ -1215,7 +1215,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`canon`](#family-canon) | [`nen canon lint`](#nen-canon-lint) | a canon repository's prose held to a caller-owned rules contract (each rule's class picks the check) behind a shrink-only baseline; fenced code and quoted words exempt; never green over a file it could not read | nen/workflow.json `canon.lint`, the --rules contract and the files it names (version source, decisions, rulings, declared values), the --baseline and --base-baseline, the Markdown its include globs match under --root; with --base, git (merge-base, diff, show) | yes |
 | [`canon`](#family-canon) | [`nen canon clause check`](#nen-canon-clause-check) | a clause id space (HR-{n}, CON-{n}) held unique -- definitions counted, citations never, gaps a notice -- and, with --leaves, every changed clause matched by a change in each file citing it or a `no-leaf-change:` line | --file under --repo; --base as a file or `git show <ref>:<path>`; with --leaves, git (ls-files, diff) and the --body-from file | yes |
 | [`quality`](#family-quality) | [`nen quality tooling`](#nen-quality-tooling) | look up the e2e/adversarial/perf tooling recorded for a scenario in a caller-supplied table | caller's own --table JSON (never a table shipped in nen) | yes |
-| [`quality`](#family-quality) | [`nen quality perf-compare`](#nen-quality-perf-compare) | classify a measured-vs-baseline regression at QA-13's fixed 10%/25% thresholds | none (pure arithmetic over the two numbers given) | yes |
+| [`quality`](#family-quality) | [`nen quality perf-compare`](#nen-quality-perf-compare) | compare relative regression and declared absolute ceilings | optional caller-supplied ceiling declaration | yes |
 | [`quality`](#family-quality) | [`nen quality method-check`](#nen-quality-method-check) | validate a QA-15 method block: device/OS stated, Release with no debugger, n&gt;=5 with the first discarded, median+p90, thermal+network stated | caller's own --input JSON method block | yes |
 | [`commit`](#family-commit) | [`nen commit format`](#nen-commit-format) | format and validate ONE Conventional Commits message's shape (type, subject, scope, breaking, trailers) the repository's `subject-case` rule (commitlint's own when readable as data, else `commits.subjectCase`), and its body/footer line lengths, wrapping `--body` to them (commitlint's own when readable as data, else `commits.bodyMaxLineLength`, else 100) -- never its content | on every run: nen/workflow.json under --repo (the attribution-trailer policy, commits.subjectCase and commits.bodyMaxLineLength), and the commitlint config commitlint would load from --repo's root (data forms parsed; JS/TS never executed) | yes |
 | [`commit`](#family-commit) | [`nen commit check`](#nen-commit-check) | is this working copy the one a green build proved? compares .nen/proof/<lane>.json's tree against the tree now | .nen/proof/<lane>.json under --repo, git (add/rm/write-tree into a scratch index) | yes |
@@ -12649,33 +12649,45 @@ scenario: swiftui-tca-uzf-v2
 
 ### `nen quality perf-compare`
 
-Classifies one measured-vs-baseline pair at QA-13's fixed thresholds: a regression over 10% (relative to `--baseline`) is `high`, over 25% is `critical`; lower is always better, so an improvement is never flagged. The metric name is not restricted to a fixed list in code -- QA-11 names seven canonical ones (cold launch, warm launch, frame hitches, memory high-water, artifact size, network payload/requests, longest main-thread block), but this verb compares whatever `--metric` names against whatever `--baseline` it is given.
-
-**Usage**
+Compares a measured value with its baseline at QA-13's unchanged relative thresholds (>10% high, >25% critical) and, optionally, an explicitly declared absolute ceiling. Lower is better. Metric names match exactly; Nen never infers a ceiling from a tool or metric name.
 
 ```text
-nen quality perf-compare --metric <name> --baseline <n> --measured <n>
+nen quality perf-compare --metric <name> --baseline <n> --measured <n> [--ceilings <path.json>]
 ```
-
-**Arguments**
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
-| `--metric <name>` | yes | The metric's name, echoed back verbatim. | Not validated against a fixed vocabulary. |
-| `--baseline <n>` | yes | The recorded baseline value. | A zero baseline is refused outright (exit 1) -- a percentage regression against zero is not a defined number. |
-| `--measured <n>` | yes | The newly measured value. | |
+| `--metric <name>` | yes | Exact metric key. | Case-sensitive; no aliases. |
+| `--baseline <n>` | yes | Recorded baseline. | Zero yields a null percentage/severity and a refusal reason, while still reporting the absolute verdict. |
+| `--measured <n>` | yes | Newly measured value. | Use the declaration's unit; Nen performs no conversion. |
+| `--ceilings <path.json>` | no | Caller-owned ceiling declaration. | Resolves against `--repo`; source, metric and unit must be nonempty single-line strings, ceilings finite and nonnegative, and metric keys unique. |
 
-**Output and exit codes** -- prints `<metric>: <pct>% vs baseline -- <severity>`. `--json`: `{ metric, baseline, measured, regressionPct, severity }`. Exit 0 when severity is `ok`; exit 1 when `high` or `critical` (or on a zero baseline).
+A declaration records its authority, for example:
 
-**Example**
+```json
+{
+  "source": "zheref/bankai-handbooks@v0.12.0 handbooks/quality-baseline.md QA-13",
+  "ceilings": [
+    {"metric": "P1-reference-median", "ceiling": 2000, "unit": "ms"},
+    {"metric": "P7-apple", "ceiling": 250, "unit": "ms"},
+    {"metric": "P7-android-jank", "ceiling": 5, "unit": "%"},
+    {"metric": "P7-web-INP", "ceiling": 200, "unit": "ms"},
+    {"metric": "P5-web-initial-transfer", "ceiling": 300, "unit": "KB compressed"}
+  ]
+}
+```
+
+The caller owns the declaration's accuracy, scenario and units; the source string is reported verbatim, not fetched or authenticated. No declaration, or an absent exact metric, reports `no-ceiling`, never an absolute pass. An empty ceilings array is explicit absence. Equality is within the inclusive ceiling.
+
+**Output and exits:** human output includes the relative row and an absolute row naming the ceiling, unit and source. JSON keeps `metric`, `baseline`, `measured`, `regressionPct`, `severity`, and adds `percentageReason` (null unless refused) plus `absolute: {status, ceiling, unit, source}`. Status is `within`, `breached`, or `no-ceiling`; absent fields are null. Exit 1 for a relative high/critical verdict, an absolute breach, or an undefined percentage at zero baseline; exit 0 otherwise. Malformed input/declarations exit 2. A relative improvement cannot hide an absolute breach.
 
 ```bash
 nen quality perf-compare --metric cold_launch_ms --baseline 1200 --measured 1400
 ```
 ```text
 cold_launch_ms: 16.7% vs baseline -- high
+absolute: no ceiling applies (no declaration)
 ```
-(run for real)
 
 ### `nen quality method-check`
 

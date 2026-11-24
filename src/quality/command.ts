@@ -5,7 +5,8 @@ import { resolveRepoRoot } from "../repo/root.js";
 import { resolveAgainstRepo } from "../cli/inputs.js";
 import { requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import { parseToolingTable, resolveTooling } from "./tooling.js";
-import { comparePerf, PerfCompareError } from "./perf.js";
+import { compareBudgets, parsePerfCeilings, type PerfCeilings } from "./ceilings.js";
+import { plainLine } from "../cli/plain.js";
 import { validateMethodBlock, type MethodBlock } from "./method.js";
 
 const USAGE = `nen quality -- tooling lookup, perf-budget comparison, method-block validation.
@@ -16,18 +17,22 @@ usage:
       supplied table (the target repository's own manifest -- never a table
       shipped in this binary). Exits 1 when the scenario has no entry.
 
-  nen quality perf-compare --metric <name> --baseline <n> --measured <n>
+  nen quality perf-compare --metric <name> --baseline <n> --measured <n> [--ceilings <path.json>]
       QA-13's own thresholds: >10% median regression is high, >25% is
       critical, regression-relative to --baseline. Lower is better for every
       one of the fixed seven metrics. Exits 1 when severity is high or
-      critical.
+      critical. Optional --ceilings declares {source, ceilings: [{metric,
+      ceiling, unit}]}; exact metric matches compare --measured in that unit.
+      Reports absolute within/breached/no-ceiling independently; a breach
+      exits 1. A zero baseline still emits the absolute verdict, with a null
+      percentage/severity and its refusal reason, and exits 1.
 
   nen quality method-check --input <path.json>
       Validates a QA-15 method block: device/OS stated, Release config with no
       debugger, sample size >=5 with the first discarded, median and p90
       reported, thermal and network conditions stated. Exits 1 on any gap.
 
-  --repo <path>    The checkout that --table and --input resolve against.
+  --repo <path>    The checkout that --table, --input and --ceilings resolve against.
                    Defaults to the current directory, so a call made from
                    anywhere else needs it: since zheref/nen#100 every path
                    flag on this verb resolves against this root, never
@@ -39,7 +44,7 @@ export const qualityCommand: Command = {
   summary: "Scenario tooling lookup, perf-budget comparison, method-block validation.",
   usage: USAGE,
   flags: {
-    values: ["table", "scenario", "metric", "baseline", "measured", "input"],
+    values: ["table", "scenario", "metric", "baseline", "measured", "input", "ceilings"],
     booleans: [],
   },
   run(context: CommandContext): number {
@@ -98,22 +103,30 @@ function perfCompare(context: CommandContext): number {
   if (!Number.isFinite(baseline) || !Number.isFinite(measured)) {
     throw new VerbUsageError("--baseline and --measured must be numbers.");
   }
-  let result;
-  try {
-    result = comparePerf(metric, baseline, measured);
-  } catch (error) {
-    if (error instanceof PerfCompareError) {
-      context.io.err(`nen: ${error.message}`);
-      return 1;
+  const ceilingsPath = context.args.values["ceilings"];
+  let declaration: PerfCeilings | null = null;
+  if (ceilingsPath !== undefined) {
+    const root = resolveRepoRoot({ repoFlag: context.repoFlag });
+    try {
+      declaration = parsePerfCeilings(readFileSync(resolveAgainstRepo(root, ceilingsPath), "utf8"));
+    } catch (error) {
+      throw new VerbUsageError(`could not read --ceilings '${plainLine(ceilingsPath)}': ${plainLine(String(error))}`);
     }
-    throw error;
   }
+  const result = compareBudgets(metric, baseline, measured, declaration);
+  const exit = result.severity === "ok" && result.absolute.status !== "breached" ? 0 : 1;
   if (context.json) {
     context.io.out(JSON.stringify(result, null, 2));
-    return result.severity === "ok" ? 0 : 1;
+    return exit;
   }
-  context.io.out(`${result.metric}: ${result.regressionPct.toFixed(1)}% vs baseline -- ${result.severity}`);
-  return result.severity === "ok" ? 0 : 1;
+  context.io.out(result.regressionPct === null
+    ? `${plainLine(result.metric)}: percentage refused -- ${result.percentageReason}`
+    : `${plainLine(result.metric)}: ${result.regressionPct.toFixed(1)}% vs baseline -- ${result.severity}`);
+  const absolute = result.absolute;
+  context.io.out(absolute.status === "no-ceiling"
+    ? `absolute: no ceiling applies${absolute.source === null ? " (no declaration)" : ` in ${plainLine(absolute.source)}`}`
+    : `absolute: ${absolute.status} -- ${measured} ${plainLine(absolute.unit ?? "")} vs ceiling ${absolute.ceiling}; source: ${plainLine(absolute.source ?? "")}`);
+  return exit;
 }
 
 function methodCheck(context: CommandContext): number {
