@@ -49,6 +49,9 @@ export const qualityCommand: Command = {
   },
   run(context: CommandContext): number {
     const subcommand = requireSubcommand("quality", context.args, ["tooling", "perf-compare", "method-check"]);
+    if (subcommand !== "perf-compare" && context.args.values["ceilings"] !== undefined) {
+      throw new VerbUsageError("--ceilings is only valid with perf-compare.");
+    }
     if (subcommand === "tooling") return tooling(context);
     if (subcommand === "perf-compare") return perfCompare(context);
     return methodCheck(context);
@@ -100,7 +103,7 @@ function perfCompare(context: CommandContext): number {
   }
   const baseline = Number(baselineRaw);
   const measured = Number(measuredRaw);
-  if (!Number.isFinite(baseline) || !Number.isFinite(measured)) {
+  if (baselineRaw.trim() === "" || measuredRaw.trim() === "" || !Number.isFinite(baseline) || !Number.isFinite(measured)) {
     throw new VerbUsageError("--baseline and --measured must be numbers.");
   }
   const ceilingsPath = context.args.values["ceilings"];

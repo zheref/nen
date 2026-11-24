@@ -86,4 +86,37 @@ describe("QA-13 absolute ceilings", () => {
       `absolute: breached -- 2001 ms vs ceiling 2000; source: ${source}`]);
     expect((await compare("P2", "1", "1", declaration, false)).out[1]).toBe(`absolute: no ceiling applies in ${source}`);
   });
+
+  it.each([["1", " "], [" ", "1"], ["1", ""], ["", "1"]])("refuses blank numeric input (%j, %j) instead of manufacturing zero", async (baseline, measured) => {
+    const result = await compare("P1", baseline, measured);
+    expect(result.code).toBe(2);
+    expect(result.out).toEqual([]);
+    expect(result.err.join("\n")).toContain("numbers");
+  });
+
+  it.each(["\u2028", "\u2029", "\u0085"])("refuses Unicode line/control separators %j in every declaration string", (separator) => {
+    for (const field of ["source", "metric", "unit"]) {
+      const value = { source, ceilings: [{ metric: "P1", unit: "ms", ceiling: 2000 }] };
+      if (field === "source") value.source += separator;
+      else Object.assign(value.ceilings[0] ?? {}, { [field]: `a${separator}b` });
+      expect(() => parsePerfCeilings(JSON.stringify(value))).toThrow();
+    }
+  });
+
+  it.each(["tooling", "method-check"])("refuses --ceilings on %s instead of ignoring it", async (verb) => {
+    const out: string[] = [];
+    const err: string[] = [];
+    const code = await run(["quality", verb, "--ceilings", "missing.json"],
+      { out: (s): void => { out.push(s); }, err: (s): void => { err.push(s); } });
+    expect(code).toBe(2);
+    expect(out).toEqual([]);
+    expect(err.join("\n")).toContain("--ceilings is only valid with perf-compare");
+  });
+
+  it("names percentage overflow without losing severity or the absolute verdict", async () => {
+    const result = await compare("P1", "1e-308", "2001");
+    expect(result.code).toBe(1);
+    expect(result.report()).toMatchObject({ regressionPct: null, severity: "critical",
+      percentageReason: expect.stringContaining("numeric range"), absolute: { status: "breached" } });
+  });
 });

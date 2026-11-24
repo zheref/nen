@@ -11,7 +11,7 @@ function object(value: unknown): value is Record<string, unknown> {
 }
 
 function text(value: unknown): value is string {
-  return typeof value === "string" && value.trim() !== "" && !/[\u0000-\u001f\u007f]/u.test(value);
+  return typeof value === "string" && value.trim() !== "" && !/[\p{Cc}\p{Zl}\p{Zp}]/u.test(value);
 }
 
 /** Reject the whole declaration before judging any metric, including unused rows. */
@@ -50,12 +50,14 @@ export interface BudgetComparison {
 
 export function compareBudgets(metric: string, baseline: number, measured: number, declaration: PerfCeilings | null): BudgetComparison {
   const relative = baseline === 0 ? null : comparePerf(metric, baseline, measured);
+  const overflow = relative !== null && !Number.isFinite(relative.regressionPct);
   const ceiling = declaration?.ceilings.find((row): boolean => row.metric === metric);
   return {
     metric, baseline, measured,
-    regressionPct: relative?.regressionPct ?? null,
+    regressionPct: overflow ? null : relative?.regressionPct ?? null,
     severity: relative?.severity ?? null,
-    percentageReason: relative === null ? "zero baseline: a percentage regression is undefined" : null,
+    percentageReason: relative === null ? "zero baseline: a percentage regression is undefined"
+      : overflow ? "percentage exceeds the finite numeric range" : null,
     absolute: {
       status: ceiling === undefined ? "no-ceiling" : measured > ceiling.ceiling ? "breached" : "within",
       ceiling: ceiling?.ceiling ?? null,
