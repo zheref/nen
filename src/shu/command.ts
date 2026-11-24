@@ -598,9 +598,17 @@ flags:
                    the target row, because "this whole app was touched" is
                    true of nearly every diff. REQUIRES --base; given without
                    it, exit 2. --json's 'touched' key carries
-                   { base, files, matched, unmatched, artifacts } -- 'files'
-                   is everything git named, 'matched' and 'unmatched' partition
-                   it by whether a row claimed it, and 'artifacts' is one
+                   { base, files, matched, unmatched, artifacts, exclusions }.
+                   'files' is what remains after the coverage row's declared
+                   'exclusions' (repo-relative path patterns); matched and
+                   unmatched partition it. Exclusions report every removed path,
+                   matching patterns and patterns matching no changed file. An
+                   absent declaration removes nothing and is stated explicitly.
+                   '=path' is exact; a plain path is a segment prefix; '*', '**'
+                   and '?' use Nen's shared path grammar. No tool config is read.
+                   Empty sets are allowed; malformed sets refuse before running.
+                   A fully excluded set is empty, so it does not produce exit 6.
+                   'artifacts' is one
                    { path, format, root, basis, rows, onDisk, error } per
                    report read, 'root' being the repo-relative directory its
                    paths were resolved against ('.' for the repository root).

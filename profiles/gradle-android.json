@@ -1,6 +1,6 @@
 {
   "$schema": "nen.profile/v0.1",
-  "$comment": "A CATALOGUE ENTRY, NOT AN AUTHORITY. Every command below is verbatim from a product repository and cited in its own `source`; nothing here is invented. A target repository's own nen/contract.json is the only thing an execution path ever reads.",
+  "$comment": "A CATALOGUE ENTRY, NOT AN AUTHORITY. Every command below is verbatim from a product repository and cited in its own `source`; nothing here is invented. A target repository's own nen/contract.json is the only thing an execution path ever reads. Anonymized source aliases preserve the original snapshot observations and line references; they do not name live public repositories or assert new live verification.",
   "id": "gradle-android",
   "displayName": "Gradle / Android",
   "markers": [
@@ -17,12 +17,14 @@
     {
       "pattern": "*/build.gradle{,.kts}",
       "contains": "com.android.application",
-      "why": "the refinement that makes it THIS stack rather than a plain JVM build: a module applying the Android application plugin. Both spellings of the build file are named because both are observed -- KroAndroid's modules are Kotlin script (app/build.gradle.kts:4-13) and food-diary's Android lane is Groovy (android/build.gradle:16-19)."
+      "why": "the refinement that makes it THIS stack rather than a plain JVM build: a module applying the Android application plugin. Both spellings of the build file are named because both are observed -- SampleDesktop's modules are Kotlin script (app/build.gradle.kts:4-13) and sourceworkspace's Android lane is Groovy (android/build.gradle:16-19)."
     }
   ],
   "crossChecks": [
     {
-      "verbs": ["test"],
+      "verbs": [
+        "test"
+      ],
       "markers": [
         {
           "pattern": "*/build.gradle{,.kts}",
@@ -34,14 +36,19 @@
       "plugin": {
         "syntax": "script",
         "catalogue": "gradle/*.versions.toml",
-        "ownBuildLogic": ["buildSrc", "build-logic"],
+        "ownBuildLogic": [
+          "buildSrc",
+          "build-logic"
+        ],
         "alternative": "THE HONEST ROW FOR A LANE WITHOUT THIS PLUGIN IS THE PLAIN JVM ONE -- `{gw} :<module>:test`, naming the module this repository runs its unit tests in, which is the same value `{unitTestTask}` fills into the gated row with the snapshot half dropped. It is NOT `testDebugUnitTest`: this row's own `why` records why that task must never be proposed for a repository that HAS Paparazzi, and it is not the replacement for one that has not -- it is the Android unit-test task, a different thing again, and a lane that wants it states it deliberately rather than inheriting it from a seat.",
         "why": "WHAT COUNTS AS APPLIED, AND WHAT COUNTS AS NEITHER. Four spellings are accepted and they are the four an Android build actually uses: `id(\"app.cash.paparazzi\")`, `id 'app.cash.paparazzi'`, `apply plugin: 'app.cash.paparazzi'`, and `alias(libs.plugins.paparazzi)` -- whose id is not in the build file AT ALL. It is in `gradle/libs.versions.toml`, as `paparazzi = { id = \"app.cash.paparazzi\", ... }`, and it is followed in the catalogue the accessor NAMES: `libs.` addresses `gradle/libs.versions.toml`, `testLibs.` addresses a different file, and the whole key is matched rather than its tail, so `libs.plugins.compose.paparazzi` is the `compose-paparazzi` entry or it is nothing. THE ID MUST BE APPLIED AND NOT MERELY MENTIONED: `testImplementation(\"app.cash.paparazzi:paparazzi-annotations:...\")` is a DEPENDENCY on this plugin's artifacts and applies nothing, so what is looked for is the quoted argument of an application and never the id as a substring. EVERY SPELLING IS READ WITH COMMENTS STRIPPED: a `// id(\"app.cash.paparazzi\")` is a line somebody wrote to switch the plugin OFF, and reading it as evidence proposes a task the build no longer creates. AND ONLY IN A MODULE THIS BUILD CONFIGURES -- the modules the lane's own settings file `include(...)`s -- because a directory Gradle never configures creates no task, whatever its build file applies. THE ANSWER IS THREE-VALUED. A module applying a plugin nen cannot resolve to an id (an `alias(...)` no catalogue answers, an `apply(...)`, an `apply from:`), a ROOT build file that configures its modules from the top (`subprojects {`, `allprojects {`), and a lane compiling its own build logic in `buildSrc/` or `build-logic/` all MAY be applying this plugin without saying so anywhere nen can read. That is neither evidence nor absence: the row is withheld either way, and the reason says WHICH of the two it was, because a maintainer fixes them differently."
       },
       "why": "`verifyPaparazziDebug` IS THE PAPARAZZI PLUGIN'S OWN TASK, and this row's entire argument -- that a unit-test run must be the snapshot-VERIFYING one -- is an argument about the repository the command was read from, which applies that plugin. A lane that does not apply it has no such task: the row fails on its first run with `Task 'verifyPaparazziDebug' not found in root project`, inside a declaration a maintainer may never have read, because `scaffold init --accept-detected` stores what detect proposed. The markers that identify this stack confirm a WRAPPER, a settings file and the Android APPLICATION plugin, and say nothing about this one -- so the gate is a second question, about a second file, and it is asked here rather than assumed."
     },
     {
-      "verbs": ["ui-test"],
+      "verbs": [
+        "ui-test"
+      ],
       "markers": [
         {
           "pattern": "*/build.gradle{,.kts}",
@@ -53,7 +60,10 @@
       "plugin": {
         "syntax": "script",
         "catalogue": "gradle/*.versions.toml",
-        "ownBuildLogic": ["buildSrc", "build-logic"],
+        "ownBuildLogic": [
+          "buildSrc",
+          "build-logic"
+        ],
         "alternative": "THERE IS NO SCREENSHOT TASK TO PROPOSE IN ITS PLACE, and nen states that rather than reaching for the next Android thing: INSTRUMENTED UI tests are `unsupported` on this stack for the reason this profile's `ui-test` row already gives -- `app/src/androidTest/` sources, a `testInstrumentationRunner` and Espresso / Compose-UI-test dependencies all exist in the observed repository, and NO `connectedAndroidTest` invocation exists anywhere in it. So a lane without the screenshot plugin has no `ui-test` row this catalogue can honestly propose at all. Apply the plugin and re-run `nen shu detect`, or state the row this repository means by hand; the seat is where it goes.",
         "why": "FOUR SPELLINGS COUNT AS APPLIED, and they are the four an Android build uses: `id(\"app.cash.paparazzi\")`, `id 'app.cash.paparazzi'`, `apply plugin: 'app.cash.paparazzi'`, and `alias(libs.plugins.paparazzi)` -- whose id is not in the build file at all but in `gradle/libs.versions.toml`, followed in the catalogue the accessor's own first segment names and matched on the whole key rather than on its tail. The id has to be the ARGUMENT OF AN APPLICATION: a `testImplementation(\"app.cash.paparazzi:paparazzi-annotations:...\")` mentions this plugin and applies nothing, and a reader that took the mention proposed the same broken row one indirection further in. All four are read with COMMENTS STRIPPED -- a `// id(\"app.cash.paparazzi\")` is a line somebody wrote to switch the plugin off -- and only in the modules the lane's own settings file includes, because a module the build never configures has no tasks. And the answer is THREE-VALUED: a module applying a plugin nen cannot resolve to an id, a root build file applying plugins to its modules from the top, or a lane compiling its own build logic in `buildSrc/` or `build-logic/`, MAY be applying this plugin without saying so anywhere nen can read -- neither evidence nor absence, withheld either way, with the reason saying which. The reading is stated here in full rather than pointed at the `test` gate's copy of it: a reader who wants to know why `ui-test` was seated should find the whole answer in the rule that seated it."
       },
@@ -61,9 +71,13 @@
     }
   ],
   "hosts": {
-    "*": ["darwin", "linux", "win32"]
+    "*": [
+      "darwin",
+      "linux",
+      "win32"
+    ]
   },
-  "hostNote": "any -- Gradle, the JDK and the Android SDK are all cross-platform, and the repository says so itself: \"The Gradle toolchain is platform-agnostic\" (KroAndroid/.github/workflows/build-test.yml:171-173). CI routes to a self-hosted Mac for BILLING, not because macOS is required.",
+  "hostNote": "any -- Gradle, the JDK and the Android SDK are all cross-platform, and the repository says so itself: \"The Gradle toolchain is platform-agnostic\" (SampleDesktop/.github/workflows/build-test.yml:171-173). CI routes to a self-hosted Mac for BILLING, not because macOS is required.",
   "scaffoldTemplate": "minimal",
   "scaffoldNote": "wrapper, `settings.gradle.kts`, one module, nen/contract.json.",
   "verbs": {
@@ -74,37 +88,49 @@
     },
     "build": {
       "exe": "{gw}",
-      "argv": ["assembleDebug", "--stacktrace"],
+      "argv": [
+        "assembleDebug",
+        "--stacktrace"
+      ],
       "why": "The repository's own CI build step, verbatim. `{gw}` is the one host-conditional substitution in this pack: `./gradlew` on POSIX, `gradlew.bat` on Windows.",
-      "source": "KroAndroid/.github/workflows/build-test.yml:97"
+      "source": "SampleDesktop/.github/workflows/build-test.yml:97"
     },
     "test": {
       "exe": "{gw}",
-      "argv": ["verifyPaparazziDebug", "{unitTestTask}", "--stacktrace"],
-      "why": "THE TASK MUST BE `verifyPaparazziDebug`, NEVER `testDebugUnitTest` (KN-IS-#182): under plain `testDebugUnitTest` a snapshot test renders and discards, so replacing a golden with a completely different image still reports PASSED. The cited command is `{gw} verifyPaparazziDebug :KroCore:test --stacktrace`; `{unitTestTask}` is the repository's own JVM unit-test task (KroAndroid: `:KroCore:test`), templated here because the module name is that repository's, not this stack's.",
-      "source": "KroAndroid/.github/workflows/build-test.yml:100 (the why: :51-58). GATED by this profile's `crossChecks`: the observed command runs the Paparazzi plugin's own task, so the row is proposed only where a module of the target lane actually applies that plugin (argued in PR #134, closes #128)"
+      "argv": [
+        "verifyPaparazziDebug",
+        "{unitTestTask}",
+        "--stacktrace"
+      ],
+      "why": "THE TASK MUST BE `verifyPaparazziDebug`, NEVER `testDebugUnitTest` (KN-IS-#182): under plain `testDebugUnitTest` a snapshot test renders and discards, so replacing a golden with a completely different image still reports PASSED. The cited command is `{gw} verifyPaparazziDebug :FixtureCore:test --stacktrace`; `{unitTestTask}` is the repository's own JVM unit-test task (SampleDesktop: `:FixtureCore:test`), templated here because the module name is that repository's, not this stack's.",
+      "source": "SampleDesktop/.github/workflows/build-test.yml:100 (the why: :51-58). GATED by this profile's `crossChecks`: the observed command runs the Paparazzi plugin's own task, so the row is proposed only where a module of the target lane actually applies that plugin (argued in PR #134, closes #128)"
     },
     "ui-test": {
       "exe": "{gw}",
-      "argv": ["verifyPaparazziDebug"],
+      "argv": [
+        "verifyPaparazziDebug"
+      ],
       "why": "Screenshot verification is this stack's UI test, and it is the same task the `test` row runs. RECORDING baselines is a different, deliberately separate command the declaration states if it wants it: `{gw} recordPaparazziDebug`. INSTRUMENTED UI tests are unsupported here: `app/src/androidTest/` sources, a `testInstrumentationRunner` (app/build.gradle.kts:48) and Espresso / Compose-UI-test dependencies (:216-219) all exist, and no `connectedAndroidTest` invocation exists anywhere.",
-      "source": "KroAndroid/.claude/rules/14-ui-screenshots.md:112-113 (record: :109). GATED by this profile's `crossChecks` for the same reason the `test` row is, and it is the row the gap was found on (argued in PR #134, closes #128)"
+      "source": "SampleDesktop/.claude/rules/14-ui-screenshots.md:112-113 (record: :109). GATED by this profile's `crossChecks` for the same reason the `test` row is, and it is the row the gap was found on (argued in PR #134, closes #128)"
     },
     "lint": {
       "exe": "{gw}",
-      "argv": [":app:lintDebug", "--stacktrace"],
+      "argv": [
+        ":app:lintDebug",
+        "--stacktrace"
+      ],
       "why": "The repository's own lint workflow step, verbatim. `:app` is the Android convention for the application module, not a product name, so it is carried literally.",
-      "source": "KroAndroid/.github/workflows/lint.yml:79"
+      "source": "SampleDesktop/.github/workflows/lint.yml:79"
     },
     "typecheck": {
       "unsupported": "The Kotlin compiler IS the type check, inside `build`'s own task graph; the repository runs no separate checking step and the stack has none.",
       "summary": "the compiler checks types",
-      "source": "KroAndroid/.github/workflows/ (inventory sweep)"
+      "source": "SampleDesktop/.github/workflows/ (inventory sweep)"
     },
     "archive": {
       "unsupported": "A `release` buildType is declared with NO signingConfig, and no `assembleRelease` / `bundleRelease` is invoked anywhere. An archive nen proposed would be an unsigned artifact nobody asked for.",
       "summary": "release type, no signing",
-      "source": "KroAndroid/app/build.gradle.kts:44-49"
+      "source": "SampleDesktop/app/build.gradle.kts:44-49"
     },
     "release": {
       "unsupported": "No release lane of any kind in the inventory.",
@@ -112,32 +138,35 @@
       "source": "the seven-repository inventory"
     },
     "dev": {
-      "unsupported": "No `installDebug`, no `run`. food-diary's Android lane is driven from the `expo` profile instead.",
+      "unsupported": "No `installDebug`, no `run`. sourceworkspace's Android lane is driven from the `expo` profile instead.",
       "summary": "no installDebug, no run",
-      "source": "KroAndroid (inventory sweep)"
+      "source": "SampleDesktop (inventory sweep)"
     },
     "run": {
       "unsupported": "A release install to a device is a DEPLOY, not a local run, and no such invocation exists here either.",
       "summary": "no local run lane",
-      "source": "KroAndroid (inventory sweep)"
+      "source": "SampleDesktop (inventory sweep)"
     },
     "deploy": {
       "unsupported": "No Play publishing, no Firebase App Distribution, no `publish`.",
       "summary": "no deploy target",
-      "source": "KroAndroid (inventory sweep)"
+      "source": "SampleDesktop (inventory sweep)"
     },
     "coverage": {
       "unsupported": "No coverage plugin is declared, checked directly: neither JaCoCo nor Kover is applied anywhere. The root plugins block names the Android application plugin, Kotlin JVM / serialization / compose, KSP, Hilt and Paparazzi -- never `jacoco` or `kover`; the app module agrees; the version catalogue names neither. THE REPOSITORY'S OWN CHECKLIST DISAGREES WITH ITS OWN BUILD FILES: it documents `./gradlew jacocoTestReport`, a task that does not exist on a clean checkout.",
       "summary": "no coverage plugin",
-      "source": "KroAndroid/build.gradle.kts:2-15, app/build.gradle.kts:4-13, gradle/libs.versions.toml (checklist: .claude/rules/12-session-completion-checklist.md:33-35)"
+      "source": "SampleDesktop/build.gradle.kts:2-15, app/build.gradle.kts:4-13, gradle/libs.versions.toml (checklist: .claude/rules/12-session-completion-checklist.md:33-35)"
     },
     "tools": {
-      "declaredOnly": "One installable class, three verify-only. Gradle -- installer `wrapper`, which installs NOTHING: `{gw}` resolves the repository's own wrapper, and a repo without one is a finding rather than an install. JDK -- verify-only, because KroAndroid needs TWO JDKs at once, Temurin 17 and 21, \"21 last so it's the default JAVA_HOME (Gradle daemon), 17 present so toolchain(17) resolves\"; an installer that got that ordering wrong would break the Gradle daemon in a way that looks like a compiler bug. Android SDK COMPONENTS -- installer `sdkmanager`, components only, into an SDK root that already exists; nen never installs the SDK root and never runs `sdkmanager --licenses`, which is an acceptance a human gives, and an absent `ANDROID_HOME` degrades the row to verify-only. `node` on PATH (food-diary's Android lane only) -- verify-only, needed by the Gradle SYNC, not just the JS bundle.",
+      "declaredOnly": "One installable class, three verify-only. Gradle -- installer `wrapper`, which installs NOTHING: `{gw}` resolves the repository's own wrapper, and a repo without one is a finding rather than an install. JDK -- verify-only, because SampleDesktop needs TWO JDKs at once, Temurin 17 and 21, \"21 last so it's the default JAVA_HOME (Gradle daemon), 17 present so toolchain(17) resolves\"; an installer that got that ordering wrong would break the Gradle daemon in a way that looks like a compiler bug. Android SDK COMPONENTS -- installer `sdkmanager`, components only, into an SDK root that already exists; nen never installs the SDK root and never runs `sdkmanager --licenses`, which is an acceptance a human gives, and an absent `ANDROID_HOME` degrades the row to verify-only. `node` on PATH (sourceworkspace's Android lane only) -- verify-only, needed by the Gradle SYNC, not just the JS bundle.",
       "summary": "components only",
-      "source": "wrapper: the repository; JDK/SDK: probes (KroAndroid/.github/actions/setup-kro/action.yml:12-23)"
+      "source": "wrapper: the repository; JDK/SDK: probes (SampleDesktop/.github/actions/setup-kro/action.yml:12-23)"
     },
     "warmup": {
-      "delegatesTo": ["build", "test"],
+      "delegatesTo": [
+        "build",
+        "test"
+      ],
       "why": "The git steps are stack-independent and run regardless. The verification half delegates to this profile's own `build` and `test` rows, both of which carry a command.",
       "source": "this profile's own build and test rows"
     }
@@ -145,52 +174,64 @@
   "toolchain": {
     "android-sdk": {
       "minimum": null,
-      "probe": ["sdkmanager", "--version"],
+      "probe": [
+        "sdkmanager",
+        "--version"
+      ],
       "versionFrom": "first-semver-on-stdout",
       "installer": "sdkmanager",
       "why": "COMPONENTS ONLY, into an SDK root that already exists: `sdkmanager --install \"platforms;android-<n>\" \"build-tools;<v>\"`. nen never installs the SDK root and never runs `sdkmanager --licenses`. An absent `ANDROID_HOME` degrades this to verify-only with the message. GATED BY RESIDUAL QUESTION (d) -- it ships verify-only in the first release. No repository in the inventory pins a component version, so the pack states no minimum.",
-      "source": "KroAndroid (Android SDK required; no pinned component version in the tree)"
+      "source": "SampleDesktop (Android SDK required; no pinned component version in the tree)"
     },
     "gradle": {
       "minimum": "9.5.1",
-      "probe": ["{gw}", "--version"],
+      "probe": [
+        "{gw}",
+        "--version"
+      ],
       "versionFrom": "first-semver-on-stdout",
       "installer": "wrapper",
       "why": "NOTHING TO INSTALL: `{gw}` resolves the repository's own wrapper, and the minimum is what the root wrapper pins. nen never installs Gradle globally.",
-      "source": "KroAndroid root wrapper (contrast program/ at 8.7 -- see the compose-desktop profile)"
+      "source": "SampleDesktop root wrapper (contrast program/ at 8.7 -- see the compose-desktop profile)"
     },
     "jdk": {
       "minimum": "17",
-      "probe": ["java", "-version"],
+      "probe": [
+        "java",
+        "-version"
+      ],
       "versionFrom": "first-semver-on-stderr",
       "installer": "verify-only",
-      "why": "KroAndroid needs TWO JDKs at once, Temurin 17 and 21 -- \"21 last so it's the default JAVA_HOME (Gradle daemon), 17 present so toolchain(17) resolves\". The pack states the lower of the two as its minimum and reports both; an installer that got the ordering wrong would break the Gradle daemon in a way that looks like a compiler bug. `java -version` writes to STDERR, which is why the reader is the stderr one.",
-      "source": "KroAndroid/.github/actions/setup-kro/action.yml:12-23"
+      "why": "SampleDesktop needs TWO JDKs at once, Temurin 17 and 21 -- \"21 last so it's the default JAVA_HOME (Gradle daemon), 17 present so toolchain(17) resolves\". The pack states the lower of the two as its minimum and reports both; an installer that got the ordering wrong would break the Gradle daemon in a way that looks like a compiler bug. `java -version` writes to STDERR, which is why the reader is the stderr one.",
+      "source": "SampleDesktop/.github/actions/setup-kro/action.yml:12-23"
     },
     "node": {
       "minimum": null,
-      "probe": ["node", "--version"],
+      "probe": [
+        "node",
+        "--version"
+      ],
       "versionFrom": "first-semver-on-stdout",
       "installer": "verify-only",
-      "why": "food-diary's Android lane needs `node` ON PATH for the Gradle SYNC, not merely for the JS bundle -- a verify-only probe most readers would not expect. No version is pinned anywhere, so the pack states presence only.",
-      "source": "food-diary android/build.gradle:16-19, android/settings.gradle:4-14"
+      "why": "sourceworkspace's Android lane needs `node` ON PATH for the Gradle SYNC, not merely for the JS bundle -- a verify-only probe most readers would not expect. No version is pinned anywhere, so the pack states presence only.",
+      "source": "sourceworkspace android/build.gradle:16-19, android/settings.gradle:4-14"
     }
   },
   "reportDefault": {
     "$comment": "ADVISORY ONLY, and the one thing `nen shu coverage` may say about a report location it was not given. That verb parses the report a DECLARATION names under the coverage verb's `artifacts`; when a repository names none, this path (or this reason) is quoted in the refusal and NEVER opened. `path: null` is the honest answer for a stack whose report location does not exist or is not conventional.",
     "path": null,
     "why": "No coverage plugin is declared -- neither JaCoCo nor Kover is applied -- so there is no report and no path to record. With a plugin applied the location is the plugin's own (a JaCoCo report task writes under the module's `build/reports` tree, and its XML output is off by default), and the declaration states it: this repository's checklist already names a `jacocoTestReport` task that does not exist on a clean checkout, and recording a plausible path here would repeat that mistake in nen's own voice.",
-    "source": "this profile's own `coverage` row (KroAndroid/build.gradle.kts:2-15, app/build.gradle.kts:4-13)"
+    "source": "this profile's own `coverage` row (SampleDesktop/build.gradle.kts:2-15, app/build.gradle.kts:4-13)"
   },
   "deployDefault": {
     "target": null,
     "why": "No canonical non-production destination is observed: no repository in the inventory publishes to a Play testing track or to Firebase App Distribution, and those two are rival conventions rather than one, so the pack names neither.",
-    "source": "KroAndroid (inventory sweep); this profile's own `deploy` row"
+    "source": "SampleDesktop (inventory sweep); this profile's own `deploy` row"
   },
   "notes": [
     "An Android launch target may declare an `adb devices` text extractor with name field 1, identifier field 1 and readiness field 2, targeting the serial exactly and accepting state `device`. The header and daemon notices are nonmatching rows; nen still executes only the consumer-declared probe.",
     "`{gw}` is the ONE host-conditional substitution in this pack: `./gradlew` on POSIX, `gradlew.bat` on Windows.",
-    "A CONFLICT THIS PACK RECORDS AND REFUSES TO RESOLVE. Two sources disagree about this stack's unit-test task, and only one of them can be right: the canonical `compose-uzf-v2` handbook (zheref/bankai-handbooks, `rules/placeholders.md`) gives `./gradlew :app:testDebugUnitTest` as the ILLUSTRATIVE value of its lint/test placeholder -- an example, not a binding; since handbook set v0.6 the task itself is the consumer's own `{{LINT_SCRIPT}}` value, and a consumer that copies the example binds exactly this task -- while KroAndroid's own CI forbids exactly that task in the sentence quoted in the `test` row's `why` (build-test.yml:51-58). The pack states the task that is OBSERVED RUNNING, cited to the line that runs it, and states the disagreement HERE rather than encoding both -- a reference that carried the forbidden task in any row, even a commented one, is a reference that will eventually be pasted. Resolve it upstream in whichever source is wrong; nen reports it and changes neither.",
+    "A CONFLICT THIS PACK RECORDS AND REFUSES TO RESOLVE. Two sources disagree about this stack's unit-test task, and only one of them can be right: the canonical `compose-uzf-v2` handbook (zheref/bankai-handbooks, `rules/placeholders.md`) gives `./gradlew :app:testDebugUnitTest` as the ILLUSTRATIVE value of its lint/test placeholder -- an example, not a binding; since handbook set v0.6 the task itself is the consumer's own `{{LINT_SCRIPT}}` value, and a consumer that copies the example binds exactly this task -- while SampleDesktop's own CI forbids exactly that task in the sentence quoted in the `test` row's `why` (build-test.yml:51-58). The pack states the task that is OBSERVED RUNNING, cited to the line that runs it, and states the disagreement HERE rather than encoding both -- a reference that carried the forbidden task in any row, even a commented one, is a reference that will eventually be pasted. Resolve it upstream in whichever source is wrong; nen reports it and changes neither.",
     "TWO ROWS HERE ARE CONDITIONAL ON A PLUGIN, AND THE MARKERS CANNOT SEE IT. `test` and `ui-test` both run `verifyPaparazziDebug`, which is the Paparazzi plugin's own task; the markers that identify this stack confirm a wrapper, a settings file and the Android APPLICATION plugin, and none of the three says anything about Paparazzi. So both rows are gated by this profile's `crossChecks` and are proposed only where a MODULE THE LANE'S SETTINGS FILE INCLUDES applies that plugin -- in any of the four spellings a build script uses, comments stripped, the id read as the ARGUMENT OF AN APPLICATION rather than as a substring, with an `alias(...)` followed through the catalogue its own accessor names in the lane's `gradle/` directory. Where the plugin is absent, or where nen cannot see through a convention plugin, a `buildSrc/`, a `build-logic/` or a root that configures its modules from the top, the row is a SEAT carrying the reason AND the row this repository should write instead. This is the same rule the rest of the pack follows and the one this stack was breaking: a task the project does not contain is a warning, never a proposal.",
     "PRECONDITIONS ASSERTED, NEVER PERFORMED: recursive submodules -- the root settings.gradle.kts:29-30 `includeBuild`s two sibling projects from a submodule, and without it nothing resolves; the two JDKs above; and a `local.properties` carrying the project's Supabase URL and anon key (app/build.gradle.kts:16-24)."
   ]

@@ -1853,7 +1853,7 @@ function hostAnswers(
   }
 }
 
-/** `include(":app", ":KroCore")` -> `:app`, `:KroCore`, in declared order. */
+/** `include(":app", ":FixtureCore")` -> `:app`, `:FixtureCore`, in declared order. */
 const INCLUDE_CALL = /\binclude(?![A-Za-z0-9_])\s*(\([^)]*\)|[^\n]*)/g;
 const QUOTED = /["']([^"'\n]+)["']/g;
 
@@ -2827,7 +2827,7 @@ const NATIVE_TARGETS =
  *
  * THE QUOTED BRANCH HONOURS THE ESCAPE, and the direction the old one failed in
  * is the unsafe one. `"([^"]*)"` stops at the backslash-escaped quote inside
- * `name = "Kro\"Q";`, so the target came out as `Kro\` -- or, where the escape
+ * `name = "FixtureApp\"Q";`, so the target came out as `FixtureApp\` -- or, where the escape
  * sat at the end, the value was dropped entirely -- and a target the project
  * DOES declare went missing from the list. A missing target is not a quiet
  * gap here: it is what makes `schemeReason` report a working scheme as BROKEN
@@ -3270,7 +3270,7 @@ export function readAppleContainer(
  * PR re-scoped. A lane with one shared scheme has not "made a decision", but it
  * has stated the only shared scheme it has -- and the thing that made
  * substituting it unsafe was never the arithmetic, it was that nen had no way
- * to tell a working scheme from `food-diary`'s, whose test action names a target
+ * to tell a working scheme from `sourceworkspace`'s, whose test action names a target
  * its own project file does not contain. With the target list read, nen can
  * tell, so the answer is granted exactly where the check was PERFORMED and
  * PASSED and nowhere else:
