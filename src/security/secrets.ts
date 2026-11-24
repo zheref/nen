@@ -1,5 +1,6 @@
 // Content-only detection, shared independently of the publishing command.
 // Findings carry shape names only: never a candidate or its surrounding text.
+import { PUBLIC_EVIDENCE_PROSE } from "./public-prose.js";
 import { redactRemoteCredentials } from "../seam/exec.js";
 
 export type SecretShape = "GitHub token" | "fine-grained PAT" | "URL credential" | "AWS access key" | "Google API key" | "Azure account key" | "private-key block" | "high-entropy token";
@@ -28,7 +29,13 @@ export function tokenEntropy(value: string): number {
  * Only settle calls this scanner today. Stage's filename secret-shape row
  * and the private-repository-name guard retain their existing policies.
  */
-export function scanContentSecrets(text: string): readonly SecretShape[] {
+export function scanContentSecrets(text: string): readonly SecretShape[] { return scan(text, false); }
+
+/** Evidence notes alone may classify the fixed sourced public false-positive corpus.
+ * Known credential shapes still scan original text; notes are never rewritten. */
+export function scanEvidenceNoteSecrets(text: string): readonly SecretShape[] { return scan(text, true); }
+
+function scan(text: string, evidenceNote: boolean): readonly SecretShape[] {
   const shapes = new Set<SecretShape>();
   const github = /\bgh[pousr]_[A-Za-z0-9]{20,}/g;
   const fine = /\bgithub_pat_[A-Za-z0-9_]+/g;
@@ -43,6 +50,7 @@ export function scanContentSecrets(text: string): readonly SecretShape[] {
   for (const match of text.matchAll(/[A-Za-z0-9+/_=-]{32,}/g)) {
     const candidate = match[0];
     const classes = [/[a-z]/, /[A-Z]/, /[0-9]/, /[+/_=-]/].filter((kind): boolean => kind.test(candidate)).length;
+    if (evidenceNote && PUBLIC_EVIDENCE_PROSE.some(entry => entry.candidate === candidate)) continue;
     if (candidate.length >= SECRET_MIN_TOKEN_LENGTH && classes >= 3 && tokenEntropy(candidate) >= SECRET_ENTROPY_THRESHOLD) {
       shapes.add("high-entropy token");
       break;
