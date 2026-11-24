@@ -1601,7 +1601,7 @@ already has a verdict, or a start time, sorts as before.
 
 **Which head the verdict is about (zheref/nen#245).** The verdict concerns
 **GitHub's current head** for the pull request at the moment the verb reads
-it. That is not necessarily your local commit. On example/fixture-service#577 a `ready`
+it. That is not necessarily your local commit. On the anonymized source snapshot’s PR #577 a `ready`
 was decided eight seconds before a push registered, so it judged the parent
 commit. Three things make that visible:
 
