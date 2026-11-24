@@ -41,3 +41,13 @@ The names are fictional source aliases, not new verification claims.
 
 The managed fixture and the script/dependency cross-checks introduced by #502
 remain intact. The matrix is regenerated from the reconciled profile pack.
+
+The round-2 live guard passes both complete detector files, all seven profiles,
+the generated matrix and fixture guide, with no ignore file. It is a new live
+check, not a reuse of the original snapshot count. The first round-2 focused
+selection executed 389 tests in the detector and matrix suites; two selected
+paths did not exist, so that run did not certify scaffold/profile coverage.
+The corrected selection uses `src/scaffold/stack.test.ts`,
+`src/profiles/pack.test.ts` and `src/profiles/inertness.test.ts` beside those two
+suites; the corrected run passes all 611 tests. Full regression at the reconciled code head passed 12,432 tests, with
+three skips, across 377 files.

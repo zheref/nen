@@ -1534,7 +1534,7 @@ App installation token) or an unreadable timeline makes no own-request claim.
 **Detail text only**: the row still fails, and the verdict and the exit code
 do not move. A row owing any reviewer a missing round keeps its reason byte for
 byte. Both reads are made only while a review request is pending. This is the
-case on [anonymized-source-exampleservice#577](https://github.com/anonymized-source-exampleservice/pull/577):
+case on the anonymized source snapshot’s PR #577:
 every later "owed at the current head" there came from the agent's own request.
 These suffixes are the one place this gate's line differs from the original
 shell gate's (`src/gates/ready.ts` divergence (11)); the shadow harness strips
@@ -1601,7 +1601,7 @@ already has a verdict, or a start time, sorts as before.
 
 **Which head the verdict is about (zheref/nen#245).** The verdict concerns
 **GitHub's current head** for the pull request at the moment the verb reads
-it. That is not necessarily your local commit. On anonymized-source-exampleservice#577 a `ready`
+it. That is not necessarily your local commit. On example/fixture-service#577 a `ready`
 was decided eight seconds before a push registered, so it judged the parent
 commit. Three things make that visible:
 
@@ -3700,7 +3700,7 @@ a non-User event that carries another id, but only as a fallback: the REST
 timeline names Copilot `Copilot` where GraphQL names it
 `copilot-pull-request-reviewer`, so for real bots the id does the counting. Every request counts, whoever made
 it and by whatever route, raw GraphQL included
-([anonymized-source-exampleservice#577](https://github.com/anonymized-source-exampleservice/pull/577) carries
+(the anonymized source snapshot’s PR #577 carries
 eight under a two-round ruling).
 
 - A request that would pass the ceiling refuses the **whole** call at exit
@@ -7318,10 +7318,12 @@ findings AND (the sweep was not requested, or it found no gaps); exit 1 otherwis
 ```bash
 nen warmup --repo src/schema/fixtures/bankai-repo --current v0.12.0
 ```
+
+The output below is sanitized: fictional source aliases replace original repository identities.
 ```text
 4 stale pin(s):
-  anonymized-source-exampleservice pinned: v0.11.2 -> v0.12.0
-  anonymized-source-sampledesktop pinned: v0.11.2 -> v0.12.0
+  example/fixture-service pinned: v0.11.2 -> v0.12.0
+  example/fixture-desktop pinned: v0.11.2 -> v0.12.0
   zheref/bankai-scaffold pinned: v0.10.0 -> v0.12.0
   zheref/bankai-scaffold db_migrate_pinned: v0.9.7 -> v0.12.0
 no unpinned consumers
@@ -9028,9 +9030,9 @@ when `--from` is combined with an explicit token.
 nen repo resolve KP --repo src/schema/fixtures/bankai-repo
 ```
 ```text
-anonymized-source-exampleservice  (KP)  via code
+example/fixture-service  (KP)  via code
 ```
-(from a real run against the bundled fixture registry)
+(sanitized transcript derived from the bundled fixture registry; the fictional slug replaces the original output and is not literal command output)
 
 ### `nen repo inventory`
 
@@ -9063,8 +9065,10 @@ propagates as an uncaught error, generic exit 1).
 **Example** (shape confirmed from `src/repo/inventory.test.ts` — this verb always reaches GitHub live
 and was not run per this section's setup notes)
 
+Illustrative sanitized example: substitute an accessible repository for the fictional target.
+
 ```bash
-nen repo inventory --target anonymized-source-exampleservice --epic-label type:epic --integration-prefix integration/ --trunk main
+nen repo inventory --target example/fixture-service --epic-label type:epic --integration-prefix integration/ --trunk main
 ```
 ```text
 epics: 1
@@ -9130,13 +9134,19 @@ all (the same precondition [`repo resolve`](#nen-repo-resolve) refuses the same 
 
 **Example**
 
+For a runnable fictional example, save this registry as `example-registry/nen/repos.json`:
+
+```json
+{"consumers":[{"repo":"example/fixture-service","scenario":"scaffold","consumes":[]}]}
+```
+
 ```bash
-nen repo scenario --repo src/schema/fixtures/bankai-repo --target anonymized-source-exampleservice
+nen repo scenario --repo example-registry --target example/fixture-service
 ```
 ```text
-swiftui-tca-uzf-v2
+scaffold
 ```
-(from a real run against the bundled fixture registry)
+(verified against the self-contained fictional registry above)
 
 <a id="family-ref"></a>
 
@@ -10216,11 +10226,11 @@ nen fanout compute --repo . --range v0.11.2..v0.11.3
 ```
 ```text
 changed workflows in v0.11.2..v0.11.3: sasuke-review.yml
-AFFECTED  anonymized-source-exampleservice (KP)  -- consumes sasuke-review.yml, which changed in this range
-AFFECTED  anonymized-source-sampledesktop (KN)  -- consumes sasuke-review.yml, which changed in this range
+AFFECTED  example/fixture-service (KP)  -- consumes sasuke-review.yml, which changed in this range
+AFFECTED  example/fixture-desktop (KN)  -- consumes sasuke-review.yml, which changed in this range
 AFFECTED  zheref/bankai-scaffold (BS)  -- consumes sasuke-review.yml, which changed in this range
 ```
-(from a real run against a scratch git repo seeded with the bundled fixture's `nen/repos.json` and two tags, `v0.11.2` and `v0.11.3`, differing only in `sasuke-review.yml`)
+(sanitized transcript from a scratch git repo; source identities are fictional aliases. The original repo was seeded with the bundled fixture's `nen/repos.json` and two tags, `v0.11.2` and `v0.11.3`, differing only in `sasuke-review.yml`)
 
 ### `nen fanout record`
 
@@ -10255,7 +10265,7 @@ nen fanout record --repo . --range v0.11.2..v0.11.3
 ```text
 recorded 3 row(s) to /path/to/repo/fanout-ledger.jsonl
 ```
-(from a real run, same scratch repo as `fanout compute`'s example; `fanout-ledger.jsonl` afterward held one JSON line per row, the first reading `{"range":"v0.11.2..v0.11.3","at":"2026-09-07T22:58:40.613Z","repo":"anonymized-source-exampleservice","code":"KP","status":"affected","matchedWorkflows":["sasuke-review.yml"],"basis":"consumes sasuke-review.yml, which changed in this range"}`)
+(sanitized transcript, same scratch repo as `fanout compute`'s example; fictional source identities replace the original values; `fanout-ledger.jsonl` afterward held one JSON line per row, the first reading `{"range":"v0.11.2..v0.11.3","at":"2026-09-07T22:58:40.613Z","repo":"example/fixture-service","code":"KP","status":"affected","matchedWorkflows":["sasuke-review.yml"],"basis":"consumes sasuke-review.yml, which changed in this range"}`)
 
 <a id="family-run"></a>
 
@@ -10346,13 +10356,15 @@ v0.25.0).
 
 **Example**
 
+Illustrative sanitized example; no live rerun was performed.
+
 ```bash
-nen run rerun-failed --target anonymized-source-exampleservice --run-id 42
+nen run rerun-failed --target example/fixture-service --run-id 42
 ```
 ```text
-re-ran the failed job(s) of anonymized-source-exampleservice's run 42
+re-ran the failed job(s) of example/fixture-service's run 42
 ```
-(from `src/run/command.test.ts`, which scripts `gh run rerun 42 --repo anonymized-source-exampleservice --failed` — this verb reaches GitHub, so it was not run live here)
+(illustrates the behavior covered by `src/run/command.test.ts`; the repository slug above is fictional, not a quotation of that fixture or a live run)
 
 ### `nen run start`
 
@@ -14618,8 +14630,8 @@ nothing and behaves exactly as before:
 |---|---|
 | **the file a row addresses** | the tree does not resolve to exactly **one** candidate at any rank the pack lists. The candidates are an *ordered* list and the order is an argument: for `dotnet-winui`, a `*.sln` outranks a `*.csproj`, because a solution is your own list of the projects a build addresses and naming one project of a tree that has a solution would be `detect` choosing a subset you never chose. Two solutions, or two WinUI project files and no solution, are an **ambiguity** — both are named and neither is picked |
 | **evidence the row needs** | nothing in the lane carries what the row would run against. `dotnet test` is a real command for a .NET lane and a fiction in a tree with no test project, so the row is proposed only where some `*.csproj` references `Microsoft.NET.Test.Sdk`, `xunit`, `NUnit` or `MSTest`. **The evidence file is also what the row addresses** — pointing `dotnet test` at the application would propose a command that builds fine and tests nothing — and several of them are an ambiguity rather than a choice |
-| **a reference that leaves the repository** | a project file points at a path outside the tree. `anonymized-source-samplewindows`'s `FixtureCore/FixtureCore.csproj` names a sibling clone of `zheref/Bankai`, and there is no submodule, no package and no restore step that fetches it. That is not a precondition `detect` can *write*: every path a declaration states is resolved against the repository root and one that escapes it exits **2** by name — so the row is withheld with the reference and its landing place quoted, never proposed with a precondition that could never hold. `detect` clones nothing. A reference that stays **inside** the tree becomes a `path` precondition instead, asserted before a verb runs and never performed |
-| **a toolchain pin the tree does not state** | the entry's version file is absent or silent. `.NET` states its SDK in a `global.json` (looked for in the lane and then up to the repository root); `anonymized-source-samplewindows` has none, so the build floats on whatever SDK is installed. `detect` then proposes **no** `project.toolchain` entry and says so: assert the version CI would need and `detect` will use it, but it will not invent one — a toolchain entry with no `version` is one nen's own reader refuses, and a pin `detect` chose is a pin that pins nothing. The note carries the block to paste, probe and installer included |
+| **a reference that leaves the repository** | a project file points at a path outside the tree. `example/fixture-windows`'s `FixtureCore/FixtureCore.csproj` names a sibling clone of `zheref/Bankai`, and there is no submodule, no package and no restore step that fetches it. That is not a precondition `detect` can *write*: every path a declaration states is resolved against the repository root and one that escapes it exits **2** by name — so the row is withheld with the reference and its landing place quoted, never proposed with a precondition that could never hold. `detect` clones nothing. A reference that stays **inside** the tree becomes a `path` precondition instead, asserted before a verb runs and never performed |
+| **a toolchain pin the tree does not state** | the entry's version file is absent or silent. `.NET` states its SDK in a `global.json` (looked for in the lane and then up to the repository root); `example/fixture-windows` has none, so the build floats on whatever SDK is installed. `detect` then proposes **no** `project.toolchain` entry and says so: assert the version CI would need and `detect` will use it, but it will not invent one — a toolchain entry with no `version` is one nen's own reader refuses, and a pin `detect` chose is a pin that pins nothing. The note carries the block to paste, probe and installer included |
 
 A proposal you paste and then discover is fiction is worse than an empty map
 with a reason.
@@ -14744,7 +14756,7 @@ any tree** and is the clearest example of what a withheld row still gives you:
 
 **A bare-workflow Expo repository is three lanes, and `detect` says so.** Where
 `ios/` and `android/` prebuild output is committed beside the manifest —
-`anonymized-source-sourceworkspace`, the repository the catalogue read for this stack — the
+`sourceworkspace`, the repository the catalogue read for this stack — the
 scan finds a `.xcworkspace` under one and a Gradle wrapper plus
 `com.android.application` under the other, and proposes `ios` (`xcode-ios`,
 darwin) and `android` (`gradle-android`) as lanes of their own with those
@@ -14800,7 +14812,7 @@ answers from); a test action naming **no** target (nothing failed is not the
 same fact as it passed); and a test action naming a target the projects do not
 declare.
 
-That last one is the finding the check exists for. `SourceWorkspace`'s shared scheme
+That last one is the finding the check exists for. `sourceworkspace`'s shared scheme
 names a test target (`fooddiaryTests`) its `project.pbxproj` does not contain,
 so a test run on that scheme **fails on a clean checkout** — the row is not one
 placeholder away from working, and a note that named only the placeholder would
@@ -15681,7 +15693,7 @@ root](#coverage-touched-roots) below:
 
 ```json
 "coverage": {
-  "exe": "pnpm", "argv": ["--filter", "@FixtureApp/core", "test:coverage"],
+  "exe": "pnpm", "argv": ["--filter", "@fixture-app/core", "test:coverage"],
   "artifacts": ["coverage/coverage-summary.json"]
 }
 ```
@@ -16255,7 +16267,7 @@ never searches a tree for one:
 
 ```json
 "test": {
-  "exe": "pnpm", "argv": ["--filter", "@FixtureApp/core", "test", "--reporter=json",
+  "exe": "pnpm", "argv": ["--filter", "@fixture-app/core", "test", "--reporter=json",
                           "--outputFile=reports/test-results.json"],
   "artifacts": ["reports/test-results.json"]
 }
@@ -20153,10 +20165,10 @@ plan: 1 runner(s) for zheref/nen, pool windows-x64
 nen runner plan: warning: .\lordzheref already runs 11 runner service(s) on this host for repositories whose visibility differs from zheref/nen's (public) or cannot be told -- one account is one trust domain, so either repository's jobs can rewrite the other's runners (#330):
 nen runner plan:   actions.runner.example-alpha.NZ-BCR1 -- example/alpha, private
 ...
-nen runner plan:   actions.runner.zheref-KroWindows.NZ-KWIR5 -- anonymized-source-samplewindows, private
+nen runner plan:   actions.runner.example-fixture-windows.HOST-FWR5 -- example/fixture-windows, private
 nen runner plan: recommended: a local account for zheref/nen alone, e.g. --service-account runner-nen (create it yourself first; nen never creates an account or handles its password).
 ```
-(run for real on the maintainer's Windows host, 2026-10-02: exit 0; the plan
+(sanitized transcript derived from a Windows run on 2026-10-02: exit 0; service and repository names are fictional; the plan
 and nine of the eleven service lines abridged)
 
 ```bash
@@ -21409,7 +21421,7 @@ archive`, a local `eas build`). `expo run:*` builds *and launches*, so it is
 never the `build` row; `run` stays withheld naming both values the repository's
 own scripts spell, because `expo run:{platform}` names a native lane neither of
 whose halves is the other's default. A **bare-workflow** Expo tree (`ios/` and
-`android/` prebuild output committed, as in `anonymized-source-sourceworkspace`) is proposed as
+`android/` prebuild output committed, as in `sourceworkspace`) is proposed as
 **three** lanes, with the Apple one's shared scheme read and cross-checked
 against the project's own targets.
 
