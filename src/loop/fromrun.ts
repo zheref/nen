@@ -1,3 +1,6 @@
+import { matchesBotLogin } from "../pr/bots.js";
+import { readPrompt, type PromptIdentity } from "../stop/prompt.js";
+import { sixthStopQuorum, unprovenReviewer, type SixthStopRead, type SixthStopReadiness } from "../stop/sixth-stop.js";
 // src/loop/fromrun.ts -- `nen loop slots --from-run`: the efforts document
 // BUILT from a run's manifest and live reads, never typed by the caller (SDD
 // plan finding D4, autonomy-loop#5).
@@ -12,8 +15,8 @@
 //                              hold no slot, and are listed so;
 //   * prOpen / merged       -- the PR's live state (gh pr view);
 //   * ready                 -- `nen pr ready`'s own verdict, in process;
-//   * prompted              -- a valid stop marker (`.nen/last-stop.json`,
-//                              ../stop/marker.ts) in the worktree checked out
+//   * prompted              -- an explicit durable prompt receipt in the shared Git directory
+//                              bound to the live PR head, effort and expected gate, never a marker
 //                              on the PR's head branch: the bell rang there;
 //   * stacked               -- the PR's live base is the head branch of another
 //                              PR the run recorded.
@@ -37,22 +40,22 @@
 // its effort OCCUPYING a slot -- the conservative count -- and is named under
 // `unread`, so a reader can tell "held" from "held because unknown".
 
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { GIT, type Seams } from "../seam/exec.js";
-import { MARKER_FILE, parseMarker } from "../stop/marker.js";
+import { type Seams } from "../seam/exec.js";
+
 import { readClaims, type RunManifest } from "../run/manifest.js";
 import type { LiveRead } from "../run/verify.js";
 import type { Effort } from "./slots.js";
-import { prReady } from "../verbs/pr_ready.js";
+import { readReady } from "../verbs/pr_ready.js";
 
-export type ReadinessRead = { readonly ok: true; readonly ready: boolean } | { readonly ok: false; readonly reason: string };
+export type ReadinessRead = { readonly ok: true; readonly ready: boolean; readonly report?: SixthStopReadiness; readonly reviewerMatches?: (reviewer: string, login: string) => boolean } | { readonly ok: false; readonly reason: string };
 export type MarkerRead = { readonly ok: true; readonly present: boolean; readonly where: string | null } | { readonly ok: false; readonly reason: string };
 
 export interface FromRunDeps {
   readonly readPr: (pr: number) => LiveRead;
-  readonly readiness: (pr: number) => Promise<ReadinessRead>;
-  readonly marker: (headBranch: string) => MarkerRead;
+  readonly readiness: (pr: number, head: string) => Promise<ReadinessRead>;
+  readonly marker: (headBranch: string, identity?: PromptIdentity) => MarkerRead;
+  readonly sixthStop?: (identity: PromptIdentity, repairOnly: boolean) => SixthStopRead;
+  readonly promptGate?: string;
   /** The product code --repo's nen/repos.json assigns the run's repository, or null (none, or no registry). */
   readonly repoCode?: string | null;
 }
@@ -139,19 +142,23 @@ export async function effortsFromRun(manifest: RunManifest, deps: FromRunDeps): 
       continue;
     }
     const stacked = [...headBranches].some(([other, branch]): boolean => other !== row.pr && branch === read.pr.base);
-    const readiness = await deps.readiness(row.pr);
+    const readiness = await deps.readiness(row.pr, read.pr.head);
     if (!readiness.ok) unread.push({ pr: row.pr, reason: `readiness unevaluated: ${readiness.reason}` });
-    const marker = deps.marker(read.pr.headRef);
-    if (!marker.ok) unread.push({ pr: row.pr, reason: `stop marker unread: ${marker.reason}` });
+    const identity = row.effort && deps.promptGate ? { effort: row.effort, pr: row.pr, head: read.pr.head, gate: deps.promptGate } : undefined;
+    const marker = deps.marker(read.pr.headRef, identity);
+    if (!marker.ok) unread.push({ pr: row.pr, reason: `prompt receipt unread: ${marker.reason}` });
     const ready = readiness.ok && readiness.ready;
     const prompted = marker.ok && marker.present;
+    const handoff = checkHandoff(deps, identity, prompted, readiness);
+    if (handoff.unread !== undefined) unread.push({ pr: row.pr, reason: handoff.unread });
     const facts = [
       "open",
       readiness.ok ? (readiness.ready ? "ready" : "not-ready") : "readiness unevaluated",
-      marker.ok ? (marker.present ? `stop marker at ${marker.where ?? "?"}` : "no stop marker") : "stop marker unread",
+      marker.ok ? (marker.present ? `prompt receipt at ${marker.where ?? "?"}` : "no prompt receipt") : "prompt receipt unread",
+      ...(handoff.fact === undefined ? [] : [handoff.fact]),
       stacked ? `stacked on ${read.pr.base}` : `base ${read.pr.base}`,
     ].join(", ");
-    efforts.push({ id, pr: row.pr, issue: row.issue ?? "-", plane: "local", prOpen: true, ready, prompted, merged: false, stacked, facts });
+    efforts.push({ id, pr: row.pr, issue: row.issue ?? "-", plane: "local", prOpen: true, ready, prompted, merged: false, stacked, ...handoff.slots, facts });
   }
   const parkedClaims: string[] = [];
   const repoCode = deps.repoCode ?? null;
@@ -191,33 +198,40 @@ export async function effortsFromRun(manifest: RunManifest, deps: FromRunDeps): 
   return { run: manifest.id, efforts, notEfforts, closedUnmerged, unread, claims: claimRead.recorded ? "read" : "not-recorded", parkedClaims, claimsUnread: null };
 }
 
-/**
- * The worktree checked out on `branch`, from `git worktree list --porcelain`
- * under `root`, and whether a valid stop marker sits in it. No worktree on
- * the branch is a fact (`present: false`): the effort's bell cannot have rung
- * anywhere nen can see. A marker that is there and will not parse is unread.
- */
-export function markerForBranch(seams: Seams, root: string, branch: string): MarkerRead {
-  const listed = seams.run(GIT, ["-C", root, "worktree", "list", "--porcelain"]);
-  if (listed.spawnFailed || listed.code !== 0) return { ok: false, reason: "git worktree list failed" };
-  let path: string | null = null;
-  let current: string | null = null;
-  for (const line of listed.stdout.split(/\r?\n/)) {
-    if (line.startsWith("worktree ")) current = line.slice("worktree ".length);
-    else if (line === `branch refs/heads/${branch}` && current !== null) path = current;
+interface HandoffCheck {
+  readonly slots?: Pick<Effort, "sixthStopHead" | "repairHold">;
+  readonly fact?: string;
+  readonly unread?: string;
+}
+
+function checkHandoff(deps: FromRunDeps, identity: PromptIdentity | undefined, prompted: boolean, readiness: ReadinessRead): HandoffCheck {
+  if (identity === undefined || deps.sixthStop === undefined) return {};
+  const report = readiness.ok ? readiness.report : undefined;
+  const quorum = report?.judgedHead === identity.head && report.verdict !== "ready" ? sixthStopQuorum(report) : null;
+  const evidence = deps.sixthStop(identity, quorum?.ok !== true || !prompted);
+  if (evidence.status === "repair-hold") return { slots: { repairHold: true }, fact: "sixth-stop repair hold recorded" };
+  if (evidence.status === "unread") {
+    return { slots: { repairHold: true }, fact: "sixth-stop evidence unread", unread: evidence.reason };
   }
-  if (path === null) return { ok: true, present: false, where: null };
-  const file = join(path, ...MARKER_FILE.split("/"));
-  if (!existsSync(file)) return { ok: true, present: false, where: null };
-  let document: unknown;
-  try {
-    document = JSON.parse(readFileSync(file, "utf8"));
-  } catch (error) {
-    return { ok: false, reason: `${file} is not JSON (${error instanceof Error ? error.message : String(error)})` };
+  if (!readiness.ok) return {};
+  if (report?.judgedHead !== identity.head) {
+    const reason = "sixth-stop readiness was judged at a different head";
+    return { slots: { repairHold: true }, fact: reason, unread: reason };
   }
-  const parsed = parseMarker(document);
-  if (!parsed.ok) return { ok: false, reason: `${file}: ${parsed.reason}` };
-  return { ok: true, present: true, where: file };
+  if (quorum === null) return {};
+  if (!quorum.ok) return { fact: quorum.reason, ...(quorum.unread === true ? { unread: quorum.reason, slots: { repairHold: true } } : {}) };
+  if (!prompted) return { fact: "sixth stop needs a prompt receipt at the judged head" };
+  if (evidence.status !== "verified") return { fact: "sixth-stop evidence missing" };
+  const reviewer = unprovenReviewer(quorum.members, evidence.evidence, identity.head, readiness.reviewerMatches);
+  if (reviewer !== undefined) return { fact: "sixth-stop unavailability unverified for " + reviewer };
+  return { slots: { sixthStopHead: identity.head }, fact: "sixth-stop release at " + identity.head };
+}
+
+/** Read explicit durable handover evidence; attention markers never prove prompting. */
+export function markerForBranch(seams: Seams, root: string, branch: string, identity?: PromptIdentity): MarkerRead {
+  void branch;
+  if (identity === undefined) return { ok: false, reason: "prompt evidence unread: effort or expected --prompt-gate is missing" };
+  return readPrompt(seams, root, identity);
 }
 
 /**
@@ -227,20 +241,21 @@ export function markerForBranch(seams: Seams, root: string, branch: string): Mar
  * disagree. `unevaluated`, or no report at all, is a failed read, never "not
  * ready": the effort stays held and the reason is named.
  */
-export async function readinessInProcess(slug: string, pr: number, repoRoot: string): Promise<ReadinessRead> {
-  const out: string[] = [];
-  const err: string[] = [];
-  const code = await prReady(
-    { positionals: ["pr", "ready", String(pr)], values: { "gh-repo": slug }, booleans: new Set(["json"]), repoFlag: repoRoot },
-    { out: (line): void => void out.push(line), err: (line): void => void err.push(line) },
-  );
-  let report: { verdict?: unknown; remedy?: unknown };
-  try {
-    report = JSON.parse(out.join("\n")) as typeof report;
-  } catch {
-    return { ok: false, reason: `pr ready produced no report (exit ${code})${err.length === 0 ? "" : `: ${err.join(" ")}`}` };
-  }
-  if (report.verdict === "ready") return { ok: true, ready: true };
-  if (report.verdict === "not-ready") return { ok: true, ready: false };
-  return { ok: false, reason: `pr ready verdict ${JSON.stringify(report.verdict)}${typeof report.remedy === "string" && report.remedy !== "" ? ` (${report.remedy})` : ""}` };
+export async function readinessInProcess(slug: string, pr: number, repoRoot: string, head: string): Promise<ReadinessRead> {
+  const read = await readReady(String(pr), {
+    positionals: ["pr", "ready", String(pr)],
+    values: { "gh-repo": slug, "require-head": head },
+    booleans: new Set(),
+    repoFlag: repoRoot,
+  });
+  if (read.kind === "usage") return { ok: false, reason: "pr ready produced no report (exit 2): " + read.message };
+  if (read.kind === "head-mismatch") return { ok: false, reason: read.report.message };
+  if (read.report.verdict === "unevaluated") return { ok: false, reason: read.report.remedy ?? read.report.gateLine };
+  return {
+    ok: true, ready: read.report.verdict === "ready", report: read.report,
+    reviewerMatches: (reviewer, login): boolean => {
+      const identity = read.identities?.reviewer(reviewer);
+      return identity !== undefined && matchesBotLogin(identity.loginPattern, login);
+    },
+  };
 }

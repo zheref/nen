@@ -89,6 +89,8 @@ export interface KnownBot {
 export interface PrAndKnownBots {
   /** The pull request's own GraphQL node id -- `requestReviews`'s `pullRequestId`. */
   readonly pullRequestId: string;
+  /** The live head read with the request target. */
+  readonly headRefOid: string | null;
   /**
    * Every Bot this pull request has ALREADY SEEN, from either direction: one
    * still owed a review (`reviewRequests`) or one that already posted a
@@ -112,7 +114,7 @@ export interface PrAndKnownBots {
 }
 
 const PR_AND_KNOWN_BOTS_QUERY =
-  "query($owner:String!,$name:String!,$pr:Int!){repository(owner:$owner,name:$name){defaultBranchRef{name target{oid}} pullRequest(number:$pr){id baseRefOid " +
+  "query($owner:String!,$name:String!,$pr:Int!){repository(owner:$owner,name:$name){defaultBranchRef{name target{oid}} pullRequest(number:$pr){id baseRefOid headRefOid " +
   "reviewRequests(first:100){nodes{requestedReviewer{__typename ... on Bot{login id}}}} " +
   "timelineItems(first:100,itemTypes:[PULL_REQUEST_REVIEW]){nodes{... on PullRequestReview{author{__typename ... on Bot{login id}}}}}}}}";
 
@@ -190,7 +192,7 @@ export function parsePrAndKnownBots(raw: string, what: string): PrAndKnownBots {
     data?: {
       repository?: {
         defaultBranchRef?: { name?: unknown; target?: { oid?: unknown } | null } | null;
-        pullRequest?: { id?: unknown; baseRefOid?: unknown; reviewRequests?: unknown; timelineItems?: unknown };
+        pullRequest?: { id?: unknown; baseRefOid?: unknown; headRefOid?: unknown; reviewRequests?: unknown; timelineItems?: unknown };
       };
     };
   };
@@ -221,6 +223,7 @@ export function parsePrAndKnownBots(raw: string, what: string): PrAndKnownBots {
   );
   return {
     pullRequestId: pr.id,
+    headRefOid: typeof pr.headRefOid === "string" ? pr.headRefOid : null,
     bots: [...byId.values()],
     baseRefOid: typeof pr.baseRefOid === "string" ? pr.baseRefOid : "",
     defaultBranch: defaultBranchOf(parsed.data?.repository?.defaultBranchRef),
@@ -254,6 +257,10 @@ export function isBotLoginAlias(login: string): boolean {
 export function botLoginKey(login: string): string {
   const short = login.toLowerCase().replace(/\[bot\]$/, "");
   return isBotLoginAlias(short) ? GITHUB_BOT_LOGIN_ALIASES[short]! : short;
+}
+
+export function matchesBotLogin(pattern: RegExp, login: string): boolean {
+  return pattern.test(login) || pattern.test(`${botLoginKey(login)}[bot]`);
 }
 
 /** Bot reviewer IDs only. Modern payloads stay opaque; legacy IDs must be
@@ -357,7 +364,7 @@ export function isCollaborator(seams: Seams, target: Target, login: string): boo
 // reader that silently accepted a Bot fragment missing it would be a second,
 // looser definition of "this is a bot" living beside the first.
 const REQUEST_BOT_REVIEWS_MUTATION =
-  "mutation($prId:ID!,$botIds:[ID!]!){requestReviews(input:{pullRequestId:$prId,botIds:$botIds,union:true}){pullRequest{" +
+  "mutation($prId:ID!,$botIds:[ID!]!){requestReviews(input:{pullRequestId:$prId,botIds:$botIds,union:true}){pullRequest{headRefOid " +
   "reviewRequests(first:100){nodes{requestedReviewer{__typename ... on Bot{login id}}}}}}}";
 
 export function requestBotReviewsArgv(pullRequestId: string, botIds: readonly string[]): readonly string[] {
@@ -416,6 +423,8 @@ export interface UnrecordedBot {
 
 export interface RequestBotReviewsResult {
   readonly ok: boolean;
+  /** The head returned by the mutation, when GitHub reported it. */
+  readonly observedHead?: string;
   readonly message: string;
   /** The bot logins `gh`'s OWN response says are now pending review -- see the module header. */
   readonly pendingBotLogins: readonly string[];
@@ -475,7 +484,7 @@ export function requestBotReviews(
   }
   let parsed: {
     data?: {
-      requestReviews?: { pullRequest?: { reviewRequests?: { nodes?: unknown } } } | null;
+      requestReviews?: { pullRequest?: { headRefOid?: unknown; reviewRequests?: { nodes?: unknown } } } | null;
     };
   };
   try {
@@ -488,7 +497,8 @@ export function requestBotReviews(
       unrecordedBots: [],
     };
   }
-  const nodes = parsed.data?.requestReviews?.pullRequest?.reviewRequests?.nodes;
+  const pr = parsed.data?.requestReviews?.pullRequest;
+  const nodes = pr?.reviewRequests?.nodes;
   // NO LIST AT ALL IS "COULD NOT READ", NOT "READ, AND THE BOT IS ABSENT".
   // A response with no `reviewRequests.nodes` array (a null `requestReviews`,
   // a missing pull request) says nothing about which bot landed, so it is the
@@ -529,6 +539,7 @@ export function requestBotReviews(
       }.`,
       pendingBotLogins,
       unrecordedBots,
+      ...(typeof pr?.headRefOid === "string" ? { observedHead: pr.headRefOid } : {}),
     };
   }
   return {
@@ -538,5 +549,6 @@ export function requestBotReviews(
     }`,
     pendingBotLogins,
     unrecordedBots: [],
+    ...(typeof pr?.headRefOid === "string" ? { observedHead: pr.headRefOid } : {}),
   };
 }

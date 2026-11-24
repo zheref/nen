@@ -1177,12 +1177,15 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       begin: MUT("writes an entry to the .nen/phases/<effort>.json ledger -- a local write, but a write"),
       end: MUT("closes an entry in the .nen/phases/<effort>.json ledger -- a local write, but a write"),
       show: RO("prints the ledger; reads one file"),
+      list: RO("lists every effort's ledger under the common dir and each checkout's older .nen/phases/ (git rev-parse, git worktree list); writes, moves and locks nothing"),
     },
   },
   parse: { subcommands: { "*": RO("parses a grammar; never executes what it classified") } },
   pr: {
     subcommands: {
       ready: RO("reports CON-32 readiness -- reads GitHub, never labels, merges or comments"),
+      // zheref/nen#663: the same reads `pr ready`'s version-collision limb makes.
+      "version-collision": RO("reports one pull request's live plugin-version collision -- reads GitHub (GraphQL queries -- the pull request snapshot and open pullRequests by cursor -- never a mutation; REST GETs of git refs, compare, contents, pull request files), never labels, merges or comments"),
       staleness: RO("computes staleness from a wakes file -- pure computation"),
       "body-check": RO("checks a body against requirements -- reads files only"),
       // fetch/next-blocker run ../pr/fetch.ts's REST reviews call, which is
@@ -1519,6 +1522,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       diff: RO("reads two inventory files; writes nothing"),
       converge: GATED_DRY(["--write"], "reads the folder, the inventories and the member checkout through git; --write appends [STALE] companions to spec.md and a convergence phase to tasks.md unless --dry-run is given"),
       coverage: RO("reads the spec folders and inventory files, or an issue body, a PR body and a test report; writes nothing"),
+      due: RO("reads nen/repos.json and capture/<CODE>/inventory.json, and gh api GETs of each member's tags and compare; writes nothing and starts no recapture"),
       parity: RO("reads parity.md and spec.md, and with --target the issues and PRs over gh issue list / gh pr list; writes nothing"),
       "tasks groups": RO("reads spec.md and tasks.md and git rev-parse HEAD; writes nothing"),
       trace: GATED_DRY(["--write"], "reads every folder's spec.md, tasks.md and parity.md; --write writes <root>/traceability.md unless --dry-run is given"),
@@ -1533,10 +1537,10 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
   },
   // `stop` GAINED A WRITE FORM, so its row gained a gate. The banner and the
   // table are still a pure render -- this verb fires no notification and never
-  // could (../stop/command.ts's header states why) -- but `--mark` writes
-  // `.nen/last-stop.json`, which is a file on disk and therefore not something
-  // a read-only loop may do on every iteration. The bare form stays read-only
-  // for the reason `nen wake fire` and `nen shu deploy` are: absent the flag,
+  // could (../stop/command.ts's header states why). The marker and durable
+  // record forms write to disk, so a read-only loop refuses them.
+  // The bare form stays read-only for the same reason as `nen wake fire`
+  // and `nen shu deploy`: absent the write flags,
   // this verb provably writes nothing, which is a property of nen rather than a
   // claim about somebody else's file.
   stop: {
@@ -1545,7 +1549,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       // zheref/nen#513: lists the per-gate markers and the single file; writes nothing.
       list: RO("lists every unrung per-gate marker under the git common directory's .nen/marks/ and the single .nen/last-stop.json; writes nothing"),
       // `answer` IS A SUBCOMMAND WITH ITS OWN WRITE, so it must never fall to
-      // the "*" row below: that row is gated on --mark alone and would certify
+      // the "*" row below: that row checks the banner flags and would certify
       // `nen stop answer --record ...` read-only while it reserves an id and
       // creates a record under the git common directory. The two-token key is
       // tried first, so `answer show` (a pure read of those records) keeps its
@@ -1553,8 +1557,8 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       "answer show": RO("lists the stop-answer records under the git common directory's .nen/stops/<effort>/; writes nothing"),
       answer: DRY("reserves an id under .nen/stop-ids/ and creates one record under .nen/stops/<effort>/ in the git common directory unless --dry-run is given"),
       "*": GATED(
-        ["--mark"],
-        "renders the gate-stop banner and fires nothing itself; --mark additionally writes the .nen/last-stop.json marker a host hook reads and its per-gate twin under the git common directory's .nen/marks/",
+        ["--mark", "--prompt-shown", "--sixth-stop-from", "--repair-hold"],
+        "renders the gate-stop banner. The marker and durable record flags write evidence",
       ),
     },
   },

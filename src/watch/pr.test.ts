@@ -7,7 +7,7 @@
 // a ScriptedSeams with no script, so a single spawned subprocess fails the test.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { checksSettled, pendingCheckLabels } from "../gates/predicates.js";
@@ -182,6 +182,7 @@ interface Snapshot {
   readonly pendingName?: string;
   /** An extra check whose latest run was CANCELLED -- the gate line NAMES it. */
   readonly cancelledName?: string;
+  readonly head?: string;
 }
 
 const CHECK_NAMES = ["compile", "linux", "macos"];
@@ -192,7 +193,7 @@ function source(snapshot: Snapshot): PrStateSource {
       number: 9,
       mergeable: "MERGEABLE",
       isDraft: false,
-      headRefOid: HEAD,
+      headRefOid: snapshot.head ?? HEAD,
       headRefName: "feature/x",
       baseRefName: "main",
       baseRefOid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -413,6 +414,28 @@ describe("nen watch until --pr -- the native compound predicate (zheref/nen#264)
     // The control: a base quorum of one wakes on the same reads.
     const woke = await watch(argv, depsAtBase([COMMENTED], async (): Promise<string | null> => quorum(1)));
     expect(woke.code).toBe(0);
+  });
+
+  it("only captures sixth-stop watch evidence from settled, unoverridden base gates", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-sixth-watch-"));
+    const full = HEAD.repeat(5);
+    try {
+      const argv = ["watch", "until", "--pr", "9", "--gh-repo", "zheref/example", "--repo", root,
+        "--interval-ms", "30000", "--until", "ready", "--require-base-gates", "--require-head", full, "--max-iterations", "2"];
+      const gate = async (): Promise<string> => quorum(1);
+      mkdirSync(join(root, "nen"));
+      writeFileSync(join(root, "nen", "gates.json"), quorum(1));
+      const settled = await watch(argv, depsAtBase([{ ...SETTLED, head: full }, { ...SETTLED, head: full }], gate), true);
+      expect(settled.code, settled.err.join("\n")).toBe(1);
+      const settledDoc: unknown = JSON.parse(settled.out.join("\n"));
+      const observation = expect.objectContaining({ head: full, pr: 9, repo: "zheref/example" });
+      expect(settledDoc).toMatchObject({ intervalMs: 30_000, sixthStopObservations: [observation, observation] });
+      const pending = { ...PENDING, pendingName: "windows", head: full };
+      const unready = await watch(argv, depsAtBase([pending, pending], gate), true);
+      expect(JSON.parse(unready.out.join("\n"))).toMatchObject({ sixthStopObservations: [null, null] });
+      const excluded = await watch([...argv, "--exclude-check", "windows"], depsAtBase([pending, pending], gate), true);
+      expect(JSON.parse(excluded.out.join("\n"))).not.toHaveProperty("sixthStopObservations");
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
   it("--until ready refuses flags-unverified: the head removed its gates file and the base could not be read", async () => {
