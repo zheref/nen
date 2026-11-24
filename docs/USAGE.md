@@ -2674,6 +2674,38 @@ includes ids, titles and the requirements array. A cell exceeding `max` after
 conditional admission exits 1 naming the cell and count; invalid catalogues or
 unknown ids also exit 1. Bad CLI arguments exit 2. No action calls GitHub.
 
+<a id="a-catalogue-of-the-other-kind"></a>
+
+**A catalogue of the other kind** ([#607](https://github.com/zheref/nen/issues/607)).
+Two files are called `--catalogue` in this family and they are not
+interchangeable: the PR-sections catalogue described above, which `pr sections
+resolve` and `pr sections family` read, and the
+[issue-sections catalogue](#the-issue-sections-catalogue), which
+[`pr body-check`](#nen-pr-body-check), [`pr converge`](#nen-pr-converge) and
+[`pr merge`](#nen-pr-merge) read (and the issue verbs, as `--requirements-from`).
+A catalogue that declares a top-level `contract` says which one it is, by the
+name segment of that id: `<namespace>.pr-sections/<version>` or
+`<namespace>.issue-sections/<version>`, whatever the namespace. Handed the other
+kind, each reader refuses **before it reads any field**, on one line that names
+the contract it read, the kind it expects, and the verbs that take the file it
+was given. No exit code moves: `pr sections resolve` and `pr sections family`
+refuse at **exit 1**, as they refuse any invalid catalogue, and the readers of
+the issue-sections catalogue at **exit 2**, a usage error, as they refuse any
+catalogue they cannot use.
+
+```text
+nen pr: <path>: the wrong kind of catalogue was passed: this file is an issue-sections catalogue (its 'contract' is 'hatsu.issue-sections/v1'), and this verb reads a PR-sections catalogue ('sections', 'footer', 'families' and 'variants': the sections a pull-request body carries). An issue-sections catalogue is the --catalogue of 'nen pr body-check', 'nen pr converge' and 'nen pr merge', and the --requirements-from of 'nen issue body-check'.
+```
+
+The mirror image, from a reader of the issue-sections catalogue handed a
+PR-sections one, ends "A PR-sections catalogue is the --catalogue of 'nen pr
+sections resolve' and 'nen pr sections family'." It is not a version
+incompatibility: pass the other file. A catalogue that declares **no**
+`contract`, or one whose name is neither kind, is not guessed at: it is read
+field by field exactly as before, so a swapped file with no `contract` still
+fails on the first field that does not fit. A malformed catalogue of the right
+kind is unchanged too.
+
 ### `nen pr sections family`
 
 ```text
@@ -2714,7 +2746,7 @@ nen pr body-check --body-from <path> [--requirements-from <path> | --base <ref>]
 | `--criteria <ids>` | no | the closing issue's acceptance-criterion ids, comma-separated (`AC-1,AC-2`), held to the body's verify rows — one row per id | each id `<PREFIX>-<id>` in the criterion grammar (`AC` and one number or several joined by hyphens, `AC-12-001`; or the catalogue's prefix and acceptance id shape, [#519](https://github.com/zheref/nen/issues/519)), else exit 2. With `--criteria-from`: exit 2 |
 | `--criteria-from <path>` | no | a local copy of the closing issue's body; its `- AC-{n}:` rows are the criteria, read as [`issue criteria`](#nen-issue-criteria) reads them | unreadable exits 2; a body with no criterion is `not-verifiable` and exits 1 |
 | `--criteria-issue <[owner/name]#N>` | no | names the issue the criteria belong to, so a qualified row (`<CODE>#<N>/AC-{n}`, `<owner/name>#<N>/AC-{n}`) matches it and the report names it | only with `--criteria`/`--criteria-from`; another shape exits 2 |
-| `--catalogue <path>` | no | the [issue-sections catalogue](#the-issue-sections-catalogue): the acceptance prefix, id shape and sections, and its `coverage` block | only with `--criteria`/`--criteria-from`; absent: `AC` rows anywhere, `missing` and `contradicts` block, evidence required |
+| `--catalogue <path>` | no | the [issue-sections catalogue](#the-issue-sections-catalogue): the acceptance prefix, id shape and sections, and its `coverage` block | only with `--criteria`/`--criteria-from`; absent: `AC` rows anywhere, `missing` and `contradicts` block, evidence required. A file that declares itself a PR-sections catalogue (the one [`pr sections resolve`](#nen-pr-sections-resolve) takes) exits **2** with "the wrong kind of catalogue was passed", [naming both kinds](#a-catalogue-of-the-other-kind) |
 | `--repo <path>` | no | resolves `--body-from`/`--requirements-from` against this root, and is where the PR template is looked for (the working tree, or the git checkout `--base` is read in) | default cwd |
 | `--json` | no | machine-readable report | — |
 
@@ -11146,7 +11178,7 @@ nen issue body-check (--body-file <path> | --ref <CODE>#<N> --target <owner/name
 
 ```json
 {
-  "contract": "<the caller's own id, echoed, never interpreted>",
+  "contract": "<the caller's own id, echoed; read only to refuse the other kind of catalogue>",
   "sections": {
     "problem": { "heading": "Problem" },
     "acceptance": { "heading": "Acceptance criteria", "rows": "acceptance" },
@@ -11167,6 +11199,7 @@ nen issue body-check (--body-file <path> | --ref <CODE>#<N> --target <owner/name
 }
 ```
 
+- `contract` -- optional; the caller's own id, echoed in reports. Its one reading: an id whose name segment is `pr-sections` (`<namespace>.pr-sections/<version>`) says the file is the PR-sections catalogue [`pr sections resolve`](#nen-pr-sections-resolve) takes, and every reader of this catalogue refuses it at exit **2** with "the wrong kind of catalogue was passed", naming both kinds ([a catalogue of the other kind](#a-catalogue-of-the-other-kind)). No `contract`, or any other id, changes nothing.
 - `sections` -- section id to `{ heading, rows?, none? }`; every heading is read at level 2. `rows` names a `rows` entry; `none: true` lets the section say only `noneText` in place of rows.
 - `common` -- optional; the sections an issue checked with **no `--kind`** must carry (read as the kind `common`).
 - `kinds` -- kind name to `{ required, optional }` section-id lists (`template` and other keys are echoed data nen does not read); keys beginning `$` are skipped. Every id must be declared under `sections`.
