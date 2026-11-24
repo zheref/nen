@@ -5,7 +5,7 @@ import { makeTempDir } from "../testing/tempdir.js";
 import { runFamily } from "../index.js";
 import { ScriptedSeams } from "../seam/scripted.js";
 import { runnerCommand } from "./command.js";
-import { launchTime, readSummary, readSummaryPlan, renderSummary } from "./summary.js";
+import { launchTime, localSummaryRoot, readSummary, readSummaryPlan, renderSummary } from "./summary.js";
 import { planFor } from "./testkit.js";
 
 const LAUNCH = "2026-11-24T12:00:00.000Z";
@@ -130,4 +130,10 @@ it("refuses an oversized newest summary", async () => {
 });
 it("accepts an ISO timestamp without milliseconds", () => {
   expect(launchTime("2026-11-24T12:00:00Z")).toBe(Date.parse(LAUNCH));
+});
+
+it("normalizes the planner's stored Windows volume root without probing it", () => {
+  const base = planFor("windows-x64");
+  expect(localSummaryRoot({ ...base, root: "C:", projectDir: "C:\\nen-runners" })).toBe("C:\\");
+  expect(() => localSummaryRoot({ ...base, root: "\\\\server\\share", projectDir: "\\\\server\\share\\nen-runners" })).toThrow(/local drive-letter/);
 });

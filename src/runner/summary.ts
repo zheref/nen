@@ -47,20 +47,25 @@ export function readSummaryPlan(path: string, platform: NodeJS.Platform): Runner
   return validatePlan(raw, `--plan '${plainLine(path)}'`);
 }
 
+export function localSummaryRoot(plan: RunnerPlan): string {
+  if (plan.os === "Windows" && !/^[A-Za-z]:[\\/]/.test(plan.projectDir)) {
+    throw new VerbUsageError("summary reads require a local drive-letter project directory; UNC and device paths are refused.");
+  }
+  return plan.os === "Windows" && /^[A-Za-z]:$/.test(plan.root) ? `${plan.root}\\` : plan.root;
+}
+
 export function readSummary(plan: RunnerPlan, after: string, platform: NodeJS.Platform, read: (fd: number, buffer: Buffer) => number = (fd, buffer) => readSync(fd, buffer, 0, buffer.length, 0)): SummaryReport {
   const launched = launchTime(after);
   if ((plan.os === "Windows") !== (platform === "win32") || !isAbsolute(plan.projectDir)) {
     throw new VerbUsageError("read the summary on the plan's host with an absolute project directory; Windows and POSIX paths cannot be interchanged.");
   }
-  if (plan.os === "Windows" && !/^[A-Za-z]:[\\/]/.test(plan.root)) {
-    throw new VerbUsageError("summary reads require a local drive-letter runner root; UNC and device paths are refused.");
-  }
+  const root = localSummaryRoot(plan);
   const directory = join(plan.projectDir, "_jusshin");
   const empty: SummaryReport = { contract: "nen.runner.summary/v0.1", verdict: "none", after, directory, path: null, writtenAt: null, registered: null, skipped: null, failed: null, reason: null };
   let path: string | null = null;
   let writtenAt: string | null = null;
   try {
-    const directories = [plan.root, plan.projectDir, directory].map((path) => {
+    const directories = [root, plan.projectDir, directory].map((path) => {
       const stat = lstatSync(path);
       if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("summary path components must be regular directories, not links");
       return { path, stat };

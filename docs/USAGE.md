@@ -314,7 +314,7 @@ file formats).
 - **`report`** — `nen.report.data/v0.1` · `nen.report.graph/v0.1` · `nen.report.render/v0.1`
 - **`review`** — `nen.review.scopes/v0.1`
 - **`run`** — `nen.run.record/v0.1` · `nen.run/v0.1`
-- **`runner`** — `nen.runner.plan/v0.1` · `nen.runner.plan/v0.2`
+- **`runner`** — `nen.runner.plan/v0.1` · `nen.runner.plan/v0.2`, `nen.runner.summary/v0.1`
 - **`scaffold`** — `nen.scaffold.init/v0.1` · `nen.scaffold.migrate/v0.1` · `nen.scaffold.new/v0.1` · `nen.scaffold.template/v0.1`
 - **`schema`** — `nen.schema.set/v0.1`
 - **`session`** — `nen.session.ledger/v0.1`
@@ -326,7 +326,6 @@ file formats).
 - **`usage`** — `nen.usage.ledger/v0.1`
 - **`wc`** — `nen.wc.catch-up/v0.2` · `nen.wc.prune/v0.1` · `nen.wc.publish/v0.1` · `nen.wc.squash/v0.1` · `nen.wc.swap.state/v0.1` · `nen.wc.swap/v0.1` · `nen.wc.worktree.copies/v0.1` · `nen.wc.worktree.copies/v0.2` · `nen.wc.worktree/v0.1` · `nen.wc.worktrees/v0.1`
 - **`workflow`** — `nen.workflow/v0.1`
-- **`runner.summary`** — `nen.runner.summary/v0.1`
 <!-- contract-ids:end -->
 
 Four verbs have no `--json` because they have no result of their own to
@@ -20416,7 +20415,7 @@ link, non-regular file or unstable read is exit 1, as is a malformed newest
 summary (no fallback). Invalid plan, host path or UTC ISO launch time is exit 2.
 Summary content is never echoed on refusal.
 
-**JSON keys:** `contract`, `verdict`, `after`, `directory`, `path`, `writtenAt`,
+**`--json` top-level keys:** `contract`, `verdict`, `after`, `directory`, `path`, `writtenAt`,
 `registered`, `skipped`, `failed`, `reason`. Tied write times sort by path.
 `--plan` and `--after` are required; `--repo` resolves a relative plan filename.
 `--json` selects JSON output; all other runner-specific flags are refused.
