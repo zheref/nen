@@ -35,7 +35,7 @@ function versionMatches(output:string,version:string):boolean {return output.tri
 function pathDirectories(seams: Seams): string[] {
   const value = seams.env["PATH"] ?? seams.env["Path"] ?? "";
   if (value === "") return [];
-  return value.split(delimiter).map(entry => resolve(seams.platform === "win32" ? entry.replace(/^"(.*)"$/, "$1") : entry));
+  return value.split(delimiter).map(entry => seams.platform === "win32" ? entry.replace(/^"(.*)"$/, "$1") : entry).filter(entry => entry !== "").map(entry => resolve(entry));
 }
 function effectiveExecutable(seams: Seams, tool: string): { path: string; implicitWorkingDirectory: boolean } | null {
   const windows = seams.platform === "win32";

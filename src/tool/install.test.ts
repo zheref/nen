@@ -89,3 +89,12 @@ it.each(["v01.2.3-alpha..1", "1.02.3", "1.2.03", "1.2.3-01", "1.2.3-alpha..1", "
   const f = fixture({ version: pin }); const data = JSON.parse(readFileSync(f.path, "utf8")); data.secretScan.version = pin; writeFileSync(f.path, JSON.stringify(data));
   expect(await f.run()).toMatchObject({ exit: 2, check: "declaration" }); expect(f.downloads).toHaveLength(0); expect(f.calls).toHaveLength(0);
 });
+
+it.each(["trailing", "interior", "quoted-empty"])("does not trust an implicit Windows CWD through %s PATH components", async kind => {
+  const f = fixture({ platform: "win32", assets: { "win32-x64": "scanner.zip" }, archive: zip() });
+  const cwd = makeTempDir("nen-tool-empty-path-"); writeFileSync(join(cwd, "scanner.exe"), "untrusted checkout executable");
+  const parts = kind === "trailing" ? [f.root, ""] : kind === "interior" ? [f.root, "", f.root] : [f.root, '""'];
+  const seams = { ...f.seams, env: { PATH: parts.join(delimiter) } }; const spy = vi.spyOn(process, "cwd").mockReturnValue(cwd);
+  try { expect(await installTool({ contract: f.path, row: "secretScan", binDir: f.root, seams, arch: "x64", download: f.download })).toMatchObject({ verdict: "refused", check: "installed version" }); expect(f.calls).toHaveLength(0); expect(f.downloads).toHaveLength(0); }
+  finally { spy.mockRestore(); }
+});
