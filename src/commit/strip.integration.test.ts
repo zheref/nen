@@ -174,12 +174,16 @@ const RUN_ID = "0123abcd";
  * `composed` as NEN_COMPOSED_TRAILER_KEYS and `run` as NEN_STRIP_RUN (null:
  * unset) -- exactly the two variables a verb sets on its child `git commit`.
  */
-function driveHook(repo: string, message: string, composed: string | null, run: string | null = RUN_ID): { code: number; stderr: string; message: string } {
+function driveHook(repo: string, message: string, composed: string | null, run: string | null = RUN_ID, locale: string | null = null): { code: number; stderr: string; message: string } {
   const path = join(repo, ".git", `drive-${counter}-${Math.random().toString(36).slice(2)}.txt`);
   writeFileSync(path, message);
   const env = plainEnv();
   if (composed !== null) env["NEN_COMPOSED_TRAILER_KEYS"] = composed;
   if (run !== null) env["NEN_STRIP_RUN"] = run;
+  if (locale !== null) {
+    env["LC_ALL"] = locale;
+    env["LANG"] = locale;
+  }
   const result = spawnSync("sh", [join(hooksDir(repo), "commit-msg"), path], { cwd: repo, encoding: "utf8", env });
   return { code: result.status ?? 1, stderr: result.stderr ?? "", message: readFileSync(path, "utf8") };
 }
@@ -288,11 +292,14 @@ describe.skipIf(!HAVE_GIT)("commits.stripInjected through the real hooks (zheref
   });
 
   // hanten round 1, C: the strip's promised edge cases, each pinned against the real hook.
-  it.skipIf(!HAVE_SH)("(C) a CRLF message: the key's line goes, every kept line keeps its CRLF", () => {
+  // K (zheref/nen#682's Windows runner): line endings are the platform awk's --
+  // Git for Windows' writes LF -- and git's cleanup strips a trailing CR anyway,
+  // so the kept lines are compared with CRLF normalised, on every platform.
+  it.skipIf(!HAVE_SH)("(C) a CRLF message is HANDLED: the key's line goes, every other line is kept (line endings left to awk and git's cleanup)", () => {
     const repo = repository(OPT_IN);
     const driven = driveHook(repo, `feat: crlf\r\n\r\nHatsu-Agent: kurapika\r\n${CURSOR}\r\n`, "hatsu-agent");
     expect(driven.code).toBe(0);
-    expect(driven.message).toBe("feat: crlf\r\n\r\nHatsu-Agent: kurapika\r\n");
+    expect(driven.message.replace(/\r\n/g, "\n")).toBe("feat: crlf\n\nHatsu-Agent: kurapika\n");
     expect(readFileSync(sidecar(repo), "utf8")).toBe("Co-authored-by\n");
   });
 
@@ -346,6 +353,52 @@ describe.skipIf(!HAVE_GIT)("commits.stripInjected through the real hooks (zheref
       expect(driven.stderr).toContain("but NEN_COMPOSED_TRAILER_KEYS was found without a nen run id (NEN_STRIP_RUN missing or malformed): it was exported or leaked rather than set by a nen verb, so no sidecar was written");
       expect(sidecars(repo)).toEqual([]);
     }
+  });
+
+  // J (zheref/nen#682's macOS runner): bash 3.2 as /bin/sh under en_US.UTF-8
+  // read [!0-9a-f] as accepting 'A'-'E', so an upper-case run id passed as
+  // well-formed. Every locale below must give the same answers as C.
+  it.skipIf(!HAVE_SH)("(J) under a UTF-8 locale the run-id check, the case-folding and the trailer-block test answer exactly as under C", () => {
+    const repo = repository(OPT_IN);
+    const text = `feat: locale\n\nHatsu-Agent: kurapika\n${CURSOR}\n`;
+    for (const locale of ["en_US.UTF-8", "C.UTF-8", "C"]) {
+      for (const run of ["0123ABCD", "ABC", "abcdeF", "NOT-HEX", "0123abcg"]) {
+        const leaked = driveHook(repo, text, "hatsu-agent", run, locale);
+        expect(leaked.code, `${locale} ${run}`).toBe(0);
+        expect(leaked.stderr, `${locale} ${run}`).toContain("was found without a nen run id");
+        expect(sidecars(repo), `${locale} ${run}`).toEqual([]);
+      }
+      // A well-formed id records; an upper-case composed key still counts as composed (ASCII folding).
+      const ok = driveHook(repo, text, "Hatsu-Agent", RUN_ID, locale);
+      expect(ok.code, locale).toBe(0);
+      expect(ok.message, locale).toBe("feat: locale\n\nHatsu-Agent: kurapika\n");
+      expect(readFileSync(sidecar(repo), "utf8"), locale).toBe("Co-authored-by\n");
+      rmSync(sidecar(repo), { force: true });
+      const composed = driveHook(repo, text, "HATSU-AGENT,CO-AUTHORED-BY", RUN_ID, locale);
+      expect(composed.code, locale).toBe(1);
+      expect(composed.message, locale).toBe(text);
+      // A trailer-block line with a non-ASCII key is not trailer-shaped under any locale: the paragraph is prose, nothing stripped.
+      const prose = `feat: locale\n\nHatsu-Agent: kurapika\nÄrger: nicht-ascii\n${CURSOR}\n`;
+      expect(driveHook(repo, prose, "hatsu-agent", RUN_ID, locale).message, locale).toBe(prose);
+      expect(sidecars(repo), locale).toEqual([]);
+    }
+  });
+
+  // L: a key refused ONLY by its -by/-with shape has no grep in the hook, and
+  // below a scissors line it is no trailer to git's own parser either -- so the
+  // read-back does not see it. Pinned, so the docs' sentence stays true.
+  it("(L) a shape-only listed key BELOW a scissors line is neither stripped nor seen by the read-back: exit 0, the line kept as text", async () => {
+    const repo = repository({ commits: { allowedAttributionTrailers: ADMITS, stripInjected: ["Made-with"] } });
+    installRawHarness(repo, `printf '# ------------------------ >8 ------------------------\\nMade-with: Cursor\\n' >> "$1"`);
+    const message = stage(repo, "l.txt", "feat: add l\n");
+    const result = await run(commitCommand, ["commit", "write", "--message-file", message, "--trailer", "Hatsu-Agent: kurapika"], repo);
+    expect(result.code).toBe(0);
+    const doc = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
+    expect(doc["stripped"]).toEqual([]);
+    expect(doc["injected"]).toEqual([]);
+    expect(doc["trailers"]).toEqual([{ key: "Hatsu-Agent", value: "kurapika" }]);
+    expect(headMessage(repo)).toContain(">8 ------------------------\nMade-with: Cursor");
+    expect(sidecars(repo)).toEqual([]);
   });
 
   it("(f) a FOLDED (multi-line) injected trailer is removed whole: exit 4, no fragment left", async () => {

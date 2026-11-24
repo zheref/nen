@@ -103,7 +103,7 @@ describe("scaffoldInit", () => {
     expect(forced.hookOutcome).toBe("installed");
     const body = readFileSync(forced.hookWritten, "utf8");
     expect(body).toContain('if [ -n "${NEN_COMPOSED_TRAILER_KEYS+x}" ]; then');
-    expect(body).toContain("nen_strip_keys='Co-authored-by'");
+    expect(body).toContain("nen_strip_keys='Co-authored-by=co-authored-by'");
   });
 
   it("takes a caller-supplied hook path", () => {

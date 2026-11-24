@@ -913,8 +913,21 @@ exported or leaked; the hook still strips (the commit cannot carry the key
 either way), says on stderr that the variable leaked, and writes no sidecar,
 so no verb reports the strip. The key spelled with spaces before its colon
 (`Key : value`, which git parses as that trailer) is stripped too; a longer
-key that merely starts with it (`Co-authored-by-bot:`) is not, and a key
-below a scissors line is never stripped and is refused (fail closed).
+key that merely starts with it (`Co-authored-by-bot:`) is not. **Below a
+scissors line nothing is stripped.** A key there that is on the hook's
+**refused list** (an attribution trailer the policy does not admit, or a
+`forbiddenTrailers` key) is then refused by the hook's own grep, which reads
+the whole message (fail closed). A listed key refused **only by its
+`-by`/`-with` shape** (`Made-with`) has no grep in the hook, and below a
+scissors line it is not a trailer to git's own parser either, so the
+read-back does not see it: the commit lands, exit `0`, carrying that line as
+text under the scissors rather than as a trailer. **A CRLF message is
+handled**: the key's line is removed and every other line kept, but line
+endings are left to the platform's awk (Git for Windows' writes LF) and to
+git's own message cleanup, which strips trailing whitespace, CR included,
+from every line. **Locale never changes what matches**: the hook's strip step
+spells every character set out (no bracket range, no class) and runs `tr`
+and `awk` under `LC_ALL=C`.
 
 **What the strip never does.** It never removes a key the composed message
 carried (a `--trailer` naming a listed key is refused as before, at exit

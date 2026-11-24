@@ -165,7 +165,7 @@ describe("renderCommitMsgHook -- commits.stripInjected, the opt-in strip step (z
     const script = renderCommitMsgHook(SPEC, ["Co-Authored-By"], true, ["Co-authored-by", "Made-with"]);
     expect(script).toContain(`if [ -n "\${${HOOK_COMPOSED_KEYS_ENV}+x}" ]; then`);
     expect(script).not.toContain(`\${${HOOK_COMPOSED_KEYS_ENV}:-}`);
-    expect(script).toContain("nen_strip_keys='Co-authored-by Made-with'");
+    expect(script).toContain("nen_strip_keys='Co-authored-by=co-authored-by Made-with=made-with'");
     expect(script).toContain(`>>"$nen_git_dir/${STRIP_SIDECAR_FILE}.$nen_run"`);
     expect(script).toContain("git rev-parse --git-dir");
     expect(script).toContain("commit-msg: stripped the hook-injected '$nen_key:' trailer (commits.stripInjected)");
@@ -181,11 +181,11 @@ describe("renderCommitMsgHook -- commits.stripInjected, the opt-in strip step (z
   it("skips a key the composed message carried -- the case match on the comma-joined, lower-cased list", () => {
     const script = renderCommitMsgHook(SPEC, [], true, ["Co-authored-by"]);
     expect(script).toContain(`*",$nen_lower,"*) continue ;;`);
-    expect(script).toContain("tr '[:upper:]' '[:lower:]'");
+    expect(script).toContain("LC_ALL=C tr 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' 'abcdefghijklmnopqrstuvwxyz'");
   });
 
   it("de-duplicates the list case-insensitively, keeping the first spelling", () => {
-    expect(renderCommitMsgHook(SPEC, [], true, ["Co-authored-by", "CO-AUTHORED-BY"])).toContain("nen_strip_keys='Co-authored-by'");
+    expect(renderCommitMsgHook(SPEC, [], true, ["Co-authored-by", "CO-AUTHORED-BY"])).toContain("nen_strip_keys='Co-authored-by=co-authored-by'");
   });
 
   it("carries no bashism the step could trip on: no [[, no local, no echo -e, and the awk program holds no single quote", () => {
@@ -193,7 +193,7 @@ describe("renderCommitMsgHook -- commits.stripInjected, the opt-in strip step (z
     expect(script).not.toContain("[[");
     expect(script).not.toMatch(/\blocal\b/);
     expect(script).not.toContain("echo -e");
-    const awk = /awk -v key="\$nen_lower" '([^']*)'/.exec(script);
+    const awk = /LC_ALL=C awk -v key="\$nen_lower" '([^']*)'/.exec(script);
     expect(awk).not.toBeNull();
     // D: the exact key, then optional spaces/tabs, then the colon -- never a prefix.
     expect(awk?.[1]).toContain("tolower(substr(txt[i], 1, k)) == key && substr(txt[i], k + 1) ~ /^[ \\t]*:/");
@@ -202,9 +202,32 @@ describe("renderCommitMsgHook -- commits.stripInjected, the opt-in strip step (z
   it("records a strip only under a WELL-FORMED run id, and says a leaked variable leaked (hanten round 1, E)", () => {
     const script = renderCommitMsgHook(SPEC, [], true, ["Co-authored-by"]);
     expect(script).toContain(`nen_run="\${${HOOK_STRIP_RUN_ENV}:-}"`);
-    expect(script).toContain("''|*[!0-9a-f]*) nen_run='' ;;");
+    expect(script).toContain("''|*[!0123456789abcdef]*) nen_run='' ;;");
     expect(script).toContain(`but ${HOOK_COMPOSED_KEYS_ENV} was found without a nen run id (${HOOK_STRIP_RUN_ENV} missing or malformed): it was exported or leaked`);
     expect(script).toContain("NEITHER VARIABLE IS EVER");
+  });
+
+  it("is LOCALE-PROOF: no bracket range or character class in the step, every tr and awk under LC_ALL=C (zheref/nen#682, J)", () => {
+    const script = renderCommitMsgHook(SPEC, ["Co-Authored-By"], true, ["Co-authored-by"]);
+    const start = script.indexOf(`if [ -n "\${${HOOK_COMPOSED_KEYS_ENV}+x}" ]; then`);
+    const end = script.indexOf("\nfi\n", start);
+    const step = script
+      .slice(start, end)
+      .split("\n")
+      .filter((line): boolean => !line.trimStart().startsWith("#"))
+      .join("\n");
+    expect(step.length).toBeGreaterThan(0);
+    // No range inside any bracket expression, and no POSIX class.
+    // ("[ -s ... ]" and "[ -n ... ]" are the test command, not a bracket expression.)
+    for (const bracket of (step.match(/\[[^\]\n]*\]/g) ?? []).filter((text): boolean => !text.startsWith("[ "))) {
+      expect(bracket, bracket).not.toMatch(/[0-9A-Za-z]-[0-9A-Za-z]/);
+      expect(bracket, bracket).not.toContain("[:");
+    }
+    // Every tr and every awk is run under LC_ALL=C -- none without it.
+    expect(step.match(/\btr '/g)?.length).toBe(step.match(/LC_ALL=C tr '/g)?.length);
+    expect(step.match(/\bawk -v/g)?.length).toBe(1);
+    expect(step.match(/LC_ALL=C tr /g)?.length).toBe(2);
+    expect(step).toContain("LC_ALL=C awk -v key=");
   });
 
   it("never replaces the message with EMPTY output: the replace is guarded by [ -s ] (hanten round 1, F)", () => {

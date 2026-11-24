@@ -59,7 +59,12 @@ export interface StripRun {
   readonly path: string;
 }
 
-/** A fresh run id: 16 lower-case hex digits, the shape the hook accepts (`^[0-9a-f]+$`). */
+/**
+ * A fresh run id: 16 lower-case hex digits, the shape the hook accepts (it
+ * spells the set out as `0123456789abcdef`, never a range, so no locale widens
+ * it). The `[0-9a-f]` below is a JavaScript range, which is by code point and
+ * never by locale.
+ */
 export function newStripRunId(): string {
   return randomBytes(8).toString("hex");
 }

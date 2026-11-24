@@ -770,9 +770,9 @@ function squash(context: CommandContext): number {
   // before the reset: a git that cannot parse stops the squash with nothing
   // moved, and the read-back below compares like with like.
   const sent = sentTrailers(context.seams, root, messageText);
-  // THE STRIP SIDECAR (../commit/strip.ts; zheref/nen#594), resolved and a
-  // stale one cleared BEFORE the reset: a git that cannot name the git dir
-  // stops the squash with nothing moved.
+  // THE STRIP SIDECAR (../commit/strip.ts; zheref/nen#594): a fresh run id
+  // names this run's own sidecar, resolved BEFORE the reset -- a git that
+  // cannot name the git dir stops the squash with nothing moved.
   const sidecar = prepareStripSidecar(context.seams, root);
   let newSha: string;
   try {

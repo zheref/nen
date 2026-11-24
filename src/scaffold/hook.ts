@@ -103,6 +103,17 @@ export const HOOK_COMPOSED_KEYS_ENV = "NEN_COMPOSED_TRAILER_KEYS";
 export const HOOK_STRIP_RUN_ENV = "NEN_STRIP_RUN";
 
 /**
+ * The character sets the strip step spells out in full -- never a range or a
+ * class, which some shells and awks collate by locale (zheref/nen#682's macOS
+ * runner: bash 3.2 as /bin/sh, under en_US.UTF-8, matched `0123ABCD` against
+ * `[!0-9a-f]` as all hex).
+ */
+const UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const LOWER = "abcdefghijklmnopqrstuvwxyz";
+const HEX_DIGITS = "0123456789abcdef";
+const TRAILER_KEY_CHARS = `${UPPER}${LOWER}0123456789`;
+
+/**
  * The awk program the strip step runs once per key, with `key` the lower-cased
  * key. It prints the message with that key's trailer lines (and their folded
  * continuations) removed from the trailer block, and exits 0 when it removed
@@ -110,14 +121,27 @@ export const HOOK_STRIP_RUN_ENV = "NEN_STRIP_RUN";
  * as "nothing removed", so the refusal below then decides (fail closed).
  *
  * THE TRAILER BLOCK IS FOUND AS GIT FINDS IT: below a scissors line nothing
- * counts -- a key there is never stripped and is left for the refusal below,
- * which greps the whole file (fail closed); trailing blank and '#' lines are
- * skipped; the block is the last paragraph, and never the FIRST one (that is
- * the subject). Every non-'#' line in it must be a trailer (`Key:` or
- * `Key :`) or a continuation (leading whitespace, not first) -- a paragraph of
- * prose with one `Key:` line in it is body text, and nothing in it is
- * touched. CRLF is matched through, and every kept line is printed exactly as
- * it was read.
+ * counts and nothing is stripped. A key there that is on the hook's REFUSED
+ * list is then refused by the greps below, which read the whole file (fail
+ * closed). A listed key that is refused only by the read-back's -by/-with
+ * shape (`Made-with`) has no grep here, and below a scissors line it is not
+ * a trailer to git's own parser either, so the read-back does not see it: the
+ * commit lands with that line as text under the scissors, never as a trailer.
+ * Trailing blank and '#' lines are skipped; the block is the last paragraph,
+ * and never the FIRST one (that is the subject). Every non-'#' line in it
+ * must be a trailer (`Key:` or `Key :`) or a continuation (leading
+ * whitespace, not first) -- a paragraph of prose with one `Key:` line in it
+ * is body text, and nothing in it is touched.
+ *
+ * A CRLF MESSAGE IS HANDLED, NOT PRESERVED: a trailing CR is ignored when a
+ * line is matched, so the key's line is removed and every other line is kept,
+ * but the line endings written are the platform awk's (Git for Windows' awk
+ * writes LF). That is immaterial: git's own message cleanup strips trailing
+ * whitespace, CR included, from every line before the commit is written.
+ *
+ * NO LOCALE CHANGES WHAT MATCHES. The program runs under LC_ALL=C and spells
+ * every character set out (`TRAILER_KEY_CHARS`), with no range: a range such
+ * as A-Z collates by locale in some awks, and `tolower()` is ASCII under C.
  *
  * THE KEY MATCHES EXACTLY, IN EITHER FORM GIT PARSES: `Key:` and the spaced
  * `Key : value` (spaces or tabs before the colon), any case -- never a prefix
@@ -138,7 +162,7 @@ END {
   for (i = 1; i < s; i++) if (txt[i] !~ /^[ \t]*$/) ok = 1
   for (i = s; ok && i <= e; i++) {
     if (substr(txt[i], 1, 1) == "#") continue
-    if (txt[i] ~ /^[A-Za-z0-9][A-Za-z0-9-]*[ \t]*:/) continue
+    if (txt[i] ~ /^[${TRAILER_KEY_CHARS}][${TRAILER_KEY_CHARS}-]*[ \t]*:/) continue
     if (i > s && txt[i] ~ /^[ \t]/) continue
     ok = 0
   }
@@ -188,23 +212,29 @@ function renderStripStep(keys: readonly string[]): string {
 # composed-keys variable found without a well-formed run id was exported or
 # leaked -- the strip still happens, says so, and records nothing.
 if [ -n "\${${HOOK_COMPOSED_KEYS_ENV}+x}" ]; then
-  nen_composed=",\$(printf '%s' "\$${HOOK_COMPOSED_KEYS_ENV}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]'),"
+  # NO LOCALE REACHES A DECISION BELOW: no bracket range, no character class,
+  # and every tr and awk runs under LC_ALL=C. A range like 0-9a-f collates by
+  # locale in some shells -- macOS's /bin/sh (bash 3.2) under en_US.UTF-8 reads
+  # a-f as taking in A-E too -- so every set is spelled out letter by letter.
+  nen_composed=",\$(printf '%s' "\$${HOOK_COMPOSED_KEYS_ENV}" | LC_ALL=C tr -d ' \\t\\r\\n' | LC_ALL=C tr '${UPPER}' '${LOWER}'),"
   nen_run="\${${HOOK_STRIP_RUN_ENV}:-}"
   case "\$nen_run" in
-    ''|*[!0-9a-f]*) nen_run='' ;;
+    ''|*[!${HEX_DIGITS}]*) nen_run='' ;;
   esac
-  # The listed keys, space-separated: each is [A-Za-z0-9][A-Za-z0-9-]* (held
-  # to that shape at load), so the unquoted expansion below splits on spaces
-  # and nothing else.
-  nen_strip_keys='${keys.join(" ")}'
-  for nen_key in \$nen_strip_keys; do
-    nen_lower="\$(printf '%s' "\$nen_key" | tr '[:upper:]' '[:lower:]')"
+  # The listed keys as <key>=<lower-cased key>, lower-cased HERE, at generation
+  # time, and space-separated: each key is [A-Za-z0-9][A-Za-z0-9-]* (held to
+  # that shape at load), so the unquoted expansion below splits on spaces and
+  # nothing else, and '=' never occurs inside one.
+  nen_strip_keys='${keys.map((key): string => `${key}=${key.toLowerCase()}`).join(" ")}'
+  for nen_pair in \$nen_strip_keys; do
+    nen_key="\${nen_pair%%=*}"
+    nen_lower="\${nen_pair#*=}"
     case "\$nen_composed" in
       *",\$nen_lower,"*) continue ;;
     esac
     # A stripped message always keeps its subject, so EMPTY output is never a
     # strip: nothing is replaced, and the refusal below decides.
-    if awk -v key="\$nen_lower" '${STRIP_AWK}' "\$msg_file" >"\$msg_file.nen-strip" && [ -s "\$msg_file.nen-strip" ]; then
+    if LC_ALL=C awk -v key="\$nen_lower" '${STRIP_AWK}' "\$msg_file" >"\$msg_file.nen-strip" && [ -s "\$msg_file.nen-strip" ]; then
       if [ -n "\$nen_run" ]; then
         nen_git_dir="\$(git rev-parse --git-dir)" || {
           rm -f "\$msg_file.nen-strip"
@@ -299,7 +329,9 @@ fi
 // PORTABLE POSIX sh AND awk ONLY: `tr`, `awk -v`, `cat`, `rm -f`, `git
 // rev-parse --git-dir` -- no bashism, no GNU-only flag -- for macOS, Linux and
 // Git for Windows' sh alike. The awk program carries no single quote, so it
-// sits inside one in the script.
+// sits inside one in the script. AND LOCALE-PROOF (zheref/nen#682's macOS
+// failure): no bracket range or character class anywhere in the step, every
+// tr and awk under LC_ALL=C, and the keys lower-cased at generation time.
 export function renderCommitMsgHook(
   spec: HookSpec,
   refusedTrailers: readonly string[] = [],

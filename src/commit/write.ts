@@ -313,8 +313,8 @@ export function write(seams: Seams, root: string, options: WriteOptions): WriteO
   if (loaded === null) throw new Error("the commit policy was not loaded before the write");
   const policy = loaded;
   const sent = sentTrailers(seams, root, message);
-  // 3b. THE STRIP SIDECAR (zheref/nen#594), resolved and cleared before the
-  // write so a stale one from an earlier run is never read as this one's.
+  // 3b. THE STRIP SIDECAR (zheref/nen#594): a fresh run id names this run's
+  // own sidecar, resolved before the write; no other run's file is read.
   const sidecar = prepareStripSidecar(seams, root);
 
   // 4. THE WRITE. The message file lands under .nen/ and is removed after the
