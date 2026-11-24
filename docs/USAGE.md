@@ -12,7 +12,7 @@ repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
 what each version changed: 49 command
-families, 177 verbs, every flag checked against that binary.
+families, 178 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -258,7 +258,7 @@ including every refusal reason. The raw NUL-delimited stream
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **108 shapes** and **112 ids** (`nen.runner.plan`
+binary carries**, writing or reading — **109 shapes** and **113 ids** (`nen.runner.plan`
 and `nen.wc.worktree.copies` each have two versions, `nen.stop.mark` three, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -319,7 +319,7 @@ file formats).
 - **`schema`** — `nen.schema.set/v0.1`
 - **`session`** — `nen.session.ledger/v0.1`
 - **`shu`** — `nen.shu.<verb>/v0.1` · `nen.shu.coverage-capture/v0.1` · `nen.shu.coverage/v0.1` · `nen.shu.detect/v0.1` · `nen.shu.evidence/v0.1` · `nen.shu.proof/v0.1` · `nen.shu.test-report/v0.1` · `nen.shu.tools/v0.1` · `nen.shu.warmup/v0.1`
-- **`spec`** — `nen.spec.check/v0.1` · `nen.spec.cite-check/v0.1` · `nen.spec.converge/v0.1` · `nen.spec.coverage/v0.1` · `nen.spec.diff/v0.1` · `nen.spec.index/v0.1` · `nen.spec.inventory/v0.1` · `nen.spec.number/v0.1` · `nen.spec.parity/v0.1` · `nen.spec.tasks/v0.1` · `nen.spec.trace/v0.1`
+- **`spec`** — `nen.spec.check/v0.1` · `nen.spec.cite-check/v0.1` · `nen.spec.converge/v0.1` · `nen.spec.coverage/v0.1` · `nen.spec.diff/v0.1` · `nen.spec.due/v0.1` · `nen.spec.index/v0.1` · `nen.spec.inventory/v0.1` · `nen.spec.number/v0.1` · `nen.spec.parity/v0.1` · `nen.spec.tasks/v0.1` · `nen.spec.trace/v0.1`
 - **`stop`** — `nen.stop.answer/v0.1` · `nen.stop.list/v0.1` · `nen.stop.mark/v0.1` · `nen.stop.mark/v0.2` · `nen.stop.mark/v0.3` · `nen.stop.prompt/v0.1` · `nen.stop.proposed-issue/v0.1` · `nen.stop.sixth-stop/v0.1`
 - **`surface`** — `nen.surface.capabilities/v0.1` · `nen.surface.install/v0.1` · `nen.surface.mirror.check-installed/v0.1` · `nen.surface.mirror.check-plugin/v0.1` · `nen.surface.mirror.check/v0.1` · `nen.surface.mirror.generate/v0.1` · `nen.surface.status/v0.1`
 - **`tests`** — `nen.tests.map/v0.1`
@@ -1006,7 +1006,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 177 verbs, grouped as the README groups them. **Reads** is what a
+All 178 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -1160,6 +1160,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`spec`](#family-spec) | [`nen spec parity`](#nen-spec-parity) | one row per FR and member from each folder's parity.md, each state held to what SP-6 says it carries (a citation, UX-13, a CL-nnn or PT ruling, both citations, the files searched), a missing row or column open; `--target` adds each row's live issues and PRs | parity.md/spec.md and nen/repos.json under --repo; github (gh issue list, gh pr list) with --target | yes |
 | [`spec`](#family-spec) | [`nen spec tasks groups`](#nen-spec-tasks-groups) | tasks.md grouped by story and platform, each group's state (open, clarifying, captured, delivered) and dependencies in topological order, and per story group the dispatch title and an issue body quoting its scenarios as fenced source data | spec.md/tasks.md under --repo; git rev-parse HEAD for the pinned sha | yes |
 | [`spec`](#family-spec) | [`nen spec trace`](#nen-spec-trace) | `<root>/traceability.md` for one family: per FR and SC, each member's parity state or citation count, the tasks and open markers; reports current / stale / hand-edited / absent and `--write` refuses a hand edit | spec.md/tasks.md/parity.md and nen/repos.json under --repo; WRITES `<root>/traceability.md` under --write unless --dry-run | yes |
+| [`spec`](#family-spec) | [`nen spec due`](#nen-spec-due) | per family of nen/repos.json `families[]`, each member's newest `v<major>.<minor>.<patch>` tag held against the commit `capture/<CODE>/inventory.json` records, decided by GitHub's compare: due · current · no-capture · not-decided (a member's tags, compare or capture entry unread); writes nothing, starts no recapture | nen/repos.json and capture/<CODE>/inventory.json under --repo; github (gh api tags --paginate, gh api compare) | yes |
 | [`decisions`](#family-decisions) | [`nen decisions summary`](#nen-decisions-summary) | rows per class and per gate and the G5 ids of nen/decisions.json, so prose never carries those numbers | nen/decisions.json under --repo | yes |
 | [`tests`](#family-tests) | [`nen tests map`](#nen-tests-map) | each acceptance criterion of an issue body with the tests whose names carry its id (mapped · unmapped · unrequested); `--require-red` reads one run as the red checkpoint, `--before-report` reads two as red-first · green-only · failing · untested | the issue body and test report files (any `shu test-report` format); no git/gh | yes |
 | [`shu`](#family-shu) | [`nen shu detect`](#nen-shu-detect) | read the markers on disk and PROPOSE a nen/contract.json project block; never writes without --write and never overwrites one | the target repo's own files (framework configs, package.json, project files); writes nen/contract.json only with --write | yes |
@@ -12574,7 +12575,8 @@ product family's Spec Kit spec repository and its members through
 (zheref/nen#493): inventory a member's owned files, number a new folder, hold
 a folder or the constitution to citation-or-marker, resolve every citation
 against the member checkouts, diff two inventories, converge a folder against
-a newer one, measure coverage, and keep `INDEX.md` generated. They **report
+a newer one, measure coverage, keep `INDEX.md` generated, and say which
+families are due a recapture. They **report
 and refuse; none decides** — no slug is picked, no question is chosen, no
 citation is rewritten, no hand edit is overwritten — and "could not read" is
 exit 1 on every one of them, never a clean report. The verbs added by #493's
@@ -13426,6 +13428,88 @@ nen spec trace --repo . --family fixture-family --write
 specs/traceability.md: absent · action written · family fixture-family (FA, FW) · 2 requirement(s)
 ```
 (exit 0; from `src/spec/trace.test.ts`)
+
+### `nen spec due`
+
+Which product families are **due a recapture** (zheref/nen#673): for every
+family the spec repository's `nen/repos.json` declares under `families[]` (or
+the one `--family` names), each member's newest release tag is held against
+the commit the family's capture record holds for it — the committed
+`capture/<CODE>/inventory.json`, read with [`spec diff`](#nen-spec-diff)'s own
+loader, whose `sha` is the recorded commit and whose `origin` must be the
+repository the code resolves to through `nen/repos.json` (compared without
+case). That committed capture is the record this reads, not the local
+`hatsu.spec.run/v0.1` run record, which has no lookup from a family to its
+latest run. A release tag is `v` plus three whole numbers (`v1.10.0` sorts
+above `v1.9.0`); a prerelease (`v1.2.0-rc.1`) is no release; a member that
+carries any other `v*` tag (a calendar version, `v1.2`, a floating `v1`)
+cannot have its newest release ordered and is **not read** until that tag is
+gone (a floating `v1` blocks a decision by design: nothing unread is ever
+called current). Only the newest release is compared, so a backport released
+on a maintenance branch below it is not seen. **Newer is GitHub's answer, never a
+date**: `gh api repos/{slug}/compare/{recorded}...{tag}` says `ahead` or
+`diverged` (due: the tag holds commits the capture never read, so a family
+whose releases are cut on a branch that never merges back stays due until it
+does) or `identical` or `behind` (current); a tag on the recorded commit itself
+needs no call. Each family gets one of four answers:
+
+- **due** — a member released since the capture; its row names the member, its
+  newest tag and the recorded commit.
+- **current** — every member was read and none released since (a member with
+  no release tag at all is current).
+- **no-capture** — no member has a capture record yet. Never current.
+- **not-decided** — some member is **not read**: its tags or compare could not
+  be read, it carries a `v*` tag outside `vMAJOR.MINOR.PATCH`, or its capture
+  entry is absent while a sibling's is present, malformed, or records another
+  repository's origin. Never current; a due member beside it is still named in
+  its row.
+
+The run's verdict is the worst family answer, in the order not-decided, due,
+no-capture, current (`no-family` when the registry declares none); the exit
+code is `0` only for `current`.
+
+The verb **writes nothing and starts no recapture** — every GitHub read is a
+`gh api` GET — so the real recapture stays the maintainer's own typed command.
+
+**Usage**
+
+```text
+nen spec due --repo <spec> [--family <name>] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--repo <path>` | yes | The spec repository's checkout. | Omitted exits 2. |
+| `--family <name>` | no | Report this one family only. | Default every declared family. Not a slug, or not in `nen/repos.json` → `families[]`: exit 2. |
+
+**Output and exit codes** — prints `<verdict>: <n> family(ies) -- <n> due ·
+<n> current · <n> no-capture · <n> not-decided`, then one line per family with
+its answer and reason, and under a due or not-decided family one line per
+member naming its newest tag and recorded commit. `--json` top-level keys:
+`contract` (`nen.spec.due/v0.1`), `verdict` (`current` \| `due` \|
+`no-capture` \| `not-decided` \| `no-family` \| `could-not-read`; the worst
+family answer, not-decided first), `repo`, `families` (`{ name, answer,
+members, reason }` each; a member is `{ code, repo, platform, capture: { file,
+sha } | null, tag: { name, sha } | null, compare: { status, aheadBy, behindBy }
+| null, state, reason }`, `state` one of `due` \| `current` \| `no-capture`
+\| `not-read`), `counts` (one per answer, summing to the families), `reason`.
+Exit 0 only when every family is `current`; exit 1 for any other answer, for
+a registry declaring no family (`no-family`) and, verdict `could-not-read` with
+its document, when `nen/repos.json` cannot be read; exit 2 on a usage error (an
+undeclared family, `--write` or `--dry-run` included).
+
+**Example**
+
+```bash
+nen spec due --repo .
+```
+```text
+current: 1 family(ies) -- 0 due · 1 current · 0 no-capture · 0 not-decided
+  port: current -- no member released since the capture
+```
+(exit 0; from `src/spec/due.test.ts`)
 
 <a id="family-decisions"></a>
 
