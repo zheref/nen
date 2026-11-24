@@ -1,3 +1,4 @@
+import { readLedgerSlice } from "./ledger-read.js";
 // src/pr/ledger-verb.ts -- `nen pr ledger post|read` (zheref/nen#510), the verb
 // half of ./ledger.ts.
 //
@@ -352,37 +353,13 @@ function post(context: CommandContext, target: Target, pr: number, effort: strin
 
 function read(context: CommandContext, target: Target, pr: number, effort: string): number {
   const restore = context.args.booleans.has("restore");
-  const refuse = (reason: string, extra: Record<string, unknown> = {}): number => {
-    emit(context.io, context.json, { contract: PR_LEDGER_CONTRACT, verdict: "could-not-read" satisfies ReadVerdict, reason, ...extra }, [`could-not-read: ${reason}`]);
+  const result = readLedgerSlice(context.seams, target, pr, effort, (): string => loginFor(context));
+  const lines = [result.evidence.line];
+  if (!result.ok) {
+    emit(context.io, context.json, result.report, lines);
     return 1;
-  };
-  let head: string;
-  let login: string;
-  let marked;
-  let allComments;
-  try {
-    head = readPrHead(context.seams, target, pr);
-    login = loginFor(context);
-    allComments = listComments(context.seams, target, pr);
-    marked = allComments.filter((comment): boolean => isMarkedFor(comment.body, effort));
-  } catch (error) {
-    if (!(error instanceof LedgerReadError)) throw error;
-    return refuse(error.message);
   }
-  const mine = marked.filter((comment): boolean => isOwn(comment, login));
-  const foreign = marked.length - mine.length;
-  if (mine.length === 0) return refuse(`${target.slug}#${pr} carries no ledger comment for effort '${effort}' by ${login}${foreign === 0 ? "" : ` (${foreign} by another login, not read)`}.`, { login, foreign });
-  if (mine.length > 1) return refuse(`${target.slug}#${pr} carries ${mine.length} ledger comments for effort '${effort}' by ${login}; nen will not choose which is the record.`, { login, foreign });
-  const comment = mine[0]!;
-  let assembled: string;
-  try { assembled = assembleLedger(comment.body, effort, allComments, login); }
-  catch (error) { if (!(error instanceof LedgerReadError)) throw error; return refuse(error.message); }
-  const parsed = parseComment(assembled, effort, target.slug, pr);
-  if (!parsed.ok) return refuse(`${comment.url}: ${parsed.reason}.`, { login, foreign, url: comment.url });
-  const verdict: ReadVerdict = parsed.slice.head.toLowerCase() === head.toLowerCase() ? "ok" : "stale";
-  const lines = [
-    `${verdict}: ${comment.url} by ${login} -- effort '${effort}', ${parsed.slice.phases.length} phase entr${parsed.slice.phases.length === 1 ? "y" : "ies"}, recorded at head ${parsed.slice.head.slice(0, 12)}${verdict === "stale" ? `, the PR is now at ${head.slice(0, 12)}` : ""}; foreign: ${foreign}`,
-  ];
+  const { verdict, login, foreign, url, slice } = result;
   let restored: { path: string; outcome: "restored" | "unchanged" } | null = null;
   if (restore) {
     const root = resolveRepoRoot({ repoFlag: context.repoFlag });
@@ -392,20 +369,20 @@ function read(context: CommandContext, target: Target, pr: number, effort: strin
     if (moved !== null) context.io.err(`nen pr ledger read: ${moved}`);
     const outcome = withLedgerLock(located.path, (): "restored" | "unchanged" | string => {
       if (!existsSync(located.path)) {
-        writeLedger(located.path, { contract: PHASE_CONTRACT, effort, phases: parsed.slice.phases });
+        writeLedger(located.path, { contract: PHASE_CONTRACT, effort, phases: slice.phases });
         return "restored";
       }
       const local = readLedger(located.path, effort);
-      return JSON.stringify(local.phases) === JSON.stringify(parsed.slice.phases) ? "unchanged" : `the local phase ledger ${located.path} (${local.phases.length} entr${local.phases.length === 1 ? "y" : "ies"}) disagrees with the slice at ${comment.url} (${parsed.slice.phases.length}); nothing was overwritten. Reconcile them by hand, or move the local ledger aside to restore.`;
+      return JSON.stringify(local.phases) === JSON.stringify(slice.phases) ? "unchanged" : `the local phase ledger ${located.path} (${local.phases.length} entr${local.phases.length === 1 ? "y" : "ies"}) disagrees with the slice at ${url} (${slice.phases.length}); nothing was overwritten. Reconcile them by hand, or move the local ledger aside to restore.`;
     });
     if (outcome !== "restored" && outcome !== "unchanged") {
       context.io.err(`nen pr ledger read: ${outcome}`);
-      emit(context.io, context.json, { contract: PR_LEDGER_CONTRACT, verdict, login, foreign, url: comment.url, slice: parsed.slice, restored: null }, lines);
+      emit(context.io, context.json, { contract: PR_LEDGER_CONTRACT, verdict, login, foreign, url, slice, restored: null }, lines);
       return 1;
     }
     restored = { path: located.path, outcome };
     lines.push(`${outcome}: ${located.path}${verdict === "stale" ? " (from a STALE slice: the phases were restored, and the exit is 1 because the PR moved on since they were posted)" : ""}`);
   }
-  emit(context.io, context.json, { contract: PR_LEDGER_CONTRACT, verdict, login, foreign, url: comment.url, slice: parsed.slice, restored }, lines);
+  emit(context.io, context.json, { contract: PR_LEDGER_CONTRACT, verdict, login, foreign, url, slice, restored }, lines);
   return verdict === "ok" ? 0 : 1;
 }

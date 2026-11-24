@@ -1,3 +1,4 @@
+import { readLedgerSlice, unreadLedger, type LedgerEvidence } from "../pr/ledger-read.js";
 // src/report/objects.ts -- `objects[]`: the pull requests and issues an effort
 // is ABOUT, as facts, for the report that lists them.
 //
@@ -172,6 +173,7 @@ export interface PrObject {
   /** Issue numbers this pull request references. */
   readonly linked: readonly number[];
   readonly readiness: ObjectReadiness | null;
+  readonly ledger: LedgerEvidence;
   /**
    * What could not be read cleanly about THIS row, named, in the order it was
    * found. Empty when everything read.
@@ -480,6 +482,7 @@ export function parseObjects(document: unknown, display: string): readonly Repor
       reviewRequests,
       linked: linked.numbers,
       readiness: retained.readiness,
+      ledger: unreadLedger(`ledger comments were not read from GitHub (${display})`),
       notes: [...readNotes(row, display, index), ...linked.notes, ...retained.notes],
     };
   });
@@ -991,6 +994,9 @@ async function prRow(
       .filter((ref): boolean => ref !== own && ref !== number)
       .sort((a, b): number => a - b),
     readiness,
+    ledger: typeof view["headRefName"] === "string" && view["headRefName"] !== ""
+      ? readLedgerSlice(seams, target, number, view["headRefName"]).evidence
+      : unreadLedger("the PR head branch could not be read"),
     notes,
   };
 }
