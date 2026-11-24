@@ -774,7 +774,7 @@ export function renderReport(report: ShuReport): readonly string[] {
   for (const entry of report.artifacts) {
     const facts = entry.archive;
     if (facts === undefined) continue;
-    lines.push(labelled("archive fact", `${plainLine(entry.value)}: ${facts.status}; bytes=${facts.bytes ?? "unknown"}; modified=${facts.modifiedAt ?? "unknown"}; produced this run=${facts.producedThisRun ?? "unknown"} (${facts.freshness}); run start=${facts.runStartedAt ?? "not run"}; observed=${facts.observedAt ?? "not run"}; ${facts.digest === null ? "digest=unavailable" : `${facts.digest.algorithm}=${facts.digest.value}`}${facts.error === null ? "" : `; error=${plainLine(facts.error)}`}`));
+    lines.push(labelled("archive fact", `${plainLine(entry.value)}: ${facts.status}; bytes=${facts.bytes ?? "unknown"}; modified=${facts.modifiedAt ?? "unknown"}; produced this run=${facts.producedThisRun ?? "unknown"} (${facts.freshness}); run start=${facts.runStartedAt ?? "not run"}; run end=${facts.runEndedAt ?? "not run"}; ${facts.digest === null ? "digest=unavailable" : `${facts.digest.algorithm}=${facts.digest.value}`}${facts.error === null ? "" : `; error=${plainLine(facts.error)}`}`));
   }
   // BESIDE `artifacts`, AND IT IS THE OTHER HALF OF THE SAME QUESTION. Both
   // lines answer "which files does this run put on disk": `artifacts` names the
@@ -1995,7 +1995,7 @@ async function runCaptured(
       emitReport(
         context,
         sink,
-        assemble(plan, cwd, repoRoot, preconditions, steps, EXIT_TOOL_NOT_INSTALLED, context.seams.now().getTime() - started, "streamed", null, started),
+        assemble(plan, cwd, repoRoot, preconditions, steps, EXIT_TOOL_NOT_INSTALLED, context.seams.now().getTime() - started, "streamed", null, index === 0 ? null : started),
       );
       throw new ShuRefusal(
         EXIT_TOOL_NOT_INSTALLED,

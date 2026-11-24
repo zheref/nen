@@ -9,20 +9,25 @@ import { shuCommand } from "./command.js";
 
 const START = Date.parse("2026-01-01T00:00:00Z");
 
-async function archive(options: { before?: (root: string) => void; during?: (root: string) => void; artifacts?: string[]; extra?: string[]; json?: boolean; exit?: number } = {}): Promise<{ code: number; out: string[]; err: string[]; root: string; report: () => { artifacts: Record<string, unknown>[] } }> {
+async function archive(options: { before?: (root: string) => void; during?: (root: string) => void; artifacts?: string[]; extra?: string[]; json?: boolean; exit?: number; spawnFailed?: boolean; twoSteps?: boolean } = {}): Promise<{ code: number; out: string[]; err: string[]; root: string; report: () => { artifacts: Record<string, unknown>[] } }> {
   const root = makeTempDir("nen-archive-");
   mkdirSync(join(root, "nen"));
   writeFileSync(join(root, "nen", "contract.json"), JSON.stringify({ $schema: "nen.contract/v0.1", project: {
     lanes: { unit: { stack: "placeholder-stack", cwd: "." } }, defaultLane: "unit",
-    verbs: { unit: { archive: { exe: "placeholder-tool", argv: ["package"], artifacts: options.artifacts ?? ["artifact.bin"] } } },
+    verbs: { unit: { archive: { ...(options.twoSteps === true
+      ? { steps: [{ exe: "placeholder-tool", argv: ["first"] }, { exe: "placeholder-tool", argv: ["package"] }] }
+      : { exe: "placeholder-tool", argv: ["package"] }), artifacts: options.artifacts ?? ["artifact.bin"] } } },
   } }));
   options.before?.(root);
   let time = START;
-  const seams = new ScriptedSeams([{ match: "placeholder-tool package", result: { code: options.exit ?? 0 } }], { now: (): Date => new Date(time) });
+  const seams = new ScriptedSeams([
+    ...(options.twoSteps === true ? [{ match: "placeholder-tool first", result: { code: 0 } }] : []),
+    { match: "placeholder-tool package", result: { code: options.exit ?? 0, ...(options.spawnFailed === true ? { spawnFailed: true } : {}) } },
+  ], { now: (): Date => new Date(time) });
   const scripted = seams.run;
   seams.run = (exe, args, opts): CommandResult => {
     const result = scripted(exe, args, opts);
-    options.during?.(root);
+    if (!result.spawnFailed) options.during?.(root);
     time += 2000;
     return result;
   };
@@ -87,5 +92,23 @@ describe("archive artifact facts", () => {
     expect(result.out.join("\n")).toContain("artifact.bin: file; bytes=3");
     expect(result.out.join("\n")).toContain("produced this run=true (during-run)");
     expect(result.out.join("\n")).toContain("sha256=ba7816bf");
+  });
+
+  it("never claims freshness when the first archive child cannot start", async () => {
+    const result = await archive({ spawnFailed: true, before: (root): void => {
+      writeFileSync(join(root, "artifact.bin"), "other process");
+      utimesSync(join(root, "artifact.bin"), START / 1000 + 1, START / 1000 + 1);
+    } });
+    expect(result.code).toBe(5);
+    expect(result.report().artifacts[0]).toMatchObject({ archive: { status: "not-inspected", producedThisRun: null, freshness: "not-run" } });
+  });
+
+  it("retains facts from an earlier step when a later child cannot start", async () => {
+    const result = await archive({ spawnFailed: true, twoSteps: true, during: (root): void => {
+      writeFileSync(join(root, "artifact.bin"), "first step");
+      utimesSync(join(root, "artifact.bin"), START / 1000 + 1, START / 1000 + 1);
+    } });
+    expect(result.code).toBe(5);
+    expect(result.report().artifacts[0]).toMatchObject({ archive: { status: "file", producedThisRun: true } });
   });
 });

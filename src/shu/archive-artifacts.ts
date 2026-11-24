@@ -13,14 +13,20 @@ export interface ArchiveFacts {
   readonly bytes: number | null;
   readonly modifiedAt: string | null;
   readonly runStartedAt: string | null;
-  readonly observedAt: string | null;
+  readonly runEndedAt: string | null;
   readonly producedThisRun: boolean | null;
   readonly freshness: "during-run" | "older-than-run" | "after-run" | "not-run" | "unknown";
   readonly digest: { readonly algorithm: "sha256"; readonly value: string } | null;
   readonly error: string | null;
 }
 
-type FileSystem = Pick<typeof fs, "lstatSync" | "openSync" | "fstatSync" | "readSync" | "closeSync">;
+interface FileSystem {
+  readonly lstatSync: (path: string) => fs.Stats;
+  readonly openSync: (path: string, flags: number) => number;
+  readonly fstatSync: (fd: number) => fs.Stats;
+  readonly readSync: (fd: number, buffer: Buffer, offset: number, length: number, position: number) => number;
+  readonly closeSync: (fd: number) => void;
+}
 
 function sameFile(left: fs.Stats, right: fs.Stats): boolean {
   return left.dev === right.dev && left.ino === right.ino && left.size === right.size &&
@@ -32,7 +38,7 @@ export function archiveFacts(path: string, window: ArchiveWindow | null, io: Fil
   const empty: ArchiveFacts = {
     status: "not-inspected", bytes: null, modifiedAt: null,
     runStartedAt: window === null ? null : new Date(window.started).toISOString(),
-    observedAt: window === null ? null : new Date(window.ended).toISOString(),
+    runEndedAt: window === null ? null : new Date(window.ended).toISOString(),
     producedThisRun: null, freshness: window === null ? "not-run" : "unknown", digest: null, error: null,
   };
   // A dry/preflight report never opens an artifact or claims a run produced it.
@@ -62,8 +68,12 @@ export function archiveFacts(path: string, window: ArchiveWindow | null, io: Fil
       if (!sameFile(before, io.fstatSync(fd)) || !sameFile(before, io.lstatSync(path))) {
         throw new Error("artifact changed while being read");
       }
-      const freshness = before.mtimeMs < window.started ? "older-than-run"
-        : before.mtimeMs > window.ended ? "after-run" : "during-run";
+      // The run clock and published ISO timestamps have millisecond precision.
+      // Filesystem sub-milliseconds must not make the same reported instant
+      // look later than the run's end.
+      const modifiedMs = Math.floor(before.mtimeMs);
+      const freshness = modifiedMs < window.started ? "older-than-run"
+        : modifiedMs > window.ended ? "after-run" : "during-run";
       return { ...empty, status: "file", bytes: before.size, modifiedAt,
         producedThisRun: freshness === "during-run", freshness,
         digest: { algorithm: "sha256", value: hash.digest("hex") } };

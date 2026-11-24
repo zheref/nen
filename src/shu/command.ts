@@ -198,7 +198,7 @@ verbs:
               nen/contract.json pointer project.verbs.<lane>.typecheck.
   archive     Produce the lane's distributable artifact. Each declared path
               gains archive facts: status, bytes, modifiedAt, runStartedAt,
-              observedAt, producedThisRun, freshness, sha256 digest and error.
+              runEndedAt, producedThisRun, freshness, sha256 digest and error.
               Only regular readable files are hashed, through a bounded buffer.
               Freshness compares mtime with the archive run's start/end; it
               does not bind a package to a build proof. Dry/preflight reports

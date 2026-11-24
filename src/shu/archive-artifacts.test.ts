@@ -85,4 +85,18 @@ describe("archive artifact reader", () => {
       return fs.fstatSync(fd);
     }) as typeof fs.fstatSync })).toMatchObject({ status: "unreadable", digest: null, error: expect.stringContaining("before") });
   });
+
+  it("compares sub-millisecond file times at the run clock's millisecond precision", () => {
+    const path = file();
+    const stamp = Date.parse("2026-01-01T00:00:00Z");
+    const observed = fs.statSync(path);
+    observed.mtimeMs = stamp + 0.5;
+    observed.mtime = new Date(stamp);
+    const result = archiveFacts(path, { started: stamp, ended: stamp }, {
+      ...fs, lstatSync: (): fs.Stats => observed,
+      fstatSync: (): fs.Stats => observed,
+    });
+    expect(result.modifiedAt).toBe(result.runEndedAt);
+    expect(result).toMatchObject({ freshness: "during-run", producedThisRun: true });
+  });
 });
