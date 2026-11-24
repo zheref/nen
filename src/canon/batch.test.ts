@@ -1,7 +1,9 @@
 import { afterAll, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
+import { defaultSeams, type Seams } from "../seam/exec.js";
+import { makeTempDir } from "../testing/tempdir.js";
 import { runFamily } from "../index.js";
 import { ScriptedSeams } from "../seam/scripted.js";
 import { canonCommand } from "./command.js";
@@ -11,15 +13,15 @@ import { parseRepoRegistry } from "../schema/repos.js";
 import { rewritePin } from "./pin-write.js";
 const roots: string[] = [];
 afterAll(() => { for (const root of roots) rmSync(root, { recursive: true, force: true }); });
-const scratch = (): string => { const root = mkdtempSync(join(tmpdir(), "nen-canon-batch-")); roots.push(root); mkdirSync(join(root, ".git")); return root; };
+const scratch = (): string => { const root = makeTempDir("nen-canon-batch-"); roots.push(root); mkdirSync(join(root, ".git")); return root; };
 function put(root: string, file: string, text: string): void {
   const path = join(root, file);
   mkdirSync(join(path, ".."), { recursive: true });
   writeFileSync(path, text);
 }
-async function run(root: string, args: string[]): Promise<{ code: number; out: string; err: string }> {
+async function run(root: string, args: string[], seams: Seams = args[0] === "mirror" ? defaultSeams() : new ScriptedSeams([])): Promise<{ code: number; out: string; err: string }> {
   const out: string[] = []; const err: string[] = [];
-  const code = await runFamily(canonCommand, ["canon", ...args], root, true, { out: (line) => { out.push(line); }, err: (line) => { err.push(line); } }, new ScriptedSeams([]));
+  const code = await runFamily(canonCommand, ["canon", ...args], root, true, { out: (line) => { out.push(line); }, err: (line) => { err.push(line); } }, seams);
   return { code, out: out.join("\n"), err: err.join("\n") };
 }
 function canonFixture(): { root: string; canon: string; resolve: string[] } {
@@ -27,6 +29,12 @@ function canonFixture(): { root: string; canon: string; resolve: string[] } {
   put(root, "nen/repos.json", JSON.stringify({ consumers: [], maintained_tools: [{ repo: "o/consumer", scenario: "target" }] }));
   for (const file of ["a.md", "stacks/source/architecture.md", "stacks/target/architecture.md", "stacks/third/architecture.md", "stacks/target/rules/01.md", "ports/source--target.md", "ports/target--source.md"]) put(canon, `handbooks/${file}`, `# ${file}\n`);
   put(canon, "handbooks/INDEX.md", ["# Manifest", "## Always load", "| File |", "|---|", "| [a](a.md) |", "## Load exactly ONE stack handbook", "| Scenario | File |", "|---|---|", ...["source", "target", "third"].map((name) => `| \`${name}\` | [stack](stacks/${name}/architecture.md) |`)].join("\n"));
+  for (const [dir, origin] of [[root, "consumer"], [canon, "canon"]] as const) {
+    for (const args of [["init", "--quiet"], ["remote", "add", "origin", `https://github.com/o/${origin}.git`], ["add", "."], ["-c", "user.name=nen test", "-c", "user.email=nen@example.invalid", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "fixture"], ["-c", "tag.gpgsign=false", "tag", "v1.0.0"]]) {
+      const result = spawnSync("git", args, { cwd: dir, encoding: "utf8" });
+      if (result.status !== 0) throw new Error(result.stderr);
+    }
+  }
   return { root, canon, resolve: ["resolve", "--target", "o/consumer", "--manifest", "handbooks/INDEX.md", "--canon-root", canon] };
 }
 
@@ -59,6 +67,13 @@ describe("manifest availability and directed pairs (#569/#457)", () => {
       expect(result.err + result.out).toMatch(/maintained_tools|repos.json/);
     }
   });
+  it("names every agreeing source row when a manifest rejects the scenario", async () => {
+    const f = canonFixture();
+    put(f.root, "nen/repos.json", JSON.stringify({ consumers: [{ repo: "o/consumer", consumes: [], scenario: "unknown" }], maintained_tools: [{ repo: "o/consumer", scenario: "unknown" }] }));
+    const result = await run(f.root, f.resolve);
+    expect(result.code).toBe(1);
+    expect(result.out + result.err).toContain("consumers[0], maintained_tools[0]");
+  });
   it("resolves a pair, returns absent null+reason and refuses self/outside scenarios at exit2", async () => {
     const f = canonFixture();
     const pair = await run(f.root, [...f.resolve, "--port-from", "source"]);
@@ -86,6 +101,54 @@ describe("manifest availability and directed pairs (#569/#457)", () => {
     put(f.root, ".claude/rules/source--target.md", body + "edited\n");
     expect((await run(f.root, args.map((arg) => arg === "generate" ? "check" : arg))).code).toBe(1);
   });
+  it("excludes the only incoming pair without refusing an empty ports selection", async () => {
+    const f = canonFixture();
+    put(f.root, "values.yml", "scenario: target\nsurfaces: claude-code\nvalues:\n");
+    const args = ["mirror", "generate", "--source", "o/canon", "--ref", "v1.0.0", "--rules-dir", join(f.canon, "handbooks/stacks/target/rules"), "--canon-root", f.canon, "--canon-values", "values.yml", "--not-mirrored", "source--target.md"];
+    expect((await run(f.root, args)).code).toBe(0);
+    expect((await run(f.root, args.map((arg) => arg === "generate" ? "check" : arg))).code).toBe(0);
+  });
+  it("refuses a broken ports directory before deleting existing mirrors", async () => {
+    if (process.platform === "win32") return;
+    const f = canonFixture();
+    put(f.root, "values.yml", "scenario: target\nsurfaces: claude-code\nvalues:\n");
+    const args = ["mirror", "generate", "--source", "o/canon", "--ref", "v1.0.0", "--rules-dir", join(f.canon, "handbooks/stacks/target/rules"), "--canon-root", f.canon, "--canon-values", "values.yml"];
+    expect((await run(f.root, args)).code).toBe(0);
+    const mirror = join(f.root, ".claude/rules/source--target.md");
+    const before = readFileSync(mirror, "utf8");
+    rmSync(join(f.canon, "handbooks/ports"), { recursive: true });
+    symlinkSync(join(f.canon, "missing"), join(f.canon, "handbooks/ports"));
+    expect((await run(f.root, args)).code).not.toBe(0);
+    expect(readFileSync(mirror, "utf8")).toBe(before);
+  });
+  it("refuses unrelated or dirty roots and rules outside the verified source before writing", async () => {
+    const f = canonFixture(); const other = canonFixture();
+    put(f.root, "values.yml", "scenario: target\nsurfaces: claude-code\nvalues:\n");
+    const args = ["mirror", "generate", "--source", "o/canon", "--ref", "v1.0.0", "--rules-dir", join(f.canon, "handbooks/stacks/target/rules"), "--canon-root", other.canon, "--canon-values", "values.yml"];
+    const outside = await run(f.root, args);
+    expect(outside.code).toBe(2);
+    expect(outside.err).toContain("--rules-dir must be inside");
+    const matching = args.map((arg) => arg === other.canon ? f.canon : arg);
+    expect((await run(f.root, matching)).code).toBe(0);
+    const mirror = join(f.root, ".claude/rules/source--target.md");
+    const before = readFileSync(mirror, "utf8");
+    put(f.canon, "handbooks/ports/source--target.md", "uncommitted foreign content");
+    const dirty = await run(f.root, matching);
+    expect(dirty.code).toBe(2);
+    expect(dirty.err).toContain("dirty");
+    expect(readFileSync(mirror, "utf8")).toBe(before);
+  });
+  it("clears Git redirects when verifying the standalone rules tag", async () => {
+    const f = canonFixture(); const recorded = "a".repeat(40);
+    put(f.root, "nen/repos.json", JSON.stringify({ consumers: [], maintained_tools: [{ repo: "o/canon", pinned: "v1.0.0", pinnedCommit: recorded }] }));
+    put(f.root, "values.yml", "scenario: target\nsurfaces: claude-code\nvalues:\n");
+    const rules = join(f.canon, "handbooks/stacks/target/rules");
+    const seams = new ScriptedSeams([{ match: `git -C ${rules} rev-parse --verify refs/tags/v1.0.0^{commit}`, result: { code: 0, stdout: "b".repeat(40) } }], { env: { GIT_DIR: "/redirect", GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.worktree", GIT_CONFIG_VALUE_0: "/redirect" } });
+    const result = await run(f.root, ["mirror", "generate", "--source", "o/canon", "--ref", "v1.0.0", "--rules-dir", rules, "--canon-root", f.canon, "--canon-values", "values.yml"], seams);
+    expect(result.code).toBe(2);
+    expect(result.err).toMatch(/moved tag/);
+    expect(seams.calls[0]?.env).toMatchObject({ GIT_DIR: undefined, GIT_CONFIG_COUNT: undefined, GIT_CONFIG_KEY_0: undefined, GIT_CONFIG_VALUE_0: undefined, GIT_NO_REPLACE_OBJECTS: "1", GIT_OPTIONAL_LOCKS: "0" });
+  });
   it("refuses escaping manifest/handbook/pair links and dangling pair symlinks", () => {
     if (process.platform === "win32") return; // symlink privilege is not assumed on Windows.
     const f = canonFixture(); const outside = scratch(); put(outside, "secret.md", "outside");
@@ -103,6 +166,12 @@ describe("manifest availability and directed pairs (#569/#457)", () => {
 
 const vocabulary: StatusVocabulary = { whole: ["ruled", "constitution"], none: ["reading"], displacement: ["reversed by", "superseded by"], unannotated: { CON: "constitution" } };
 describe("clause citation closure (#554)", () => {
+  it("preserves a Status column without a trailing pipe", () => {
+    const root = scratch();
+    put(root, "home.md", '| Clause | Status\n|---|---\n| <a id="p-1"></a>**P-1** | ruled\n');
+    put(root, "request.md", "P-1");
+    expect(clauseCites({ root, text: "request.md", homes: { P: "home.md" }, vocabulary }).readSet).toEqual(["P-1"]);
+  });
   it("matches Hatsu #505 fixture cited/followed read sets byte-for-byte", () => {
     const root = scratch();
     const def = (n: number, status: string): string => `| <a id="hr-${n}"></a>**HR-${n}** (${status}) a ruling | settles |`;

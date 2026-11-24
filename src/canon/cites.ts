@@ -40,11 +40,18 @@ function parenthesis(text: string): string | null {
   throw new ClauseWiringError("unclosed clause status parenthesis");
 }
 
+function tableCells(line: string): string[] {
+  const cells = line.trim().split(/(?<!\\)\|/);
+  if (cells[0] === "") cells.shift();
+  if (cells.at(-1) === "") cells.pop();
+  return cells.map((cell) => cell.trim());
+}
+
 function statusOf(line: string, prefix: string, statusColumn: number): string | null {
   const anchored = new RegExp(`<a id="${escape(prefix.toLowerCase())}-\\d+"></a>\\*\\*${escape(prefix)}-\\d+\\*\\*`).exec(line);
   if (anchored === null) return null;
   const annotated = parenthesis(line.slice(anchored.index + anchored[0].length));
-  const column = line.startsWith("|") && statusColumn >= 0 ? line.split(/(?<!\\)\|/).slice(1, -1).map((cell) => cell.trim())[statusColumn] : undefined;
+  const column = line.startsWith("|") && statusColumn >= 0 ? tableCells(line)[statusColumn] : undefined;
   if (annotated !== null && column !== undefined && annotated !== column) throw new ClauseWiringError("conflicting parenthesis and Status-column values");
   return column ?? annotated;
 }
@@ -65,7 +72,7 @@ export function clauseCites(options: { root: string; text: string; homes: Readon
     let inTable = false;
     lines.forEach((line, index) => {
       const row = line.startsWith("|");
-      if (row && !inTable) column = line.split(/(?<!\\)\|/).slice(1, -1).findIndex((cell) => /^status$/i.test(cell.trim()));
+      if (row && !inTable) column = tableCells(line).findIndex((cell) => /^status$/i.test(cell));
       inTable = row;
       columns.set(index + 1, column);
     });
