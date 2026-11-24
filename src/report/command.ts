@@ -42,6 +42,7 @@ import { assembleRegister, parseDesk, renderRegister, type Desk, type NotationSo
 import { openTaxonomy } from "../schema/taxonomy.js";
 import { codeFor as productCodeFor, recordedRepoFor } from "../repo/resolve.js";
 import { graphInjection, graphToMermaid, parseGraph, type GraphDocument } from "./graph.js";
+import { deskStarter } from "./desk.js";
 import { renderReport } from "./render.js";
 
 const USAGE = `nen report -- the facts an effort's report is made of, and the fill that turns them into one.
@@ -50,6 +51,14 @@ usage:
   nen report data --repo <path> --base <ref> [--lane <name>] [--tiers <file>] [--target <owner/name>] [--prs <n,...>] [--issues <n,...>] [--backlog] [--objects-from <file>] [--label <name>]... [--severity <name>[+] --severity-family <ns>:<family> --severity-order <a,b,..>] [--register <desk>] [--tz <zone>] [--open-stop] [--effort <id>]... [--json]
   nen report render --template <file> --data <file> --out <file> [--variant <name>] [--graph <file>] [--dry-run] [--repo <path>] [--json]
   nen report mermaid --graph <file>
+  nen report desk [--row <object-ref>] [--json]
+
+desk      Print a valid starting desk as JSON to stdout, with optional top-level
+          fields present. No repository or network reads. Save it and pass it
+          to data --register; rows and spendNotes start empty to avoid inventing
+          object identities or ledger efforts. --row <object-ref> includes all
+          seven optional row-note strings for that caller-named object. Field
+          refusals list all errors.
 
 data      One document describing this branch against --base: the commits, the
           changed files (with a tier from --tiers, or null), the evidence rows
@@ -259,10 +268,11 @@ const SUBCOMMAND_FLAGS: Readonly<Record<string, { values: readonly string[]; boo
     lists: [...FILTER_LIST_FLAGS, "effort"],
   },
   render: { values: ["template", "data", "out", "variant", "graph"], booleans: ["dry-run"] },
+  desk: { values: ["row"], booleans: [] },
   mermaid: { values: ["graph"], booleans: [] },
 };
 
-const SUBCOMMANDS: readonly string[] = ["data", "render", "mermaid"];
+const SUBCOMMANDS: readonly string[] = ["data", "render", "mermaid", "desk"];
 
 const FAMILY_VALUES = [
   ...new Set(Object.values(SUBCOMMAND_FLAGS).flatMap((spec): readonly string[] => spec.values)),
@@ -865,6 +875,14 @@ export const reportCommand: Command = {
   run(context: CommandContext): number | Promise<number> {
     const subcommand = requireSubcommand("report", context.args, SUBCOMMANDS);
     refuseForeignFlags(subcommand, context);
+    if (subcommand === "desk") {
+      refuseExtraPositionals(context.args, 2);
+      const row = context.args.values["row"];
+      const document = deskStarter(row);
+      parseDesk(document, "report desk starter");
+      context.io.out(JSON.stringify(document, null, 2));
+      return 0;
+    }
     if (subcommand === "data") return runData(context);
     if (subcommand === "mermaid") return runMermaid(context);
     return runRender(context);

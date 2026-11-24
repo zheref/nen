@@ -984,3 +984,14 @@ it("C437-3 appends sessions after the complete register and context prefix", asy
     "contract", "repo", "branch", "base", "generatedAt", "commits", "files", "evidence", "coverage", "proof", "phases", "lastStop", "usage", "objects",
   ]);
 });
+
+ it("round-trips the unchanged desk starter through data and render (#638 AC-2)", async () => {
+  const starter = await capture(["report", "desk"], null, []);
+  expect(starter.code, starter.err.join("\n")).toBe(0);
+  const root = repo({desk: JSON.parse(starter.out.join("\n")), objects: [], workflow: true});
+  const {captured, document} = await registerDocument(root);
+  expect(captured.code, captured.err.join("\n")).toBe(0);
+  writeFileSync(join(root, "starter-data.json"), JSON.stringify(document));
+  const rendered = await capture(["report", "render", "--variant", "register", "--template", join(FIXTURES, "rikugan.html"), "--data", "starter-data.json", "--out", "starter.html"], root, []);
+  expect(rendered.code, rendered.err.join("\n")).toBe(0);
+});
