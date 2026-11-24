@@ -18257,7 +18257,7 @@ git reads only, no network, no token. A pull-request row carries `kind`,
 check name, through the same `latestChecks` reduction [`pr
 ready`](#nen-pr-ready) uses), `threads` (`total`/`unresolved`),
 `reviewRequests[]`, `linked[]` (the issue numbers it references), `readiness`
-and `notes[]`. **`linked[]` holds only real numbers** ([#639](https://github.com/zheref/nen/issues/639)):
+and `notes[]`, plus `ledger` (see below). **`linked[]` holds only real numbers** ([#639](https://github.com/zheref/nen/issues/639)):
 it is every `#<n>` in the title and body where `<n>` is **1 to 9 digits
 starting `1`–`9`** followed by no ASCII word character (`[A-Za-z0-9_]`), and
 the `#` is either **not glued** — not preceded by an ASCII word character, `&`
@@ -18278,6 +18278,19 @@ only. The row's own number is left out of `linked[]` on both paths. An issue row
 `labels[]`, `linked[]` (the pull requests that reference it), a `readiness`
 that is **always `null`** — CON-32 is a statement about a pull request — and
 `notes[]`.
+
+**Ledger evidence** ([#674](https://github.com/zheref/nen/issues/674)): each PR row carries
+`ledger: { state, url, verdict, reason, line }`. The live read uses the PR head branch
+as its effort and the same authority as `nen pr ledger read`, including multipart
+assembly and author/editor validation. `line` and `verdict` preserve that read-back
+exactly. `state` is `valid` for `ok`, `none` only after a successful comments read
+finds no matching slice, `refused` for a stale, edited, foreign, duplicate or invalid
+slice, and `not-read` when the head, login or comments cannot be read. `url` is null
+when the read supplies none; `reason` is null only for a valid slice. No slice is
+posted, refreshed or restored. Offline `--objects-from` rows say `not-read` because
+no GitHub comment read occurs, even if their input carries historical ledger data.
+With `--register`, `ledgerLine` is the same exact line (empty only on issue rows).
+A desk-provided `ledger` or `ledgerLine` is refused at exit 2 like any other fact.
 
 **A FIELD degrades; an OBJECT does not go missing.** Each field of a pull
 request is read on its own: a check rollup that will not validate (an unknown
