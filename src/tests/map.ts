@@ -261,7 +261,7 @@ export function mapTests(input: MapInput): TestsMapReport {
     ...input.tests,
     ...names.filter((test) => !real.has(identity(test))).map((test): TestCase => ({ ...test, status: test.suite !== null && loadFailures.includes(test.suite) ? "failed" : "skipped" })),
   ];
-  const unreadableRed = input.mode === "require-red" && loadFailures.length > 0 && names.length === 0;
+  const unreadableRed = input.mode === "require-red" && loadFailures.some((suite) => !names.some((test) => test.suite === suite));
   const numbers = new Map<number, Criterion>();
   for (const criterion of input.criteria.criteria) if (!numbers.has(criterion.number)) numbers.set(criterion.number, criterion);
   const byNumber = new Map<number, MappedTest[]>();

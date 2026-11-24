@@ -205,12 +205,12 @@ function replaceLedgerTemp(temp: string, path: string): void {
  * step, and a `show` that races a write reads either the old document or the
  * new one, never half of the new one.
  */
-export function writeLedgerAtomically(path: string, document: unknown): void {
+export function writeLedgerAtomically(path: string, document: unknown, mode?: number): void {
   mkdirSync(dirname(path), { recursive: true });
   const temp = `${path}.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`;
   let failed = false;
   try {
-    writeFileSync(temp, `${JSON.stringify(document, null, 2)}\n`, "utf8");
+    writeFileSync(temp, `${JSON.stringify(document, null, 2)}\n`, mode === undefined ? "utf8" : { encoding: "utf8", mode });
     replaceLedgerTemp(temp, path);
   } catch (error) {
     failed = true;

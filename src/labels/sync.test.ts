@@ -56,6 +56,14 @@ describe("syncLabels -- remote diff with progress and isolated failures", () => 
     expect(report.entries[1]?.message).toMatch(/would create/);
     expect(seams.calls).toHaveLength(1);
   });
+  it("dry-run diffs an update against the remote, naming only the fields that differ (zheref/nen#591)", () => {
+    const t = taxonomy();
+    const seams = new ScriptedSeams([read([[{ ...t.labels[0], color: "000000" }, { ...t.labels[1], description: null }]])]);
+    const messages = syncLabels(seams, TARGET, t, true).entries.map((entry) => entry.message);
+    expect(messages[0]).toBe("would update: a (#abcdef) -- label a  (was: color #000000)");
+    expect(messages[1]).toBe('would update: b (#222222) -- label b  (was: description "")');
+    expect(seams.calls).toHaveLength(1);
+  });
   it("a no-op over 124 labels performs one paginated read and zero writes", () => {
     const labels = Array.from({ length: 124 }, (_, n) => ({ name: `label-${n}`, color: "abcdef", description: "declared label" }));
     const t = parseLabelTaxonomy("/x/labels.json", { labels });

@@ -112,8 +112,8 @@ interface GitCall {
   readonly error: string;
 }
 
-function runGit(seams: Seams, cwd: string, args: readonly string[]): GitCall {
-  const result = seams.run(GIT, [...args], { cwd });
+function runGit(seams: Seams, cwd: string, args: readonly string[], env?: Readonly<Record<string, string>>): GitCall {
+  const result = seams.run(GIT, [...args], env === undefined ? { cwd } : { cwd, env });
   return {
     code: result.code,
     stdout: result.stdout,
@@ -366,17 +366,28 @@ export function findPublishedCommit(seams: Seams, cwd: string, commits: readonly
  * `planSquash` has answered `"ready"` -- every refusal this module makes
  * runs strictly before either of these two calls.
  */
-export function performSquash(seams: Seams, cwd: string, mergeBaseSha: string, messageFile: string): string {
+export function performSquash(
+  seams: Seams,
+  cwd: string,
+  mergeBaseSha: string,
+  messageFile: string,
+  commitOptions: {
+    /** Extra environment for the child `git commit` only -- ../commit/strip.ts's NEN_COMPOSED_TRAILER_KEYS (zheref/nen#594). */
+    readonly env?: Readonly<Record<string, string>>;
+    /** Appended to the failed-commit error, given git's stderr -- ../commit/strip.ts's stripFailureHint. */
+    readonly failureHint?: (gitStderr: string) => string;
+  } = {},
+): string {
   const reset = runGit(seams, cwd, ["reset", "--soft", mergeBaseSha]);
   if (reset.code !== 0) {
     throw new SquashStateError(
       `could not reset to '${mergeBaseSha}' ('git reset --soft ${mergeBaseSha}' failed: ${reset.error}). Nothing was committed; the branch is unchanged.`,
     );
   }
-  const commit = runGit(seams, cwd, ["commit", "-F", messageFile]);
+  const commit = runGit(seams, cwd, ["commit", "-F", messageFile], commitOptions.env);
   if (commit.code !== 0) {
     throw new SquashStateError(
-      `reset to '${mergeBaseSha}' but 'git commit -F ${messageFile}' failed: ${commit.error}. The original commits are not lost -- recover them with 'git reset --hard ORIG_HEAD'.`,
+      `reset to '${mergeBaseSha}' but 'git commit -F ${messageFile}' failed: ${commit.error}. The original commits are not lost -- recover them with 'git reset --hard ORIG_HEAD'.${commitOptions.failureHint?.(commit.error) ?? ""}`,
     );
   }
   const head = runGit(seams, cwd, ["rev-parse", "HEAD"]);

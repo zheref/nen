@@ -1421,3 +1421,115 @@ async function runShu(argv: readonly string[], repo: string): Promise<Run> {
   const code = await runFamily(shuCommand, argv, repo, false, io, refusingSeams());
   return { code, out, err, spawned: [] };
 }
+
+// ── more than one lane: one job per lane, or the step named (zheref/nen#586) ─
+
+describe("a proposal with more than one lane gets one CI job per lane", () => {
+  const WORKFLOW = join(".github", "workflows", "nen-shu.yml");
+
+  /** apps/web (nextjs) + apps/mobile (expo) -- the zheref/Market shape. */
+  function twoStacks(extra?: (root: string) => void): string {
+    const root = tempEmpty();
+    cpSync(NEXTJS_SINGLE, join(root, "apps", "web"), { recursive: true });
+    cpSync(markerTree("expo"), join(root, "apps", "mobile"), { recursive: true });
+    extra?.(root);
+    return root;
+  }
+
+  it("writes a job per lane for a two-stack tree, each verb pinned to its lane", async () => {
+    const root = twoStacks();
+    const lanes = detect(root, "linux").lanes;
+    expect(new Set(lanes.map((lane): string => lane.stack))).toEqual(new Set(["expo", "nextjs"]));
+    const result = await capture(["scaffold", "init", "--accept-detected", ...TRAILERS], root);
+    expect(result.code).toBe(0);
+    const body = readFileSync(join(root, WORKFLOW), "utf8");
+    // THE MUTATION THIS CATCHES: the multi-stack branch going back to a note
+    // and no file -- the reported defect.
+    for (const lane of lanes) {
+      expect(body).toContain(`  shu-${lane.lane}:\n`);
+      expect(body).toContain(`NEN_LANE: '${lane.lane}'`);
+    }
+    expect(body.match(/^ {2}shu-[^\s:]+:$/gm)).toHaveLength(lanes.length);
+    expect(body).toContain(`shu tools --repo . --lane "\${NEN_LANE}"`);
+    // project.toolchain is repository-wide, so a missing pin (exit 5) on this
+    // lane's runner is a warning, never the job's failure (Copilot, #602).
+    expect(body).toMatch(/if \[ "\$\{status\}" -eq 5 \]; then\n\s+echo "::warning title=pinned tool missing on this runner::/);
+    expect(body).toContain(`shu "\${verb}" --repo . --lane "\${NEN_LANE}"`);
+    expect(body).not.toMatch(/\{\{[A-Za-z]/);
+    expect(result.out.join("\n")).toMatch(/created: \.github\/workflows\/nen-shu\.yml -- one job per lane \(mobile: expo, web: nextjs\)/);
+    expect(result.out.join("\n")).not.toMatch(/no CI workflow/);
+  });
+
+  it("previews it under --dry-run and writes nothing", async () => {
+    const root = twoStacks();
+    const result = await capture(["scaffold", "init", "--accept-detected", "--dry-run", ...TRAILERS], root);
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toMatch(/would-create: \.github\/workflows\/nen-shu\.yml -- one job per lane/);
+    expect(existsSync(join(root, WORKFLOW))).toBe(false);
+  });
+
+  it("is idempotent: a second run skips the same workflow", async () => {
+    const root = twoStacks();
+    expect((await capture(["scaffold", "init", "--accept-detected", ...TRAILERS], root)).code).toBe(0);
+    const before = readFileSync(join(root, WORKFLOW), "utf8");
+    const second = await capture(["scaffold", "init", "--accept-detected", ...TRAILERS], root);
+    expect(second.code).toBe(0);
+    expect(second.out.join("\n")).toContain("skipped: .github/workflows/nen-shu.yml");
+    expect(readFileSync(join(root, WORKFLOW), "utf8")).toBe(before);
+  });
+
+  it("gives one stack in several directories a job per lane too, since no lane is the default", async () => {
+    const root = tempCopy(NEXTJS_MULTI);
+    const lanes = detect(root, "linux").lanes;
+    expect(lanes.length).toBeGreaterThan(1);
+    const result = await capture(["scaffold", "init", "--accept-detected", ...TRAILERS], root);
+    expect(result.code).toBe(0);
+    const body = readFileSync(join(root, WORKFLOW), "utf8");
+    for (const lane of lanes) expect(body).toContain(`NEN_LANE: '${lane.lane}'`);
+  });
+
+  it("takes the jobs from a declaration already on disk, not from the refused proposal", async () => {
+    const root = twoStacks();
+    mkdirSync(join(root, "nen"), { recursive: true });
+    const theirs = {
+      $schema: "nen.contract/v0.1",
+      project: {
+        lanes: {
+          $comment: "metadata, never a lane",
+          site: { stack: "nextjs", cwd: "apps/web" },
+          app: { stack: "expo", cwd: "apps/mobile" },
+        },
+        defaultLane: null,
+        verbs: { site: {}, app: {} },
+      },
+    };
+    writeFileSync(join(root, "nen", "contract.json"), `${JSON.stringify(theirs)}\n`, "utf8");
+    // `--stack nextjs` alone would have meant the single-lane body, no --lane.
+    const result = await capture(["scaffold", "init", "--stack", "nextjs", ...TRAILERS], root);
+    expect(result.out.join("\n")).toMatch(/refused: nen\/contract\.json/);
+    const body = readFileSync(join(root, WORKFLOW), "utf8");
+    expect(body).toContain("NEN_LANE: 'app'");
+    expect(body).toContain("NEN_LANE: 'site'");
+    expect(body).not.toContain("NEN_LANE: 'web'");
+    expect(body).not.toContain("$comment");
+  });
+
+  it("writes NO workflow when a lane's stack has no CI template, and names the manual step", async () => {
+    const root = twoStacks((tree): void => {
+      cpSync(markerTree("compose-desktop"), join(tree, "apps", "desk"), { recursive: true });
+    });
+    const desk = detect(root, "linux").lanes.find((lane): boolean => lane.stack === "compose-desktop");
+    expect(desk, "the fixture must detect the untemplated lane").toBeDefined();
+    const result = await capture(["scaffold", "init", "--accept-detected", ...TRAILERS], root);
+    // A note, not a refusal: every other step stands and the run is not red.
+    expect(result.code).toBe(0);
+    // THE MUTATION THIS CATCHES: a workflow written for the covered lanes only,
+    // a green check over a lane nothing built.
+    expect(existsSync(join(root, WORKFLOW))).toBe(false);
+    const out = result.out.join("\n");
+    expect(out).toMatch(/the declaration has 3 lanes across 3 stacks/);
+    expect(out).toContain(`'${desk?.lane}' (compose-desktop): the catalogue proposes no template for 'compose-desktop'`);
+    expect(out).toMatch(/The manual step: write \.github\/workflows\/nen-shu\.yml with one job per lane/);
+    expect(out).toContain("'--repo . --lane <lane>'");
+  });
+});

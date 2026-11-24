@@ -45,7 +45,7 @@ import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { VerbUsageError } from "../cli/command.js";
 import { containedPath } from "../repo/contain.js";
 import { proofRelativePath } from "../shu/proof.js";
-import { PHASE_CONTRACT } from "../phase/ledger.js";
+import { idleWait, PHASE_CONTRACT } from "../phase/ledger.js";
 import { commonDirOrNull, EFFORT_COMMON_SEGMENTS, type EffortFamily } from "../ledger/home.js";
 import { EFFORT_WORKTREE_LEGACY } from "../ledger/roots.js";
 import { SESSION_CONTRACT, isSessionEntry, readSessionLedgerText, type SessionEntry } from "../session/ledger.js";
@@ -120,6 +120,18 @@ export interface ReportPhase {
   /** The `nen shu` steps that ran inside the phase, verbatim from the ledger; `[]` when none. */
   readonly steps: readonly ReportPhaseStep[];
   readonly dial: string | null;
+  /**
+   * What spend counts of this phase: `durationMs`, less an idle wait when
+   * there is one; null while the phase is open (zheref/nen#639). Derived at
+   * read time by ../phase/ledger.ts's `idleWait`, never stored in the ledger.
+   */
+  readonly countedMs: number | null;
+  /**
+   * The untimed wait left out of `countedMs` -- above zero only for a wait
+   * phase (`readiness`) whose untimed time sums to over 60 minutes; null while
+   * the phase is open.
+   */
+  readonly idleWaitMs: number | null;
 }
 
 export interface ReportPhaseStep {
@@ -711,26 +723,34 @@ export function readPhaseLedgers(source: LedgerSource, warn: (line: string) => v
       continue;
     }
     for (const entry of doc.phases as Record<string, unknown>[]) {
+      const phase = String(entry["phase"] ?? "");
+      const durationMs = typeof entry["durationMs"] === "number" ? entry["durationMs"] : null;
+      const steps = Array.isArray(entry["steps"])
+        ? (entry["steps"] as Record<string, unknown>[]).map((step): ReportPhaseStep => ({
+            verb: String(step["verb"] ?? ""),
+            argv: String(step["argv"] ?? ""),
+            exitCode: typeof step["exitCode"] === "number" ? step["exitCode"] : null,
+            durationMs: typeof step["durationMs"] === "number" ? step["durationMs"] : null,
+            stalled: step["stalled"] === true,
+          }))
+        : [];
+      // APPENDED AFTER `dial`, the last key before them, so a reader of the
+      // keys it always read reads the same row (zheref/nen#639).
+      const { countedMs, idleWaitMs } = idleWait({ phase, durationMs, steps });
       rows.push({
         effort: doc.effort,
-        phase: String(entry["phase"] ?? ""),
+        phase,
         startedAt: String(entry["startedAt"] ?? ""),
         endedAt: typeof entry["endedAt"] === "string" ? entry["endedAt"] : null,
-        durationMs: typeof entry["durationMs"] === "number" ? entry["durationMs"] : null,
+        durationMs,
         exitCode: typeof entry["exitCode"] === "number" ? entry["exitCode"] : null,
         surface: typeof entry["surface"] === "string" ? entry["surface"] : null,
         model: typeof entry["model"] === "string" ? entry["model"] : null,
         note: typeof entry["note"] === "string" ? entry["note"] : null,
-        steps: Array.isArray(entry["steps"])
-          ? (entry["steps"] as Record<string, unknown>[]).map((step): ReportPhaseStep => ({
-              verb: String(step["verb"] ?? ""),
-              argv: String(step["argv"] ?? ""),
-              exitCode: typeof step["exitCode"] === "number" ? step["exitCode"] : null,
-              durationMs: typeof step["durationMs"] === "number" ? step["durationMs"] : null,
-              stalled: step["stalled"] === true,
-            }))
-          : [],
+        steps,
         dial: typeof entry["dial"] === "string" ? entry["dial"] : null,
+        countedMs,
+        idleWaitMs,
       });
     }
   }

@@ -221,3 +221,14 @@ it("attributes a JUnit load-failed file from names without executing tests (#559
   const root = repo({ "issue.md": BODY, "red.xml": red, "names.json": vitest([["AC-1 title", "passed"], ["AC-2 title", "passed"]]) });
   expect((await map(root, ["--issue-body", "issue.md", "--test-report", "red.xml", "--require-red", "--names-from-report", "names.json"])).code).toBe(0);
 });
+
+it("keeps a partially named load-failed checkpoint unreadable (#559)", async () => {
+  const red = JSON.stringify({ testResults: ["x", "y"].map(name => ({ name: `/abs/src/${name}.test.ts`, status: "failed", message: "Cannot load missing module", assertionResults: [] })) });
+  const root = repo({ "issue.md": BODY, "red.json": red, "names.json": vitest([["AC-1 title", "passed"], ["AC-2 title", "passed"]]) });
+  const result = await map(root, ["--issue-body", "issue.md", "--test-report", "red.json", "--require-red", "--names-from-report", "names.json", "--json"], true);
+  expect(result.code).toBe(1);
+  const report = JSON.parse(result.out);
+  expect(report.verdict).toBe("could-not-read");
+  expect(report.reason).toContain("/abs/src/y.test.ts");
+  expect(report.criteria.every((row: { checkpoint: string }) => row.checkpoint === "unreadable")).toBe(true);
+});

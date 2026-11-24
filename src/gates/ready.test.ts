@@ -2395,3 +2395,22 @@ it("does not report terminal STALE/STARTUP_FAILURE checks as pending (#531)", ()
     expect(evaluation.line).not.toContain("pending:");
   }
 });
+
+ it("keeps anonymous failing checks separate from anonymous successes (#531)", () => {
+  const evaluation = evaluateReady(IDENTITIES, readyState({ checks: [{ status: "COMPLETED", conclusion: "FAILURE" }, { status: "COMPLETED", conclusion: "SUCCESS" }] }), OPTIONS);
+  const row = evaluation.conjuncts.find((row) => row.id === "checks-green");
+  expect(row?.reason).toContain("unnamed check (FAILURE)");
+  expect(row?.reason).not.toContain("SUCCESS");
+});
+it("reports the older evaluated attempt beside an excluded newer run (#531)", () => {
+  const evaluation = evaluateReady(IDENTITIES, readyState({ checks: [
+    { name: "build", status: "COMPLETED", conclusion: "FAILURE", startedAt: "2026-01-01T00:00:00Z", detailsUrl: "https://github.com/o/r/actions/runs/10/job/1" },
+    { name: "build", status: "COMPLETED", conclusion: "SUCCESS", startedAt: "2026-01-02T00:00:00Z", detailsUrl: "https://github.com/o/r/actions/runs/20/job/2" },
+  ], exclude_run_id: "20" }), OPTIONS);
+  const row = evaluation.conjuncts.find((row) => row.id === "checks-green");
+  expect(row?.reason).toContain("build (FAILURE)");
+  expect(row?.checks).toEqual([
+    { name: "build", conclusion: "FAILURE", excluded: false },
+    { name: "build", conclusion: "SUCCESS", excluded: true },
+  ]);
+});

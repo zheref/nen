@@ -3193,3 +3193,15 @@ it("refuses to report a merged state with an invalid merge commit (#531)", async
   expect(report.terminal).toBeUndefined();
   expect(report.gateLine).toContain("merge commit SHA");
 });
+
+it("honours the requested head before reporting a terminal state (#531)", async () => {
+  const source = stubSource(); const snapshot = await source.pullRequestSnapshot({ owner: "o", repo: "n" }, 9);
+  if (snapshot.pullRequest === undefined) throw new Error("missing fixture PR");
+  const pull = snapshot.pullRequest;
+  for (const state of ["MERGED", "CLOSED"]) {
+    const terminal = stubSource({ pullRequestSnapshot: async () => ({ ...snapshot, pullRequest: { ...pull, state, mergeCommitOid: state === "MERGED" ? "1".repeat(40) : null } }) });
+    const { io, out } = capture();
+    expect(await prReady(input({ values: { ...input().values, "require-head": "abcdef0" } }), io, stubDeps(terminal))).toBe(8);
+    expect(JSON.parse(out.join("\n")).status).toBe("head-mismatch");
+  }
+});

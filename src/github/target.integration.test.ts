@@ -79,6 +79,9 @@ describe.skipIf(!HAVE_GIT || !HAVE_BUN)("a token-bearing, unparseable origin (zh
     });
   }
 
+  // An explicit budget (zheref/nen#598): this synchronous test spawns real programs and runs
+  // about 4.5 s on the Windows runners. vitest 2 could not time out a test that never
+  // yields, so it passed past the 5 s default; vitest 4 checks the elapsed time when the test returns.
   it("repo resolve and repo classify refuse an unparseable origin without its token -- space, TAB and CR variants too", () => {
     for (const [name, url] of [["plain", `https://user:${TOKEN}@github.com/only`], ["space", `https://u:pa ss${TOKEN}@github.com/only`], ["tab", `https://u:pa\tss${TOKEN}@github.com/only`], ["cr", `https://${TOKEN}\r@github.com/only`]] as const) {
     const repo = repoWithOrigin(`repo-verbs-${name}`, url);
@@ -89,5 +92,5 @@ describe.skipIf(!HAVE_GIT || !HAVE_BUN)("a token-bearing, unparseable origin (zh
       expect(result.stdout + result.stderr).toContain("https://***@github.com/only");
     }
     }
-  });
+  }, 30_000);
 });
