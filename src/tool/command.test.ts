@@ -20,3 +20,10 @@ describe("bounded credential-free HTTPS transport",()=>{
   it("enforces byte budget before concatenation and forces TLS verification",async()=>{const fetcher=vi.fn().mockResolvedValue(new Response("123456"));vi.stubGlobal("fetch",fetcher);await expect(downloadHttps(new URL("https://example.com/start"),5)).rejects.toThrow(/byte budget/);expect(fetcher.mock.calls[0]?.[1]).toMatchObject({credentials:"omit",redirect:"manual",tls:{rejectUnauthorized:true}});});
   it("follows bounded HTTPS release asset redirects without retry",async()=>{const fetcher=vi.fn().mockResolvedValueOnce(new Response(null,{status:302,headers:{location:"https://assets.example.com/archive"}})).mockResolvedValueOnce(new Response("ok"));vi.stubGlobal("fetch",fetcher);expect((await downloadHttps(new URL("https://example.com/start"),10)).toString()).toBe("ok");expect(fetcher).toHaveBeenCalledTimes(2);});
 });
+
+it.each([false, true])("does not echo malformed declaration bytes in JSON mode %s", async json => {
+  const f = fixture(); const marker = "synthetic-malformed-declaration-marker"; writeFileSync(f.contract, `{"broken":"${marker}" trailing}`);
+  const out: string[] = []; const err: string[] = [];
+  const code = await runFamily({ ...toolCommand, run: c => runTool(c, f.download, "x64") }, ["tool", "install", "--contract", f.contract, "--row", "secretScan", "--bin-dir", f.root, ...(json ? ["--json"] : [])], null, json, { out: line => out.push(line), err: line => err.push(line) }, f.seams);
+  expect(code).toBe(2); expect([...out, ...err].join(" ")).not.toContain(marker); expect(out.join(" ")).toContain("declaration JSON is invalid");
+});

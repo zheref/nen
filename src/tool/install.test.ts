@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { makeTempDir } from "../testing/tempdir.js";
@@ -72,4 +72,20 @@ it("refuses an earlier PATH executable appearing during staged verification", as
   const f = fixture(); const earlier = join(f.root, "earlier"); mkdirSync(earlier);
   const seams = { ...f.seams, env: { PATH: [earlier, f.root].join(delimiter) }, run: (): CommandResult => { const path = join(earlier, "scanner"); writeFileSync(path, "concurrent old tool"); chmodSync(path, 0o700); return { code: 0, stdout: "1.2.3", stderr: "", spawnFailed: false }; } };
   expect(await installTool({ contract: f.path, row: "secretScan", binDir: f.root, seams, arch: "x64", download: f.download })).toMatchObject({ exit: 1, check: "atomic install" }); expect(existsSync(join(f.root, "scanner"))).toBe(false);
+});
+
+it("refuses an implicit Windows current-directory shadow without a child process", async () => {
+  const f = fixture({ platform: "win32", assets: { "win32-x64": "scanner.zip" }, archive: zip() });
+  const cwd = makeTempDir("nen-tool-shadow-"); writeFileSync(join(cwd, "scanner.exe"), "untrusted checkout executable");
+  const spy = vi.spyOn(process, "cwd").mockReturnValue(cwd);
+  try { expect(await f.run()).toMatchObject({ verdict: "refused", check: "installed version", path: join(cwd, "scanner.exe") }); expect(f.calls).toHaveLength(0); expect(f.downloads).toHaveLength(0); }
+  finally { spy.mockRestore(); }
+});
+it.each(["1.2.3+build.7", "v1.2.3-alpha.1+build.007"])("accepts exact SemVer metadata %s", async pin => {
+  const f = fixture({ version: pin }); const data = JSON.parse(readFileSync(f.path, "utf8")); data.secretScan.version = pin; writeFileSync(f.path, JSON.stringify(data));
+  expect(await f.run()).toMatchObject({ exit: 0, verdict: "installed" });
+});
+it.each(["v01.2.3-alpha..1", "1.02.3", "1.2.03", "1.2.3-01", "1.2.3-alpha..1", "1.2.3+build..7", "1.2.3+", "latest"])("refuses invalid exact SemVer %s", async pin => {
+  const f = fixture({ version: pin }); const data = JSON.parse(readFileSync(f.path, "utf8")); data.secretScan.version = pin; writeFileSync(f.path, JSON.stringify(data));
+  expect(await f.run()).toMatchObject({ exit: 2, check: "declaration" }); expect(f.downloads).toHaveLength(0); expect(f.calls).toHaveLength(0);
 });

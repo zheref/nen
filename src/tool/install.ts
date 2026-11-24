@@ -10,13 +10,21 @@ export interface ToolInstallResult {readonly contract:typeof TOOL_INSTALL_CONTRA
 interface Declaration {tool:string;version:string;checksumsUrl:string;assetUrlTemplate:string;assets:Record<string,string>;versionArgv:string[]}
 function record(value:unknown):Record<string,unknown>{if(value===null || typeof value!=="object" || Array.isArray(value))throw new Error("declaration must be an object");return value as Record<string,unknown>;}
 function url(value:string):URL {const result=new URL(value);if(result.protocol!=="https:" || result.username || result.password || result.hash)throw new Error("download URL must use HTTPS without credentials or fragment");return result;}
+function exactVersion(value: string): boolean {
+  const match = /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$/.exec(value);
+  if (match === null) return false;
+  const pre = match[4]; const build = match[5];
+  return (pre === undefined || pre.split(".").every(part => part !== "" && (!/^\d+$/.test(part) || /^(0|[1-9]\d*)$/.test(part)))) && (build === undefined || build.split(".").every(part => part !== ""));
+}
 function declaration(path:string,row:string):Declaration {
   if(!isAbsolute(path))throw new Error("--contract must be an absolute trusted declaration path");
-  const raw=record(JSON.parse(readFileSync(path,"utf8")));if(!Object.hasOwn(raw,row))throw new Error("declared row is missing");const data=record(raw[row]);
+  let parsed: unknown; const text = readFileSync(path,"utf8");
+  try { parsed = JSON.parse(text); } catch { throw new Error("declaration JSON is invalid"); }
+  const raw=record(parsed);if(!Object.hasOwn(raw,row))throw new Error("declared row is missing");const data=record(raw[row]);
   for(const key of ["tool","version","checksumsUrl","assetUrlTemplate"])if(typeof data[key]!=="string" || data[key]==="")throw new Error(`declaration ${key} must be nonempty text`);
   const tool=data["tool"] as string;const version=data["version"] as string;
   if(!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(tool) || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(tool))throw new Error("tool must be a literal executable basename");
-  if(!/^v?\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/.test(version))throw new Error("version must be an exact semver pin, never latest/range");
+  if(!exactVersion(version))throw new Error("version must be an exact semver pin, never latest/range");
   const assets=record(data["assets"]);for(const [host,asset] of Object.entries(assets))if(!/^[a-z0-9]+-[a-z0-9]+$/.test(host) || typeof asset!=="string" || !/^[A-Za-z0-9][A-Za-z0-9._-]*\.(?:tar\.gz|zip)$/.test(asset))throw new Error("assets must map exact host keys to archive basenames");
   const template=data["assetUrlTemplate"] as string;if(template.split("<asset>").length!==2)throw new Error("assetUrlTemplate must contain exactly one <asset> placeholder");url(template.replace("<asset>","asset"));url(data["checksumsUrl"] as string);
   const argv=data["versionArgv"] ?? ["version"];if(!Array.isArray(argv) || argv.length===0 || argv.length>10 || argv.some(arg=>typeof arg!=="string" || /[\x00-\x1f\x7f]/.test(arg)))throw new Error("versionArgv must be a bounded literal string array");
@@ -29,7 +37,7 @@ function pathDirectories(seams: Seams): string[] {
   if (value === "") return [];
   return value.split(delimiter).map(entry => resolve(seams.platform === "win32" ? entry.replace(/^"(.*)"$/, "$1") : entry));
 }
-function effectiveExecutable(seams: Seams, tool: string): string | null {
+function effectiveExecutable(seams: Seams, tool: string): { path: string; implicitWorkingDirectory: boolean } | null {
   const windows = seams.platform === "win32";
   const suffixes = windows ? (seams.env["PATHEXT"] ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(ext => /^\.[a-z0-9]+$/i.test(ext)) : [""];
   const directories = windows ? [process.cwd(), ...pathDirectories(seams)] : pathDirectories(seams);
@@ -38,7 +46,8 @@ function effectiveExecutable(seams: Seams, tool: string): string | null {
     try {
       if (!statSync(candidate).isFile()) continue;
       if (!windows) accessSync(candidate, constants.X_OK);
-      return candidate;
+      const explicit = pathDirectories(seams).some(entry => { try { return realpathSync(entry) === realpathSync(directory); } catch { return false; } });
+      return { path: candidate, implicitWorkingDirectory: windows && !explicit };
     } catch (error) {
       if (!["ENOENT", "ENOTDIR", "EACCES"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
     }
@@ -60,9 +69,10 @@ export async function installTool(options:{contract:string;row:string;binDir:str
     check="installed version";
     const active = effectiveExecutable(options.seams, tool);
     if (active !== null) {
-      const probe = options.seams.run(active, pin.versionArgv, { cwd: binDir });
-      if (probe.code === 0 && !probe.spawnFailed && versionMatches(probe.stdout, pin.version)) return answer("unchanged", 0, `already on PATH at exact pinned version ${pin.version}; nothing changed`, active);
-      return answer("refused", 1, "effective PATH tool differs or could not be verified; no shadowed installation was made", active);
+      if (active.implicitWorkingDirectory) return answer("refused", 1, "implicit Windows working-directory executable shadows PATH; it was not executed", active.path);
+      const probe = options.seams.run(active.path, pin.versionArgv, { cwd: binDir });
+      if (probe.code === 0 && !probe.spawnFailed && versionMatches(probe.stdout, pin.version)) return answer("unchanged", 0, `already on PATH at exact pinned version ${pin.version}; nothing changed`, active.path);
+      return answer("refused", 1, "effective PATH tool differs or could not be verified; no shadowed installation was made", active.path);
     }
     if(existsSync(destination)) {
       const stat=lstatSync(destination);if(!stat.isFile() || stat.isSymbolicLink())throw new Error("existing tool is not a regular file; refusing replacement");
