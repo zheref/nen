@@ -250,6 +250,22 @@ export const REVIEW_THREADS_QUERY = `
     }
   }`;
 
+// ONE page of the repository's OPEN pull requests, oldest first, by CURSOR
+// (zheref/nen#663 round 2, N1): the version-collision limb's inventory. A
+// cursor is a position in the connection, not an offset, so a pull request
+// closed or reopened between two page reads cannot shift a later row out of
+// both passes -- the hole REST `page=N` left. `isCrossRepository` is the fork
+// flag. A query, never a mutation: read-only.
+export const OPEN_PULL_REQUESTS_QUERY = `
+  query($owner:String!, $name:String!, $cursor:String) {
+    repository(owner:$owner, name:$name) {
+      pullRequests(states: OPEN, first: 100, after: $cursor, orderBy: {field: CREATED_AT, direction: ASC}) {
+        pageInfo { hasNextPage endCursor }
+        nodes { number isDraft isCrossRepository baseRefName headRefOid headRepository { nameWithOwner } }
+      }
+    }
+  }`;
+
 // --- connection unwrapping ---------------------------------------------------
 
 // `{ nodes: [...] }` -> `[...]`, and NOTHING else.
