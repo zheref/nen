@@ -46,6 +46,7 @@
 
 import { VerbUsageError } from "../cli/command.js";
 import { plainLine } from "../cli/plain.js";
+import { IDLE_WAIT_MS } from "../phase/ledger.js";
 import { formatRef, OBJECT_REF, parseRef, type ObjectKind } from "../ref/notation.js";
 import type { ReportPhase, ReportUsage } from "./data.js";
 import type { ReportObject } from "./objects.js";
@@ -391,6 +392,11 @@ function slugOf(object: ReportObject, target: string | null): string | null {
  * IS/PR half is guessed is a reference that can be wrong (Nobunaga N4).
  */
 function notationOf(kind: ObjectKind | null, number: number, slug: string | null, codes: NotationSource): { text: string; resolved: boolean } {
+  // A NUMBER <= 0 NAMES NOTHING, AND IS NEVER WRITTEN AS IF IT DID
+  // (zheref/nen#639). `formatRef` refuses it, and the fallback below used to
+  // print `<owner>/<name>#0` instead. Both read paths now leave such a number
+  // out of `linked[]`; this is the last line, so a page never says `#0`.
+  if (!Number.isInteger(number) || number <= 0) return { text: "", resolved: false };
   const code = slug === null ? null : codes.codeFor(slug);
   if (code !== null) {
     try {
@@ -554,6 +560,7 @@ function registerRow(
   // is written kind-free when none does (Nobunaga N4): a PR body's `#12` may be
   // an issue or another pull request, and `linked[]` does not say which.
   const linkedLine = object.linked
+    .filter((number): boolean => Number.isInteger(number) && number > 0)
     .map((number): string => {
       const known = scope.find((other): boolean => sameSlug(other.slug, slug) && other.object.number === number);
       if (known !== undefined) return known.notation;
@@ -660,6 +667,12 @@ export interface SpendPhase {
   readonly percent: string;
   readonly amount: string;
   readonly steps: string;
+  /**
+   * True when the phase's bar and amount EXCLUDE an idle wait (zheref/nen#639):
+   * a wait phase whose untimed time sums to over `IDLE_WAIT_MS`. The amount
+   * then says how much was counted and how much was left out.
+   */
+  readonly idle: boolean;
 }
 
 export interface SpendUsage {
@@ -692,25 +705,42 @@ function sum(entries: readonly ReportUsage[], key: "input" | "output" | "cacheRe
 
 /**
  * One effort's spend block, from its two ledgers, as Hatsu's
- * spiritual-message § 4 builds it: a phase bar's `percent` is its duration
- * over the effort's longest, a usage row is one surface+model with its
- * counters summed, and `actionsMinutes` is the sum of every `minutes` entry --
- * `not read` when none was recorded.
+ * spiritual-message § 4 builds it: a phase bar's `percent` is its COUNTED
+ * duration over the effort's longest counted one, a usage row is one
+ * surface+model with its counters summed, and `actionsMinutes` is the sum of
+ * every `minutes` entry -- `not read` when none was recorded.
+ *
+ * COUNTED, NOT WALL-CLOCK (zheref/nen#639). A readiness phase left open from
+ * one sitting to the final report five days later measured 396726699 ms with
+ * no step inside it, and every other bar was scaled against it to nothing. A
+ * phase whose `idleWaitMs` is above zero is barred on its `countedMs` and its
+ * amount says, in the same breath, what was left out and why -- the wait is
+ * excluded, never hidden. `durationMs` is unchanged everywhere it is carried.
  */
 export function spendEffort(name: string, phases: readonly ReportPhase[], usage: readonly ReportUsage[], note: string): SpendEffort {
   const mine = phases.filter((phase): boolean => phase.effort === name);
-  const longest = Math.max(0, ...mine.map((phase): number => phase.durationMs ?? 0));
-  const spendPhases = mine.map((phase): SpendPhase => ({
-    lane: phase.phase,
-    percent:
-      phase.durationMs === null || longest === 0
-        ? "0"
-        : String(Math.round((phase.durationMs / longest) * 1000) / 10),
-    amount: phase.durationMs === null ? "not ended" : formatDuration(phase.durationMs),
-    steps: phase.steps
-      .map((step): string => `${step.verb} ${step.durationMs === null ? "not timed" : formatDuration(step.durationMs)}`)
-      .join(" · "),
-  }));
+  // `countedMs` ALONE: it is null exactly when the phase is open or its
+  // durations are unreadable (../phase/ledger.ts's `idleWait`), and either
+  // renders `not ended` at 0 % -- never NaN, never outside 0..100.
+  const longest = Math.max(0, ...mine.map((phase): number => phase.countedMs ?? 0));
+  const spendPhases = mine.map((phase): SpendPhase => {
+    const ms = phase.countedMs;
+    const idle = ms !== null && (phase.idleWaitMs ?? 0) > 0;
+    return {
+      lane: phase.phase,
+      percent: ms === null || longest === 0 ? "0" : String(Math.round((ms / longest) * 1000) / 10),
+      amount:
+        ms === null
+          ? "not ended"
+          : idle
+            ? `${formatDuration(ms)} counted · idle wait ${formatDuration(phase.idleWaitMs ?? 0)} excluded (untimed for over ${IDLE_WAIT_MS / 60_000} m)`
+            : formatDuration(ms),
+      steps: phase.steps
+        .map((step): string => `${step.verb} ${step.durationMs === null ? "not timed" : formatDuration(step.durationMs)}`)
+        .join(" · "),
+      idle,
+    };
+  });
   const groups = new Map<string, ReportUsage[]>();
   for (const entry of usage) {
     if (entry.effort !== name) continue;
