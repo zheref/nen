@@ -32,22 +32,22 @@ function declaration(path:string,row:string):Declaration {
 }
 function versionMatches(output:string,version:string):boolean {return output.trim().replace(/^v/,"")===version.replace(/^v/,"");}
 /** Resolve in PATH order before downloading; probing a later copy cannot prove what the user runs. */
-function pathDirectories(seams: Seams): string[] {
+function pathDirectories(seams: Seams, includeEmpty = false): string[] {
   const value = seams.env["PATH"] ?? seams.env["Path"] ?? "";
   if (value === "") return [];
-  return value.split(delimiter).map(entry => seams.platform === "win32" ? entry.replace(/^"(.*)"$/, "$1") : entry).filter(entry => entry !== "").map(entry => resolve(entry));
+  return value.split(delimiter).map(entry => seams.platform === "win32" ? entry.replace(/^"(.*)"$/, "$1") : entry).filter(entry => includeEmpty || entry !== "").map(entry => resolve(entry));
 }
 function effectiveExecutable(seams: Seams, tool: string): { path: string; implicitWorkingDirectory: boolean } | null {
   const windows = seams.platform === "win32";
   const suffixes = windows ? (seams.env["PATHEXT"] ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(ext => /^\.[a-z0-9]+$/i.test(ext)) : [""];
-  const directories = windows ? [process.cwd(), ...pathDirectories(seams)] : pathDirectories(seams);
+  const directories = windows ? [process.cwd(), ...pathDirectories(seams)] : pathDirectories(seams, true);
   for (const directory of directories) for (const suffix of suffixes) {
     const candidate = join(directory, tool + suffix.toLowerCase());
     try {
       if (!statSync(candidate).isFile()) continue;
       if (!windows) accessSync(candidate, constants.X_OK);
       const explicit = pathDirectories(seams).some(entry => { try { return realpathSync(entry) === realpathSync(directory); } catch { return false; } });
-      return { path: candidate, implicitWorkingDirectory: windows && !explicit };
+      return { path: candidate, implicitWorkingDirectory: !explicit };
     } catch (error) {
       if (!["ENOENT", "ENOTDIR", "EACCES"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
     }
@@ -69,7 +69,7 @@ export async function installTool(options:{contract:string;row:string;binDir:str
     check="installed version";
     const active = effectiveExecutable(options.seams, tool);
     if (active !== null) {
-      if (active.implicitWorkingDirectory) return answer("refused", 1, "implicit Windows working-directory executable shadows PATH; it was not executed", active.path);
+      if (active.implicitWorkingDirectory) return answer("refused", 1, "implicit working-directory executable shadows PATH; it was not executed", active.path);
       const probe = options.seams.run(active.path, pin.versionArgv, { cwd: binDir });
       if (probe.code === 0 && !probe.spawnFailed && versionMatches(probe.stdout, pin.version)) return answer("unchanged", 0, `already on PATH at exact pinned version ${pin.version}; nothing changed`, active.path);
       return answer("refused", 1, "effective PATH tool differs or could not be verified; no shadowed installation was made", active.path);

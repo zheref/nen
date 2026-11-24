@@ -98,3 +98,18 @@ it.each(["trailing", "interior", "quoted-empty"])("does not trust an implicit Wi
   try { expect(await installTool({ contract: f.path, row: "secretScan", binDir: f.root, seams, arch: "x64", download: f.download })).toMatchObject({ verdict: "refused", check: "installed version" }); expect(f.calls).toHaveLength(0); expect(f.downloads).toHaveLength(0); }
   finally { spy.mockRestore(); }
 });
+
+it.each(["leading", "interior", "trailing"])("refuses implicit POSIX CWD in the %s PATH position without probing", async kind => {
+  const f = fixture(); const cwd = makeTempDir("nen-tool-posix-shadow-"); const executable = join(cwd, "scanner"); writeFileSync(executable, "implicit executable"); chmodSync(executable, 0o700);
+  const parts = kind === "leading" ? ["", f.root] : kind === "interior" ? [f.root, "", f.root] : [f.root, ""];
+  const seams = { ...f.seams, env: { PATH: parts.join(delimiter) } }; const spy = vi.spyOn(process, "cwd").mockReturnValue(cwd);
+  try { expect(await installTool({ contract: f.path, row: "secretScan", binDir: f.root, seams, arch: "x64", download: f.download })).toMatchObject({ verdict: "refused", check: "installed version", path: executable }); expect(f.calls).toHaveLength(0); expect(f.downloads).toHaveLength(0); }
+  finally { spy.mockRestore(); }
+});
+it("preserves the effective POSIX exact pin ahead of a later implicit CWD slot", async () => {
+  const f = fixture(); const executable = join(f.root, "scanner"); writeFileSync(executable, "explicit exact pin"); chmodSync(executable, 0o700);
+  const cwd = makeTempDir("nen-tool-later-shadow-"); writeFileSync(join(cwd, "scanner"), "later shadow"); chmodSync(join(cwd, "scanner"), 0o700);
+  const seams = { ...f.seams, env: { PATH: [f.root, ""].join(delimiter) } }; const spy = vi.spyOn(process, "cwd").mockReturnValue(cwd);
+  try { expect(await installTool({ contract: f.path, row: "secretScan", binDir: f.root, seams, arch: "x64", download: f.download })).toMatchObject({ verdict: "unchanged", path: executable }); expect(f.calls).toEqual([executable + " version"]); expect(f.downloads).toHaveLength(0); }
+  finally { spy.mockRestore(); }
+});
