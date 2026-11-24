@@ -215,6 +215,125 @@ function pushPlumbed(w: World, extra: string, message: string, drop?: string): s
   return commit;
 }
 
+
+/** Publish only a PR ref: its commit is deliberately absent from core. */
+function publishPr(w: World, number = 650): string {
+  writeFileSync(join(w.O, "README"), `PR ${number} change\n`);
+  commitIn(w.O, `PR ${number}`);
+  const head = headOf(w.O);
+  mustGit(w.O, [...PINNED, "push", "--quiet", "origin", `${head}:refs/pull/${number}/head`]);
+  return head;
+}
+
+const prArgs = (head: string, number = 650): string[] => ["--name", "kagutsuchi", "--pr", String(number), "--head", head];
+
+describe.skipIf(!HAVE_GIT)("NN#650 pinned PR worktrees", () => {
+  it("AC-1 creates detached at the pinned PR head and copies the same ignored files", async () => {
+    const w = world();
+    const head = publishPr(w);
+    const run = await wc([...prArgs(head), ...COPY], w.C, true);
+    expect(run.code, run.err).toBe(0);
+    expect(headOf(w.W)).toBe(head);
+    expect(git(w.W, ["symbolic-ref", "-q", "HEAD"]).code).toBe(1);
+    expect(readFileSync(join(w.W, SECRET), "utf8")).toBe(readFileSync(join(w.C, SECRET), "utf8"));
+    expect(run.doc).toMatchObject({ pr: 650, pinnedHead: head, base: null, tip: head, fetched: true, state: "created" });
+    expect(headOf(w.C)).toBe(w.firstTip);
+  });
+
+  it("AC-2 refuses a moved head naming both commits before creating a worktree", async () => {
+    const w = world();
+    const moved = publishPr(w);
+    const run = await wc(prArgs(w.firstTip), w.C, true);
+    expect(run.code).toBe(2);
+    expect(refusalKind(run)).toBe("head-mismatch");
+    expect(run.err).toContain(w.firstTip);
+    expect(run.err).toContain(moved);
+    expect(existsSync(w.W)).toBe(false);
+    expect(isRegistered(w.C, w.W)).toBe(false);
+  });
+
+  it("AC-3 moves a clean existing worktree to the next pinned head", async () => {
+    const w = await worldWithWorktree();
+    const head = publishPr(w);
+    const run = await wc([...prArgs(head), ...COPY], w.C, true);
+    expect(run.code, run.err).toBe(0);
+    expect(run.doc["state"]).toBe("moved");
+    expect(headOf(w.W)).toBe(head);
+    expect(readFileSync(join(w.W, SECRET), "utf8")).toBe(readFileSync(join(w.C, SECRET), "utf8"));
+  });
+
+  it("AC-4 refuses a dirty worktree listing every dirty path and preserving its head and bytes", async () => {
+    const w = await worldWithWorktree();
+    const head = publishPr(w);
+    writeFileSync(join(w.W, "README"), "dirty tracked\n");
+    writeFileSync(join(w.W, "untracked.txt"), "dirty untracked\n");
+    const run = await wc(prArgs(head), w.C, true);
+    expect(run.code).toBe(2);
+    expect(refusalKind(run)).toBe("dirty");
+    expect(run.err).toContain("README");
+    expect(run.err).toContain("untracked.txt");
+    expect(headOf(w.W)).toBe(w.firstTip);
+    expect(readFileSync(join(w.W, "README"), "utf8")).toBe("dirty tracked\n");
+    expect(readFileSync(join(w.W, "untracked.txt"), "utf8")).toBe("dirty untracked\n");
+  });
+
+  it("preserves an existing worktree on mismatch and removes the scratch ref", async () => {
+    const w = await worldWithWorktree();
+    const moved = publishPr(w);
+    const refs = mustGit(w.C, ["show-ref"]);
+    const run = await wc(prArgs(w.firstTip), w.C, true);
+    expect(refusalKind(run)).toBe("head-mismatch");
+    expect(run.err).toContain(moved);
+    expect(headOf(w.W)).toBe(w.firstTip);
+    expect(mustGit(w.C, ["show-ref"])).toBe(refs);
+    expect(readFileSync(join(w.W, SECRET), "utf8")).toBe(readFileSync(join(w.C, SECRET), "utf8"));
+  });
+
+  it("AC-3 refuses a PR move that would overwrite ignored bytes", async () => {
+    const w = await worldWithWorktree();
+    writeFileSync(join(w.O, SECRET), "tracked by PR\n");
+    mustGit(w.O, ["add", "-f", "--", SECRET]);
+    const head = publishPr(w);
+    const run = await wc(prArgs(head), w.C, true);
+    expect(refusalKind(run)).toBe("would-overwrite-ignored");
+    expect(headOf(w.W)).toBe(w.firstTip);
+    expect(readFileSync(join(w.W, SECRET), "utf8")).toBe(readFileSync(join(w.C, SECRET), "utf8"));
+  });
+
+  it("refuses an absent PR and incompatible or malformed arguments without placing a worktree", async () => {
+    const w = world();
+    const run = await wc(prArgs(w.firstTip), w.C, true);
+    expect(refusalKind(run)).toBe("pr");
+    for (const flags of [
+      ["--pr", "650"], ["--head", w.firstTip],
+      ["--pr", "0", "--head", w.firstTip],
+      ["--pr", "9007199254740993", "--head", w.firstTip],
+      ["--pr", "650", "--head", "HEAD"],
+      ["--base", "main", "--pr", "650", "--head", w.firstTip],
+    ]) {
+      expect((await wc(["--name", "kagutsuchi", ...flags], w.C)).code).toBe(2);
+    }
+    expect(existsSync(w.W)).toBe(false);
+    expect(mustGit(w.C, ["for-each-ref", "--format=%(refname)", "refs/nen/worktree-pr/"])).toBe("");
+  });
+
+  it("AC-5 dry run prints fetch and detached placement without fetching or writing an unknown head", async () => {
+    const w = world();
+    const head = publishPr(w);
+    const refs = mustGit(w.C, ["show-ref"]);
+    const before = walk(w.C);
+    const run = await wc([...prArgs(head), ...COPY, "--dry-run"], w.C);
+    expect(run.code, run.err).toBe(0);
+    expect(run.out).toContain("refs/pull/650/head");
+    expect(run.out).toContain("fetch");
+    expect(run.out).toContain("detach");
+    expect(run.out).toContain(head);
+    expect(mustGit(w.C, ["show-ref"])).toBe(refs);
+    expect(walk(w.C)).toEqual(before);
+    expect(git(w.C, ["cat-file", "-e", head]).code).not.toBe(0);
+  });
+});
+
 describe.skipIf(!HAVE_GIT)("nen wc worktree -- against the real git, one world per test", () => {
   it("refuses a missing --name, a missing --base, a bad name, a bad copy path and a non-checkout, all at exit 2", async () => {
     const w = world();
