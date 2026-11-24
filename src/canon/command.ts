@@ -154,7 +154,8 @@ usage:
   nen canon pin --repo <consumer> [--source <owner/name>] [--json]
       The canonical handbooks repository this consumer mirrors and the TAG it
       is pinned to, read from its own nen/repos.json: the 'pinned' field on
-      that repository's maintained_tools entry. Data, so a sync can check the
+      that repository's maintained_tools entry, plus its recorded pinnedCommit
+      (or explicitly unrecorded for a legacy row). Data, so a sync can check the
       canon out at that tag before rendering, and so 'mirror check' has a pin
       to hold the mirror to. Exit 1 when no pin is recorded (naming the field
       to record it in), when several maintained tools are pinned and --source
@@ -164,10 +165,10 @@ usage:
                 [--canon-checkout <path>] [--dry-run] [--json]
       MOVES the pin: writes <tag> into maintained_tools[].pinned of the SAME
       row the read form answers from -- the last row naming the source,
-      compared case-insensitively -- and changes no other byte of the file:
-      formatting, key order, the other rows and a trailing newline are kept,
-      and the new text is proved to parse to the old document with that one
-      value changed before anything is written. The registry is resolved,
+      compared case-insensitively -- and records its resolved pinnedCommit.
+      All unrelated bytes are kept, including formatting, key order, other
+      rows and a trailing newline. The parsed change is proved to contain
+      only the intended pin and commit updates before anything is written. The registry is resolved,
       checked for containment and re-read from that checked path only AFTER
       the tag resolution's git calls; the write is atomic (a temporary file
       beside it, renamed over it) and re-asserts, after opening the temporary
@@ -929,12 +930,12 @@ function checkoutDocument(resolution: CheckoutResolution): Record<string, unknow
   };
 }
 
-function resolveCheckout(context: CommandContext, root: string, source: string, ref: string): CheckoutResolution {
+function resolveCheckout(context: CommandContext, root: string, source: string, ref: string, flag = optionalValue(context, "canon-checkout")): CheckoutResolution {
   const known = existsSync(join(root, REPOS_FILE)) ? loadRepoRegistry(root) : null;
   const knownKey = known === null ? undefined : pinKey(known.toolPins, source);
   const expected = knownKey === undefined || known?.toolPins[knownKey] !== ref ? undefined : known.toolPinCommits?.[knownKey];
   if (expected !== undefined) {
-    const tag = resolveCanonTag({ root, source, ref, flag: optionalValue(context, "canon-checkout"), declaration: declarationFor(root, source), seams: context.seams });
+    const tag = resolveCanonTag({ root, source, ref, flag, declaration: declarationFor(root, source), seams: context.seams });
     if (tag.failure !== null || tag.verified === null) return { ...tag, verified: null };
     if (tag.verified.tagCommit.toLowerCase() !== expected.toLowerCase()) return { ...tag, verified: null, failure: { code: "moved-tag", message: `moved tag '${ref}': recorded ${expected}, found ${tag.verified.tagCommit}` } };
   }
@@ -942,7 +943,7 @@ function resolveCheckout(context: CommandContext, root: string, source: string, 
     root,
     source,
     ref,
-    flag: optionalValue(context, "canon-checkout"),
+    flag,
     declaration: declarationFor(root, source),
     seams: context.seams,
   });
@@ -1034,7 +1035,7 @@ function resolveVerb(context: CommandContext): number {
       const canonRoot = resolveAgainstRepo(root, canonRootFlag);
       const manifest = readHandbookManifest(canonRoot, manifestFlag);
       const stack = Object.hasOwn(manifest.scenarios, scenarioResult.scenario) ? manifest.scenarios[scenarioResult.scenario] : undefined;
-      if (stack === undefined) return refuse(context.io, context.json, "canon resolve", 1, [`invalid-scenario '${scenarioResult.scenario}' for ${target.slug} in ${registry.path}: absent from ${manifest.path}`]);
+      if (stack === undefined) return refuse(context.io, context.json, "canon resolve", 1, [`invalid-scenario '${scenarioResult.scenario}' for ${target.slug} in ${registry.path} (${scenarioResult.sourceRows.join(", ")}): absent from ${manifest.path}`]);
       const port = portFrom === null ? null : portPair(canonRoot, context.args.values["ports-dir"] ?? "handbooks/ports", portFrom, scenarioResult.scenario, Object.keys(manifest.scenarios));
       if (portFrom !== null && port === null) context.io.err(`no port handbook for ${portFrom}--${scenarioResult.scenario}: no rulings file yet`);
       const resolution = { scenario: scenarioResult.scenario, alwaysLoad: manifest.alwaysLoad, stackHandbook: stack, portHandbook: port, manifest: manifest.path, availability: "verified" };
@@ -1042,7 +1043,7 @@ function resolveVerb(context: CommandContext): number {
       return 0;
     } catch (error) {
       if (portFrom !== null && error instanceof Error && /--port-from|--ports-dir/.test(error.message)) throw new VerbUsageError(error.message);
-      return refuse(context.io, context.json, "canon resolve", 1, [`${target.slug} scenario '${scenarioResult.scenario}' (${registry.path}): ${error instanceof Error ? error.message : String(error)}`]);
+      return refuse(context.io, context.json, "canon resolve", 1, [`${target.slug} scenario '${scenarioResult.scenario}' (${registry.path}: ${scenarioResult.sourceRows.join(", ")}): ${error instanceof Error ? error.message : String(error)}`]);
     }
   }
   if (portFrom !== null && canonRootFlag === null) throw new VerbUsageError("--port-from requires --canon-root (and optionally --manifest) to prove stack membership and pair availability");
@@ -1246,6 +1247,22 @@ function readMirrorInputs(context: CommandContext): MirrorInputs {
     const tag = context.seams.run("git", ["-C", rulesDir, "rev-parse", "--verify", `refs/tags/${ref}^{commit}`], { env: verificationGitEnv(context.seams.env) });
     const found = tag.stdout.trim();
     if (tag.code !== 0 || found.toLowerCase() !== recordedCommit.toLowerCase()) throw new VerbUsageError(`moved tag '${ref}' or unreadable tag: recorded ${recordedCommit}, found ${found || "(unreadable)"}`);
+  }
+
+  const explicitCanonRoot = optionalValue(context, "canon-root");
+  if (rulesDirFlag !== null && explicitCanonRoot !== null) {
+    checkout = resolveCheckout(context, root, source, ref, explicitCanonRoot);
+    if (checkout.failure !== null || checkout.path === null) {
+      throw new VerbUsageError(plainLine(`--canon-root is not the verified source checkout (${checkout.failure?.code ?? "unresolvable"}): ${checkout.failure?.message ?? "no path"}`));
+    }
+    const realRules = resolvedOrSelf(rulesDir, undefined, context.seams.platform);
+    if (!containedOn(checkout.path, rulesDir, context.seams.platform) || !containedOn(checkout.path, realRules, context.seams.platform) || samePath(checkout.path, realRules, context.seams.platform)) {
+      throw new VerbUsageError("--rules-dir must be inside the verified --canon-root checkout (symbolic links resolved)");
+    }
+    rulesDir = realRules;
+  }
+  if (checkout?.path !== null && checkout?.path !== undefined && explicitCanonRoot !== null && !samePath(checkout.path, resolvedOrSelf(resolveAgainstRepo(root, explicitCanonRoot), undefined, context.seams.platform), context.seams.platform)) {
+    throw new VerbUsageError("--canon-root must name the verified canon checkout");
   }
 
   const pin: CanonPin = { source, ref, scenario };
