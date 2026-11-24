@@ -9466,7 +9466,9 @@ refused at exit 2 as there, and here before any tool runs, `gh` included.
 
 **Post-cut reading.** Add `--expect-tag-at <commit-sha>` after the tag is cut.
 Only the tag row changes: it passes when origin resolves that tag to the caller's
-expected cut commit, and fails naming absence, another commit, or unreadable
+expected cut commit. The expected SHA must name a locally readable commit;
+`git cat-file -t` runs with replacement objects and lazy fetching disabled.
+The tag row fails naming absence, another commit, or unreadable
 remote evidence. Annotated tags are compared by their peeled object, not their
 tag-object hash. `--tag` is a literal name, never a `^{}` selector. A failed remote
 read remains a tooling failure, never an absent tag. Every other row keeps its

@@ -167,7 +167,9 @@ preflight:
   --expect-tag-at <commit-sha>
                             Post-cut reading: require the tag on origin at this
                             full 40-character commit SHA (the caller's cut
-                            commit). Annotated tags use the peeled object.
+                            commit). It must be a locally readable commit,
+                            checked without replacements or lazy fetching.
+                            Annotated tags use the peeled object.
                             Absent, mismatched or unreadable tag evidence fails.
                             Every other row is unchanged. Omit for the original
                             pre-cut requirement that the tag does not exist.
@@ -447,6 +449,10 @@ export const releaseCommand: Command = {
       fragmentNames: fragmentFiles,
     });
 
+    const expectedType = expectedCommit === null ? null : context.seams.run(GIT, ["cat-file", "-t", expectedCommit], {
+      cwd: root, env: { GIT_NO_LAZY_FETCH: "1", GIT_NO_REPLACE_OBJECTS: "1" },
+    });
+    const expectedIsCommit = expectedType !== null && !expectedType.spawnFailed && expectedType.code === 0 && expectedType.stdout.trim() === "commit";
     const tagsResult = must(context.seams, GIT, ["ls-remote", "--tags", "origin"], { cwd: root });
     const tagAlreadyExists = outputLines(tagsResult.stdout).some((line): boolean => line.endsWith(`refs/tags/${tag}`));
 
@@ -461,7 +467,7 @@ export const releaseCommand: Command = {
       missingChangelogPrs: reconciliation.missing,
       releasePrAllowance: reconciliation.releasePrAllowance,
       tagAlreadyExists,
-      ...(expectedCommit === null ? {} : { postCutTag: { expectedCommit, listing: tagsResult.stdout } }),
+      ...(expectedCommit === null ? {} : { postCutTag: { expectedCommit, listing: tagsResult.stdout, expectedIsCommit } }),
       tag,
     });
 
