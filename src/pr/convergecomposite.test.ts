@@ -98,6 +98,19 @@ async function judge(calls: readonly ScriptedCall[], source: PrStateSource = rea
 }
 
 describe("pr converge --composite (zheref/nen#483 AC-1)", () => {
+  it("reports selected comment and ignored body through the composite criteria conjunct (#610)", async () => {
+    const body = "<!-- nen:issue-criteria -->\n" + ISSUE;
+    const url = "https://github.com/zheref/example/issues/12#issuecomment-7";
+    const result = await judge([
+      view(BODY, [12]), issueCall("- AC-9: ignored"),
+      { match: "gh api repos/zheref/example/issues/12/comments?per_page=100&page=1", result: { stdout: JSON.stringify([{ node_id: "C7", body, html_url: url }]) } },
+      { match: "gh api graphql -f query=query($id:ID!){node(id:$id){... on IssueComment{body url authorAssociation author{login} editor{login}}}} -f id=C7", result: { stdout: JSON.stringify({ data: { node: { body, url, authorAssociation: "OWNER", author: { login: "owner" }, editor: null } } }) } },
+      headCall(),
+    ]);
+    expect(result.ready).toBe(true);
+    expect(result.conjuncts.find(row => row.name === "criteria")?.lines).toContain(`CRITERIA SOURCE zheref/example#12: ${url}; ignored: https://github.com/zheref/example/issues/12`);
+    expect(JSON.stringify(result.conjuncts)).toContain(url);
+  });
   it("reports readiness, the body check, the closing links and the criteria at the pinned head: all four hold", async () => {
     const verdict = await judge([view(BODY, [12]), issueCall(ISSUE), headCall()]);
     expect(verdict.conjuncts.map((c) => [c.name, c.ok])).toEqual([

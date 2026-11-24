@@ -19,7 +19,7 @@
 // wrong number of cells) is `malformed-row`, never skipped, and two rows for
 // one criterion are `duplicate-rows`: nen will not pick one.
 
-import { criterionCellPatterns, criterionGrammar, criterionId, DEFAULT_CRITERION_GRAMMAR, MAX_CRITERION_CELL, MAX_QUALIFIED_CELL, maskedLines, readIdRows, sectionLines, type CriterionGrammar, type IssueSectionsCatalogue } from "./shape.js";
+import { LIST_LEAD, criterionCellPatterns, criterionGrammar, criterionId, DEFAULT_CRITERION_GRAMMAR, MAX_CRITERION_CELL, MAX_QUALIFIED_CELL, maskedLines, readIdRows, sectionLines, type CriterionGrammar, type IssueSectionsCatalogue } from "./shape.js";
 
 /** The `--json` contract of `nen issue criteria`. */
 export const ISSUE_CRITERIA_CONTRACT = "nen.issue.criteria/v0.1";
@@ -71,7 +71,9 @@ export function extractCriteria(body: string, catalogue: IssueSectionsCatalogue 
   const open = rule?.pattern === undefined ? null : new RegExp(rule.pattern);
   const resolved = rule?.resolvedPattern === undefined ? null : new RegExp(rule.resolvedPattern);
   const admitted = scope.filter((line) => {
-    const canonical = line.text.replace(/^\s*[-*+]\s+/, "- ");
+    const lead = LIST_LEAD.exec(line.text);
+    if (lead === null || (lead[1] ?? "").includes(">")) return true;
+    const canonical = `- ${line.text.slice(lead[0].length)}`;
     return resolved === null || !resolved.test(canonical);
   });
   const read = readIdRows(admitted, grammar.prefix, grammar.tail, open);
@@ -129,10 +131,10 @@ function unwrap(cell: string): string {
 /** A table line's cells, split on unescaped pipes (GFM: a pipe inside a code span splits too unless escaped). */
 function cellsOf(text: string): string[] | null {
   const trimmed = text.trim();
-  if (!trimmed.startsWith("|")) return null;
+  if (!trimmed.includes("|")) return null;
   const cells: string[] = [];
   let current = "";
-  for (let index = 1; index < trimmed.length; index += 1) {
+  for (let index = trimmed.startsWith("|") ? 1 : 0; index < trimmed.length; index += 1) {
     const char = trimmed[index] as string;
     if (char === "\\" && trimmed[index + 1] === "|") {
       current += "|";
@@ -187,9 +189,12 @@ export function readVerifyRows(body: string, grammar: CriterionGrammar = DEFAULT
   const lines = maskedLines(body, { keepInlineCode: true });
   for (const [index, line] of lines.entries()) {
     const cells = cellsOf(line.text);
-    if (cells === null || cells.length === 0) { table = true; continue; }
+    if (cells === null || cells.length === 0) {
+      if (line.text.trim() === "" || /^ {0,3}(?:#|>|[-+*]\s|\d+[.)]\s)/.test(line.text)) table = true;
+      continue;
+    }
     const next = cellsOf(lines[index + 1]?.text ?? "");
-    if (next !== null && next.every((cell) => /^:?-{3,}:?$/.test(cell))) {
+    if (next !== null && next.every((cell) => /^:?-+:?$/.test(cell))) {
       table = cells.length === 3 && cells.map(unwrap).map((cell) => cell.toLowerCase()).join("|") === "criterion|coverage|evidence";
       continue;
     }

@@ -348,6 +348,13 @@ describe("catalogue annotated and withdrawn acceptance rows (#553)", () => {
     };
     const catalogue = parseCatalogue(raw);
     const body = "## Acceptance criteria\n\n- AC-12-001 (P1): Given a When b Then c\n- ~~AC-12-002~~ withdrawn: folded (2026-10-22)";
+    for (const lead of ["1.", "1)", "- [x]", "* [ ]"]) {
+      const resolvedBody = body.replace("- ~~AC-12-002~~", `${lead} ~~AC-12-002~~`);
+      expect(extractCriteria(resolvedBody, catalogue).unrecognised).toEqual([]);
+    }
+    expect(extractCriteria(body.replace("- ~~AC-12-002~~", "> - ~~AC-12-002~~"), catalogue).unrecognised).toHaveLength(1);
+    const content = extractCriteria("## Acceptance criteria\n- AC-1: Given label (P1): x When b Then c", catalogue);
+    expect(content.criteria[0]?.text).toBe("Given label (P1): x When b Then c");
     const report = extractCriteria(body, catalogue);
     expect(report.criteria.map((row) => row.id)).toEqual(["AC-12-001"]);
     expect(report.unrecognised).toEqual([]);

@@ -176,3 +176,13 @@ describe("criterion table scope (#558)", () => {
     expect(rows.every((row) => row.problem !== null)).toBe(true);
   });
 });
+
+
+describe("Markdown table forms retain scope (#558)", () => {
+  it.each([
+    "| How | Coverage | Evidence |\n|-|-|-|",
+    "How | Coverage | Evidence\n-|-|-",
+  ])("ignores unrelated table %s until a new block", header => {
+    expect(readVerifyRows(`${header}\nAC-x | satisfied | unrelated\npipe-free row\n| AC-1 | satisfied | still unrelated |\n\n| AC-2 | satisfied | actual |`).map(row => row.cell)).toEqual(["AC-2"]);
+  });
+});

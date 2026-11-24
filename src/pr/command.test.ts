@@ -1326,7 +1326,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
   // FIRST -- against this pull request's own known bots, then against
   // --target's collaborators -- before either route is called.
   const KNOWN_BOTS_TARGET: Target = { owner: "zheref", repo: "nen", slug: "zheref/nen" };
-  const NO_KNOWN_BOTS = { stdout: JSON.stringify({ data: { repository: { defaultBranchRef: { name: "main", target: { oid: "BASE1" } }, pullRequest: { id: "PR_1", baseRefOid: "BASE1", reviewRequests: { nodes: [] }, timelineItems: { nodes: [] } } } } }) };
+  const NO_KNOWN_BOTS = { stdout: JSON.stringify({ data: { repository: { defaultBranchRef: { name: "main", target: { oid: "BASE1" } }, pullRequest: { id: "PR_1", baseRefOid: "BASE1", headRefOid: "a".repeat(40), reviewRequests: { nodes: [] }, timelineItems: { nodes: [] } } } } }) };
   const KNOWN_BOT_COPILOT = {
     stdout: JSON.stringify({
       data: {
@@ -1366,6 +1366,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
       data: {
         requestReviews: {
           pullRequest: {
+            headRefOid: "a".repeat(40),
             reviewRequests: {
               nodes: logins.map((login, index): unknown => ({
                 requestedReviewer: { __typename: "Bot", login, id: ids?.[index] ?? `BOT_${index + 1}` },
@@ -1506,9 +1507,10 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
   // zheref/nen#277: the call zheref/hatsu#123, #128 and #130 made on
   // 2026-09-29 -- accepted, answered, and recording nothing. It used to exit 0
   // with "(none reported back)" while no review was ever coming.
-  const BOT_MUTATION_RECORDS_NOTHING = {
-    stdout: JSON.stringify({ data: { requestReviews: { pullRequest: { reviewRequests: { nodes: [] } } } } }),
-  };
+  const botMutationRecordsNothing = (head = "a".repeat(40)): { stdout: string } => ({
+    stdout: JSON.stringify({ data: { requestReviews: { pullRequest: { headRefOid: head, reviewRequests: { nodes: [] } } } } }),
+  });
+  const BOT_MUTATION_RECORDS_NOTHING = botMutationRecordsNothing();
 
   it("exits 9 naming the bot when GitHub accepts an --add-bots request but records no pending review for it (zheref/nen#277)", async () => {
     const script: readonly ScriptedCall[] = [
@@ -1527,11 +1529,15 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
     expect(out).not.toMatch(/none reported back/);
   });
 
-  it("--json carries the same fact: ok false, unrecordedBots naming the bot, under exit 9", async () => {
+  it.each([["a".repeat(40), "a".repeat(40)], ["b".repeat(40), null]] as const)("--json binds an exit-9 response to a matching mutation head (%s)", async (mutationHead, requestHead) => {
     const script: readonly ScriptedCall[] = [
       { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS },
       ...NO_BASE_GATES,
-      { match: `gh ${requestBotReviewsArgv("PR_1", ["BOT_kgDOCnlnWA"]).join(" ")}`, result: BOT_MUTATION_RECORDS_NOTHING },
+      { match: `gh ${requestBotReviewsArgv("PR_1", ["BOT_kgDOCnlnWA"]).join(" ")}`, result: botMutationRecordsNothing(mutationHead) },
+      {
+        match: `gh ${botNodesArgv(["BOT_kgDOCnlnWA"]).join(" ")}`,
+        result: { stdout: JSON.stringify({ data: { nodes: [{ __typename: "Bot", id: "BOT_kgDOCnlnWA", login: "reviewer-bot" }] } }) },
+      },
     ];
     const result = await capture(
       ["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-bots", "BOT_kgDOCnlnWA", "--json"],
@@ -1541,7 +1547,8 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
     expect(result.code).toBe(9);
     const report = JSON.parse(result.out.join("\n")) as { ok: boolean; unrecordedBots: unknown; message: string; routing: unknown };
     expect(report.ok).toBe(false);
-    expect(report.unrecordedBots).toEqual([{ id: "BOT_kgDOCnlnWA", login: null }]);
+    expect(report.unrecordedBots).toEqual([{ id: "BOT_kgDOCnlnWA", login: "reviewer-bot" }]);
+    expect(report).toMatchObject({ repo: "zheref/nen", pr: 9, exitCode: 9, requestHead });
     expect(report.message).toContain("cannot determine allowance exhaustion");
     expect(report.message).toMatch(/its response did not list it for BOT_kgDOCnlnWA/);
     expect(report.routing).toEqual([{ name: "BOT_kgDOCnlnWA", via: "add-bots", route: "bot", id: "BOT_kgDOCnlnWA" }]);
@@ -1592,6 +1599,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
     const report = JSON.parse(result.out.join("\n")) as { ok: boolean; unrecordedBots: unknown; message: string };
     expect(report.ok).toBe(false);
     expect(report.unrecordedBots).toEqual([{ id: "BOT_kgDOCnlnWA", login: null }]);
+    expect(report).toMatchObject({ repo: "zheref/nen", pr: 9, exitCode: 1, requestHead: "a".repeat(40) });
     expect(report.message).toContain("cannot determine allowance exhaustion");
   });
 
@@ -1610,6 +1618,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
     const report = JSON.parse(result.out.join("\n")) as { ok: boolean; unrecordedBots: unknown; message: string };
     expect(report.ok).toBe(true);
     expect(report.unrecordedBots).toEqual([]);
+    expect(report).toMatchObject({ exitCode: 0, requestHead: "a".repeat(40) });
   });
 
   // ── the round ceiling, round_policy.maxRounds (zheref/nen#240) ───────────
@@ -2899,7 +2908,7 @@ describe("nen pr mark-ready (registry wiring onto ./markready.ts)", () => {
     const seams = new ScriptedSeams([]);
     const result = await capture([...base, "--token-env", "MY_TOKEN"], null, seams);
     expect(result.code).toBe(2);
-    expect(result.err.join("\n")).toContain("--token-env is only read by 'pr ready'; mark-ready runs on whatever credential gh resolves");
+    expect(result.err.join("\n")).toContain("--token-env is only read by 'pr ready' and 'pr version-collision'; mark-ready runs on whatever credential gh resolves");
     expect(seams.calls.length).toBe(0);
   });
 
@@ -3051,7 +3060,7 @@ describe("the family's one flag guard (zheref/nen#351)", () => {
       expect(result.code).toBe(2);
       const err = result.err.join("\n");
       expect(err).toContain(`--token-env is not read by 'pr ${label}'.`);
-      expect(err).toContain("--token-env is only read by 'pr ready';");
+      expect(err).toContain("--token-env is only read by 'pr ready' and 'pr version-collision';");
       expect(seams.calls.length).toBe(0);
     });
 
@@ -3061,7 +3070,7 @@ describe("the family's one flag guard (zheref/nen#351)", () => {
       expect(result.code).toBe(2);
       const err = result.err.join("\n");
       expect(err).toContain(`--gh-repo is not read by 'pr ${label}'.`);
-      expect(err).toContain("--gh-repo is only read by 'pr ready'");
+      expect(err).toContain("--gh-repo is only read by 'pr ready' and 'pr version-collision'");
       expect(seams.calls.length).toBe(0);
     });
   }
@@ -3083,7 +3092,7 @@ describe("the family's one flag guard (zheref/nen#351)", () => {
   it("points --gh-repo at --target on a subcommand that reads --target", async () => {
     const result = await capture(["pr", "fetch", "--target", "zheref/nen", "--pr", "12", "--gh-repo", "acme/widgets"], null, new ScriptedSeams([]));
     expect(result.code).toBe(2);
-    expect(result.err.join("\n")).toContain("--gh-repo is only read by 'pr ready'; 'pr fetch' names its repository with --target <owner/name>.");
+    expect(result.err.join("\n")).toContain("--gh-repo is only read by 'pr ready' and 'pr version-collision'; 'pr fetch' names its repository with --target <owner/name>.");
   });
 
   it("names EVERY subcommand that reads a flag, not only 'pr ready'", async () => {
@@ -3094,7 +3103,7 @@ describe("the family's one flag guard (zheref/nen#351)", () => {
       [[...mark, "--base", "main"], "--base is only read by 'pr body-check', 'pr retarget' and 'pr open'."],
       [[...mark, "--body-file", BODY], "--body-file is only read by 'pr edit-body', 'pr threads reply' and 'pr open'."],
       [["pr", "fetch", "--target", "zheref/nen", "--pr", "12", "--from", SETTLE], "--from is only read by 'pr threads settle'."],
-      [["pr", "fetch", "--target", "zheref/nen", "--pr", "12", "--require-head", "abcdef1"], "--require-head is only read by 'pr ready', 'pr converge', 'pr mark-ready' and 'pr merge --delivery'."],
+      [["pr", "fetch", "--target", "zheref/nen", "--pr", "12", "--require-head", "abcdef1"], "--require-head is only read by 'pr ready', 'pr version-collision', 'pr converge', 'pr mark-ready' and 'pr merge --delivery'."],
     ];
     for (const [argv, message] of cases) {
       const result = await capture(argv, null, new ScriptedSeams([]));
@@ -3171,18 +3180,18 @@ describe("the family's one flag guard (zheref/nen#351)", () => {
     const err = list.err.join("\n");
     expect(err).toContain("--from is not read by 'pr threads list'. --from is only read by 'pr threads settle'.");
     expect(err).toContain("--thread is not read by 'pr threads list'. --thread is only read by 'pr threads reply' and 'pr threads resolve'.");
-    expect(err).toContain("--token-env is not read by 'pr threads list'. --token-env is only read by 'pr ready';");
+    expect(err).toContain("--token-env is not read by 'pr threads list'. --token-env is only read by 'pr ready' and 'pr version-collision';");
     expect(seams.calls.length).toBe(0);
   });
 
   // Nobunaga 9 (hanten round 1): the form that reads it, not the one that refuses it.
   it("names 'pr merge --delivery' for --require-head", () => {
-    expect(prFlagOwners("require-head")).toEqual(["'pr ready'", "'pr converge'", "'pr mark-ready'", "'pr merge --delivery'"]);
+    expect(prFlagOwners("require-head")).toEqual(["'pr ready'", "'pr version-collision'", "'pr converge'", "'pr mark-ready'", "'pr merge --delivery'"]);
   });
 
   // Nobunaga 6 (hanten round 1): no default credential claim.
   it("states --token-env advice for every subcommand but ready, and has no default", () => {
-    expect([...PR_TOKEN_ENV_ADVICE_KEYS].sort()).toEqual(PR_SUBCOMMANDS.filter((name): boolean => name !== "ready").sort());
+    expect([...PR_TOKEN_ENV_ADVICE_KEYS].sort()).toEqual(PR_SUBCOMMANDS.filter((name): boolean => name !== "ready" && name !== "version-collision").sort());
   });
 
   // Nobunaga 5, BC-9 (hanten round 1): the derived tests above take both sides
@@ -3196,6 +3205,7 @@ describe("the family's one flag guard (zheref/nen#351)", () => {
         booleans: ["explain", "require-base-gates"],
         lists: ["exclude-check", "reviewer-login"],
       },
+      "version-collision": { values: ["target", "pr", "gh-repo", "token-env", "require-head"], booleans: ["explain"] },
       staleness: { values: ["wakes-from", "last-activity", "now", "min-verified-wakes", "idle-minutes"], booleans: ["ready"] },
       "body-check": { values: ["body-from", "requirements-from", "base", "max", "prose-budget", "criteria", "criteria-from", "criteria-issue", "catalogue"], booleans: ["exact"] },
       sections: { values: ["catalogue", "kind", "family", "with", "overrides", "taxonomy", "jobs"] },
@@ -3227,8 +3237,8 @@ describe("the family's one flag guard (zheref/nen#351)", () => {
     }
     // The spread zheref/nen#351 named is no longer the family's: --token-env
     // and --gh-repo belong to 'pr ready' alone.
-    expect(prFlagOwners("token-env")).toEqual(["'pr ready'"]);
-    expect(prFlagOwners("gh-repo")).toEqual(["'pr ready'"]);
+    expect(prFlagOwners("token-env")).toEqual(["'pr ready'", "'pr version-collision'"]);
+    expect(prFlagOwners("gh-repo")).toEqual(["'pr ready'", "'pr version-collision'"]);
   });
 });
 

@@ -300,5 +300,5 @@ export function criteriaConjunct(input: ConvergeInput, policy: CoveragePolicy = 
         ? "criteria: GitHub lists no closing issue and the body names none on a non-default base -- no criterion to compare"
         : "criteria: closes no issue -- no criterion to compare"
       : `criteria: ${report.criteria.length} criterion row(s) across ${input.issues.length} closing issue(s), ${report.blocking.length} blocking`;
-  return { name: "criteria", ok: report.blocking.length === 0, lines: [head, ...report.blocking.map((line): string => `  BLOCKING ${line}`)], blocking: report.blocking };
+  return { name: "criteria", ok: report.blocking.length === 0, lines: [head, ...input.issues.flatMap(issue => issue.report.criteriaSource?.kind === "comment" ? [`CRITERIA SOURCE ${issue.target}#${issue.number}: ${issue.report.criteriaSource.url}; ignored: ${issue.report.criteriaSource.ignored.join(", ")}`] : []), ...report.blocking.map((line): string => `  BLOCKING ${line}`)], blocking: report.blocking };
 }

@@ -1,0 +1,23 @@
+acme/widget#9: ready
+  judged head: cafebabe (GitHub's head for this pull request when it was read; the verdict is about this commit)
+aiReviewers required; base basebase: required (workflow file absent); default tip basebase: required (workflow file absent)
+
+  head cafebabe · reviewers sasuke,tenma,copilot · approvers sasuke,tenma
+  policy bounded · delivery PR no · identities <GATES> (--gates, the caller's file)
+  decided by nen 0.30.0 (/opt/nen/nen-linux-x64) at 2025-01-01T00:00:00Z
+
+  The gate is a CONJUNCTION. Every row is evaluated; the verdict is ready only
+  when every row is ready, and the line above is the first failing row's reason.
+  An 'unknown' row could not be computed, names the missing fact, and is never a pass.
+
+  1  ready       CON-42/1          Mergeable
+  2  ready       CON-32(a)         Every reported check green, on the latest run per check name
+  3  ready       CON-32(b)         No configured reviewer's requested round has stalled
+  4  ready       CON-32(b)         No configured reviewer's round owed at the current head
+  5  ready       CON-32(b)/CON-16  Every approving reviewer's latest round is an APPROVE at the current head
+  6  ready       CON-32(d)         Zero unresolved review threads
+
+  What the gate does NOT decide:
+  - CON-32(c): "Addressed" is APPROXIMATED by a current-head review round, an APPROVE when approval_policy is 'required', and zero unresolved threads. The gate cannot read whether a thread's substance was actually answered. Replying remains the author's obligation.
+  - CON-32(a): That a BUILD check exists specifically is NOT asserted -- only that at least one check reported and that every reported check is green on its latest run. An EMPTY rollup FAILS, so absence is a finding here and never a pass; what the gate cannot tell you is WHICH checks reported. Confirm by eye that the one your repository requires is among them.
+  - CON-32(e): A reviewer finding with NO thread object -- a suppressed-comments block rendered in the review BODY -- has nothing for the unresolved-threads row to count. Read the review bodies, not only their threads.

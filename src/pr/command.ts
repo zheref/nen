@@ -52,6 +52,7 @@ import { declarationWarnings } from "../gates/ready.js";
 import { GH, must, redactRemoteCredentials, type Seams } from "../seam/exec.js";
 import { parseTarget, type Target , TargetError} from "../github/target.js";
 import { classifyGatesPath, PR_READY_FLAGS, prReady, resolveIdentities } from "../verbs/pr_ready.js";
+import { PR_VERSION_COLLISION_FLAGS, prVersionCollision } from "../verbs/pr_version_collision.js";
 import type { FlagSpec } from "../cli/args.js";
 import { conjoin } from "../cli/prose.js";
 import { checkBody, validateRequirements, BodyCheckError, type BodyRequirement, type BodyCheckOptions } from "./bodycheck.js";
@@ -92,6 +93,7 @@ import {
 import {
   EXIT_BOT_REQUEST_UNRECORDED,
   botLoginKey,
+  matchesBotLogin,
   isReviewerNodeId,
   isBotLoginInput,
   isBotLoginAlias,
@@ -159,6 +161,7 @@ function requirePr(context: CommandContext): number {
 
 const USAGE = `nen pr ready --target <owner/name> --pr <n> [the same ready options below]
 nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [--reviewer-login <name>=<login>]... [--approvers <a,b>] [--round-policy strict|bounded] [--exclude-run <id>] [--exclude-check <name>]... [--gates <path>] [--token-env <VAR>] [--require-head <sha>] [--require-base-gates]
+nen pr version-collision <ref> [--target <owner/name>] [--pr <n>] [--gh-repo <owner/name>] [--token-env <VAR>] [--require-head <sha>] [--explain] [--json]
 nen pr staleness --wakes-from <path> --last-activity <ISO> --now <ISO> [--ready] [--min-verified-wakes <n>] [--idle-minutes <n>]
 nen pr body-check --body-from <path> [--requirements-from <path> | --base <ref>]
                   [--exact [--max <n>]] [--prose-budget <words>]
@@ -380,6 +383,32 @@ ready:
                               anything else: exit 8, status head-mismatch, both
                               SHAs printed, and NO verdict. The verb never
                               waits or retries; polling is the caller's.
+
+version-collision:
+  The trusted-CI read of one pull request's LIVE plugin-version collision
+  (zheref/nen#663), by the SAME evaluator 'pr ready' folds into its CON-32(a)
+  row. Opt-in: nen/gates.json's version_collision block AT THE DEFAULT-BRANCH
+  TIP decides (the base's and the checkout's copies only warn when they
+  differ). If that file cannot be read, parsed or validated, the repository
+  is opted in only when its raw JSON or another copy shows version_collision
+  (then unknown, exit 1); otherwise not-applicable, exit 0, with a warning
+  that the policy could not be read and no copy shows the opt-in. A pull
+  request that changes a shipped path must propose a version
+  no target tip holds and no other open same-repository pull request proposes
+  (drafts included; a fork never blocks, and is named in a warning). Status
+  not-applicable | clear | collision | unknown; unknown names every missing
+  piece of evidence -- a failed, capped or over-budget read, or anything that
+  moved between the two passes. Read-only. Exit 0 clear or not-applicable; 1
+  collision or unknown; 2 usage; 8 head-mismatch. --json: { contract:
+  'nen.pr.version-collision/v0.1', status, line, judgedHead, base, default,
+  policySource, policy, proposedVersion, collisions[] (kind base | unbumped
+  | peer), missing[], inventory, warnings, notes, ref, repo, pr,
+  evaluatedAt, generator }.
+  <ref> --target --pr --gh-repo   As for 'ready'.
+  --token-env <VAR>           Environment variable holding the token (GH_TOKEN).
+  --require-head <sha>        Judge ONLY this commit; otherwise exit 8.
+  --explain                   Also the policy source, the read counts, each
+                              collision, and each missing piece.
 
 staleness:
   A pull request is STALE at >=2 verified no-commit wakes AND >=60 minutes
@@ -609,10 +638,11 @@ request-reviews:
   call was ACCEPTED but at least one requested bot is absent from the
   response's pending-review page
   -- named in the message, and in --json's 'unrecordedBots' ([{ id, login
-  }], login null for a bot this pull request has never seen). The response cannot determine allowance exhaustion versus an otherwise
+  }], login null when a bot cannot be named). Exit-9 JSON resolves an unseen bot by node ID when possible. The response cannot determine allowance exhaustion versus an otherwise
   unrecorded request; its first:100 page may omit a pending bot. When a call also failed outright, 1 wins and
-  'unrecordedBots' still names the bot. --json: '{ ok, routing, message,
-  unrecordedBots }'.
+  'unrecordedBots' still names the bot. Actual calls add repo, pr and
+  requestHead and exitCode to --json so another command can bind evidence
+  to the delivery and distinguish exit 9 from a failed mixed-route call.
 
 edit-body:
   Replaces the pull request's body OUTRIGHT with the file's bytes -- no
@@ -815,8 +845,8 @@ ledger:
     step argv, refuses a credential's shape anywhere in the slice
     (secret-shape, exit 1, the field named), runs the private-name guard,
     then posts a new comment, or EDITS this login's one marked comment for
-    the effort in place. The comment is as visible as the PR. Verdicts: posted | updated | unchanged (the same
-    bytes are already there) | dry-run (prints the gh call and the body,
+    the effort in place. The comment is as visible as the PR. Verdicts: posted | updated | unchanged (the marker
+    already carries this slice's digest; the wrapper around it is not compared) | dry-run (prints the gh call and the body,
     writes nothing) | findings-invalid (exit 1, the first failing JSON pointer
     named, nothing posted) | too-large (exit 1: over GitHub's ${GITHUB_COMMENT_LIMIT}-
     character limit, both sizes named, never truncated) | refused (exit 4,
@@ -1265,6 +1295,22 @@ function ready(context: CommandContext): Promise<number> {
   );
 }
 
+/** `nen pr version-collision` (zheref/nen#663): the same input shape `ready` hands prReady. */
+function versionCollision(context: CommandContext): Promise<number> {
+  const booleans = new Set(context.args.booleans);
+  if (context.json) booleans.add("json");
+  return prVersionCollision(
+    {
+      positionals: context.args.positionals,
+      values: context.args.values,
+      booleans,
+      lists: context.args.lists,
+      repoFlag: context.repoFlag,
+    },
+    context.io,
+  );
+}
+
 // ── which flags each subcommand reads (zheref/nen#351) ──────────────────────
 
 /**
@@ -1301,6 +1347,11 @@ export const PR_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
     values: ["target", "pr", ...PR_READY_FLAGS.values],
     booleans: [...PR_READY_FLAGS.booleans],
     lists: [...PR_READY_FLAGS.lists],
+  },
+  // zheref/nen#663: the trusted-CI collision read, ../verbs/pr_version_collision.ts.
+  "version-collision": {
+    values: ["target", "pr", ...PR_VERSION_COLLISION_FLAGS.values],
+    booleans: [...PR_VERSION_COLLISION_FLAGS.booleans],
   },
   staleness: { values: ["wakes-from", "last-activity", "now", "min-verified-wakes", "idle-minutes"], booleans: ["ready"] },
   "body-check": { values: ["body-from", "requirements-from", "base", "max", "prose-budget", "criteria", "criteria-from", "criteria-issue", "catalogue"], booleans: ["exact"] },
@@ -1412,7 +1463,8 @@ const GH_RESOLVES = "runs on whatever credential gh resolves (GH_TOKEN/GITHUB_TO
  * What `--token-env` would have meant here, said truthfully per subcommand --
  * a refusal that asserts something false about the verb is one a caller stops
  * believing (../issue/command.ts's refuseForeignFlags, the same rule). Keyed
- * by EVERY subcommand but `ready` (the one that reads the flag) with no default
+ * by EVERY subcommand but `ready` and `version-collision` (the two that read
+ * the flag) with no default
  * branch, so a new subcommand gets no credential claim until one is written
  * for it (command.test.ts asserts the coverage; hanten round 1).
  */
@@ -1435,7 +1487,7 @@ const TOKEN_ENV_ADVICE: Readonly<Record<string, string>> = {
   merge: "merge judges readiness on GH_TOKEN and merges on whatever credential gh resolves (GH_TOKEN/GITHUB_TOKEN if exported, else its stored login); the variable --token-env names would have changed neither.",
 };
 
-/** Exported for the coverage test: every key of PR_SUBCOMMAND_FLAGS but `ready` has advice. */
+/** Exported for the coverage test: every key of PR_SUBCOMMAND_FLAGS but `ready` and `version-collision` has advice. */
 export const PR_TOKEN_ENV_ADVICE_KEYS: readonly string[] = Object.keys(TOKEN_ENV_ADVICE);
 
 /** What to type instead, where the owners alone are not the useful answer. */
@@ -1519,6 +1571,7 @@ export const prCommand: Command = {
     { verb: "pr merge", code: 6, meaning: "gh could not be started" },
     { verb: "pr merge", code: 7, meaning: "--delivery: merged without authority; GitHub reports a base other than the one gated" },
     { verb: "pr ready", code: 8, meaning: "--require-head did not match GitHub's head; no verdict" },
+    { verb: "pr version-collision", code: 8, meaning: "--require-head did not match GitHub's head; no collision decided" },
     { verb: "pr converge", code: 3, meaning: "--composite: a read did not finish, or was at another head than --require-head; no verdict" },
     { verb: "pr mark-ready", code: 3, meaning: "the pull request is CLOSED or MERGED; nothing sent" },
     { verb: "pr mark-ready", code: 8, meaning: "--require-head did not match GitHub's head" },
@@ -1542,6 +1595,8 @@ export const prCommand: Command = {
     switch (subcommand) {
       case "ready":
         return ready(context);
+      case "version-collision":
+        return versionCollision(context);
       case "staleness":
         return staleness(context);
       case "body-check":
@@ -2173,7 +2228,7 @@ function doRequestReviews(context: CommandContext): number {
     : canonicalBotLogins(context.seams, explicitBots.filter(isReviewerNodeId));
   const requestable = (name: string): boolean => {
     const login = canonicalIds.get(name) ?? name;
-    const identity = eventIdentities.find((candidate): boolean => candidate.loginPattern.test(login) || candidate.loginPattern.test(`${botLoginKey(login)}[bot]`));
+    const identity = eventIdentities.find((candidate): boolean => matchesBotLogin(candidate.loginPattern, login));
     if (identity === undefined) return true;
     skipped.push({ name, reviewer: identity.name, reason: "event-driven, not requested" });
     return false;
@@ -2304,6 +2359,7 @@ function doRequestReviews(context: CommandContext): number {
   if (userLogins.length > 0) {
     results.push(requestReviews(context.seams, target, prNumber, userLogins));
   }
+  let requestHead: string | null = null;
   if (botIds.length > 0) {
     // `known` is already populated whenever any --add-reviewers login
     // resolved to a bot; a caller who named bots ONLY via --add-bots never
@@ -2312,7 +2368,9 @@ function doRequestReviews(context: CommandContext): number {
     // bot list rides along so an unrecorded bot (zheref/nen#277) is named by
     // its login where this pull request already knows it, not only by id.
     const bots = knownBots ?? fetchPrAndKnownBots(context.seams, target, prNumber);
-    results.push(requestBotReviews(context.seams, target, prNumber, bots.pullRequestId, botIds, bots.bots));
+    const result = requestBotReviews(context.seams, target, prNumber, bots.pullRequestId, botIds, bots.bots);
+    requestHead = result.observedHead === bots.headRefOid ? bots.headRefOid : null;
+    results.push(result);
   }
 
   const ok = results.every((result): boolean => result.ok);
@@ -2326,14 +2384,34 @@ function doRequestReviews(context: CommandContext): number {
   // least one requested bot is absent from the response's pending-review page.
   const failedOutright = results.some((result): boolean => !result.ok && (result.unrecordedBots ?? []).length === 0);
   const code = ok ? 0 : failedOutright ? 1 : EXIT_BOT_REQUEST_UNRECORDED;
+  const evidenceBots = context.json && code === EXIT_BOT_REQUEST_UNRECORDED
+    ? nameUnrecordedBots(context.seams, unrecordedBots, canonicalIds, ceiling?.rounds ?? [])
+    : unrecordedBots;
   const lines = [...skippedLines, ...results.map((result): string => result.message), ...ceilingLines];
   // JOINED WITH A NEWLINE, matching the human rendering line for line
   // (Copilot review, PR #174) -- both routes running in the same call
   // prints two lines to the terminal, and `--json`'s `message` field
   // silently collapsing them with a space would be a fact the human
   // rendering states plainly and the JSON rendering blurs.
-  emit(context.io, context.json, { ok, skipped, routing: routes, message: lines.join("\n"), unrecordedBots, ...ceilingJson }, lines);
+  emit(context.io, context.json, { ok, skipped, routing: routes, message: lines.join("\n"), unrecordedBots: evidenceBots, repo: target.slug, pr: prNumber, requestHead, exitCode: code, ...ceilingJson }, lines);
   return code;
+}
+
+/** Keep a successful mutation's exit code even if the evidence lookup is unreadable. */
+function nameUnrecordedBots(
+  seams: Seams, bots: readonly UnrecordedBot[], canonical: ReadonlyMap<string, string>, rounds: readonly BotRound[],
+): readonly UnrecordedBot[] {
+  const named = bots.map((bot): UnrecordedBot => ({
+    id: bot.id,
+    login: bot.login ?? canonical.get(bot.id) ?? rounds.find((round) => round.id === bot.id)?.login ?? null,
+  }));
+  try {
+    const resolved = canonicalBotLogins(seams, named.filter((bot) => bot.login === null).map((bot) => bot.id));
+    return named.map((bot): UnrecordedBot => ({ ...bot, login: bot.login ?? resolved.get(bot.id) ?? null }));
+  } catch (error) {
+    if (!(error instanceof RoundCeilingError)) throw error;
+    return named;
+  }
 }
 
 /**
