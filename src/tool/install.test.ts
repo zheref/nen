@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { makeTempDir } from "../testing/tempdir.js";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { tar, zip } from "./fixtures.js";
 import { ScriptedSeams } from "../seam/scripted.js";
 import type { Seams, CommandResult } from "../seam/exec.js";
@@ -30,3 +30,46 @@ describe("declared checksum-pinned tool install",()=>{
 it("verified Windows ZIP installs exact .exe basename into a synthetic PATH",async()=>{const f=fixture({platform:"win32",assets:{"win32-x64":"scanner.zip"},archive:zip()});expect(await f.run()).toMatchObject({exit:0,verdict:"installed",host:"win32-x64"});expect(readFileSync(join(f.root,"scanner.exe"),"utf8")).toBe("123456789");});
 it("malformed verified ZIP refuses before execution or installation",async()=>{for(const options of [{crc:0},{localSize:1},{mode:0x1000},{mode:0xc000},{count:4097}]){const f=fixture({platform:"win32",assets:{"win32-x64":"scanner.zip"},archive:zip(options)});expect(await f.run()).toMatchObject({exit:1,check:"verified archive structure"});expect(f.calls).toHaveLength(0);expect(existsSync(join(f.root,"scanner.exe"))).toBe(false);}});
 it("a destination appearing during staged version verification is never overwritten",async()=>{const f=fixture();const seams={...f.seams,run:():CommandResult=>{writeFileSync(join(f.root,"scanner"),"concurrent install");return{code:0,stdout:"1.2.3",stderr:"",spawnFailed:false};}};expect(await installTool({contract:f.path,row:"secretScan",binDir:f.root,seams,arch:"x64",download:f.download})).toMatchObject({exit:1,check:"atomic install"});expect(readFileSync(join(f.root,"scanner"),"utf8")).toBe("concurrent install");});
+
+describe("installer review regressions", () => {
+  it.each([["1.2.3", "v1.2.3"], ["v1.2.3", "1.2.3"], ["v1.2.3", "v1.2.3"], ["1.2.3", "1.2.3"]])("accepts optional v for pin %s and report %s", async (pin, version) => {
+    const f = fixture({ version }); const data = JSON.parse(readFileSync(f.path, "utf8")); data.secretScan.version = pin; writeFileSync(f.path, JSON.stringify(data));
+    expect(await f.run()).toMatchObject({ verdict: "installed", exit: 0 });
+    expect(await f.run()).toMatchObject({ verdict: "unchanged", exit: 0 });
+  });
+  it("ignores valid unrelated manifest names ending with the target basename", async () => {
+    const archive = tar([{ name: "scanner" }]); const hash = createHash("sha256").update(archive).digest("hex"); const asset = "scanner.tar.gz";
+    const f = fixture({ archive, assets: { "linux-x64": asset }, manifest: Buffer.from(`${hash}  other-${asset}\n${hash}  ${asset}\n`) });
+    expect(await f.run()).toMatchObject({ verdict: "installed", exit: 0 });
+  });
+  it("still rejects malformed entries for the exact selected manifest name", async () => {
+    const archive = tar([{ name: "scanner" }]); const hash = createHash("sha256").update(archive).digest("hex"); const asset = "scanner.tar.gz";
+    const f = fixture({ archive, assets: { "linux-x64": asset }, manifest: Buffer.from(`${hash}  ${asset}\nbad-hash  ${asset}\n`) });
+    expect(await f.run()).toMatchObject({ verdict: "refused", check: "checksum manifest entry" }); expect(f.calls).toHaveLength(0);
+  });
+  it.each(["linux", "win32"] as const)("uses the first existing %s PATH executable and never installs a shadowed copy", async platform => {
+    for (const version of ["v1.2.3", "0.1.0"]) {
+      const f = fixture({ platform, version, ...(platform === "win32" ? { assets: { "win32-x64": "scanner.zip" }, archive: zip() } : {}) });
+      const other = join(f.root, "first"); mkdirSync(other); const executable = join(other, platform === "win32" ? "scanner.exe" : "scanner"); writeFileSync(executable, "existing executable"); chmodSync(executable, 0o700);
+      const seams = { ...f.seams, env: { PATH: [other, f.root].join(delimiter) } };
+      const result = await installTool({ contract: f.path, row: "secretScan", binDir: f.root, seams, arch: "x64", download: f.download });
+      expect(result).toMatchObject({ verdict: version === "v1.2.3" ? "unchanged" : "refused", path: executable });
+      expect(f.downloads).toHaveLength(0); expect(f.calls).toEqual([executable + " version"]); expect(readFileSync(executable, "utf8")).toBe("existing executable");
+    }
+  });
+  it("does not download when the exact pin is after an empty destination on PATH", async () => {
+    const f = fixture(); const other = join(f.root, "later"); mkdirSync(other); const executable = join(other, "scanner"); writeFileSync(executable, "existing"); chmodSync(executable, 0o700);
+    const seams = { ...f.seams, env: { PATH: [f.root, other].join(delimiter) } };
+    expect(await installTool({ contract: f.path, row: "secretScan", binDir: f.root, seams, arch: "x64", download: f.download })).toMatchObject({ verdict: "unchanged", path: executable }); expect(f.downloads).toHaveLength(0);
+  });
+});
+
+it("requires an explicit PATH rather than treating an absent value as the current directory", async () => {
+  const f = fixture(); const seams = { ...f.seams, env: {} };
+  expect(await installTool({ contract: f.path, row: "secretScan", binDir: f.root, seams, arch: "x64", download: f.download })).toMatchObject({ exit: 2, check: "install destination" }); expect(f.downloads).toHaveLength(0);
+});
+it("refuses an earlier PATH executable appearing during staged verification", async () => {
+  const f = fixture(); const earlier = join(f.root, "earlier"); mkdirSync(earlier);
+  const seams = { ...f.seams, env: { PATH: [earlier, f.root].join(delimiter) }, run: (): CommandResult => { const path = join(earlier, "scanner"); writeFileSync(path, "concurrent old tool"); chmodSync(path, 0o700); return { code: 0, stdout: "1.2.3", stderr: "", spawnFailed: false }; } };
+  expect(await installTool({ contract: f.path, row: "secretScan", binDir: f.root, seams, arch: "x64", download: f.download })).toMatchObject({ exit: 1, check: "atomic install" }); expect(existsSync(join(f.root, "scanner"))).toBe(false);
+});

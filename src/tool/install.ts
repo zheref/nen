@@ -1,7 +1,7 @@
 // Caller-declared supply pin; downloaded bytes are verified before parsing/execution.
 import { createHash } from "node:crypto";
-import { existsSync, linkSync, lstatSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { delimiter, isAbsolute, join } from "node:path";
+import { accessSync, constants, existsSync, linkSync, lstatSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { delimiter, isAbsolute, join, resolve } from "node:path";
 import type { Seams } from "../seam/exec.js";
 import { archiveBinary } from "./archive.js";
 export type Download = (url:URL, maxBytes:number)=>Promise<Buffer>;
@@ -22,7 +22,29 @@ function declaration(path:string,row:string):Declaration {
   const argv=data["versionArgv"] ?? ["version"];if(!Array.isArray(argv) || argv.length===0 || argv.length>10 || argv.some(arg=>typeof arg!=="string" || /[\x00-\x1f\x7f]/.test(arg)))throw new Error("versionArgv must be a bounded literal string array");
   return {tool,version,checksumsUrl:data["checksumsUrl"] as string,assetUrlTemplate:template,assets:assets as Record<string,string>,versionArgv:argv as string[]};
 }
-function versionMatches(output:string,version:string):boolean {return output.trim()===version || output.trim()===version.replace(/^v/,"");}
+function versionMatches(output:string,version:string):boolean {return output.trim().replace(/^v/,"")===version.replace(/^v/,"");}
+/** Resolve in PATH order before downloading; probing a later copy cannot prove what the user runs. */
+function pathDirectories(seams: Seams): string[] {
+  const value = seams.env["PATH"] ?? seams.env["Path"] ?? "";
+  if (value === "") return [];
+  return value.split(delimiter).map(entry => resolve(seams.platform === "win32" ? entry.replace(/^"(.*)"$/, "$1") : entry));
+}
+function effectiveExecutable(seams: Seams, tool: string): string | null {
+  const windows = seams.platform === "win32";
+  const suffixes = windows ? (seams.env["PATHEXT"] ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(ext => /^\.[a-z0-9]+$/i.test(ext)) : [""];
+  const directories = windows ? [process.cwd(), ...pathDirectories(seams)] : pathDirectories(seams);
+  for (const directory of directories) for (const suffix of suffixes) {
+    const candidate = join(directory, tool + suffix.toLowerCase());
+    try {
+      if (!statSync(candidate).isFile()) continue;
+      if (!windows) accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch (error) {
+      if (!["ENOENT", "ENOTDIR", "EACCES"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+    }
+  }
+  return null;
+}
 export async function installTool(options:{contract:string;row:string;binDir:string;seams:Seams;arch:string;download:Download;cleanup?: (path:string)=>void}):Promise<ToolInstallResult> {
   const host=`${options.seams.platform}-${options.arch}`;let tool:string|null=null;let version:string|null=null;let check="declaration";let temporary:string|null=null;let outcome:ToolInstallResult|null=null;
   const answer=(verdict:ToolInstallResult["verdict"],exit:ToolInstallResult["exit"],detail:string,path:string|null=null):ToolInstallResult=>{outcome={contract:TOOL_INSTALL_CONTRACT,host,tool,version,verdict,exit,path,check,detail};return outcome;};
@@ -32,10 +54,16 @@ export async function installTool(options:{contract:string;row:string;binDir:str
     const asset=pin.assets[host] as string;const binary=tool+(options.seams.platform==="win32"?".exe":"");
     check="install destination";if(!isAbsolute(options.binDir))throw new Error("--bin-dir must be an absolute existing PATH directory");
     const binDir=realpathSync(options.binDir);if(!lstatSync(binDir).isDirectory())throw new Error("bin directory is not a directory");
-    const onPath=(options.seams.env["PATH"] ?? options.seams.env["Path"] ?? "").split(delimiter).some(entry=>{try{return isAbsolute(entry)&&realpathSync(entry)===binDir;}catch{return false;}});
+    const onPath=pathDirectories(options.seams).some(entry=>{try{return realpathSync(entry)===binDir;}catch{return false;}});
     if(!onPath)throw new Error("bin directory is not on the existing PATH; no profile or PATH changes are made");
     const destination=join(binDir,binary);
     check="installed version";
+    const active = effectiveExecutable(options.seams, tool);
+    if (active !== null) {
+      const probe = options.seams.run(active, pin.versionArgv, { cwd: binDir });
+      if (probe.code === 0 && !probe.spawnFailed && versionMatches(probe.stdout, pin.version)) return answer("unchanged", 0, `already on PATH at exact pinned version ${pin.version}; nothing changed`, active);
+      return answer("refused", 1, "effective PATH tool differs or could not be verified; no shadowed installation was made", active);
+    }
     if(existsSync(destination)) {
       const stat=lstatSync(destination);if(!stat.isFile() || stat.isSymbolicLink())throw new Error("existing tool is not a regular file; refusing replacement");
       const probe=options.seams.run(destination,pin.versionArgv,{cwd:binDir});
@@ -44,14 +72,14 @@ export async function installTool(options:{contract:string;row:string;binDir:str
     }
     check="checksum manifest fetch";const manifest=await options.download(url(pin.checksumsUrl),2*1024*1024);if(manifest.length>2*1024*1024)throw new Error("manifest byte budget exceeded");const text=new TextDecoder("utf-8",{fatal:true}).decode(manifest);
     check="checksum manifest entry";const hashes:string[]=[];
-    for(const line of text.split(/\r?\n/)){const match=/^([a-fA-F0-9]{64}) +\*?([^\r\n]+)$/.exec(line);if(match?.[2]===asset)hashes.push((match[1] as string).toLowerCase());else if(line.endsWith(asset))throw new Error("malformed asset manifest entry");}
+    for(const line of text.split(/\r?\n/)){const match=/^([a-fA-F0-9]{64}) +\*?([^\r\n]+)$/.exec(line);if(match){if(match[2]===asset)hashes.push((match[1] as string).toLowerCase());}else if(line.trim().split(/\s+/).at(-1)?.replace(/^\*/,"")===asset)throw new Error("malformed asset manifest entry");}
     if(hashes.length!==1)throw new Error("manifest must contain exactly one SHA256 entry for the declared host asset");
     check="archive fetch";const archive=await options.download(url(pin.assetUrlTemplate.replace("<asset>",asset)),128*1024*1024);if(archive.length>128*1024*1024)throw new Error("archive byte budget exceeded");
     check="archive checksum";if(createHash("sha256").update(archive).digest("hex")!==hashes[0])return answer("refused",1,"archive SHA256 mismatch; nothing extracted or installed");
     check="verified archive structure";const bytes=archiveBinary(archive,asset,binary);
     check="staged version";temporary=mkdtempSync(join(binDir,".nen-tool-"));const staged=join(temporary,binary);writeFileSync(staged,bytes,{flag:"wx",mode:0o700});
     const probe=options.seams.run(staged,pin.versionArgv,{cwd:temporary});if(probe.code!==0 || probe.spawnFailed || !versionMatches(probe.stdout,pin.version))throw new Error("verified executable did not report the exact declared version; nothing installed");
-    check="atomic install";if(realpathSync(options.binDir)!==binDir)throw new Error("install directory moved before publication");linkSync(staged,destination);
+    check="atomic install";if(effectiveExecutable(options.seams,tool)!==null)throw new Error("a PATH executable appeared during verification; nothing installed");if(realpathSync(options.binDir)!==binDir)throw new Error("install directory moved before publication");linkSync(staged,destination);
     return answer("installed",0,`installed ${tool} ${pin.version} after archive SHA256 verification`,destination);
   } catch(error) {return answer("refused",check==="declaration" || check==="install destination"?2:1,error instanceof Error?error.message:String(error));}
   finally {if(temporary!==null){try{if(options.cleanup)options.cleanup(temporary);else rmSync(temporary,{recursive:true,force:true});}catch{if(outcome!==null)Object.assign(outcome,{cleanupWarning:"temporary verified executable staging could not be removed; installed outcome and path above remain authoritative"});}}}
