@@ -76,6 +76,59 @@ export interface PhaseEntry {
   readonly resumedAt?: readonly string[];
 }
 
+/**
+ * How long a WAIT phase may go with no timed step before the untimed part of
+ * it is called an idle wait and left out of spend (zheref/nen#639).
+ */
+export const IDLE_WAIT_MS = 60 * 60 * 1000;
+
+/**
+ * The phases whose untimed span is waiting on someone else -- a reviewer, CI,
+ * the maintainer's merge -- rather than work. `readiness` is opened when a PR
+ * goes up and, by the prose that drives it, may stay open until the final
+ * report: the issue's failing ledger held it open for about 110 hours.
+ *
+ * A NAME LIST, NOT A HEURISTIC. A long authoring phase with no `nen shu` step
+ * inside it is somebody writing, and calling that idle would understate the
+ * one number spend exists to show; only a phase named here can be idle.
+ */
+export const WAIT_PHASES: readonly string[] = ["readiness"];
+
+/** What spend counts of one phase entry, and the idle wait it leaves out. */
+export interface IdleWait {
+  /** The duration spend bars and sums; null while the phase is open. */
+  readonly countedMs: number | null;
+  /** The untimed wait left out of `countedMs`; 0 when none, null while open. */
+  readonly idleWaitMs: number | null;
+}
+
+/**
+ * `countedMs` and `idleWaitMs` for one entry, computed at READ time
+ * (zheref/nen#639). Pure: the ledger is never rewritten, `durationMs` keeps
+ * its wall-clock meaning, and the contract stays v0.1 -- both values are
+ * derived, never stored.
+ *
+ *   - An entry with no `durationMs` (an OPEN phase) is `null`/`null`: nothing
+ *     has been measured yet.
+ *   - A WAIT_PHASES entry whose untimed span -- `durationMs` less the sum of
+ *     its steps' `durationMs`, an untimed step counting 0 -- is OVER
+ *     `IDLE_WAIT_MS` counts only its timed steps, and the untimed span is the
+ *     idle wait. At or under the line the whole duration counts.
+ *   - Any other entry counts its whole duration, whatever is inside it.
+ */
+export function idleWait(entry: {
+  readonly phase: string;
+  readonly durationMs: number | null;
+  readonly steps?: readonly { readonly durationMs: number | null }[];
+}): IdleWait {
+  if (entry.durationMs === null) return { countedMs: null, idleWaitMs: null };
+  if (!WAIT_PHASES.includes(entry.phase)) return { countedMs: entry.durationMs, idleWaitMs: 0 };
+  const timed = (entry.steps ?? []).reduce((sum, step): number => sum + (step.durationMs ?? 0), 0);
+  const untimed = entry.durationMs - timed;
+  if (untimed > IDLE_WAIT_MS) return { countedMs: timed, idleWaitMs: untimed };
+  return { countedMs: entry.durationMs, idleWaitMs: 0 };
+}
+
 export interface PhaseLedger {
   readonly contract: string;
   readonly effort: string;

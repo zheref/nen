@@ -8,7 +8,7 @@
 // nobody scripted -- so "the register flags reach no gh unless they must"
 // is proved by the fixture rather than asserted in a comment.
 
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -29,6 +29,15 @@ import { viewArgv } from "../pr/fetch.js";
 import { listArgv } from "../pr/threads.js";
 import { parseTarget } from "../github/target.js";
 import type { RollupEntry } from "../github/types.js";
+import { prReady } from "../verbs/pr_ready.js";
+
+// THE GATE IS WATCHED, NOT REPLACED: every call still runs the real `nen pr
+// ready`, so each test below behaves as it always did -- and a test can say
+// the gate was never asked (zheref/nen#639: a MERGED row is not evaluated).
+vi.mock("../verbs/pr_ready.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../verbs/pr_ready.js")>();
+  return { ...actual, prReady: vi.fn(actual.prReady) };
+});
 
 const FIELD = "";
 const LOG_FORMAT = `%H${FIELD}%s${FIELD}%an${FIELD}%aI`;
@@ -527,6 +536,63 @@ describe("the live register", () => {
   });
 });
 
+describe("a pull request that is no longer open is not evaluated (zheref/nen#639)", () => {
+  beforeEach(() => {
+    vi.mocked(prReady).mockClear();
+  });
+
+  const rowOf = (captured: Captured): Record<string, unknown> =>
+    (JSON.parse(captured.out.join("\n")) as { objects: ReportObject[] }).objects[0] as unknown as Record<string, unknown>;
+  const checkRunCalls = (captured: Captured): number =>
+    captured.seams.calls.filter((call): boolean => call.args.join(" ").includes("/check-runs")).length;
+
+  it("gives a MERGED row the state verdict, with no check-run read and no gate call", async () => {
+    // No check-runs answer is scripted: a read would throw.
+    const captured = await live(LIVE_PR, [viewCall({ state: "MERGED", mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" }), threadsCall(THREAD_NODES)]);
+    expect(captured.code, captured.err.join("\n")).toBe(0);
+    const row = rowOf(captured);
+    expect(row["state"]).toBe("MERGED");
+    expect(row["readiness"]).toEqual({
+      verdict: "merged",
+      reason: "merged — not evaluated: CON-32 readiness is a statement about an open pull request",
+      source: "state",
+    });
+    expect(row["notes"]).toEqual([]);
+    expect(checkRunCalls(captured)).toBe(0);
+    expect(vi.mocked(prReady)).not.toHaveBeenCalled();
+    expect(captured.err.join("\n")).not.toMatch(/readiness gate|mergeable/);
+  });
+
+  it("gives a CLOSED row the closed verdict, the same way, whatever case GitHub spells it in", async () => {
+    const captured = await live(LIVE_PR, [viewCall({ state: "closed" }), threadsCall(THREAD_NODES)]);
+    expect(captured.code, captured.err.join("\n")).toBe(0);
+    expect(rowOf(captured)["readiness"]).toEqual({
+      verdict: "closed",
+      reason: "closed without merging — not evaluated: CON-32 readiness is a statement about an open pull request",
+      source: "state",
+    });
+    expect(checkRunCalls(captured)).toBe(0);
+    expect(vi.mocked(prReady)).not.toHaveBeenCalled();
+  });
+
+  it("still asks the gate about an OPEN row (the watch sees a real call)", async () => {
+    const captured = await live(LIVE_PR, [viewCall(), checkRunsCall([]), threadsCall(THREAD_NODES)]);
+    expect(captured.code).toBe(0);
+    expect(checkRunCalls(captured)).toBe(1);
+    expect(vi.mocked(prReady)).toHaveBeenCalledTimes(1);
+  });
+
+  it("links neither a hex colour nor the pull request's own number", async () => {
+    const captured = await live(LIVE_PR, [
+      viewCall({ state: "MERGED", body: '<span style="color:#000000">tint</span> This is #217 in the stack. Closes #591.' }),
+      threadsCall(THREAD_NODES),
+    ]);
+    expect(captured.code, captured.err.join("\n")).toBe(0);
+    expect(rowOf(captured)["linked"]).toEqual([591]);
+    expect(captured.out.join("\n")).not.toMatch(/#0\b/);
+  });
+});
+
 describe("readiness, and which authority answered it", () => {
   const withRuns = async (runs: readonly unknown[]): Promise<Captured> =>
     live(LIVE_PR, [viewCall(), checkRunsCall(runs), threadsCall(THREAD_NODES)]);
@@ -816,6 +882,26 @@ describe("the read seam's remaining refusals", () => {
   it("refuses a row that is not an object at all, naming its index", () => {
     expect(() => parseObjects([PR_ROW, null], "o.json")).toThrow(/row 1 is null, not an object/);
     expect(() => parseObjects([["pr", 87]], "o.json")).toThrow(/row 0 is a list of 2, not an object/);
+  });
+
+  // zheref/nen#639: registers published before the reference pattern was
+  // tightened carry `linked: [0]` from a hex colour. They still load.
+  it("leaves a non-positive `linked` entry out with a note, and still loads the file", () => {
+    const [pr, issue] = parseObjects([{ ...PR_ROW, linked: [0, 85] }, { ...ISSUE_ROW, linked: [87, 0] }], "o.json") as ReportObject[];
+    expect(pr?.linked).toEqual([85]);
+    expect(pr?.notes).toEqual(["linked[] carried 0, which numbers no issue or pull request; left out"]);
+    expect(issue?.linked).toEqual([87]);
+    expect(issue?.notes).toEqual(["linked[] carried 0, which numbers no issue or pull request; left out"]);
+    expect(renderObjects([pr as ReportObject]).join("\n")).not.toMatch(/#0\b/);
+  });
+
+  it("accepts `source: \"state\"` on a MERGED or CLOSED row and refuses it on an OPEN one", () => {
+    const merged = { verdict: "merged", reason: "merged — not evaluated: CON-32 readiness is a statement about an open pull request", source: "state" };
+    expect(parseObjects([{ ...PR_ROW, state: "MERGED", readiness: merged }], "o.json")[0]?.readiness).toEqual(merged);
+    const closed = { verdict: "closed", reason: "closed without merging — not evaluated: CON-32 readiness is a statement about an open pull request", source: "state" };
+    expect(parseObjects([{ ...PR_ROW, state: "CLOSED", readiness: closed }], "o.json")[0]?.readiness).toEqual(closed);
+    expect(bad({ state: "OPEN", readiness: merged })).toThrow(/row 0 has 'readiness.source' 'state' on an OPEN pull request/);
+    expect(bad({ state: "open", readiness: merged })).toThrow(/'state' on an OPEN pull request/);
   });
 });
 

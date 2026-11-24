@@ -49,8 +49,19 @@ export interface Assembly {
 // closing keyword or a bare `#<n>` -- the same cross-reference surface a
 // reader following the PR would use to find the issue it delivers. Matched
 // case-insensitively, as GitHub's own keyword parsing is.
+//
+// ONLY A REAL NUMBER IS A REFERENCE (zheref/nen#639). `#(\d+)` matched a hex
+// colour in a PR body (`#000000`) and parseInt made it 0 -- a "linked" object
+// GitHub never numbered, printed as `<owner>/<name>#0` on a delivered PR's
+// report. So the digits must start 1-9 and end the token (`#123abc` is a
+// colour, not #123), and the `#` must not be glued to a word or follow `&`
+// (`&#39;` is an HTML entity) -- unless what it is glued to is an
+// `<owner>/<name>` path, the cross-repository form `owner/name#591/AC-1`.
 const CLOSING_KEYWORDS = ["close", "closes", "closed", "fix", "fixes", "fixed", "resolve", "resolves", "resolved"];
-const REF_PATTERN = new RegExp(`(?:\\b(?:${CLOSING_KEYWORDS.join("|")})\\s+)?#(\\d+)`, "gi");
+const REF_PATTERN = new RegExp(
+  `(?:\\b(?:${CLOSING_KEYWORDS.join("|")})\\s+)?(?:(?<=\\/[\\w.-]+)|(?<![&\\w]))#([1-9]\\d*)(?!\\w)`,
+  "gi",
+);
 
 export function referencedIssueNumbers(text: string): Set<number> {
   const found = new Set<number>();

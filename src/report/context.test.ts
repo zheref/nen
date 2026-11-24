@@ -278,6 +278,17 @@ describe("effortStage, gate and stageClass -- the documented table", () => {
     expect(captured.doc).toMatchObject({ effortStage: "landed", gate: "none — landed", stageClass: "ok" });
   });
 
+  it("a merged PR carrying the state verdict is still landed (zheref/nen#639)", async () => {
+    const root = repo();
+    const merged = prRow({
+      state: "MERGED",
+      readiness: { verdict: "merged", reason: "merged — not evaluated: CON-32 readiness is a statement about an open pull request", source: "state" },
+    });
+    const captured = await capture(data(root, "--objects-from", objectsFile(root, [merged])), script({ pushed: true }));
+    expect(captured.code, captured.err.join("\n")).toBe(0);
+    expect(captured.doc).toMatchObject({ effortStage: "landed", gate: "none — landed", stageClass: "ok" });
+  });
+
   it("--open-stop is blocked, 'G5 — yours', red -- and it is the only way there", async () => {
     const captured = await capture(data(repo(), "--open-stop"), script({ pushed: true }));
     expect(captured.doc).toMatchObject({ effortStage: "blocked", gate: "G5 — yours", stageClass: "red" });
@@ -324,7 +335,7 @@ describe("effortStage, gate and stageClass -- the documented table", () => {
 
 describe("turnNumber", () => {
   function phase(effort: string, name: string): ReportPhase {
-    return { effort, phase: name, startedAt: "", endedAt: null, durationMs: null, exitCode: null, surface: null, model: null, dial: null, note: null, steps: [] };
+    return { effort, phase: name, startedAt: "", endedAt: null, durationMs: null, exitCode: null, surface: null, model: null, dial: null, note: null, steps: [], countedMs: null, idleWaitMs: null };
   }
 
   it("counts the 'report' entries of the ledger named after the branch -- and only that one (N3)", () => {
