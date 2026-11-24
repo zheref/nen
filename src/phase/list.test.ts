@@ -1,7 +1,7 @@
 // src/phase/list.test.ts -- `nen phase list` (zheref/nen#583), AC-1..AC-4.
 
 import { describe, expect, it } from "vitest";
-import { chmodSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readdirSync, rmSync, truncateSync, readFileSync, realpathSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { makeTempDir } from "../testing/tempdir.js";
 import { runFamily, type Io } from "../index.js";
@@ -10,7 +10,8 @@ import { noPortProbe } from "../seam/scripted.js";
 import { encodeEffortId } from "../ledger/effort.js";
 import { phaseCommand } from "./command.js";
 import { PHASE_CONTRACT } from "./ledger.js";
-import { decodeLedgerFileName, PHASE_LIST_CONTRACT, type PhaseListReport } from "./list.js";
+import { decodeLedgerFileName, LEDGER_READ_CAP_BYTES, listPhaseLedgers, openLedgerFile, PHASE_LIST_CONTRACT, PLAIN_LABEL_MAX, renderPhaseList, type PhaseListReport } from "./list.js";
+import { localEffortHome } from "../ledger/home.js";
 
 const NOW = "2026-03-01T12:00:00.000Z";
 const at = (offsetMs: number): Date => new Date(Date.parse(NOW) + offsetMs);
@@ -367,5 +368,72 @@ describe("nen phase list -- reads only", () => {
     expect((await list(linked)).efforts).toEqual([]);
     expect({ main: snapshot(main), linked: snapshot(linked) }).toEqual(before);
     expect(readdirSync(common)).not.toContain(".nen");
+  });
+});
+
+describe("nen phase list -- hanten round 1 (SEC-7 and the read path)", () => {
+  it("strips ESC, CR and OSC from every ledger string in plain output, and --json still carries them escaped", async () => {
+    const root = plainDir();
+    const hostile = "2026-03-01T10:00:00.000Z\u001b[2J\r\u001b]0;pwned\u0007";
+    ledger(phasesOf(root), "evil", [entry("p\u001b[31mhase", hostile, `${hostile}-end`, 0)], at(-MIN));
+    const plain = await run(["phase", "list"], root);
+    expect(plain.code).toBe(0);
+    for (const line of plain.out) expect(line).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/);
+    expect(plain.out[1]).toMatch(/p\[31mhase  started 2026-03-01T10:00:00\.000Z\[2J\]0;pwned  ended 2026-03-01T10:00:00\.000Z\[2J\]0;pwned-end exit 0$/);
+    const json = await run(["phase", "list", "--json"], root);
+    expect(json.out.join("\n")).toContain("\\u001b]0;pwned\\u0007");
+    const report = JSON.parse(json.out.join("\n")) as PhaseListReport;
+    expect(report.efforts[0]?.newest).toMatchObject({ startedAt: hostile, endedAt: `${hostile}-end` });
+  });
+
+  it("a ledger over the read cap is one unreadable row; a FIFO is never opened for a blocking read", async () => {
+    const root = plainDir();
+    const dir = phasesOf(root);
+    ledger(dir, "fine", [], at(-MIN));
+    writeFileSync(join(dir, "huge.json"), "");
+    truncateSync(join(dir, "huge.json"), LEDGER_READ_CAP_BYTES + 1);
+    if (process.platform !== "win32") {
+      const made = spawnRunner("mkfifo", [join(dir, "fifo.json")], { cwd: dir });
+      expect(made.code, made.stderr).toBe(0);
+    }
+    const report = await list(root);
+    const reasons = Object.fromEntries(report.efforts.map((row) => [row.file, row.reason]));
+    expect(reasons["huge.json"]).toBe(`larger than ${LEDGER_READ_CAP_BYTES} bytes; not read`);
+    expect(reasons["fine.json"]).toBeNull();
+    if (process.platform !== "win32") expect(reasons["fifo.json"]).toMatch(/^not a regular file/);
+    // The cap is the descriptor's, and bounded on a smaller one too.
+    writeFileSync(join(dir, "small.json"), "x".repeat(11));
+    expect(openLedgerFile(join(dir, "small.json"), 10)?.problem).toBe("larger than 10 bytes; not read");
+    expect(openLedgerFile(join(dir, "small.json"), 11)?.text).toBe("x".repeat(11));
+  });
+
+  it("a ledger gone between the listing and the open is no row at all (ENOENT is not unreadable)", () => {
+    const root = plainDir();
+    const dir = phasesOf(root);
+    ledger(dir, "stays", [], at(-MIN));
+    ledger(dir, "moved", [], at(-MIN));
+    expect(openLedgerFile(join(dir, "never-there.json"))).toBeNull();
+    const report = listPhaseLedgers(root, localEffortHome(root, "phases"), new Date(NOW), null, {
+      afterReaddir: (_dir, names): void => {
+        expect(names).toEqual(["moved.json", "stays.json"]);
+        rmSync(join(dir, "moved.json"));
+      },
+    });
+    expect(report.efforts.map((row) => [row.effort, row.state])).toEqual([["stays", "ok"]]);
+  });
+
+  it("caps the plain label width with an ellipsis; --json keeps the full name", async () => {
+    const root = plainDir();
+    const dir = phasesOf(root);
+    const long = `${"x".repeat(240)}%zz.json`;
+    ledger(dir, "short", [], at(-MIN));
+    writeFileSync(join(dir, long), "{}");
+    const report = await list(root);
+    expect(report.efforts.find((row) => row.file === long)?.file).toBe(long);
+    const lines = renderPhaseList(report);
+    const cut = `${"x".repeat(PLAIN_LABEL_MAX - 1)}…`;
+    expect(lines.some((line) => line.startsWith(`  ${cut}  `))).toBe(true);
+    expect(lines.find((line) => line.includes("short"))?.startsWith(`  ${"short".padEnd(PLAIN_LABEL_MAX)}  `)).toBe(true);
+    expect(Math.max(...lines.slice(1).map((line) => line.indexOf(" 20")))).toBeLessThanOrEqual(PLAIN_LABEL_MAX + 4);
   });
 });

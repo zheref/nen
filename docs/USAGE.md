@@ -6660,7 +6660,7 @@ answered them. It only reports — it never edits the registry, and "not checked
 
 ### `nen phase`
 
-`nen phase begin|end|show` -- the per-phase timing ledger (v0.11.0, zheref/nen#216). `nen shu` already
+`nen phase begin|end|show|list` -- the per-phase timing ledger (v0.11.0, zheref/nen#216; `list` reads only, zheref/nen#583). `nen shu` already
 measures how long every step took and prints it; nothing recorded when a workflow PHASE began or ended, so
 "what is slow" was inference. This family writes that fact once, on every surface, to
 `<git-common-dir>/.nen/phases/<effort>.json` (since #509; `<--repo>/.nen/phases/` outside git; see
@@ -6742,25 +6742,37 @@ record, and `list` does not choose either. A copy only at the older location is 
 `HA-IS-#12`; a name the encoder could never have written -- a lower-case or needless escape, a stray
 `%` -- is no effort id), the ledger's **newest phase** with its `startedAt`, `endedAt` and `exitCode`,
 and the file's **modification time**. The newest phase is the **last entry of `phases[]`**: `begin`
-is the only writer that adds an entry and it appends; `end`, `--resume` and a `shu` step append edit
-an entry in place and never reorder. It is not re-sorted by `startedAt`, a clock the ledger never
-promised was monotonic. Rows are sorted **newest modification first, ties by effort id**.
+adds an entry by appending; `end`, `--resume` and a `shu` step append edit an entry in place and never
+reorder; and [`nen pr ledger read --restore`](#nen-pr-ledger) writes a whole `phases[]` back in its
+original order, so the last entry is still the newest -- but the file's modification time is then
+when it was **restored**, not when that phase ran. It is not re-sorted by `startedAt`, a clock the
+ledger never promised was monotonic. Rows are sorted **newest modification first, ties by effort id**.
 
 **`--since <minutes>`** keeps only ledgers whose modification time is at most that many minutes before
-this invocation's clock (the `now` seam; the edge is kept). A positive whole number; `0`, a negative,
-a fraction or anything else is exit 2. A conflict row is windowed by its newest copy.
+this invocation's clock (the `now` seam; the edge is kept). A ledger whose modification time is in
+the **future** of that clock is kept, and a row whose modification time could not be read
+(`modifiedAt: null`) is **always kept**: neither can be proven outside the window. A positive whole
+number; `0`, a negative, a fraction or anything else is exit 2. A conflict row is windowed by its
+newest copy.
 
 **Unreadable is a row, never the run.** Bad JSON, a document that is not an object, another
 contract, a **newer** `nen.phase.ledger` contract (named, with the one this build reads), a ledger
 whose `effort` is not the id its file name decodes to (or carries none), a `phases` that is not an
 array, a newest entry that is not a phase entry, a file name that is not an encoded id, a symbolic
-link or other non-regular file (never read through, SEC-7), a file that cannot be read: each is one
+link or other non-regular file (never read through, SEC-7), a file larger than 8 MiB
+(`larger than 8388608 bytes; not read`), a file that cannot be read: each is one
 row with `state: "unreadable"`, its file name and a short `reason`, and every other row still
 prints. A ledger directory that is a link (or resolves outside the common directory) is one
 unreadable row too, and is never followed. No ledger directory, or an empty one, is an empty list.
-`<ledger>.lock` and an atomic write's `.tmp` file are not ledgers and are not listed.
+`<ledger>.lock` and an atomic write's `.tmp` file are not ledgers and are not listed, and a file that
+is **gone** between the listing and the open (a concurrent `begin` or `end` moving an older copy into
+the common dir) is no row at all. Every string a ledger carries is printed through the same
+control-character strip as every other file-derived string in plain output; `--json` carries it
+escaped and unchanged. Plain output cuts a label longer than 48 characters with `…`; `--json` keeps
+the full name.
 
-**Reads only.** `readdir`, `lstat` and `read`: the read-mode half of the layout, never the write-mode
+**Reads only.** `readdir`, `lstat` and one `open` per ledger (`O_NOFOLLOW | O_NONBLOCK` where the
+platform defines them, then `fstat` on the descriptor; on Windows the `lstat` check comes first): the read-mode half of the layout, never the write-mode
 locate that migrates an older copy, no ledger lock (taking one creates `<ledger>.lock`), and no
 directory created. It spawns `git rev-parse --git-common-dir` and `git worktree list` only.
 

@@ -49,9 +49,10 @@ nen phase end   --effort <id> [--phase <name>] [--exit <code>] [--note <text>]
 nen phase show  --effort <id> [--repo <path>] [--json]
 nen phase list  [--repo <path>] [--since <minutes>] [--json]
 
-Every form reads and writes the ledger of --repo's repository (default: the
-current directory): '<git-common-dir>/${PHASE_LEDGER_DIR}/<effort>.json', the
-git common directory every worktree shares, so a worktree cleanup never takes
+Every form but 'list' (which reads only) reads and writes the ledger of
+--repo's repository (default: the current directory):
+'<git-common-dir>/${PHASE_LEDGER_DIR}/<effort>.json', the git common
+directory every worktree shares, so a worktree cleanup never takes
 an effort's phases with it. Outside git it is '<--repo>/${PHASE_LEDGER_DIR}/'.
 A ledger an older build left at '<worktree>/${PHASE_LEDGER_DIR}/' is read in
 place by 'show' (the old path is named) and moved once by 'begin' and 'end';
