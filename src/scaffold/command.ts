@@ -102,7 +102,9 @@ mechanism -- see ../scaffold/hook.ts), writes a canon-values.yml template when
 --canon-values-path is given and nothing is there yet, COPIES any of the four
 taxonomy files still under 'schemas/' into 'nen/' (never a move, never a
 delete -- the removal command is printed), writes nen/contract.json's project
-block into absence, adds the stack's CI workflow, appends '.nen/' to
+block into absence, adds the stack's CI workflow (one job per lane when the
+proposal declares several, or a note naming the manual step when a lane's stack
+has no template -- zheref/nen#586), appends '.nen/' to
 .gitignore, and ends by running 'nen shu tools' in CHECK mode -- printing what
 this host is missing and the --install command, rather than installing
 anything. --install-tools is the explicit flag that runs the install.
@@ -183,6 +185,22 @@ naming the missing policy -- there is no message a repository that has not
 admitted the key could ever write that would satisfy a check for it, so the
 hook does not pretend to check. '.gitignore' upkeep appends the policy's
 reports.dir beside '.nen/'.
+
+commits.stripInjected (zheref/nen#594) is the one OPT-IN that adds a step:
+with keys listed, the commit-msg hook gains a strip step, run before the
+refusals and only when NEN_COMPOSED_TRAILER_KEYS is set (the variable 'nen
+commit write' and 'nen wc squash' give their child 'git commit', beside a
+run id in NEN_STRIP_RUN), that removes a listed key a hook added -- and the
+composed message did not carry -- from the trailer block, reporting each
+removal on stderr and in <git dir>/nen-stripped-trailers.<run id> (the verbs'
+exit 4). Neither variable is ever exported by hand: found without a
+well-formed run id, the hook still strips but says the variable leaked and
+records nothing. It admits nothing: a plain 'git commit' strips nothing, and
+a key the message carried is refused as before. Every listed key must be one
+the policy refuses. With the list empty (the default) the hook is byte-identical to
+one generated before the key existed, so 'init' still reports it unchanged. A
+repository that edits the list regenerates the hook with 'nen scaffold init
+... --force'.
 
 --dry-run prints every write, every migration and every post-step, and
 performs none. It spawns NOTHING, probes included: the toolchain check is

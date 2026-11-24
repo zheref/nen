@@ -22,6 +22,14 @@ describe("first-anchored trailing clauses (#458)", () => {
     expect(missing.ok).toBe(false);
     expect(missing.missing).toEqual(expect.arrayContaining(["from", "to"]));
   });
+  it("keeps a leading first-anchor case-sensitive without changing the default", () => {
+    const marked = parseTemplate("[ruling <text>]{first}");
+    expect(parseInvocation("x", marked, "ruling x ruling y").slots[0]?.value).toBe("x ruling y");
+    for (const line of ["Ruling x", "overruling x"]) {
+      expect(parseInvocation("x", marked, line).ok).toBe(false);
+    }
+    expect(parseInvocation("x", parseTemplate("[ruling <text>]"), "Ruling x").ok).toBe(true);
+  });
   it("refuses modifiers on nontrailing, literal-only or enumerated clauses", () => {
     for (const template of ["<x> [ruling <text>]{first} [then <more>]", "<x> [ruling]{first}", "<x> [ruling <text:a|b>]{first}"]) {
       expect(() => parseTemplate(template)).toThrow(GrammarError);

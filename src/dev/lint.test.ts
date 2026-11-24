@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { makeTempDir } from "../testing/tempdir.js";
 import { devLintArgv, runDevLint } from "./lint.js";
 
 // NOTE: mirrors ./test.test.ts's own note -- this suite never calls
@@ -20,7 +18,7 @@ describe("devLintArgv", () => {
 
 describe("runDevLint", () => {
   it("refuses a directory with no package.json, and says why a binary cannot do this", () => {
-    const empty = mkdtempSync(join(tmpdir(), "nen-dev-lint-"));
+    const empty = makeTempDir("nen-dev-lint-");
     const result = runDevLint({ repoFlag: empty });
     expect(result.code).toBe(2);
     expect(result.message).toMatch(/no package\.json/);

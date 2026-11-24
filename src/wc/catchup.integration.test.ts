@@ -348,6 +348,9 @@ describe.skipIf(!HAVE_GIT)("nen wc catch-up classifies a conflict, against the r
     mustGit(work, ["merge", "--abort"]);
   }, GIT_CASE_MS);
 
+  // An explicit budget (zheref/nen#598): this test spawns real programs synchronously and runs
+  // about 3.4 s on the Windows runners. vitest 4, unlike vitest 2, fails a test that returns after
+  // the 5 s default even if it never yielded.
   it("an ALL-MECHANICAL merge stop exits 3 with the declared regenerate argv; following the steps and re-running continues and pushes nothing", async () => {
     seedCase("allmech");
     const work = branchWith("allmech-merge", releaseEdits("allmech", "0.2.0"));
@@ -489,7 +492,7 @@ describe.skipIf(!HAVE_GIT)("nen wc publish, against the real git", () => {
     expect(more.code).toBe(0);
     expect(more.doc).toMatchObject({ upstreamBefore: "origin/plain-push", ahead: 1, pushed: true });
     expect(mustGit(work, ["ls-remote", "origin", "refs/heads/plain-push"]).split(/\s+/)[0]).toBe(mustGit(work, ["rev-parse", "HEAD"]));
-  });
+  }, 30_000);
 
   it("refuses a branch git holds as `+main` -- the argv that would have force-pushed main -- and pushes nothing (S1)", async () => {
     const work = branchWith("+main", { "sneaky.txt": "sneaky\n" });

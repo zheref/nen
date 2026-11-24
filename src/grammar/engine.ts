@@ -475,12 +475,12 @@ function lastSplit(text: string, pattern: RegExp): { head: string; tail: string 
  * later separator, which is the LAST occurrence -- because everything to its
  * left has, by construction, already been resolved away.
  */
-function stripLeading(text: string, separator: string, kind: "word" | "symbol" | null): string | null {
+function stripLeading(text: string, separator: string, kind: "word" | "symbol" | null, caseSensitive = false): string | null {
   if (kind === "symbol") {
     return text.startsWith(separator) ? text.slice(separator.length) : null;
   }
   const words = separator.trim().split(/\s+/).map(escapeRegex);
-  const pattern = new RegExp(`^${words.join("\\s+")}(?![A-Za-z0-9])`, "i");
+  const pattern = new RegExp(`^${words.join("\\s+")}(?![A-Za-z0-9])`, caseSensitive ? "" : "i");
   const hit = pattern.exec(text);
   if (hit === null) return null;
   return text.slice(hit[0].length);
@@ -678,7 +678,7 @@ function parseInvocationOnce(skill: string, grammar: Grammar, line: string): Inv
   if (first !== undefined) {
     let text: string | null = remaining.trim();
     if (first.separator !== null) {
-      const stripped = stripLeading(text, first.separator, first.separatorKind);
+      const stripped = stripLeading(text, first.separator, first.separatorKind, first.firstAnchored === true);
       if (stripped !== null) {
         text = stripped.trim();
       } else if ((first.separatorOptional || nothingRequired) && first.optional) {
