@@ -2,6 +2,7 @@
 
 ```text
 nen review ledger init|ensure|decide|record|show|recover-first --branch <name> [--pr <n>] [--repo <path>] [--json]
+nen review ledger record --branch <name> --persona <id> --outcome delta --from-head <sha> --to-head <sha> [--pr <n>] [--repo <path>] [--json]
 ```
 
 This is the TypeScript owner of Hatsu's review-cycle ledger ([#346](https://github.com/zheref/nen/issues/346)).
@@ -23,11 +24,30 @@ roster or fallback budgets. Declare the complete roster before migrating.
   `main`. The trunk, `HEAD`, an empty branch and `refs/*` refuse at exit 3.
   The requested PR ledger takes precedence over a branch-only ledger.
 - `decide --applicable <csv>` returns `reviewers[]`, `raise[]` and
-  `skippedExhausted[]`. Each reviewer carries `used`, `max`, `remaining` and
-  `action` (`raise`, `skip-exhausted` or `not-applicable`).
+  `skippedExhausted[]`. Each reviewer carries `used`, `max`, `remaining`,
+  `deltas`, `skips`, `lastDeltaHead` and `action` (`raise`, `skip-exhausted`
+  or `not-applicable`). `used` counts ordinary rounds only; `skips` counts
+  `skipped-exhausted` rows and `deltas` counts `delta` rows, so the three are
+  read without parsing `invocations[]`. A delta never restores a `raise`.
 - `record --persona <id> --outcome ran|skipped-exhausted` appends a timestamped
   invocation. `ran` spends one pass and refuses past the maximum; a skip is
   valid only when exhausted. Changing the declared maximum never resets used.
+- `record --persona <id> --outcome delta --from-head <sha> --to-head <sha>`
+  appends hanten's bounded delta pass ([#662](https://github.com/zheref/nen/issues/662)):
+  `{ at, outcome: "delta", fromHead, toHead }`. It spends nothing — `used` and
+  `max` are unchanged — and is the truthful row for a completed re-read of a
+  spent reviewer's own earlier review on a new head. Each is refused at exit 2
+  before anything is written, the message naming the bad input: a missing
+  head, a head given with `ran` or `skipped-exhausted`, a head that is not a
+  full 40-digit lowercase hexadecimal commit id, equal heads, a reviewer with
+  no `ran` row in this cycle, a reviewer that still has budget (raise an
+  ordinary round instead), the same `fromHead`/`toHead` pair recorded again,
+  and, among the deltas since the reviewer's last `ran` row, a `fromHead`
+  other than the last delta's `toHead` when one exists, or a `toHead` those
+  deltas already reviewed. A later `ran` row resets that chain, so the next
+  delta may start from any head; the duplicate check reads the whole cycle.
+  `lastDeltaHead` is the `toHead` of the last delta since the last `ran` row,
+  `null` when there is none; `deltas` counts every delta in the cycle.
 - `show` returns the document with its absolute `path`. `show` and `decide`
   read without saving; missing reads leave no lock trace.
 - `recover-first --confirmed-first-cycle` explicitly audits a first-cycle
@@ -59,10 +79,22 @@ exit 2. The legacy script's named-persona exception is not embedded in Nen;
 restore that history explicitly. Malformed rows and inconsistent counts always
 refuse. Complete unstamped ledgers load without loss.
 
+A `delta` row is read only in the shape `record` writes — both heads full,
+lowercase and different — and `used` must still equal the number of `ran`
+rows; a malformed stored delta is inconsistent history and refuses at exit 2,
+never repaired. Legacy ledgers holding only `ran` and `skipped-exhausted`
+rows read exactly as before. The contract stays `hatsu.hanten.cycle/v0.1`
+so that a ledger without deltas stays readable everywhere; **a nen older than
+this change refuses a ledger that holds a `delta` row as inconsistent
+history**, so a caller records deltas only once its pinned nen has the
+outcome.
+
 Exit 0 means the requested operation succeeded; exit 2 covers bad arguments,
 second init, missing/corrupt history, invalid policy and misuse of a budget.
 Ensure's exit 3/4 documents carry `reason`, and lost documents carry `traces[]`.
 Init/recovery return `path`, `branch`, `pr`, `contract`, `openedAs` and
-`budgets`; record returns `path`, `persona`, `outcome`, `used` and `max`.
+`budgets`; record returns `path`, `persona`, `outcome`, `used`, `max`,
+`deltas`, `skips` and `lastDeltaHead`, plus `fromHead` and `toHead` for a
+delta.
 Human output is concise; `--json` carries these full documents.
 
