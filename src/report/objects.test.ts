@@ -145,6 +145,7 @@ describe("parseObjects -- the read seam", () => {
       "reviewRequests",
       "linked",
       "readiness",
+      "ledger",
       "notes",
     ]);
   });
@@ -409,7 +410,7 @@ async function live(argv: readonly string[], calls: readonly ScriptedCall[]): Pr
     out: (line): void => void out.push(line),
     err: (line): void => void err.push(line),
   };
-  const seams = new ScriptedSeams([...script(), ...calls], { now: (): Date => NOW, platform: "linux" });
+  const seams = new ScriptedSeams([...script(), ...calls, { match: "gh api repos/zheref/nen/pulls/217", result: { code: 1, stderr: "ledger read unavailable in readiness fixture" } }], { now: (): Date => NOW, platform: "linux" });
   const code = await runFamily(reportCommand, argv, null, false, io, seams);
   return { code, out, err, seams };
 }
@@ -447,6 +448,7 @@ describe("the live register", () => {
       "reviewRequests",
       "linked",
       "readiness",
+      "ledger",
       "notes",
     ]);
     expect(row["labels"]).toEqual(["nen:severity/high", "nen:lane/cli"]);

@@ -12752,9 +12752,11 @@ OK -- method block is complete.
 
 **`nen commit`**
 
-Validates the SHAPE of a Conventional Commits message -- a declared type, a non-empty subject under 72 characters, no trailing sentence punctuation -- and never its content; what changed and why stays the author's to write. `format` reads and writes nothing on disk or over the network beyond `nen/workflow.json` (the trailer policy, `commits.subjectCase` and `commits.bodyMaxLineLength`) and the repository's commitlint config; `check` reads one build proof and asks git for a tree hash, and writes nothing at all.
+Validates the SHAPE of a Conventional Commits message -- a declared type, a non-empty subject under 72 characters, no trailing sentence punctuation -- and never its content; what changed and why stays the author's to write. `format` writes nothing on disk or over the network; it reads an input file when `--message-file` is supplied, plus `nen/workflow.json` (the trailer policy, `commits.subjectCase` and `commits.bodyMaxLineLength`) and the repository's commitlint config; `check` reads one build proof and asks git for a tree hash, and writes nothing at all.
 
 ### `nen commit format`
+
+To validate an existing message, run `nen commit format --repo <path> --message-file <path>`. Relative message paths resolve against the repository. This route checks the file as supplied, with the same message and repository-policy validators as `commit write`; it does not wrap or rewrite it, inspect the index, or commit. Do not combine it with `--type`, `--scope`, `--subject`, `--body`, `--trailer`, or `--breaking`. Success emits the original message (the existing `{ message }` shape under `--json`); invalid messages exit 2 and broken policy/configuration exits 1.
 
 Builds and validates one Conventional Commits header (`type(scope)!: subject`) plus optional body paragraph and trailers, from the type set `feat, fix, chore, docs, refactor, test, perf, build, ci`. `--trailer` keys are caller data (a specific persona's trailer convention lives in the calling skill, never a literal in this binary).
 
@@ -12793,6 +12795,7 @@ Builds and validates one Conventional Commits header (`type(scope)!: subject`) p
 **Usage**
 
 ```text
+nen commit format --repo <path> --message-file <path>
 nen commit format --type feat --subject "a short imperative subject"
                   [--scope <scope>] [--breaking] [--body "paragraph one"]
                   [--trailer key=value,key2=value2] [--repo <path>]
@@ -12802,15 +12805,16 @@ nen commit format --type feat --subject "a short imperative subject"
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
-| `--type <type>` | yes | One of `feat, fix, chore, docs, refactor, test, perf, build, ci`. | |
-| `--subject <text>` | yes | The header's imperative subject. | Non-empty, the FULL header line (`type(scope)!: subject`) must be <= 72 characters, and must not end in `.!?`. |
+| `--message-file <path>` | file form | Validate an existing message without rewriting it. | Exclusive with every message-building flag; paths resolve against `--repo`. |
+| `--type <type>` | constructed form | One of `feat, fix, chore, docs, refactor, test, perf, build, ci`. | |
+| `--subject <text>` | constructed form | The header's imperative subject. | Non-empty, the FULL header line (`type(scope)!: subject`) must be <= 72 characters, and must not end in `.!?`. |
 | `--scope <scope>` | no | The parenthesised scope. | Given but empty is refused -- omit the flag entirely instead. |
 | `--breaking` | no | Adds the `!` marker after type/scope. | |
 | `--body "paragraph"` | no | ONE paragraph. | This parser does not support repeating `--body`; pass one paragraph and use blank lines inside it for multiple, if the shell allows a multi-line value. A line over the repository's commitlint line length (100 where none is read) is wrapped at spaces — see above. |
 | `--trailer key=value,key2=value2` | no | Comma-separated `key=value` pairs. | A key containing `:` or empty is refused. An attribution-shaped key the repository's `nen/workflow.json` does not admit is refused too — see above. |
 | `--repo <path>` | no | The repository whose `nen/workflow.json` states the trailer policy, `commits.subjectCase` and `commits.bodyMaxLineLength`, and whose commitlint config states `subject-case`, `body-max-line-length` and `footer-max-line-length`. | Defaults to the cwd. Both are read on every run, so a `--repo` that does not exist is exit 2. |
 
-**Output and exit codes** -- prints the formatted message, its `--body` wrapped as above. `--json`: `{ message }` -- unchanged; no key was added for `subject-case` or the line length, and `message` is the wrapped one. All shape violations, policy refusals and `subject-case` refusals print as plain `nen:` lines on stderr; under `--json` they are the [refusal envelope](#the-refusal-envelope) on stdout instead (a broken config's failures first, then the shape refusals, `code` the exit), while warnings and notes stay `nen:` lines on stderr either way. **Every** one of them is reported, not just the first -- a shape violation, a refused trailer and a capitalized subject in the same invocation are three problems reported together. Exit 0 on a valid shape (a `nen: warning:` or `nen: note:` line may accompany it — and in a repository whose commitlint config is code and that declares no `commits.subjectCase`, every run carries a `subject-case NOT checked` warning, so exit 0 is **not** a subject-case verdict there); exit 2 on any shape violation, trailer-policy refusal, level-2 `subject-case` break — commitlint's own or the declared one — or line over a level-2 `body-max-line-length`/`footer-max-line-length`, the declared `commits.bodyMaxLineLength`, or the 100 assumed for a body whose config nen cannot read; exit **1** when a `nen/workflow.json` (a malformed `commits.subjectCase` or `commits.bodyMaxLineLength` included) or a `.commitlintrc` (a line-length rule of a shape commitlint rejects included) is present and could not be read. A broken config is reported **first**: both files are named when both are broken, and then any shape violation the run could still establish is printed after them rather than dropped — the exit stays 1, because the repository's files are what is wrong. [`commit write`](#nen-commit-write) reports the same failures in the same order.
+**Output and exit codes** -- prints the supplied file text unchanged, or the constructed message with `--body` wrapped as above. `--json`: `{ message }` -- unchanged; no key was added for `subject-case` or the line length, and `message` is the supplied or constructed text. All shape violations, policy refusals and `subject-case` refusals print as plain `nen:` lines on stderr; under `--json` they are the [refusal envelope](#the-refusal-envelope) on stdout instead (a broken config's failures first, then the shape refusals, `code` the exit), while warnings and notes stay `nen:` lines on stderr either way. **Every** one of them is reported, not just the first -- a shape violation, a refused trailer and a capitalized subject in the same invocation are three problems reported together. Exit 0 on a valid shape (a `nen: warning:` or `nen: note:` line may accompany it — and in a repository whose commitlint config is code and that declares no `commits.subjectCase`, every run carries a `subject-case NOT checked` warning, so exit 0 is **not** a subject-case verdict there); exit 2 on any shape violation, trailer-policy refusal, level-2 `subject-case` break — commitlint's own or the declared one — or line over a level-2 `body-max-line-length`/`footer-max-line-length`, the declared `commits.bodyMaxLineLength`, or the 100 assumed for a body whose config nen cannot read; exit **1** when a `nen/workflow.json` (a malformed `commits.subjectCase` or `commits.bodyMaxLineLength` included) or a `.commitlintrc` (a line-length rule of a shape commitlint rejects included) is present and could not be read. A broken config is reported **first**: both files are named when both are broken, and then any shape violation the run could still establish is printed after them rather than dropped — the exit stays 1, because the repository's files are what is wrong. [`commit write`](#nen-commit-write) reports the same failures in the same order.
 
 ```bash
 nen commit format --type fix --subject "stop dropping the last row" --trailer "Co-Authored-By=A" --repo .
@@ -18265,7 +18269,7 @@ git reads only, no network, no token. A pull-request row carries `kind`,
 check name, through the same `latestChecks` reduction [`pr
 ready`](#nen-pr-ready) uses), `threads` (`total`/`unresolved`),
 `reviewRequests[]`, `linked[]` (the issue numbers it references), `readiness`
-and `notes[]`. **`linked[]` holds only real numbers** ([#639](https://github.com/zheref/nen/issues/639)):
+and `notes[]`, plus `ledger` (see below). **`linked[]` holds only real numbers** ([#639](https://github.com/zheref/nen/issues/639)):
 it is every `#<n>` in the title and body where `<n>` is **1 to 9 digits
 starting `1`–`9`** followed by no ASCII word character (`[A-Za-z0-9_]`), and
 the `#` is either **not glued** — not preceded by an ASCII word character, `&`
@@ -18286,6 +18290,19 @@ only. The row's own number is left out of `linked[]` on both paths. An issue row
 `labels[]`, `linked[]` (the pull requests that reference it), a `readiness`
 that is **always `null`** — CON-32 is a statement about a pull request — and
 `notes[]`.
+
+**Ledger evidence** ([#674](https://github.com/zheref/nen/issues/674)): each PR row carries
+`ledger: { state, url, verdict, reason, line }`. The live read uses the PR head branch
+as its effort and the same authority as `nen pr ledger read`, including multipart
+assembly and author/editor validation. `line` and `verdict` preserve that read-back
+exactly. `state` is `valid` for `ok`, `none` only after a successful comments read
+finds no matching slice, `refused` for a stale, edited, foreign, duplicate or invalid
+slice, and `not-read` when the head, login or comments cannot be read. `url` is null
+when the read supplies none; `reason` is null only for a valid slice. No slice is
+posted, refreshed or restored. Offline `--objects-from` rows say `not-read` because
+no GitHub comment read occurs, even if their input carries historical ledger data.
+With `--register`, `ledgerLine` is the same exact line (empty only on issue rows).
+A desk-provided `ledger` or `ledgerLine` is refused at exit 2 like any other fact.
 
 **A FIELD degrades; an OBJECT does not go missing.** Each field of a pull
 request is read on its own: a check rollup that will not validate (an unknown

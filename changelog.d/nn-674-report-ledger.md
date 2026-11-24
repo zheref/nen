@@ -1,0 +1,1 @@
+Report PR rows now carry their ledger comment link, exact read-back verdict and line, and distinct valid/none/refused/not-read states. Register rows expose ledgerLine; desks cannot supply it. The report reuses the ledger read authority without posting or restoring slices. (#674)
