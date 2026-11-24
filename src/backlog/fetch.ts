@@ -49,8 +49,37 @@ export interface Assembly {
 // closing keyword or a bare `#<n>` -- the same cross-reference surface a
 // reader following the PR would use to find the issue it delivers. Matched
 // case-insensitively, as GitHub's own keyword parsing is.
+//
+// ONLY A REAL NUMBER IS A REFERENCE (zheref/nen#639). `#(\d+)` matched a hex
+// colour in a PR body (`#000000`) and parseInt made it 0 -- a "linked" object
+// GitHub never numbered, printed as `<owner>/<name>#0` on a delivered PR's
+// report. The rule, exactly:
+//
+//   - THE NUMBER is 1 to 9 digits starting 1-9, followed by no ASCII word character (`[A-Za-z0-9_]`):
+//     `#0`, `#000000`, `#123abc` and a 20-digit run read as nothing.
+//   - THE `#` is either NOT GLUED -- not preceded by an ASCII word character,
+//     `&` or `;`, so `&#39;` and the double-escaped `&amp;#39;` read as nothing -- or
+//     glued to exactly one `owner/name`: two `[\w.-]+` segments joined by one
+//     `/`, the first not itself preceded by `/`, an ASCII word
+//     character, `.` or `-`.
+//     So `acme/widget#591` and `acme/widget#591/AC-1` read; `.../faq#2` in a
+//     URL and `/path/to/file#12` do not.
+//
+// KNOWN LIMITS, kept on purpose: a relative two-segment path
+// (`docs/USAGE.md#123`) has the same shape as `owner/name#123` and is read;
+// `other/repo#591` is read as THIS repository's #591, as it always was; and a
+// `#` straight after `;` is not read, so `Fixes #1;#2` reads #1 only. `\w` is
+// ASCII, so a `#` after a non-ASCII letter (`é#12`) IS read.
+//
+// NO CATASTROPHIC BACKTRACKING. `(?=#)` comes first, so the lookbehinds run
+// only at a `#`, and each walks back over the one `[\w.-]` run before it
+// (which a `#` ends); `\d{0,8}` backs off at most nine times. The work is
+// linear in the text -- ./fetch.test.ts times a 1M-character input.
 const CLOSING_KEYWORDS = ["close", "closes", "closed", "fix", "fixes", "fixed", "resolve", "resolves", "resolved"];
-const REF_PATTERN = new RegExp(`(?:\\b(?:${CLOSING_KEYWORDS.join("|")})\\s+)?#(\\d+)`, "gi");
+const REF_PATTERN = new RegExp(
+  `(?:\\b(?:${CLOSING_KEYWORDS.join("|")})\\s+)?(?=#)(?:(?<=(?<![\\w./-])[\\w.-]+\\/[\\w.-]+)|(?<![&;\\w]))#([1-9]\\d{0,8})(?!\\w)`,
+  "gi",
+);
 
 export function referencedIssueNumbers(text: string): Set<number> {
   const found = new Set<number>();

@@ -12,7 +12,7 @@ a fictional alias is a public repository or that new live verification occurred.
 The detector's executable implementation is unchanged. No assertions, matcher,
 ignore entries or prior rulings are weakened.
 
-Verification:
+Original verification (before the main catch-up):
 
 - 589 focused detector, scaffold, profile and matrix tests pass.
 - Typecheck and scoped lint pass; the generated matrix matches its source.
@@ -28,3 +28,16 @@ Verification:
 
 Git history is retained. The public record deliberately contains no private
 identity, catalog, ignored-name list or mapping back from fictional examples.
+
+## November 24 reconciliation
+
+Sergio ruled on November 24, 2026 at 14:07 COT: retain the Expo support
+from #502 and its second source, and reapply fictional examples on top.
+The Expo profile keeps the current main executable declarations unchanged.
+`sourceworkspace` identifies the original bare-workflow snapshot;
+`referenceworkspace` identifies the distinct maintained mobile snapshot added
+by #502. Both retain the observed paths, line references and preconditions.
+The names are fictional source aliases, not new verification claims.
+
+The managed fixture and the script/dependency cross-checks introduced by #502
+remain intact. The matrix is regenerated from the reconciled profile pack.

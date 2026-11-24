@@ -54,6 +54,9 @@ describe("the bundled default policy document", () => {
     expect(packed.iteration.checks).toEqual(built.iteration.checks);
     expect(packed.commits.forbiddenTrailers).toEqual(built.commits.forbiddenTrailers);
     expect(packed.commits.runTrailer).toEqual(built.commits.runTrailer);
+    // zheref/nen#594: the pack states the opt-in strip list OFF, exactly as an absent key reads.
+    expect(packed.commits.stripInjected).toEqual(built.commits.stripInjected);
+    expect(packed.commits.stripInjected).toEqual([]);
   });
 
   it("carries a model matrix the loader has no default for, and reads every leaf", () => {

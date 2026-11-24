@@ -1,0 +1,28 @@
+{
+  "name": "placeholder-mobile",
+  "private": true,
+  "packageManager": "pnpm@9.15.9",
+  "main": "expo-router/entry",
+  "scripts": {
+    "dev": "expo start",
+    "build": "expo export --platform ios --platform android --output-dir dist",
+    "archive": "eas build --local --platform ios --profile simulator --non-interactive --output dist-archive/placeholder.tar.gz",
+    "lint": "expo lint",
+    "test": "jest",
+    "test:coverage": "jest --coverage",
+    "test:ui": "maestro test .maestro"
+  },
+  "dependencies": {
+    "expo": "~55.0.32",
+    "expo-dev-client": "~55.0.41",
+    "expo-router": "~55.0.18",
+    "react": "19.2.0",
+    "react-native": "0.83.10"
+  },
+  "devDependencies": {
+    "@testing-library/react-native": "13.3.3",
+    "eas-cli": "27.4.1",
+    "jest": "~29.7.0",
+    "jest-expo": "~55.0.22"
+  }
+}

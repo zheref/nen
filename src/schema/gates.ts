@@ -408,7 +408,30 @@ export interface GateIdentities {
    * exclusion, and every caller-built identity set stays valid unchanged.
    */
   readonly excludedChecks?: readonly DeclaredCheckExclusion[];
+  /**
+   * `version_collision` (zheref/nen#663), or `null` when the file declares
+   * none. OPTIONAL in the type for the reason `roundQuorum` is. The copy that
+   * DECIDES is the default-branch tip's (../pr/version_collision.ts); this one
+   * -- local, `--gates` or base -- is compared against it, and only adds
+   * evidence of the opt-in when the default tip cannot decide.
+   */
+  readonly versionCollision?: VersionCollisionPolicy | null;
   reviewer(name: string): ReviewerIdentity | undefined;
+}
+
+/**
+ * `version_collision` (zheref/nen#663): which file carries the plugin version,
+ * where in it (an RFC 6901 JSON pointer), and which paths ship. A pull
+ * request that changes a shipped path must propose a version no target tip
+ * and no other open same-repository pull request already holds.
+ */
+export interface VersionCollisionPolicy {
+  /** Repository-relative, `/`-separated, no glob character, no `..`. */
+  readonly versionFile: string;
+  /** An RFC 6901 pointer, `/`-led, into the version file's JSON. */
+  readonly versionPointer: string;
+  /** ../shu/evidence/glob.ts globs (`*`, `**`, `?`), unique, at least one. */
+  readonly shippedPaths: readonly string[];
 }
 
 /**
@@ -921,6 +944,15 @@ export const GATES_KNOWN_KEYS: GatesKeyLevel = {
       },
     },
   },
+  // zheref/nen#663: the opt-in live plugin-version collision limb of CON-32(a).
+  version_collision: {
+    introducedIn: NEXT_RELEASE,
+    object: {
+      version_file: { introducedIn: NEXT_RELEASE },
+      version_pointer: { introducedIn: NEXT_RELEASE },
+      shipped_paths: { introducedIn: NEXT_RELEASE },
+    },
+  },
 };
 
 /** One key a file carries that this build does not read. */
@@ -1279,6 +1311,7 @@ export function parseGateIdentities(path: string, value: unknown): GateIdentitie
 
   const roundQuorum = readRoundQuorum(path, root["round_quorum"], declared);
   const excludedChecks = readCheckExclusions(path, root["checks"]);
+  const versionCollision = readVersionCollision(path, root["version_collision"]);
 
   // `round_policy.stallMinutes` -- OPTIONAL (zheref/nen#214 item 2). A
   // repository that does not declare it gets the caller's own fixed default,
@@ -1393,6 +1426,8 @@ export function parseGateIdentities(path: string, value: unknown): GateIdentitie
     dependabotCarveOut,
     roundQuorum,
     excludedChecks,
+    // Spread so an identity set from a file without the key is unchanged.
+    ...(versionCollision === null ? {} : { versionCollision }),
     reviewer: (name): ReviewerIdentity | undefined => byName.get(name),
   };
 }
@@ -1596,6 +1631,102 @@ export function parseCheckExclusions(path: string, rootValue: unknown): Declared
   requireGatesVersion(path, root);
   refuseUnknownKeys(path, root);
   return readCheckExclusions(path, root["checks"]);
+}
+
+/**
+ * The base-only reader for `version_collision` (zheref/nen#663), modelled on
+ * `parseCheckExclusions`: the version guard and the unknown-key sweep every
+ * reader of this file applies, then the block and nothing else. `null` when
+ * the file declares none (absent or `null`).
+ */
+export function parseVersionCollision(path: string, rootValue: unknown): VersionCollisionPolicy | null {
+  const root = requireRecord(path, "$", rootValue);
+  requireGatesVersion(path, root);
+  refuseUnknownKeys(path, root);
+  return readVersionCollision(path, root["version_collision"]);
+}
+
+/** The most `**` segments one `shipped_paths` glob may carry (Feitan, zheref/nen#663 round 1). */
+export const MAX_GLOBSTARS = 4;
+
+// Any C0 control, DEL or C1 control: never part of a path or a pointer a
+// reader can see, and a terminal would act on it.
+const CONTROL_CHARACTER = /[\u0000-\u001f\u007f-\u009f]/;
+
+/**
+ * `version_collision` -- OPTIONAL, and REFUSED BY POINTER when malformed. Each
+ * refusal is a block that would silently read something its author did not
+ * write:
+ *
+ *   * `version_file` is ONE file at a repository-relative path: a glob
+ *     character, a `..` or `.` segment, an empty segment, a backslash, a
+ *     leading `/` or a control character would name another file, several, or
+ *     none;
+ *   * `version_pointer` is an RFC 6901 JSON pointer (`/version`), never a
+ *     pattern -- a regex over text the pull request's head controls is a ReDoS
+ *     surface -- so it must start with `/` and every `~` must be `~0` or `~1`;
+ *   * `shipped_paths` is a non-empty list of unique globs in
+ *     ../shu/evidence/glob.ts's grammar (`*`, `**` as a whole segment, `?`).
+ *     A bracket or a brace reads like a class or an expansion that grammar
+ *     does not have, so it is refused rather than matched literally; more
+ *     than MAX_GLOBSTARS `**` segments is refused as a backtracking bound.
+ */
+function readVersionCollision(path: string, raw: unknown): VersionCollisionPolicy | null {
+  if (raw === undefined || raw === null) return null;
+  const record = requireRecord(path, "version_collision", raw);
+  const repoPath = (pointer: string, value: unknown, glob: boolean): string => {
+    const stated = requireString(path, pointer, value);
+    const refuse = (why: string): never => {
+      throw new SchemaError(path, pointer, `(${JSON.stringify(stated)}) ${why}`);
+    };
+    if (stated === "") refuse("is empty; name a repository-relative path.");
+    if (CONTROL_CHARACTER.test(stated)) refuse("carries a control character, which no repository path a reader can see contains.");
+    if (stated.includes("\\")) refuse("carries a backslash; paths are '/'-separated on every platform.");
+    if (stated.startsWith("/")) refuse("starts with '/'; it is repository-relative, never absolute.");
+    if (!glob && /[*?[\]{}]/.test(stated)) refuse("carries a glob character; it names exactly ONE file.");
+    if (glob && /[[\]{}]/.test(stated)) {
+      refuse("carries '[', ']', '{' or '}'. The glob grammar is '*', '**' (a whole segment) and '?', so a class or a brace expansion would be matched literally -- not what it reads as.");
+    }
+    const segments = stated.split("/");
+    if (glob && segments.filter((segment): boolean => segment === "**").length > MAX_GLOBSTARS) {
+      refuse(`has more than ${MAX_GLOBSTARS} '**' segments; each one multiplies the matcher's backtracking over every changed path, and no shipped tree needs more.`);
+    }
+    for (const segment of segments) {
+      if (segment === "") refuse("has an empty segment (a doubled or trailing '/').");
+      if (segment === ".." || segment === ".") refuse(`has a '${segment}' segment, which would name a path outside what it spells.`);
+      if (glob && segment !== "**" && segment.includes("**")) refuse("uses '**' inside a segment; '**' is a whole segment ('a/**/b'), and inside one it would mean '*'.");
+    }
+    return stated;
+  };
+  const versionFile = repoPath("version_collision.version_file", record["version_file"], false);
+  const versionPointer = requireString(path, "version_collision.version_pointer", record["version_pointer"]);
+  if (!versionPointer.startsWith("/") || CONTROL_CHARACTER.test(versionPointer) || /~(?![01])/.test(versionPointer)) {
+    throw new SchemaError(
+      path,
+      "version_collision.version_pointer",
+      `(${JSON.stringify(versionPointer)}) is not an RFC 6901 JSON pointer to a member: it must start with '/', every '~' must be written '~0' or '~1', and it carries no control character -- e.g. "/version". A pointer, never a pattern: a regex over the head's text would be a ReDoS surface.`,
+    );
+  }
+  const rawPaths = requireArray(path, "version_collision.shipped_paths", record["shipped_paths"]);
+  if (rawPaths.length === 0) {
+    throw new SchemaError(
+      path,
+      "version_collision.shipped_paths",
+      "is empty. With no shipped path no pull request ships anything, so the block would never apply; name the paths that ship (e.g. \"claude/**\"), or delete the block.",
+    );
+  }
+  const seenAt = new Map<string, number>();
+  const shippedPaths = rawPaths.map((item, index): string => {
+    const pointer = `version_collision.shipped_paths[${index}]`;
+    const glob = repoPath(pointer, item, true);
+    const previous = seenAt.get(glob);
+    if (previous !== undefined) {
+      throw new SchemaError(path, pointer, `duplicates version_collision.shipped_paths[${previous}] ('${glob}').`);
+    }
+    seenAt.set(glob, index);
+    return glob;
+  });
+  return { versionFile, versionPointer, shippedPaths };
 }
 
 function readCheckExclusions(path: string, raw: unknown): DeclaredCheckExclusion[] {

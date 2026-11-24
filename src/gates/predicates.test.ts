@@ -3425,3 +3425,36 @@ describe("round_check_producer -- a name alone is never identity (zheref/nen#546
     expect(reviewerRoundFacts(APP, rounds({ checks: [cursorRun] }), "headsha", ["bugbot"], "bounded")[0]?.round).toBe("round-check");
   });
 });
+
+// --- isDeliveryPr under nen's own nen/gates.json (zheref/nen#657) -----------
+// Every {model} fill of nen/workflow.json's branch template is a delivery
+// prefix; CON-40's author and default-branch conjuncts are unchanged.
+
+describe("isDeliveryPr under nen's committed nen/gates.json (zheref/nen#657)", () => {
+  const OWN = loadGateIdentities(process.cwd());
+  const evidence = (headRef: string, overrides: Partial<{ author: string; baseRef: string }> = {}): Parameters<typeof isDeliveryPr>[1] => ({
+    author: "zheref",
+    baseRef: "main",
+    defaultBranch: "main",
+    headRef,
+    labels: [] as string[],
+    ...overrides,
+  });
+
+  it.each(["fable/kurapika/x", "opus/kurapika/x", "claude/kurapika/x", "astra/kurapika/x", "codex/kurapika/x"])(
+    "%s by zheref into main is a delivery PR",
+    (headRef) => {
+      expect(isDeliveryPr(OWN, evidence(headRef))).toBe(true);
+    },
+  );
+
+  it("a wrong author or a non-default base still is not", () => {
+    expect(isDeliveryPr(OWN, evidence("fable/kurapika/x", { author: "someone-else" }))).toBe(false);
+    expect(isDeliveryPr(OWN, evidence("fable/kurapika/x", { baseRef: "integration/x" }))).toBe(false);
+  });
+
+  it("a head ref outside the list, or a prefix in another case, is not", () => {
+    expect(isDeliveryPr(OWN, evidence("feature/x"))).toBe(false);
+    expect(isDeliveryPr(OWN, evidence("Fable/kurapika/x"))).toBe(false);
+  });
+});
