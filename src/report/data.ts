@@ -128,7 +128,7 @@ export interface ReportPhase {
   readonly countedMs: number | null;
   /**
    * The untimed wait left out of `countedMs` -- above zero only for a wait
-   * phase (`readiness`) with no timed step for over 60 minutes; null while
+   * phase (`readiness`) whose untimed time sums to over 60 minutes; null while
    * the phase is open.
    */
   readonly idleWaitMs: number | null;

@@ -195,16 +195,21 @@ data      One document describing this branch against --base: the commits, the
   nen's own in-process CON-32 gate decided it, and null -- with the reason on
   stderr and in the row's notes -- when neither could be read. Under
   --objects-from, 'readiness' is the caller's file's, validated for shape
-  ('state' is refused on an OPEN row) and never re-derived. 'linked[]' is
-  every '#<n>' (n from 1, ending the token) the title and body reference,
-  less the pull request's own number; a hex colour or '&#39;' is none, and a
-  file's non-positive entry is left out with a note.
+  ('state' only on a MERGED or CLOSED row, with that state's verdict) and
+  never re-derived -- except that a MERGED or CLOSED row's older 'check' or
+  'computed' verdict is replaced by the state verdict, named in its notes.
+  'linked[]' is every '#<n>' the title and body reference (n 1 to 9 digits
+  from 1, ending the token; the '#' not after a word character, '&' or ';',
+  unless glued to one owner/name), less the pull request's own number; a hex
+  colour or '&#39;' is none, and a file's non-positive entry is left out with
+  a note. Known limits: 'docs/USAGE.md#123' reads as #123, and
+  'other/repo#591' as this repository's #591.
 
   'phases[]' rows end with countedMs and idleWaitMs, derived at read time:
-  a 'readiness' phase with no timed step for over 60 minutes counts only
+  a 'readiness' phase untimed for over 60 minutes in all counts only
   its timed steps, and the rest is its idle wait; durationMs is unchanged.
-  Spend bars use countedMs, and an idle phase's amount names the wait it
-  excludes.
+  A non-finite or negative duration leaves both null. Spend bars use
+  countedMs, and an idle phase's amount names the wait it excludes.
 
 render    Fills a template with a data document and writes the result. The whole
           template language is '{{token}}' (HTML-escaped), '{{{token}}}' (raw),

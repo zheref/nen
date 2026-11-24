@@ -327,17 +327,54 @@ function readReadiness(row: Record<string, unknown>, state: string, display: str
       `has 'readiness.source' of ${describe(source)} -- it says WHICH authority answered and is 'check' (the head's own readiness check run), 'computed' (nen's in-process CON-32 gate) or 'state' (a MERGED or CLOSED pull request, which neither evaluates)`,
     );
   }
-  // `state` IS A STATEMENT THAT THE PULL REQUEST IS NO LONGER OPEN, so it is
-  // refused on a row that says it is: an open pull request's readiness is
-  // CON-32's to decide, never its state's (zheref/nen#639).
-  if (source === "state" && state.toUpperCase() === "OPEN") {
-    refuse(
-      display,
-      index,
-      `has 'readiness.source' 'state' on an OPEN pull request. 'state' says the pull request is MERGED or CLOSED and so was not evaluated; an open one's readiness is 'check' or 'computed'`,
-    );
+  // `state` IS A STATEMENT THAT THE PULL REQUEST IS NO LONGER OPEN, and it is
+  // held to exactly what the live path would say (zheref/nen#639): only on a
+  // row whose state routes to it -- MERGED or CLOSED -- and only with the
+  // verdict that state gives. On an OPEN row, an empty or unknown state, or
+  // with another verdict, it is a claim no read of GitHub would have made.
+  if (source === "state") {
+    const expected = stateReadiness(state);
+    if (expected === null) {
+      refuse(
+        display,
+        index,
+        `has 'readiness.source' 'state' on a pull request whose state is ${describe(state)}. 'state' says the pull request is MERGED or CLOSED and so was not evaluated; an open one's readiness is 'check' or 'computed'`,
+      );
+    }
+    if (verdict !== expected.verdict) {
+      refuse(
+        display,
+        index,
+        `has 'readiness.source' 'state' with verdict ${describe(verdict)} on a ${state.toUpperCase()} pull request, whose state verdict is '${expected.verdict}'`,
+      );
+    }
   }
   return { verdict, reason, source };
+}
+
+/**
+ * A retained row's readiness, with the state verdict put in place of a verdict
+ * the pull request has since outlived (zheref/nen#639, AC-1 on the offline
+ * path).
+ *
+ * A FILE WRITTEN BEFORE THE MERGE carries the gate's verdict on the open pull
+ * request -- or, written after it by an older nen, `not-ready:
+ * mergeable=UNKNOWN`. Quoting either on a row whose state is MERGED or CLOSED
+ * is the defect the live path no longer has, so the state verdict is shown and
+ * the row's notes name the verdict it replaced. Not a refusal: the file is a
+ * true record of what was read then, and it still loads.
+ */
+function settleRetained(
+  readiness: ObjectReadiness | null,
+  state: string,
+): { readonly readiness: ObjectReadiness | null; readonly notes: readonly string[] } {
+  const settled = stateReadiness(state);
+  if (readiness === null || settled === null || readiness.source === "state") return { readiness, notes: [] };
+  const old = readiness.reason !== "" ? readiness.reason : readiness.verdict;
+  return {
+    readiness: settled,
+    notes: [`readiness '${old}' was read before this pull request was ${settled.verdict}; the ${settled.verdict} state is shown instead`],
+  };
 }
 
 /**
@@ -424,6 +461,7 @@ export function parseObjects(document: unknown, display: string): readonly Repor
     const threads = requireCounts(row, "threads", ["total", "unresolved"], display, index) as unknown as ObjectThreads;
     const reviewRequests = requireStrings(row, "reviewRequests", display, index);
     const linked = readLinked(row, display, index);
+    const retained = settleRetained(readReadiness(row, common.state, display, index), common.state);
     return {
       kind: "pr",
       ...common,
@@ -433,8 +471,8 @@ export function parseObjects(document: unknown, display: string): readonly Repor
       threads,
       reviewRequests,
       linked: linked.numbers,
-      readiness: readReadiness(row, common.state, display, index),
-      notes: [...readNotes(row, display, index), ...linked.notes],
+      readiness: retained.readiness,
+      notes: [...readNotes(row, display, index), ...linked.notes, ...retained.notes],
     };
   });
 }

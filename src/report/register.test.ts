@@ -712,7 +712,7 @@ describe("a merged pull request's register row (zheref/nen#639)", () => {
 });
 
 describe("spend excludes an idle readiness wait, and says so (zheref/nen#639, SC-1)", () => {
-  const IDLE = "0.0 s counted · idle wait 6612 m 07 s excluded (no timed step for over 60 m)";
+  const IDLE = "0.0 s counted · idle wait 6612 m 07 s excluded (untimed for over 60 m)";
   const MINUTE = 60_000;
   const row = (phase: string, durationMs: number, steps: number[] = []): ReportPhase => {
     const timed = steps.map((ms) => ({ verb: "build", argv: "x", exitCode: 0, durationMs: ms, stalled: false }));
@@ -747,6 +747,30 @@ describe("spend excludes an idle readiness wait, and says so (zheref/nen#639, SC
     const span = 5 * 24 * 60 * MINUTE;
     const effort = spendEffort("fixture/kp-12-sample", [row("pr", 132619), row("readiness", span, [span - 30 * MINUTE])], [], "");
     expect(effort.spendPhases[1]).toMatchObject({ percent: "100", amount: "7200 m 00 s", idle: false });
+  });
+
+  it("renders a phase with an unreadable duration as not ended, never NaN or past 100 %", async () => {
+    const root = repo({ desk: { ...DESK, rows: {} } });
+    mkdirSync(join(root, ".nen", "phases"), { recursive: true });
+    // `1e400` is valid JSON and parses to Infinity; the others are hand edits.
+    writeFileSync(
+      join(root, ".nen", "phases", "fixture%2Fkp-12-sample.json"),
+      `{"contract":"nen.phase.ledger/v0.1","effort":"fixture/kp-12-sample","phases":[
+        {"phase":"pr","startedAt":"","endedAt":"x","durationMs":132619,"steps":[]},
+        {"phase":"readiness","startedAt":"","endedAt":"x","durationMs":1e400,"steps":[]},
+        {"phase":"rasengan","startedAt":"","endedAt":"x","durationMs":-5,"steps":[]},
+        {"phase":"review","startedAt":"","endedAt":"x","durationMs":9000,"steps":[{"verb":"build","argv":"x","durationMs":-1}]}]}`,
+    );
+    const { captured, document } = await registerDocument(root);
+    expect(captured.code, captured.err.join("\n")).toBe(0);
+    const phases = (document["spendEfforts"] as { spendPhases: { lane: string; percent: string; amount: string; idle: boolean }[] }[])[0]?.spendPhases ?? [];
+    expect(phases.map((phase): unknown => [phase.lane, phase.percent, phase.amount, phase.idle])).toEqual([
+      ["pr", "100", "2 m 13 s", false],
+      ["readiness", "0", "not ended", false],
+      ["rasengan", "0", "not ended", false],
+      ["review", "0", "not ended", false],
+    ]);
+    expect(JSON.stringify(phases)).not.toMatch(/NaN|Infinity/);
   });
 
   it("never calls a long authoring phase with no step idle", () => {

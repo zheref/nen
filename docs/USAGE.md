@@ -6131,8 +6131,10 @@ facts, never inferred from content.
 Answers "what does the open backlog of `owner/name` look like right now": it fetches open issues and
 open pull requests fresh over `gh api` — never from a cache — and assembles one row per effort, meaning
 an issue plus the PRs that reference it (via a closing keyword or a bare `#N` in the PR's title/body —
-`N` from 1, ending the token, the `#` not glued to a word or `&` unless to an `<owner>/<name>` path, so a
-hex colour such as `#000000` or an HTML entity such as `&#39;` references nothing),
+`N` 1 to 9 digits from 1, ending the token, the `#` not after a word character, `&` or `;` unless glued to
+exactly one `owner/name` — the rule [`report data`](#nen-report-data)'s `linked[]` states in full, with its
+two known limits — so a hex colour such as `#000000`, an HTML entity such as `&#39;` or a URL fragment
+references nothing),
 or a lone PR that references no open issue as its own row. It paginates past GitHub's 100-row
 per-page clamp rather than stopping at the first page, so `--limit` is a real total cap across as many
 pages as it takes, not the accidental 100-row ceiling an earlier version of this verb had.
@@ -17684,11 +17686,20 @@ check name, through the same `latestChecks` reduction [`pr
 ready`](#nen-pr-ready) uses), `threads` (`total`/`unresolved`),
 `reviewRequests[]`, `linked[]` (the issue numbers it references), `readiness`
 and `notes[]`. **`linked[]` holds only real numbers** ([#639](https://github.com/zheref/nen/issues/639)):
-it is every `#<n>` in the title and body whose digits start `1`–`9` and end
-the token, where the `#` is not glued to a word or an `&` — unless what it is
-glued to is an `<owner>/<name>` path (`owner/name#591/AC-1`) — less the pull
-request's **own** number. So a hex colour (`#000000`, `#123abc`), `#0` and an
-HTML entity (`&#39;`) are no reference, and `Closes #591` still is. An issue row carries `kind`, `number`, `title`, `url`, `state`,
+it is every `#<n>` in the title and body where `<n>` is **1 to 9 digits
+starting `1`–`9`** followed by no word character, and the `#` is either **not
+glued** — not preceded by a word character, `&` or `;` — or glued to exactly
+**one `owner/name`**: two `[A-Za-z0-9_.-]+` segments joined by one `/`, the
+first not itself preceded by `/`, a word character, `.` or `-`
+(`acme/widget#591`, `acme/widget#591/AC-1`); less the pull request's **own**
+number. So a hex colour (`#000000`, `#123abc`), `#0`, an HTML entity
+(`&#39;`, double-escaped `&amp;#39;`), a 20-digit run, a URL fragment
+(`https://example.com/faq#2`) and a longer path (`/path/to/file#12`) are no
+reference, and `Closes #591` still is. **Two known limits**, by shape: a
+relative two-segment path (`docs/USAGE.md#123`) cannot be told from
+`owner/name#123` and is read as `#123`; and `other/repo#591` is read as
+**this** repository's `#591`, as it always was — the repository half is not
+compared. An issue row carries `kind`, `number`, `title`, `url`, `state`,
 `labels[]`, `linked[]` (the pull requests that reference it), a `readiness`
 that is **always `null`** — CON-32 is a statement about a pull request — and
 `notes[]`.
@@ -17708,7 +17719,7 @@ because a short `objects[]` at exit 0 says "that is the whole register" about
 a register that is not. (Routing the register through the readiness gate's
 fail-closed parser is what used to delete a named pull request outright.)
 
-On the **live** path, `readiness` says **which authority answered it**, in `source`. A pull request whose `state` is **`MERGED` or `CLOSED`** is not evaluated at all: neither the check-run read nor the gate runs, and `readiness` is `{ verdict: "merged", reason: "merged — not evaluated: CON-32 readiness is a statement about an open pull request", source: "state" }` (for `CLOSED`, verdict `closed` and reason `closed without merging — not evaluated: …`) — CON-32 readiness is a statement about an **open** pull request, and GitHub answers `mergeable: UNKNOWN` for a merged one, so asking the gate made a delivered PR read `not-ready: mergeable=UNKNOWN` ([#639](https://github.com/zheref/nen/issues/639)). Such a row is counted in no readiness tally (they count OPEN pull requests only) and its stage is still `landed`. For an open one: `check` when the
+On the **live** path, `readiness` says **which authority answered it**, in `source`. A pull request whose `state` is **`MERGED` or `CLOSED`** is not evaluated at all: neither the check-run read nor the gate runs, and `readiness` is `{ verdict: "merged", reason: "merged — not evaluated: CON-32 readiness is a statement about an open pull request", source: "state" }` (for `CLOSED`, verdict `closed` and reason `closed without merging — not evaluated: …`) — CON-32 readiness is a statement about an **open** pull request, and GitHub answers `mergeable: UNKNOWN` for a merged one, so asking the gate made a delivered PR read `not-ready: mergeable=UNKNOWN` ([#639](https://github.com/zheref/nen/issues/639)). Such a row is counted in no readiness tally (they count OPEN pull requests only); a MERGED row's stage stays `landed`, and a CLOSED row has no stage (`null`, as before). For an open one: `check` when the
 head carries a check run named `readiness` that clears **four** tests — it is
 the **latest** run of that name by `started_at`, its `status` is `completed`,
 its `conclusion` is not one of FAILURE/CANCELLED/TIMED_OUT/ACTION_REQUIRED/
@@ -17723,9 +17734,16 @@ when neither could be read — no token, an unevaluated gate, an unreachable API
 An unevaluated gate has not said "not ready"; it has said nothing, and
 publishing the two as one word is the false-red twin of a false green. Under
 `--objects-from` none of this runs: `readiness` is the caller's file's,
-validated for shape (`source` must be `check`, `computed` or `state`, and
-`state` is refused on a row whose `state` is `OPEN`) and never re-derived, so
-it is only as good as whatever wrote the file. A file row's `linked[]` entry
+validated for shape (`source` must be `check`, `computed` or `state`; `state`
+only on a row whose `state` is `MERGED` or `CLOSED`, with that state's verdict
+— `merged` or `closed` — and refused on `OPEN`, an empty or unknown state, or
+another verdict) and never re-derived, so it is only as good as whatever wrote
+the file. **One correction is made**: a `MERGED` or `CLOSED` row carrying a
+`check` or `computed` verdict — a file written while the pull request was open,
+or by an older nen that asked the gate about a merged one — shows the state
+verdict instead, and its `notes[]` names the one it replaced: `readiness
+'<old verdict>' was read before this pull request was merged; the merged state
+is shown instead` (`closed` likewise). A file row's `linked[]` entry
 that is not positive — a `0` a hex colour left in a register published before
 [#639](https://github.com/zheref/nen/issues/639) — is **left out, not
 refused**, so a retained file still loads, and the row's `notes[]` says
@@ -17741,9 +17759,9 @@ rendering (`linked: #n`, `linkedLine`) ever writes a number `<= 0`.
 - **Every fact is the verb's.** Each `objects[]` row gains `notation` (the bare `nen ref` token `<CODE>-<IS|PR>-#<N>`, its code from `--repo`'s `nen/repos.json`; without one the row reads `<owner>/<name>#<n>` and `footerNote` names the failed resolution), `marks`/`gate`/`gateClass`/`needs`/`session`/`lane`/`thought` (the desk's row, `""` where it wrote none), `verdict`, `labelsLine`, `checksLine` (`G/T green · R red · P pending`), `threadsLine` (`U/T unresolved`), `linkedLine` (each number's kind taken from the object in scope that has it; a number not in scope is written kind-free, `<CODE>#<n>`), `head` (`""` on an issue) and `notes[]` (a `url` that is not a link is blanked and named here; a pull request with no readiness always carries a line saying why its verdict is blank; the checkout's absolute path is kept out). A malformed `nen/repos.json` prints its real reason on stderr; the page's footer says only that notation fell back. After `objects` come `variant`, `title`, `scope`, `gate`, `generatedAtLocal` (the desk's, else `generatedAt`), `footerNote`, `footerCount`, the five tallies, `gates[]`, `architectureCaption`, `graphJson`/`graphMermaid`/`graphNodes`/`graphEdges` (empty — `report render --graph` injects over them), `spendEfforts[]` and `legendRows[]` — and after them the derived context **except** `gate` and `generatedAtLocal`, which are the register's own above (the desk's page gate is the page's, in a register about more than one effort). When the desk sets `generatedAtLocal`, the desk owns the clock: `timeZone` and `generatedDateLocal` are `null`, stderr says so, and the derived clock's own diagnostics are not printed (a `--tz` is still validated).
 - **A verdict is quoted, never written.** Every row's and every ask's `verdict` is that row's `readiness.reason` **verbatim** — or, when the authority gave a verdict word and an empty reason, that word (`ready`, `not-ready`), still its own text — or `""` when no authority answered (an issue; a pull request whose readiness is `null`, with the reason in `notes[]`). **Which authority depends on the path.** On the live path (`--target`) it is the `nen pr ready` gate line or the head's `readiness` check run's verdict line. Under `--objects-from` it is whatever `readiness` the caller's file carried — validated for shape, never re-derived — so `footerNote` says `Verdicts read from <file name>, not from GitHub.` and every such row's `notes[]` says `verdict read from <file name>, not from GitHub` (the name only, never the path). An ask quotes a verdict only by naming `pr`. A desk carrying `verdict` **anywhere** is refused at exit 2.
 - **The tallies are counts of facts**: `tallyScope` every row; `tallyNeedsYou` every ask; `tallyBlockers` OPEN pull requests with a red check, an unresolved thread or a `DIRTY` merge state; `tallyReady` OPEN pull requests whose readiness verdict is `ready` and that are not blocked; `tallyInFlight` the OPEN pull requests that are neither.
-- **`spendEfforts[]`** is one row per effort — the desk's `efforts` in its order, else every effort the phase and usage ledgers recorded — built as Hatsu's spiritual-message § 4 builds it: `spendPhases[{ lane, percent, amount, steps, idle }]` (percent of the effort's longest **counted** phase, from each row's `countedMs`; `12.3 s` / `4 m 05 s`; `not ended` for an open phase; for a phase whose `idleWaitMs` is above zero, `idle` is `true` and the amount reads `<counted> counted · idle wait <wait> excluded (no timed step for over 60 m)` — e.g. `0.0 s counted · idle wait 6612 m 07 s excluded (no timed step for over 60 m)` — and `idle` is `false` everywhere else), `spendUsage[]` (one row per surface + model, counters summed, `notReported` when **any** entry in the group was recorded `--not-reported`, as spiritual-message § 4 says), `actionsMinutes` (the sum of `minutes`, or `not read`), `spendNote` (the desk's line, or `""`), `hasSpendPhases`/`noSpendPhases`.
+- **`spendEfforts[]`** is one row per effort — the desk's `efforts` in its order, else every effort the phase and usage ledgers recorded — built as Hatsu's spiritual-message § 4 builds it: `spendPhases[{ lane, percent, amount, steps, idle }]` (percent of the effort's longest **counted** phase, from each row's `countedMs`; `12.3 s` / `4 m 05 s`; `not ended` for an open phase; for a phase whose `idleWaitMs` is above zero, `idle` is `true` and the amount reads `<counted> counted · idle wait <wait> excluded (untimed for over 60 m)` — e.g. `0.0 s counted · idle wait 6612 m 07 s excluded (untimed for over 60 m)` — and `idle` is `false` everywhere else), `spendUsage[]` (one row per surface + model, counters summed, `notReported` when **any** entry in the group was recorded `--not-reported`, as spiritual-message § 4 says), `actionsMinutes` (the sum of `minutes`, or `not read`), `spendNote` (the desk's line, or `""`), `hasSpendPhases`/`noSpendPhases`.
 
-**Idle waits** ([#639](https://github.com/zheref/nen/issues/639)). `nen phase end` records wall-clock `durationMs`, and a `readiness` phase opened when a pull request goes up can stay open until the final report — days later, with nothing inside it. So every `phases[]` row carries two values **derived at read time** (the ledger is never written, its contract stays `nen.phase.ledger/v0.1`, and `durationMs` keeps its meaning everywhere): `countedMs` and `idleWaitMs`. For a closed phase named in the wait list — today `readiness` only — whose untimed span (`durationMs` less the sum of its `steps[].durationMs`, an untimed step counting `0`) is **over 60 minutes**, `idleWaitMs` is that untimed span and `countedMs` the timed total; at or under 60 minutes, `idleWaitMs` is `0` and `countedMs` is `durationMs`. Every other phase has `idleWaitMs` `0` and `countedMs` `durationMs` — a long authoring phase with no `shu` step is somebody working, never an idle wait. An open phase (no `durationMs`) has both `null`. Spend bars each phase on `countedMs`, and an idle one says what it left out.
+**Idle waits** ([#639](https://github.com/zheref/nen/issues/639)). `nen phase end` records wall-clock `durationMs`, and a `readiness` phase opened when a pull request goes up can stay open until the final report — days later, with nothing inside it. So every `phases[]` row carries two values **derived at read time** (the ledger is never written, its contract stays `nen.phase.ledger/v0.1`, and `durationMs` keeps its meaning everywhere): `countedMs` and `idleWaitMs`. For a closed phase named in the wait list — today `readiness` only — whose untimed time (`durationMs` less the sum of its `steps[].durationMs`, an untimed step counting `0` — a sum, not one continuous gap) is **over 60 minutes**, `idleWaitMs` is that untimed span and `countedMs` the timed total; at or under 60 minutes, `idleWaitMs` is `0` and `countedMs` is `durationMs`. Every other phase has `idleWaitMs` `0` and `countedMs` `durationMs` — a long authoring phase with no `shu` step is somebody working, never an idle wait. An open phase (no `durationMs`) has both `null`, and so does one whose `durationMs`, or any step's, is not a finite number of 0 or more (`1e400` parses to Infinity; a hand edit can be negative) — it renders as `not ended` at 0 %, never NaN or past 100 %. Spend bars each phase on `countedMs`, and an idle one says what it left out.
 
 Without `--register` the document keeps its shape and key order, **with one exception**: on the live path, a pull request whose `readiness` ends `null` now carries the reasons in its `objects[].notes[]` as well as on stderr (the checkout's path written `<repo>`, `/`-separated on every platform), so a blank verdict is explained wherever the row is read. `report render --variant register|final --template rikugan.html --data <it>` fills the page with no further composition.
 

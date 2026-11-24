@@ -669,7 +669,7 @@ export interface SpendPhase {
   readonly steps: string;
   /**
    * True when the phase's bar and amount EXCLUDE an idle wait (zheref/nen#639):
-   * a wait phase that ran over `IDLE_WAIT_MS` with no timed step. The amount
+   * a wait phase whose untimed time sums to over `IDLE_WAIT_MS`. The amount
    * then says how much was counted and how much was left out.
    */
   readonly idle: boolean;
@@ -719,10 +719,12 @@ function sum(entries: readonly ReportUsage[], key: "input" | "output" | "cacheRe
  */
 export function spendEffort(name: string, phases: readonly ReportPhase[], usage: readonly ReportUsage[], note: string): SpendEffort {
   const mine = phases.filter((phase): boolean => phase.effort === name);
-  const counted = (phase: ReportPhase): number | null => phase.countedMs ?? phase.durationMs;
-  const longest = Math.max(0, ...mine.map((phase): number => counted(phase) ?? 0));
+  // `countedMs` ALONE: it is null exactly when the phase is open or its
+  // durations are unreadable (../phase/ledger.ts's `idleWait`), and either
+  // renders `not ended` at 0 % -- never NaN, never outside 0..100.
+  const longest = Math.max(0, ...mine.map((phase): number => phase.countedMs ?? 0));
   const spendPhases = mine.map((phase): SpendPhase => {
-    const ms = counted(phase);
+    const ms = phase.countedMs;
     const idle = ms !== null && (phase.idleWaitMs ?? 0) > 0;
     return {
       lane: phase.phase,
@@ -731,7 +733,7 @@ export function spendEffort(name: string, phases: readonly ReportPhase[], usage:
         ms === null
           ? "not ended"
           : idle
-            ? `${formatDuration(ms)} counted · idle wait ${formatDuration(phase.idleWaitMs ?? 0)} excluded (no timed step for over ${IDLE_WAIT_MS / 60_000} m)`
+            ? `${formatDuration(ms)} counted · idle wait ${formatDuration(phase.idleWaitMs ?? 0)} excluded (untimed for over ${IDLE_WAIT_MS / 60_000} m)`
             : formatDuration(ms),
       steps: phase.steps
         .map((step): string => `${step.verb} ${step.durationMs === null ? "not timed" : formatDuration(step.durationMs)}`)

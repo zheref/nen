@@ -155,6 +155,21 @@ describe("idleWait -- what spend counts of one phase", () => {
     });
   });
 
+  it("leaves a duration that is not a finite number >= 0 unread, on the entry or any step", () => {
+    const infinite = (JSON.parse('{"d":1e400}') as { d: number }).d;
+    expect(infinite).toBe(Number.POSITIVE_INFINITY);
+    for (const entry of [
+      { phase: "readiness", durationMs: infinite, steps: [] },
+      { phase: "rasengan", durationMs: infinite },
+      { phase: "readiness", durationMs: -5 },
+      { phase: "rasengan", durationMs: Number.NaN },
+      { phase: "readiness", durationMs: 2 * IDLE_WAIT_MS, steps: steps(10, -1) },
+      { phase: "rasengan", durationMs: 1000, steps: steps(infinite) },
+    ]) {
+      expect(idleWait(entry), JSON.stringify(entry)).toEqual({ countedMs: null, idleWaitMs: null });
+    }
+  });
+
   it("never calls a phase that is not a wait phase idle, however long and untimed", () => {
     expect(idleWait({ phase: "rasengan", durationMs: 5 * 24 * 60 * MINUTE, steps: [] })).toEqual({ countedMs: 5 * 24 * 60 * MINUTE, idleWaitMs: 0 });
     expect(idleWait({ phase: "pr", durationMs: 132619, steps: [] })).toEqual({ countedMs: 132619, idleWaitMs: 0 });

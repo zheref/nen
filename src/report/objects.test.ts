@@ -564,8 +564,10 @@ describe("a pull request that is no longer open is not evaluated (zheref/nen#639
   });
 
   it("gives a CLOSED row the closed verdict, the same way, whatever case GitHub spells it in", async () => {
-    const captured = await live(LIVE_PR, [viewCall({ state: "closed" }), threadsCall(THREAD_NODES)]);
+    // No head SHA either: a row that is not evaluated has no readiness to miss.
+    const captured = await live(LIVE_PR, [viewCall({ state: "closed", headRefOid: null }), threadsCall(THREAD_NODES)]);
     expect(captured.code, captured.err.join("\n")).toBe(0);
+    expect(rowOf(captured)["notes"]).toEqual([]);
     expect(rowOf(captured)["readiness"]).toEqual({
       verdict: "closed",
       reason: "closed without merging — not evaluated: CON-32 readiness is a statement about an open pull request",
@@ -900,8 +902,40 @@ describe("the read seam's remaining refusals", () => {
     expect(parseObjects([{ ...PR_ROW, state: "MERGED", readiness: merged }], "o.json")[0]?.readiness).toEqual(merged);
     const closed = { verdict: "closed", reason: "closed without merging — not evaluated: CON-32 readiness is a statement about an open pull request", source: "state" };
     expect(parseObjects([{ ...PR_ROW, state: "CLOSED", readiness: closed }], "o.json")[0]?.readiness).toEqual(closed);
-    expect(bad({ state: "OPEN", readiness: merged })).toThrow(/row 0 has 'readiness.source' 'state' on an OPEN pull request/);
-    expect(bad({ state: "open", readiness: merged })).toThrow(/'state' on an OPEN pull request/);
+    expect(bad({ state: "OPEN", readiness: merged })).toThrow(/row 0 has 'readiness.source' 'state' on a pull request whose state is 'OPEN'/);
+    expect(bad({ state: "open", readiness: merged })).toThrow(/'state' on a pull request whose state is 'open'/);
+  });
+
+  it("refuses a `state` source on an empty or unknown state, and one whose verdict is not the state's", () => {
+    const merged = { verdict: "merged", reason: "merged — not evaluated", source: "state" };
+    expect(bad({ state: "", readiness: merged })).toThrow(/row 0 has 'readiness.source' 'state' on a pull request whose state is ''/);
+    expect(bad({ state: "DRAFT", readiness: merged })).toThrow(/whose state is 'DRAFT'/);
+    expect(bad({ state: "MERGED", readiness: { ...merged, verdict: "ready" } })).toThrow(
+      /'state' with verdict 'ready' on a MERGED pull request, whose state verdict is 'merged'/,
+    );
+    expect(bad({ state: "CLOSED", readiness: merged })).toThrow(/with verdict 'merged' on a CLOSED pull request, whose state verdict is 'closed'/);
+  });
+
+  it("shows the state verdict, with a note, on a retained MERGED or CLOSED row carrying an older verdict", () => {
+    const stale = { verdict: "not-ready", reason: "not-ready: mergeable=UNKNOWN (expected MERGEABLE)", source: "computed" };
+    const [merged] = parseObjects([{ ...PR_ROW, state: "MERGED", readiness: stale }], "o.json") as ReportObject[];
+    expect(merged?.readiness).toEqual({
+      verdict: "merged",
+      reason: "merged — not evaluated: CON-32 readiness is a statement about an open pull request",
+      source: "state",
+    });
+    expect(merged?.notes).toEqual([
+      "readiness 'not-ready: mergeable=UNKNOWN (expected MERGEABLE)' was read before this pull request was merged; the merged state is shown instead",
+    ]);
+    const [closed] = parseObjects([{ ...PR_ROW, state: "CLOSED", readiness: { verdict: "ready", reason: "", source: "check" } }], "o.json") as ReportObject[];
+    expect(closed?.readiness).toEqual({
+      verdict: "closed",
+      reason: "closed without merging — not evaluated: CON-32 readiness is a statement about an open pull request",
+      source: "state",
+    });
+    expect(closed?.notes).toEqual(["readiness 'ready' was read before this pull request was closed; the closed state is shown instead"]);
+    // An OPEN row's verdict is the file's, untouched.
+    expect(parseObjects([{ ...PR_ROW, readiness: stale }], "o.json")[0]?.readiness).toEqual(stale);
   });
 });
 

@@ -77,7 +77,7 @@ export interface PhaseEntry {
 }
 
 /**
- * How long a WAIT phase may go with no timed step before the untimed part of
+ * How much untimed time, summed, a WAIT phase may hold before the untimed part of
  * it is called an idle wait and left out of spend (zheref/nen#639).
  */
 export const IDLE_WAIT_MS = 60 * 60 * 1000;
@@ -109,7 +109,8 @@ export interface IdleWait {
  * derived, never stored.
  *
  *   - An entry with no `durationMs` (an OPEN phase) is `null`/`null`: nothing
- *     has been measured yet.
+ *     has been measured yet. So is one whose `durationMs`, or any step's, is
+ *     not a finite number >= 0: nothing usable was measured.
  *   - A WAIT_PHASES entry whose untimed span -- `durationMs` less the sum of
  *     its steps' `durationMs`, an untimed step counting 0 -- is OVER
  *     `IDLE_WAIT_MS` counts only its timed steps, and the untimed span is the
@@ -122,6 +123,14 @@ export function idleWait(entry: {
   readonly steps?: readonly { readonly durationMs: number | null }[];
 }): IdleWait {
   if (entry.durationMs === null) return { countedMs: null, idleWaitMs: null };
+  // A DURATION NOBODY COULD HAVE MEASURED IS UNREAD, NOT COUNTED. A ledger
+  // value of `1e400` parses to Infinity and a hand-edited one can be negative;
+  // either, on the entry or on any step, would put NaN or a bar outside
+  // 0..100 % on the page. The entry then reads as an open one does.
+  const sane = (ms: number | null): boolean => ms === null || (Number.isFinite(ms) && ms >= 0);
+  if (!sane(entry.durationMs) || !(entry.steps ?? []).every((step): boolean => sane(step.durationMs))) {
+    return { countedMs: null, idleWaitMs: null };
+  }
   if (!WAIT_PHASES.includes(entry.phase)) return { countedMs: entry.durationMs, idleWaitMs: 0 };
   const timed = (entry.steps ?? []).reduce((sum, step): number => sum + (step.durationMs ?? 0), 0);
   const untimed = entry.durationMs - timed;
