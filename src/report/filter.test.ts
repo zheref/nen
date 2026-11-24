@@ -1,3 +1,4 @@
+import { unreadLedger } from "../pr/ledger-read.js";
 // zheref/nen#410: `nen report data --label/--severity`, and `filterEfforts`.
 import { describe, expect, it } from "vitest";
 import { cpSync, mkdtempSync, writeFileSync } from "node:fs";
@@ -50,6 +51,7 @@ const pr = (number: number, labels: string[], linked: number[] = []): PrObject =
   kind: "pr", number, title: `pr ${number}`, url: `https://github.com/o/r/pull/${number}`, state: "OPEN", labels,
   head: "a".repeat(40), mergeStateStatus: "CLEAN", checks: { total: 0, green: 0, red: 0, pending: 0 },
   threads: { total: 0, unresolved: 0 }, reviewRequests: [], linked, readiness: null, notes: [],
+  ledger: unreadLedger("fixture has no live comment read"),
 });
 
 const OBJECTS: readonly ReportObject[] = [

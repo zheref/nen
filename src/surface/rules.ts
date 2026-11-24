@@ -60,9 +60,9 @@ export type AgentRule =
       readonly required: readonly string[];
       /**
        * The size past which the surface documents that it stops READING the
-       * document, in bytes, or null. Never a refusal -- the surface truncates,
-       * it does not fail -- but the generate report names an appendix over it,
-       * because a persona past the cut-off is a persona the surface never met.
+       * document, in bytes, or null. An appendix over this ceiling is refused
+       * before writing: silent truncation would hide personas or shared rules.
+       * The historical field name is retained for row compatibility.
        */
       readonly warnBytes: number | null;
     };

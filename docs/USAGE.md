@@ -11,8 +11,8 @@ binary](#getting-the-binary)), or as `bun src/index.ts` from a checkout of this
 repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
-what each version changed: 49 command
-families, 181 verbs, every flag checked against that binary.
+what each version changed: 50 command
+families, 182 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -258,7 +258,7 @@ including every refusal reason. The raw NUL-delimited stream
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **112 shapes** and **116 ids** (`nen.runner.plan`
+binary carries**, writing or reading — **113 shapes** and **117 ids** (`nen.runner.plan`
 and `nen.wc.worktree.copies` each have two versions, `nen.stop.mark` three, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -326,6 +326,7 @@ file formats).
 - **`usage`** — `nen.usage.ledger/v0.1`
 - **`wc`** — `nen.wc.catch-up/v0.2` · `nen.wc.prune/v0.1` · `nen.wc.publish/v0.1` · `nen.wc.squash/v0.1` · `nen.wc.swap.state/v0.1` · `nen.wc.swap/v0.1` · `nen.wc.worktree.copies/v0.1` · `nen.wc.worktree.copies/v0.2` · `nen.wc.worktree/v0.1` · `nen.wc.worktrees/v0.1`
 - **`workflow`** — `nen.workflow/v0.1`
+- **`tool`** — `nen.tool.install/v0.1`
 <!-- contract-ids:end -->
 
 Four verbs have no `--json` because they have no result of their own to
@@ -1075,7 +1076,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 181 verbs, grouped as the README groups them. **Reads** is what a
+All 182 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -1162,6 +1163,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`changelog`](#family-changelog) | [`nen changelog fragment-required`](#nen-changelog-fragment-required) | whether a change owes a changelog.d/ fragment (CON-33(a)) | git diff/caller files, CHANGELOG.md at base+head, optional nen/repos.json-shaped --base-repos/--head-repos | yes |
 | [`changelog`](#family-changelog) | [`nen changelog collate`](#nen-changelog-collate) | collate every changelog.d/ fragment into a new dated CHANGELOG.md section (CON-33(b)) | changelog.d/, CHANGELOG.md | yes |
 | [`changelog`](#family-changelog) | [`nen changelog completeness`](#nen-changelog-completeness) | every PR merged in a range has a CHANGELOG entry or an (un)collated fragment (CON-33(c)), except the range's terminal PR when its merge introduced the dated section | git log --merges, git ls-tree/cat-file (the CHANGELOG's history, for the release-PR allowance), CHANGELOG.md, changelog.d/ | yes |
+| [`tool`](#family-tool) | [`nen tool install`](#nen-tool-install) | install a declared checksum-pinned scan tool on the existing PATH; exact-pin no-op, refusals never install | trusted contract, HTTPS manifest/archive, destination and version probe | yes |
 | [`tag`](#family-tag) | [`nen tag cut`](#nen-tag-cut) | cut an annotated git tag pinned at an explicit SHA, never auto-pushed | git (tag/ls-remote/merge-base; --push also reaches origin) | yes |
 | [`fanout`](#family-fanout) | [`nen fanout compute`](#nen-fanout-compute) | which registered consumers (nen/repos.json) are affected by workflows changed in a release range | nen/repos.json, git diff, .github/workflows/ | yes |
 | [`fanout`](#family-fanout) | [`nen fanout record`](#nen-fanout-record) | the same computation, appended to an audit ledger file | nen/repos.json, git diff, .github/workflows/, ledger file | yes |
@@ -1535,7 +1537,7 @@ App installation token) or an unreadable timeline makes no own-request claim.
 **Detail text only**: the row still fails, and the verdict and the exit code
 do not move. A row owing any reviewer a missing round keeps its reason byte for
 byte. Both reads are made only while a review request is pending. This is the
-case on [zheref/KroApple#577](https://github.com/zheref/KroApple/pull/577):
+case on the anonymized source snapshot’s PR #577:
 every later "owed at the current head" there came from the agent's own request.
 These suffixes are the one place this gate's line differs from the original
 shell gate's (`src/gates/ready.ts` divergence (11)); the shadow harness strips
@@ -1602,7 +1604,7 @@ already has a verdict, or a start time, sorts as before.
 
 **Which head the verdict is about (zheref/nen#245).** The verdict concerns
 **GitHub's current head** for the pull request at the moment the verb reads
-it. That is not necessarily your local commit. On zheref/KroApple#577 a `ready`
+it. That is not necessarily your local commit. On the anonymized source snapshot’s PR #577 a `ready`
 was decided eight seconds before a push registered, so it judged the parent
 commit. Three things make that visible:
 
@@ -3701,7 +3703,7 @@ a non-User event that carries another id, but only as a fallback: the REST
 timeline names Copilot `Copilot` where GraphQL names it
 `copilot-pull-request-reviewer`, so for real bots the id does the counting. Every request counts, whoever made
 it and by whatever route, raw GraphQL included
-([zheref/KroApple#577](https://github.com/zheref/KroApple/pull/577) carries
+(the anonymized source snapshot’s PR #577 carries
 eight under a two-round ruling).
 
 - A request that would pass the ceiling refuses the **whole** call at exit
@@ -5755,7 +5757,7 @@ ports that skill's `scripts/kagutsuchi_worktree.sh` state table and copy proofs.
 **Usage**
 
 ```text
-nen wc worktree --repo <path> --name <name> --base <branch>
+nen wc worktree --repo <path> --name <name> (--base <branch> | --pr <n> --head <sha>)
                 [--copy-from-core <path>]... [--dry-run] [--json]
 ```
 
@@ -5763,7 +5765,8 @@ nen wc worktree --repo <path> --name <name> --base <branch>
 |---|---|---|
 | `--repo <path>` | **yes** | any checkout of the project; core is resolved from it |
 | `--name <name>` | **yes** | one plain path segment (letters, digits, `.`, `_`, `-`; no `..`; not ending in `.lock`); the worktree is `<core>/.nen/worktrees/<name>` |
-| `--base <branch>` | **yes** | the branch whose fetched tip the worktree stands at, as `origin/<base>`; a short name `git check-ref-format --branch` returns unchanged, never shaped like an option, a refspec or a force |
+| `--base <branch>` | unless `--pr`/`--head` | the branch whose fetched tip the worktree stands at, as `origin/<base>`; a short name `git check-ref-format --branch` returns unchanged, never shaped like an option, a refspec or a force |
+| `--pr <n>` / `--head <sha>` | together, instead of `--base` | Fetch `refs/pull/<n>/head` into an isolated scratch ref and compare against the full lowercase 40-character SHA before placement. |
 | `--copy-from-core <path>` | no, repeatable | a repo-relative path copied from core into the worktree. Only this flag names the list today; reading `nen/contract.json` → `project.fromCore[]` is a follow-up |
 | `--dry-run` | no | fetch nothing (the tip is read as last fetched) and write nothing; print the state and every planned action, retention included |
 | `--json` | no | `nen.wc.worktree/v0.1`, described below |
@@ -5771,6 +5774,13 @@ nen wc worktree --repo <path> --name <name> --base <branch>
 `--onto`, `--message-file`, `--strategy`, `--abort` and `--set-upstream` are
 refused here, and `--name` and `--copy-from-core` are refused on every other
 `wc` subcommand.
+
+The [pinned PR guide](WC-PR-WORKTREES.md) covers the selector, caller-owned
+metadata/trust checks and conditional dry-run plans. PR JSON adds `pr` and
+`pinnedHead`, sets `base: null`, and includes `verificationPending` on dry runs.
+PR dry runs require Git 2.44 or newer and disable lazy fetch; all PR reads and
+placement disable replacement objects. A pin mismatch refuses as `head-mismatch`;
+an absent PR ref refuses as `pr`. Neither creates or moves a worktree.
 
 **Names every platform can hold.** The `--name` and every `--copy-from-core`
 segment are refused, on every platform, when they:
@@ -5912,7 +5922,7 @@ copies: [{ path, action }], removed: [{ path, action }], kept: [{ path, reason
 **Example**
 
 ```bash
-nen wc worktree --repo . --name kagutsuchi --base main --copy-from-core Kro/Config.xcconfig
+nen wc worktree --repo . --name kagutsuchi --base main --copy-from-core FixtureApp/Config.xcconfig
 ```
 ```text
 core:            /work/app
@@ -5920,7 +5930,7 @@ core-ignore:     .nen/worktrees/kagutsuchi is gitignored in core
 origin/main:   4f5c11a2b9e0d6c1a7f3e2b8d4c6a0f1e3b5d7c9
 worktree:        /work/app/.nen/worktrees/kagutsuchi (created)
 head:            4f5c11a2b9e0d6c1a7f3e2b8d4c6a0f1e3b5d7c9
-copied:          Kro/Config.xcconfig (from core, gitignored)
+copied:          FixtureApp/Config.xcconfig (from core, gitignored)
 ```
 
 ### `nen wc ahead`
@@ -7319,10 +7329,12 @@ findings AND (the sweep was not requested, or it found no gaps); exit 1 otherwis
 ```bash
 nen warmup --repo src/schema/fixtures/bankai-repo --current v0.12.0
 ```
+
+The output below is sanitized: fictional source aliases replace original repository identities.
 ```text
 4 stale pin(s):
-  zheref/KroApple pinned: v0.11.2 -> v0.12.0
-  zheref/KroAndroid pinned: v0.11.2 -> v0.12.0
+  example/fixture-service pinned: v0.11.2 -> v0.12.0
+  example/fixture-desktop pinned: v0.11.2 -> v0.12.0
   zheref/bankai-scaffold pinned: v0.10.0 -> v0.12.0
   zheref/bankai-scaffold db_migrate_pinned: v0.9.7 -> v0.12.0
 no unpinned consumers
@@ -9029,9 +9041,9 @@ when `--from` is combined with an explicit token.
 nen repo resolve KP --repo src/schema/fixtures/bankai-repo
 ```
 ```text
-zheref/KroApple  (KP)  via code
+example/fixture-service  (KP)  via code
 ```
-(from a real run against the bundled fixture registry)
+(sanitized transcript derived from the bundled fixture registry; the fictional slug replaces the original output and is not literal command output)
 
 ### `nen repo inventory`
 
@@ -9064,8 +9076,10 @@ propagates as an uncaught error, generic exit 1).
 **Example** (shape confirmed from `src/repo/inventory.test.ts` — this verb always reaches GitHub live
 and was not run per this section's setup notes)
 
+Illustrative sanitized example: substitute an accessible repository for the fictional target.
+
 ```bash
-nen repo inventory --target zheref/KroApple --epic-label type:epic --integration-prefix integration/ --trunk main
+nen repo inventory --target example/fixture-service --epic-label type:epic --integration-prefix integration/ --trunk main
 ```
 ```text
 epics: 1
@@ -9131,13 +9145,19 @@ all (the same precondition [`repo resolve`](#nen-repo-resolve) refuses the same 
 
 **Example**
 
+For a runnable fictional example, save this registry as `example-registry/nen/repos.json`:
+
+```json
+{"consumers":[{"repo":"example/fixture-service","scenario":"scaffold","consumes":[]}]}
+```
+
 ```bash
-nen repo scenario --repo src/schema/fixtures/bankai-repo --target zheref/KroApple
+nen repo scenario --repo example-registry --target example/fixture-service
 ```
 ```text
-swiftui-tca-uzf-v2
+scaffold
 ```
-(from a real run against the bundled fixture registry)
+(verified against the self-contained fictional registry above)
 
 <a id="family-ref"></a>
 
@@ -10251,11 +10271,11 @@ nen fanout compute --repo . --range v0.11.2..v0.11.3
 ```
 ```text
 changed workflows in v0.11.2..v0.11.3: sasuke-review.yml
-AFFECTED  zheref/KroApple (KP)  -- consumes sasuke-review.yml, which changed in this range
-AFFECTED  zheref/KroAndroid (KN)  -- consumes sasuke-review.yml, which changed in this range
+AFFECTED  example/fixture-service (KP)  -- consumes sasuke-review.yml, which changed in this range
+AFFECTED  example/fixture-desktop (KN)  -- consumes sasuke-review.yml, which changed in this range
 AFFECTED  zheref/bankai-scaffold (BS)  -- consumes sasuke-review.yml, which changed in this range
 ```
-(from a real run against a scratch git repo seeded with the bundled fixture's `nen/repos.json` and two tags, `v0.11.2` and `v0.11.3`, differing only in `sasuke-review.yml`)
+(sanitized transcript from a scratch git repo; source identities are fictional aliases. The original repo was seeded with the bundled fixture's `nen/repos.json` and two tags, `v0.11.2` and `v0.11.3`, differing only in `sasuke-review.yml`)
 
 ### `nen fanout record`
 
@@ -10290,7 +10310,7 @@ nen fanout record --repo . --range v0.11.2..v0.11.3
 ```text
 recorded 3 row(s) to /path/to/repo/fanout-ledger.jsonl
 ```
-(from a real run, same scratch repo as `fanout compute`'s example; `fanout-ledger.jsonl` afterward held one JSON line per row, the first reading `{"range":"v0.11.2..v0.11.3","at":"2026-09-07T22:58:40.613Z","repo":"zheref/KroApple","code":"KP","status":"affected","matchedWorkflows":["sasuke-review.yml"],"basis":"consumes sasuke-review.yml, which changed in this range"}`)
+(sanitized transcript, same scratch repo as `fanout compute`'s example; fictional source identities replace the original values; `fanout-ledger.jsonl` afterward held one JSON line per row, the first reading `{"range":"v0.11.2..v0.11.3","at":"2026-09-07T22:58:40.613Z","repo":"example/fixture-service","code":"KP","status":"affected","matchedWorkflows":["sasuke-review.yml"],"basis":"consumes sasuke-review.yml, which changed in this range"}`)
 
 <a id="family-run"></a>
 
@@ -10381,13 +10401,15 @@ v0.25.0).
 
 **Example**
 
+Illustrative sanitized example; no live rerun was performed.
+
 ```bash
-nen run rerun-failed --target zheref/KroApple --run-id 42
+nen run rerun-failed --target example/fixture-service --run-id 42
 ```
 ```text
-re-ran the failed job(s) of zheref/KroApple's run 42
+re-ran the failed job(s) of example/fixture-service's run 42
 ```
-(from `src/run/command.test.ts`, which scripts `gh run rerun 42 --repo zheref/KroApple --failed` — this verb reaches GitHub, so it was not run live here)
+(illustrates the behavior covered by `src/run/command.test.ts`; the repository slug above is fictional, not a quotation of that fixture or a live run)
 
 ### `nen run start`
 
@@ -12424,9 +12446,10 @@ drift: yes
 A canon repository's prose held to a **rules contract the caller owns**,
 behind a **shrink-only baseline** (zheref/nen#481; SDD piece N9; Hatsu rulings
 HR-13 — the ratchet — and HR-4 — the one open-question marker). It is the port
-of Hatsu's interim guard `scripts/prose_ambiguity_check.mts`, and that guard's
-fixture is this verb's test suite (`src/canon/lint.test.ts`), so the two cannot
-disagree on a verdict and the guard retires at Hatsu's repin.
+of Hatsu's interim guard `scripts/prose_ambiguity_check.mts`. Its fixture
+cases live in `src/canon/lint.test.ts`. Valid rendered ruling rows retain
+the record-cell exemption; native lint rejects additional malformed marker
+and delimiter shapes. The interim guard retires at Hatsu's repin.
 
 **Nen detects and reports; it decides nothing.** The rules — their ids,
 severities and patterns, the paths linted, which paths are dated records, where
@@ -12440,13 +12463,21 @@ picks the check; nothing dispatches on an id, so a contract may renumber:
 | `stale-residue` | a match in a paragraph without the `requires` reference | `pattern`, `requires` |
 | `stale-version` | a pin claim (`patterns[0]`) or floor claim (the rest) that is neither the contract's `versionSource` minimum nor its pinned ref, read at run time; a pin claim near `otherPins` or after a `pastWords` word is history | `patterns[]`, `otherPins` (`pastWords` optional) |
 | `citation` | a relative link to no file, to a file outside the root, to a missing `#anchor`, or a linked `§ N` / `§ *Title*` that resolves to no heading or bold lead — exactly as [`ref resolve`](#nen-ref-resolve) reads it | none |
-| `bare-ref` | a match outside a link target | `pattern` |
+| `bare-ref` | a match outside a link target and the rendered record cells described below | `pattern` |
 | `unverified-claim` | a match in a paragraph without both a `date` and an `evidence` match | `pattern`, `date`, `evidence` |
 | `hedge`, `adjective` | every match | `pattern` |
 | `number-not-declared` | a captured number on a `nen …` line that no `declaredValues` JSON file carries | `pattern` |
 | `residue-unfiled` | a list item under a `## Residue…` section (`section` overrides) without the `requires` reference | `requires` |
 | `open-question-shape` | a match not in the `marker` shape; a marker naming a human-gate row of `decisionsFile` or a row outside `markerRows`; a marker without a `ledger` reference; more than `markerLimit` markers in one file of `skillPaths` | `pattern`, `marker`, `ledger` |
 | `reading-cited-as-ruled` | a clause id (`pattern`, capture 1) whose status in `rulingsFile` is `reading`, in a `skillPaths` file, in a paragraph without the word *reading* | `pattern` (`prefix` optional, default `HR`) |
+
+**Rendered record cells.** In the declared `rulingsFile`, the `bare-ref`
+class exempts the question, options and answer cells of a six-cell rendered
+ruling row. Its anchor must match the bold clause id, its record label must
+match the `ruling-records/<label>.json` filename, and its seven unescaped
+pipe delimiters must include the closing pipe. Status, settlement and other
+prose remain checked. Citation checks and the consumer's ruling-record guard
+still own linked-record existence, required cell contents and provenance.
 
 **Exemptions.** Fenced code is never read; quoted words (`"…"`, `“…”`, so also
 `*"…"*`) are blanked unless `exemptions.quotedWords` is `false` — a quotation
@@ -12744,9 +12775,11 @@ OK -- method block is complete.
 
 **`nen commit`**
 
-Validates the SHAPE of a Conventional Commits message -- a declared type, a non-empty subject under 72 characters, no trailing sentence punctuation -- and never its content; what changed and why stays the author's to write. `format` reads and writes nothing on disk or over the network beyond `nen/workflow.json` (the trailer policy, `commits.subjectCase` and `commits.bodyMaxLineLength`) and the repository's commitlint config; `check` reads one build proof and asks git for a tree hash, and writes nothing at all.
+Validates the SHAPE of a Conventional Commits message -- a declared type, a non-empty subject under 72 characters, no trailing sentence punctuation -- and never its content; what changed and why stays the author's to write. `format` writes nothing on disk or over the network; it reads an input file when `--message-file` is supplied, plus `nen/workflow.json` (the trailer policy, `commits.subjectCase` and `commits.bodyMaxLineLength`) and the repository's commitlint config; `check` reads one build proof and asks git for a tree hash, and writes nothing at all.
 
 ### `nen commit format`
+
+To validate an existing message, run `nen commit format --repo <path> --message-file <path>`. Relative message paths resolve against the repository. This route checks the file as supplied, with the same message and repository-policy validators as `commit write`; it does not wrap or rewrite it, inspect the index, or commit. Do not combine it with `--type`, `--scope`, `--subject`, `--body`, `--trailer`, or `--breaking`. Success emits the original message (the existing `{ message }` shape under `--json`); invalid messages exit 2 and broken policy/configuration exits 1.
 
 Builds and validates one Conventional Commits header (`type(scope)!: subject`) plus optional body paragraph and trailers, from the type set `feat, fix, chore, docs, refactor, test, perf, build, ci`. `--trailer` keys are caller data (a specific persona's trailer convention lives in the calling skill, never a literal in this binary).
 
@@ -12785,6 +12818,7 @@ Builds and validates one Conventional Commits header (`type(scope)!: subject`) p
 **Usage**
 
 ```text
+nen commit format --repo <path> --message-file <path>
 nen commit format --type feat --subject "a short imperative subject"
                   [--scope <scope>] [--breaking] [--body "paragraph one"]
                   [--trailer key=value,key2=value2] [--repo <path>]
@@ -12794,15 +12828,16 @@ nen commit format --type feat --subject "a short imperative subject"
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
-| `--type <type>` | yes | One of `feat, fix, chore, docs, refactor, test, perf, build, ci`. | |
-| `--subject <text>` | yes | The header's imperative subject. | Non-empty, the FULL header line (`type(scope)!: subject`) must be <= 72 characters, and must not end in `.!?`. |
+| `--message-file <path>` | file form | Validate an existing message without rewriting it. | Exclusive with every message-building flag; paths resolve against `--repo`. |
+| `--type <type>` | constructed form | One of `feat, fix, chore, docs, refactor, test, perf, build, ci`. | |
+| `--subject <text>` | constructed form | The header's imperative subject. | Non-empty, the FULL header line (`type(scope)!: subject`) must be <= 72 characters, and must not end in `.!?`. |
 | `--scope <scope>` | no | The parenthesised scope. | Given but empty is refused -- omit the flag entirely instead. |
 | `--breaking` | no | Adds the `!` marker after type/scope. | |
 | `--body "paragraph"` | no | ONE paragraph. | This parser does not support repeating `--body`; pass one paragraph and use blank lines inside it for multiple, if the shell allows a multi-line value. A line over the repository's commitlint line length (100 where none is read) is wrapped at spaces — see above. |
 | `--trailer key=value,key2=value2` | no | Comma-separated `key=value` pairs. | A key containing `:` or empty is refused. An attribution-shaped key the repository's `nen/workflow.json` does not admit is refused too — see above. |
 | `--repo <path>` | no | The repository whose `nen/workflow.json` states the trailer policy, `commits.subjectCase` and `commits.bodyMaxLineLength`, and whose commitlint config states `subject-case`, `body-max-line-length` and `footer-max-line-length`. | Defaults to the cwd. Both are read on every run, so a `--repo` that does not exist is exit 2. |
 
-**Output and exit codes** -- prints the formatted message, its `--body` wrapped as above. `--json`: `{ message }` -- unchanged; no key was added for `subject-case` or the line length, and `message` is the wrapped one. All shape violations, policy refusals and `subject-case` refusals print as plain `nen:` lines on stderr; under `--json` they are the [refusal envelope](#the-refusal-envelope) on stdout instead (a broken config's failures first, then the shape refusals, `code` the exit), while warnings and notes stay `nen:` lines on stderr either way. **Every** one of them is reported, not just the first -- a shape violation, a refused trailer and a capitalized subject in the same invocation are three problems reported together. Exit 0 on a valid shape (a `nen: warning:` or `nen: note:` line may accompany it — and in a repository whose commitlint config is code and that declares no `commits.subjectCase`, every run carries a `subject-case NOT checked` warning, so exit 0 is **not** a subject-case verdict there); exit 2 on any shape violation, trailer-policy refusal, level-2 `subject-case` break — commitlint's own or the declared one — or line over a level-2 `body-max-line-length`/`footer-max-line-length`, the declared `commits.bodyMaxLineLength`, or the 100 assumed for a body whose config nen cannot read; exit **1** when a `nen/workflow.json` (a malformed `commits.subjectCase` or `commits.bodyMaxLineLength` included) or a `.commitlintrc` (a line-length rule of a shape commitlint rejects included) is present and could not be read. A broken config is reported **first**: both files are named when both are broken, and then any shape violation the run could still establish is printed after them rather than dropped — the exit stays 1, because the repository's files are what is wrong. [`commit write`](#nen-commit-write) reports the same failures in the same order.
+**Output and exit codes** -- prints the supplied file text unchanged, or the constructed message with `--body` wrapped as above. `--json`: `{ message }` -- unchanged; no key was added for `subject-case` or the line length, and `message` is the supplied or constructed text. All shape violations, policy refusals and `subject-case` refusals print as plain `nen:` lines on stderr; under `--json` they are the [refusal envelope](#the-refusal-envelope) on stdout instead (a broken config's failures first, then the shape refusals, `code` the exit), while warnings and notes stay `nen:` lines on stderr either way. **Every** one of them is reported, not just the first -- a shape violation, a refused trailer and a capitalized subject in the same invocation are three problems reported together. Exit 0 on a valid shape (a `nen: warning:` or `nen: note:` line may accompany it — and in a repository whose commitlint config is code and that declares no `commits.subjectCase`, every run carries a `subject-case NOT checked` warning, so exit 0 is **not** a subject-case verdict there); exit 2 on any shape violation, trailer-policy refusal, level-2 `subject-case` break — commitlint's own or the declared one — or line over a level-2 `body-max-line-length`/`footer-max-line-length`, the declared `commits.bodyMaxLineLength`, or the 100 assumed for a body whose config nen cannot read; exit **1** when a `nen/workflow.json` (a malformed `commits.subjectCase` or `commits.bodyMaxLineLength` included) or a `.commitlintrc` (a line-length rule of a shape commitlint rejects included) is present and could not be read. A broken config is reported **first**: both files are named when both are broken, and then any shape violation the run could still establish is printed after them rather than dropped — the exit stays 1, because the repository's files are what is wrong. [`commit write`](#nen-commit-write) reports the same failures in the same order.
 
 ```bash
 nen commit format --type fix --subject "stop dropping the last row" --trailer "Co-Authored-By=A" --repo .
@@ -14653,8 +14688,8 @@ nothing and behaves exactly as before:
 |---|---|
 | **the file a row addresses** | the tree does not resolve to exactly **one** candidate at any rank the pack lists. The candidates are an *ordered* list and the order is an argument: for `dotnet-winui`, a `*.sln` outranks a `*.csproj`, because a solution is your own list of the projects a build addresses and naming one project of a tree that has a solution would be `detect` choosing a subset you never chose. Two solutions, or two WinUI project files and no solution, are an **ambiguity** — both are named and neither is picked |
 | **evidence the row needs** | nothing in the lane carries what the row would run against. `dotnet test` is a real command for a .NET lane and a fiction in a tree with no test project, so the row is proposed only where some `*.csproj` references `Microsoft.NET.Test.Sdk`, `xunit`, `NUnit` or `MSTest`. **The evidence file is also what the row addresses** — pointing `dotnet test` at the application would propose a command that builds fine and tests nothing — and several of them are an ambiguity rather than a choice |
-| **a reference that leaves the repository** | a project file points at a path outside the tree. `zheref/KroWindows`'s `KroCore/KroCore.csproj` names a sibling clone of `zheref/Bankai`, and there is no submodule, no package and no restore step that fetches it. That is not a precondition `detect` can *write*: every path a declaration states is resolved against the repository root and one that escapes it exits **2** by name — so the row is withheld with the reference and its landing place quoted, never proposed with a precondition that could never hold. `detect` clones nothing. A reference that stays **inside** the tree becomes a `path` precondition instead, asserted before a verb runs and never performed |
-| **a toolchain pin the tree does not state** | the entry's version file is absent or silent. `.NET` states its SDK in a `global.json` (looked for in the lane and then up to the repository root); `zheref/KroWindows` has none, so the build floats on whatever SDK is installed. `detect` then proposes **no** `project.toolchain` entry and says so: assert the version CI would need and `detect` will use it, but it will not invent one — a toolchain entry with no `version` is one nen's own reader refuses, and a pin `detect` chose is a pin that pins nothing. The note carries the block to paste, probe and installer included |
+| **a reference that leaves the repository** | a project file points at a path outside the tree. `example/fixture-windows`'s `FixtureCore/FixtureCore.csproj` names a sibling clone of `zheref/Bankai`, and there is no submodule, no package and no restore step that fetches it. That is not a precondition `detect` can *write*: every path a declaration states is resolved against the repository root and one that escapes it exits **2** by name — so the row is withheld with the reference and its landing place quoted, never proposed with a precondition that could never hold. `detect` clones nothing. A reference that stays **inside** the tree becomes a `path` precondition instead, asserted before a verb runs and never performed |
+| **a toolchain pin the tree does not state** | the entry's version file is absent or silent. `.NET` states its SDK in a `global.json` (looked for in the lane and then up to the repository root); `example/fixture-windows` has none, so the build floats on whatever SDK is installed. `detect` then proposes **no** `project.toolchain` entry and says so: assert the version CI would need and `detect` will use it, but it will not invent one — a toolchain entry with no `version` is one nen's own reader refuses, and a pin `detect` chose is a pin that pins nothing. The note carries the block to paste, probe and installer included |
 
 A proposal you paste and then discover is fiction is worse than an empty map
 with a reason.
@@ -14773,13 +14808,13 @@ any tree** and is the clearest example of what a withheld row still gives you:
 | `gatsby` | `build` (`gatsby build`), `dev` (`gatsby develop`), `run` (`gatsby serve`), `archive` (`node <the script your package.json names>`) and the two-step `deploy` (that same archive step, then the pages push the pack cites). Seats for `test`, `ui-test`, `lint`, `typecheck`, `release` and `coverage`, each with the pack's sentence — *"no test script and no test-runner dependency"*, *"NO LINTER OF ANY KIND EXISTS IN THIS REPOSITORY."* `hosts` is every platform. | `archive` and `deploy` when no declared script both matches the shape **and** corroborates it — `{archiveScript}` is a path, the one place `detect` can see a path this repository runs is its own `scripts` block, and `node {archiveScript}` is thin enough that arity alone would take the first one-argument `node` script in the file. A `resume:pdf` answers; a `start` is named as a near miss. Two corroborated scripts that disagree are an ambiguity, not a choice. `build`/`dev`/`run` when `gatsby` is not a declared dependency, and the second step of `deploy` when the **publishing** tool the pack cites is not one either: a marker match is not evidence a tool is installed, and this is the one row where a proposal nobody checked would put bytes on somebody's infrastructure. And **no precondition for the locally installed browser** `archive` and `deploy` need — the reference probes for it *by path* and cites no environment variable, and a `path` precondition cannot name a location outside the repository at all, so `detect` reports the requirement in a note. |
 | `gradle-android` | `build` (`{gw} assembleDebug --stacktrace`), `lint` (`{gw} :app:lintDebug --stacktrace`), and — **only where a module of your lane applies the Paparazzi plugin** — `ui-test` (`{gw} verifyPaparazziDebug` — screenshot verification; **recording** the baselines is the deliberately separate `{gw} recordPaparazziDebug`, which your declaration states if it wants it) and `test` (`{gw} verifyPaparazziDebug <your unit-test task> --stacktrace`), the latter additionally needing your settings file to name exactly one module `detect` can see is a library. Seats for `archive` (a `release` buildType with **no signingConfig**), `release`, `dev`, `run`, `deploy`, `typecheck` (the Kotlin compiler is the type check) and `coverage` (**no** JaCoCo or Kover is applied anywhere — and the observed repository's own checklist documents a task that does not exist on a clean checkout). `hosts` is every platform: the toolchain is cross-platform and the repository says so itself. **The `test` row's `why` is load-bearing and is carried verbatim into your declaration** — the task must be `verifyPaparazziDebug` and never `testDebugUnitTest`, because under the latter a snapshot test renders and discards: replacing a golden with a completely different image still reports PASSED. A note also reports a **conflict** the pack records and refuses to resolve: one canonical handbook binds its lint/test placeholder to exactly the forbidden task. Fix that upstream; nen encodes one side, cites it, and reports the other. A second note names the **plugin gate** on those two rows and why the markers cannot stand in for it. | `test` unless the lane's own `settings.gradle{,.kts}` names exactly **one** module `detect` can see is a library. Every included module is classified three ways — `application` (its build file carries the plugin that identified this lane), `library` (`detect` read the file, every plugin application in it is a literal id, and none of them is the plugin or a look-alike for it), and **`unknown`** — and a single `unknown` ends the row, naming the module and why. A module is `unknown` when its directory is not there, when its `projectDir` is remapped outside the repository, when its build file applies no plugin `detect` can see, when it applies one through an `alias(…)` or a dynamic `apply(…)` — the id then lives in a version catalogue `detect` does not read — or when it applies an id ending in the same word as the lane's plugin, which is how a **convention plugin** wrapping it is spelled. This is why `unknown` is not folded into `library`: an application module applying AGP through `id("myapp.android.application")` would otherwise be the one "library" the settings file named, and `{unitTestTask}` would be answered `:app:test` — the aggregate this row's own `why` exists to forbid. Also withheld: no `include(...)` `detect` can read, every module an application module, or two library candidates, in which case the note lists them and asks which. (`includeBuild` is deliberately not read: it names a separate build, not a module of this one.) And every row on a lane whose wrapper is missing for **this** host, naming the platform, the spelling it implies and what the lane carries instead. <br><br>**`test` *and* `ui-test` unless a module of this lane applies the Paparazzi plugin.** Both rows run `verifyPaparazziDebug`, which is that plugin's own task, and the markers that identify this stack confirm a wrapper, a settings file and the Android *application* plugin — none of the three says anything about Paparazzi, so a lane without it used to be handed a command whose first run is `Task 'verifyPaparazziDebug' not found in root project`. Four spellings count as applied — `id("app.cash.paparazzi")`, `id 'app.cash.paparazzi'`, `apply plugin: 'app.cash.paparazzi'`, and `alias(libs.plugins.paparazzi)` — and the id has to be the **argument of an application**, never merely present: a `testImplementation("app.cash.paparazzi:paparazzi-annotations:…")` names this plugin's artifacts and applies nothing. The alias is followed in the catalogue **its own accessor names**, among the `gradle/*.versions.toml` files at your lane root (`libs.` is `gradle/libs.versions.toml`; a second catalogue is addressed by its own file stem, and a `testLibs.` accessor is not answered by `libs`), matched on the **whole key** Gradle would generate — `libs.plugins.compose.paparazzi` is your `compose-paparazzi` entry or it is nothing. Every spelling is read with **comments stripped** (a commented-out application is not one, in either language — the catalogue by TOML's `#` rule and the build files by the script one), in a **module** build file your settings file `include(…)`s: a root `plugins` block naming the plugin `apply false` applies it nowhere, and a directory Gradle never configures creates no task whatever it applies — a build file in one is named as outside the build rather than counted. The answer is three-valued: `applied`, `absent`, or **`unknown`** — an `alias(…)` no catalogue of that name resolves, a settings file that builds its catalogues itself with `versionCatalogs {`, a dynamic `apply(…)`, a **root** build file that configures its modules from the top (`subprojects {`, `allprojects {`, `apply(…)` — the one thing `detect` reads the root for, and never for the id), or a `buildSrc/` or `build-logic/` whose convention plugins `detect` does not read and one of which may be applying it. `absent` and `unknown` both **withhold**, as a seat that says which of the two it was, names every file it opened and every file it deliberately did not, and states what to write instead: for `test`, the plain JVM row `{gw} :<module>:test` (never `testDebugUnitTest`); for `ui-test`, that there is no screenshot task to propose and instrumented UI tests are unsupported on this stack. A plugin applied inside a **nested build** (a directory with its own wrapper or settings file) is named and not counted — it is applied to a build your lane's wrapper never runs. |
 | `compose-desktop` | `run` (`{gw} run`) and nothing else — one observed lane, one observed command, and it exists only as an IDE run configuration. Seats for the other ten, each with the pack's sentence: `archive` in particular declares `Dmg`/`Msi`/`Deb` target formats, **so the tasks exist**, and no command string for them appears anywhere in the repository — proposing one would be nen inventing a release path. `hosts` is every platform *to run*; packaging is per-format and host-locked, which is a `hosts` constraint your declaration states rather than a tool nen can supply. | The `run` row on a lane whose wrapper is missing for this host, **and** every row when the `compose.desktop` block sits in a subdirectory the lane's settings file names no module for — that build is neither addressable as `:<module>:run` nor a build of its own. Where the settings file *does* include it, the row is proposed as `{gw} :<module>:run`, and a note says so. A note also carries the pack's own argument for **per-lane** stacks: this lane lives inside a repository whose every other verb is Android, with its own wrapper pinned to a different version than the root's. |
-| `expo` | The **Metro lane**: `dev` (`expo start`) and `lint` (`expo lint`), each proposed only where `expo` is a dependency the lane's own `package.json` declares — `expo` is invoked through the project, and Expo itself warns against a global install. And the five rows the maintained reference (the `apps/mobile` lane of Market, the maintainer's private Next.js + Expo monorepo, zheref/nen#502) runs: `build` (`{pm} run build`, the reference's `expo export` script, which **launches nothing**), `test` (`{pm} exec -- jest --ci`, Jest with `jest-expo`; the `--` is what makes `npm exec` forward `--ci` to Jest), `ui-test` (`maestro test .maestro`, against a dev-client build), `archive` (`{pm} run archive`, a local `eas build`) and `coverage` (`{pm} exec -- jest --ci --coverage`). Seats for `typecheck`, `release` and `deploy`. `hosts` is every platform for a single-lane tree. | **Each of those five rows where the lane does not visibly carry what it runs**: `build` and `archive` without a `build` / `archive` script in the lane's `package.json` (and `build` also wherever that `package.json` never spells `expo export`, so a `"build": "expo run:ios"` script is not quoted the build-only reason), `test` and `coverage` without `jest` as a declared dependency, and `ui-test` without a script spelling `maestro test .maestro` verbatim (the Maestro CLI is a host install, not a dependency) — each withheld with a note naming what is missing. A bare workflow that scripts only `expo run:*` gets no `build` row: `expo run:ios` and `expo run:android` build *and launch*, so they are this stack's `run`, never its `build`. And **`run`**, because `expo run:{platform}` names a native lane and neither half is the other's default. The note goes further than naming the token: it names every value the lane's **own scripts** spell in that position (`ios` from `"ios": "expo run:ios"`, `android` from `"android": "expo run:android"`) and says where to state one — seeing a value and choosing one are different acts, and only the second is forbidden. Paste the pack's row in unedited and the executor refuses at exit **2**, naming `{platform}`. |
+| `expo` | The **Metro lane**: `dev` (`expo start`) and `lint` (`expo lint`), each proposed only where `expo` is a dependency the lane's own `package.json` declares — `expo` is invoked through the project, and Expo itself warns against a global install. And the five rows the maintained reference (the `apps/mobile` lane of referenceworkspace, the maintainer's private Next.js + Expo monorepo, zheref/nen#502) runs: `build` (`{pm} run build`, the reference's `expo export` script, which **launches nothing**), `test` (`{pm} exec -- jest --ci`, Jest with `jest-expo`; the `--` is what makes `npm exec` forward `--ci` to Jest), `ui-test` (`maestro test .maestro`, against a dev-client build), `archive` (`{pm} run archive`, a local `eas build`) and `coverage` (`{pm} exec -- jest --ci --coverage`). Seats for `typecheck`, `release` and `deploy`. `hosts` is every platform for a single-lane tree. | **Each of those five rows where the lane does not visibly carry what it runs**: `build` and `archive` without a `build` / `archive` script in the lane's `package.json` (and `build` also wherever that `package.json` never spells `expo export`, so a `"build": "expo run:ios"` script is not quoted the build-only reason), `test` and `coverage` without `jest` as a declared dependency, and `ui-test` without a script spelling `maestro test .maestro` verbatim (the Maestro CLI is a host install, not a dependency) — each withheld with a note naming what is missing. A bare workflow that scripts only `expo run:*` gets no `build` row: `expo run:ios` and `expo run:android` build *and launch*, so they are this stack's `run`, never its `build`. And **`run`**, because `expo run:{platform}` names a native lane and neither half is the other's default. The note goes further than naming the token: it names every value the lane's **own scripts** spell in that position (`ios` from `"ios": "expo run:ios"`, `android` from `"android": "expo run:android"`) and says where to state one — seeing a value and choosing one are different acts, and only the second is forbidden. Paste the pack's row in unedited and the executor refuses at exit **2**, naming `{platform}`. |
 | `xcode-ios` | **No command row, on any tree** — and the eight seats, the darwin-only `hosts` block, and everything the checkout says about the rows it could not write. `{project}` is answered from the one container of the kind **the reference row's own flag addresses** — a lone `.xcodeproj` behind `-project`, a lone `.xcworkspace` behind `-workspace`, and lane-relative either way; the flag is read out of the pack's argv, not assumed. `{scheme}` is answered from the one shared scheme whose cross-check was performed **in full** and passed: every testable is read against the container *its own* `ReferencedContainer` names, and a scheme that delegates its test action to a `<TestPlanReference>` — which is what every project a recent Xcode creates looks like — is followed into the `.xctestplan` and checked from there. `{resultBundle}` comes from nen's own `.nen/`. Every withheld row then says what it **did** answer — *"nen DID answer `{project} = Kro.xcodeproj`, `{scheme} = Kro` from this lane's own files, so what this row still needs stated is `{destination}` and nothing else"* — which is the whole value of the verb on this stack: it does the copying out of the checkout, and you add the one value it cannot know. Seats for `ui-test`, `lint` (**declared-only** — two incompatible scripts in the observed repository, and SwiftLint appears in none of the seven), `archive`, `release`, `dev`, `run`, `typecheck` (the Swift compiler is the type check) and `deploy` (the observed repository's only deploy lane is a **database migration**, which is not an app deploy). A `Podfile` beside the container is recorded as **evidence**, never as a marker. | **`build`, `test` and `coverage`, on every tree there will ever be**, and one reason covers all three: each names `{destination}` or `id={simUdid}`, which name a simulator that exists, is of the right device type and is **booted on the machine** — and `detect` reads a working tree and spawns nothing. That is the one withholding here that is not a gap in your repository, and the note says so rather than reading like something you could close. The pack's own rows CITE forms for the position (`-destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5'`, `-destination id=<udid>`); `detect` quotes those sentences once per lane and lifts no value out of them. `{project}` is withheld where the container is not the kind the reference row's flag addresses — a workspace-only lane behind a project flag, the CocoaPods shape where the workspace's own `contents.xcworkspacedata` references the project, a workspace whose contents file `detect` could not read at all (**fail closed**: a container it could not ask is not a container that answered), or a flag it knows no container kind for — because the flag is **part of the row** and a path of the wrong kind behind it fails on every machine; the note names the flag the pack's row carries and asks you for both halves. Also withheld, each with its own sentence because each is a different repair: two projects (or two workspaces); two shared schemes; an unreadable `project.pbxproj`, which withholds the cross-check for the **whole lane** rather than measuring schemes against a target list missing a project; a test plan `detect` could not read, which is a target list it has not got rather than a scheme that names nothing; a testable declared **outside** this lane's root projects — a local Swift package, a project one directory over — which is neither confirmed nor called broken, because `detect` reads the `.xcodeproj` bundles at the lane root and nothing else, and a *partial* check is not a check that passed; a scheme whose test action names a target the projects do not declare (**a finding about your checkout**, not about the proposal — `xcodebuild test` on that scheme fails before any token matters); and a scheme that names **no** target anywhere. |
-| `dotnet-winui` | `build` (`dotnet build <the project or solution your tree resolves to> -c Debug`) and, where a test project exists, `test` (`dotnet test <that test project>`). `hosts` is **`win32` only** — every verb, exit **3** everywhere else, and the pack's `hostNote` rides along as a lane note saying what that means in practice. A `path` precondition for each `ProjectReference` that resolves inside the tree **and names a file that is there today**, and a `project.toolchain.dotnet-sdk` entry when a `global.json` states `sdk.version` (searched from the lane up to the repository root; a `rollForward` beside the pin is carried into the reason, because it makes the pin a **floor** and a toolchain block has no field for one). Seats for the other nine (`typecheck` among them: the C# compiler is the type check), each with the pack's own sentence — *"NOTHING IN THE REPOSITORY INVOKES A COMMAND"* — plus a seat for any row a cross-check withholds, carrying the reason. **Read those two rows honestly:** the observed repository (`zheref/KroWindows`) runs no command anywhere — no Makefile, no `.cmd`/`.ps1`/`.sh`, no `.github/` at all. `dotnet build` is the maintainer's approved decision; `-c Debug` and the whole `test` row are argued in this PR and are **not** in that approval, which is why the pack's `source` fields say so and why deleting the `test` row returns the grid to the approved shape. | **`archive`, and MSIX packaging with it.** Packaging here is a Visual Studio gesture needing a platform, a signing identity and a publish profile the repository states nowhere, and the approval was `dotnet build` **alone**. `build` and `test` when the tree does not resolve to exactly one project or solution, with the candidates named — and a solution answers only when it **lists** the lane's WinUI project, so an unrelated, empty or stale one is named in a note and stands aside. Both rows when a `ProjectReference` in the graph the answer reaches **escapes the repository**, or is one `detect` cannot resolve at all — an MSBuild `$(property)`, a `*`/`?` wildcard, a `;`-list, an `&entity;` — or differs from disk only in **case**: each is quoted verbatim, no precondition is written, and nothing is guessed. A reference in a project file the answered graph does **not** reach is a finding and withholds nothing. `test` when nothing in the tree is a test project. And the SDK **version** when no `global.json` states one: assert the version CI would need and `detect` uses it; it will not invent one. |
+| `dotnet-winui` | `build` (`dotnet build <the project or solution your tree resolves to> -c Debug`) and, where a test project exists, `test` (`dotnet test <that test project>`). `hosts` is **`win32` only** — every verb, exit **3** everywhere else, and the pack's `hostNote` rides along as a lane note saying what that means in practice. A `path` precondition for each `ProjectReference` that resolves inside the tree **and names a file that is there today**, and a `project.toolchain.dotnet-sdk` entry when a `global.json` states `sdk.version` (searched from the lane up to the repository root; a `rollForward` beside the pin is carried into the reason, because it makes the pin a **floor** and a toolchain block has no field for one). Seats for the other nine (`typecheck` among them: the C# compiler is the type check), each with the pack's own sentence — *"NOTHING IN THE REPOSITORY INVOKES A COMMAND"* — plus a seat for any row a cross-check withholds, carrying the reason. **Read those two rows honestly:** the observed repository (`anonymized-source-snapshot`) runs no command anywhere — no Makefile, no `.cmd`/`.ps1`/`.sh`, no `.github/` at all. `dotnet build` is the maintainer's approved decision; `-c Debug` and the whole `test` row are argued in this PR and are **not** in that approval, which is why the pack's `source` fields say so and why deleting the `test` row returns the grid to the approved shape. | **`archive`, and MSIX packaging with it.** Packaging here is a Visual Studio gesture needing a platform, a signing identity and a publish profile the repository states nowhere, and the approval was `dotnet build` **alone**. `build` and `test` when the tree does not resolve to exactly one project or solution, with the candidates named — and a solution answers only when it **lists** the lane's WinUI project, so an unrelated, empty or stale one is named in a note and stands aside. Both rows when a `ProjectReference` in the graph the answer reaches **escapes the repository**, or is one `detect` cannot resolve at all — an MSBuild `$(property)`, a `*`/`?` wildcard, a `;`-list, an `&entity;` — or differs from disk only in **case**: each is quoted verbatim, no precondition is written, and nothing is guessed. A reference in a project file the answered graph does **not** reach is a finding and withholds nothing. `test` when nothing in the tree is a test project. And the SDK **version** when no `global.json` states one: assert the version CI would need and `detect` uses it; it will not invent one. |
 
 **A bare-workflow Expo repository is three lanes, and `detect` says so.** Where
 `ios/` and `android/` prebuild output is committed beside the manifest —
-`zheref/food-diary`, the repository the catalogue read for this stack — the
+`sourceworkspace`, the repository the catalogue read for this stack — the
 scan finds a `.xcworkspace` under one and a Gradle wrapper plus
 `com.android.application` under the other, and proposes `ios` (`xcode-ios`,
 darwin) and `android` (`gradle-android`) as lanes of their own with those
@@ -14835,7 +14870,7 @@ answers from); a test action naming **no** target (nothing failed is not the
 same fact as it passed); and a test action naming a target the projects do not
 declare.
 
-That last one is the finding the check exists for. `food-diary`'s shared scheme
+That last one is the finding the check exists for. `sourceworkspace`'s shared scheme
 names a test target (`fooddiaryTests`) its `project.pbxproj` does not contain,
 so a test run on that scheme **fails on a clean checkout** — the row is not one
 placeholder away from working, and a note that named only the placeholder would
@@ -15230,13 +15265,13 @@ declared results path. The wrapper is the repository's code, not nen's.
 ```json
 "test": {
   "exe": "xcodebuild",
-  "argv": ["-scheme", "Kro", "-destination", "platform=iOS Simulator,name=iPhone 17 Pro",
+  "argv": ["-scheme", "FixtureApp", "-destination", "platform=iOS Simulator,name=iPhone 17 Pro",
            "-enableCodeCoverage", "YES", "-resultBundlePath", ".nen/aka/regression.xcresult", "test"],
   "artifacts": [".nen/aka/regression.xcresult"],
   "select": {
     "exe": "scripts/focused-xctest",
     "argv": ["--summary", ".nen/focused/apple/summary.json", "--",
-             "-scheme", "Kro", "-destination", "platform=iOS Simulator,name=iPhone 17 Pro",
+             "-scheme", "FixtureApp", "-destination", "platform=iOS Simulator,name=iPhone 17 Pro",
              "-resultBundlePath", ".nen/focused-bundles/apple.xcresult", "test"],
     "each": ["-only-testing:{id}"],
     "pattern": "[A-Za-z_][A-Za-z0-9_]*(/[A-Za-z_][A-Za-z0-9_]*){0,2}",
@@ -15256,7 +15291,7 @@ verb:          test
 selection:     KroTests/CaptureTests/testInlinePills, KroTests/InboxTests  (2 identifiers, from project.verbs.apple.test.select; appends: -only-testing:KroTests/CaptureTests/testInlinePills -only-testing:KroTests/InboxTests)
 results:       .nen/focused/apple/summary.json (xcresult-summary)  -- not read
 …
-would run:     scripts/focused-xctest --summary .nen/focused/apple/summary.json -- -scheme Kro -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -resultBundlePath .nen/focused-bundles/apple.xcresult test -only-testing:KroTests/CaptureTests/testInlinePills -only-testing:KroTests/InboxTests
+would run:     scripts/focused-xctest --summary .nen/focused/apple/summary.json -- -scheme FixtureApp -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -resultBundlePath .nen/focused-bundles/apple.xcresult test -only-testing:KroTests/CaptureTests/testInlinePills -only-testing:KroTests/InboxTests
 …
 ```
 
@@ -15708,6 +15743,23 @@ nen shu coverage [--repo <path>] [--lane <name>] [--threshold <0-100>] [--touche
 | `--from-capture` | only with `--touched` | Build the touched table from the reports already on disk and **run nothing**. | nen proves the capture this tree's from its provenance sidecar first; one it cannot prove is **exit 8**, nothing reused. Given without `--touched`, with `--dry-run`, or with `--effort`: **exit 2**. See [below](#coverage-from-capture). |
 | `--dry-run` | no | Print every step, run nothing — and **parse nothing**. | The report may well be on disk from a previous run; a dry run does not read it, because reporting yesterday's numbers for a command that did not execute is the most believable wrong answer this verb can give. `--touched` still computes the touched-file set under `--dry-run`: that read is `git diff`, not the declared tool, and previewing which files would be checked costs nothing. |
 
+**Declared tool exclusions.** A runnable coverage row may declare
+`"exclusions": ["src/generated", "**/*.test.ts", "=README.md"]` beside its
+`artifacts`. Paths are repository-relative, case-sensitive, and use Nen's
+shared path grammar: `=path` is exact, a plain path matches on segment
+boundaries, `*` stays within a segment, `**` crosses segments, and `?` matches
+one non-separator character. Nen reads no coverage tool configuration.
+
+On touched runs (including dry runs and proved captures), excluded paths leave
+`touched.files`, `matched`, `unmatched` and the target-row join. The appended
+`touched.exclusions` object carries `declared`, `patterns`, `excluded` (each
+`{path, patterns}`), and `unmatchedPatterns`. Text names every removed file and
+every pattern matching no changed file. No declaration removes nothing and
+prints that absence; `[]` is an explicitly empty set. A fully excluded change
+has an empty touched set, so it does not trigger exit 6. Report-wide totals and
+thresholds remain the coverage report's own. Malformed declarations fail before
+the tool runs. Exclusions are snapshotted from the declaration and lane actually selected by the executor, before execution.
+
 **Where the report comes from — the verb's own `artifacts`.** nen parses the
 first path under `project.verbs.<lane>.coverage.artifacts` whose **format** it
 recognises, and it never searches a tree for one. Under `--touched` it parses
@@ -15716,7 +15768,7 @@ root](#coverage-touched-roots) below:
 
 ```json
 "coverage": {
-  "exe": "pnpm", "argv": ["--filter", "@kro/core", "test:coverage"],
+  "exe": "pnpm", "argv": ["--filter", "@fixture-app/core", "test:coverage"],
   "artifacts": ["coverage/coverage-summary.json"]
 }
 ```
@@ -15901,9 +15953,10 @@ The match depends on what a row **is**:
   every other format's row name is.
 
 `--json` gains a ninth key, `touched: { base, files, matched, unmatched,
-artifacts }` (`files` is everything git named; `matched` and `unmatched`
-partition it — their lengths always sum to `files.length`; `artifacts` is
-described just below), and each **row** gains its own
+artifacts, exclusions }` (`files` is the changed set after declared exclusions;
+`matched` and `unmatched` partition it — their lengths always sum to
+`files.length`; `exclusions` records removed paths and unmatched patterns;
+`artifacts` is described just below), and each **row** gains its own
 `met` when `--threshold` is also given — the aggregate `threshold.met` above
 still answers for the whole report; a row's `met` answers for that row alone,
 both compared on the **counts**, never the rounded percentage. **This still
@@ -16290,7 +16343,7 @@ never searches a tree for one:
 
 ```json
 "test": {
-  "exe": "pnpm", "argv": ["--filter", "@kro/core", "test", "--reporter=json",
+  "exe": "pnpm", "argv": ["--filter", "@fixture-app/core", "test", "--reporter=json",
                           "--outputFile=reports/test-results.json"],
   "artifacts": ["reports/test-results.json"]
 }
@@ -16480,7 +16533,7 @@ exactly one character, never a `/`. `[...]` classes and brace expansion are
 not implemented; a pattern using either is matched literally, character by
 character.
 
-**Suite and scene**, generalised from KroApple's own `ci_scripts/
+**Suite and scene**, generalised from ExampleService's own `ci_scripts/
 pr_screenshots.sh` (`scene_of()`): walk a changed path's ancestor
 directories, nearest first, and the first one whose name ends with
 `suiteSuffix` (default `"SnapshotTests"`) names the **suite**, with the
@@ -16527,7 +16580,7 @@ nen shu evidence --base main
 evidence: 1 changed file across 1 suite (public-mirror), against main...HEAD
 
 suite: DateTimeField
-  added    disabled                 Kro/Tests/DateTimeFieldSnapshotTests/__Snapshots__/DateTimeFieldSnapshotTests/test_snapshot_disabled.1.png
+  added    disabled                 FixtureApp/Tests/DateTimeFieldSnapshotTests/__Snapshots__/DateTimeFieldSnapshotTests/test_snapshot_disabled.1.png
 ```
 (run against a KroApple-shaped fixture declaring
 `{"globs": ["**/__Snapshots__/**/*.png"], "mechanism": "public-mirror"}`; a
@@ -18239,7 +18292,7 @@ git reads only, no network, no token. A pull-request row carries `kind`,
 check name, through the same `latestChecks` reduction [`pr
 ready`](#nen-pr-ready) uses), `threads` (`total`/`unresolved`),
 `reviewRequests[]`, `linked[]` (the issue numbers it references), `readiness`
-and `notes[]`. **`linked[]` holds only real numbers** ([#639](https://github.com/zheref/nen/issues/639)):
+and `notes[]`, plus `ledger` (see below). **`linked[]` holds only real numbers** ([#639](https://github.com/zheref/nen/issues/639)):
 it is every `#<n>` in the title and body where `<n>` is **1 to 9 digits
 starting `1`–`9`** followed by no ASCII word character (`[A-Za-z0-9_]`), and
 the `#` is either **not glued** — not preceded by an ASCII word character, `&`
@@ -18260,6 +18313,19 @@ only. The row's own number is left out of `linked[]` on both paths. An issue row
 `labels[]`, `linked[]` (the pull requests that reference it), a `readiness`
 that is **always `null`** — CON-32 is a statement about a pull request — and
 `notes[]`.
+
+**Ledger evidence** ([#674](https://github.com/zheref/nen/issues/674)): each PR row carries
+`ledger: { state, url, verdict, reason, line }`. The live read uses the PR head branch
+as its effort and the same authority as `nen pr ledger read`, including multipart
+assembly and author/editor validation. `line` and `verdict` preserve that read-back
+exactly. `state` is `valid` for `ok`, `none` only after a successful comments read
+finds no matching slice, `refused` for a stale, edited, foreign, duplicate or invalid
+slice, and `not-read` when the head, login or comments cannot be read. `url` is null
+when the read supplies none; `reason` is null only for a valid slice. No slice is
+posted, refreshed or restored. Offline `--objects-from` rows say `not-read` because
+no GitHub comment read occurs, even if their input carries historical ledger data.
+With `--register`, `ledgerLine` is the same exact line (empty only on issue rows).
+A desk-provided `ledger` or `ledgerLine` is refused at exit 2 like any other fact.
 
 **A FIELD degrades; an OBJECT does not go missing.** Each field of a pull
 request is read on its own: a check rollup that will not validate (an unknown
@@ -18817,7 +18883,7 @@ fields; [#227](https://github.com/zheref/nen/issues/227)) and the verbatim one:
 | read-only persona ([#473](https://github.com/zheref/nen/issues/473)) — a source `tools:` list naming none of the built-in write tools `Edit`, `Write`, `MultiEdit`, `NotebookEdit` and no `mcp__*` tool (a YAML comment is ignored) | **nothing written** — the page lists `sandbox_mode` among the settings that *"don't override the parent configuration when placed in a custom agent file"*; each such persona is a report `note:` (`codex: <name> is read-only at source; …`) ([docs](https://learn.chatgpt.com/docs/agent-configuration/subagents)) | **`readonly: true` added** unless the source sets `readonly` itself — *"restricted write permissions (no file edits, no state-changing shell commands)"* ([docs](https://cursor.com/docs/subagents)); a plugin-shipped subagent does not honour it yet ([forum 173787](https://forum.cursor.com/t/173787)) | the `tools` list in Antigravity's own names ([#505](https://github.com/zheref/nen/issues/505)), written as the block list the page documents (`tools` · `string[]`): `Read` → `view_file`, `Bash` → `run_command`, the only names both the [subagents page](https://antigravity.google/docs/subagents) and the SDK's [built-in tools reference](https://antigravity.google/docs/sdk/tools) give (OQ-1, ruled 2026-10-22). Every other name, and a scoped grant such as `Bash(git:*)`, is **dropped and named** in a report `note:` (`antigravity: <name>: dropped … from tools …; wrote …`), never written — the page warns an unmapped name *"may cause the subagent process to hang"*. A list naming no mapped tool, or one the parse cannot read, is **refused** at exit 2; a persona with no `tools` key, or an empty one, passes through unchanged. A mirror an older build generated, Claude Code names and all, reads **stale** under `check`. This applies to every persona with a `tools` key, writers included: their `Edit`/`Write`/`MultiEdit` are unmapped too | the `tools` list, verbatim |
 | hooks (`--hooks`) | `hooks.json` → `.codex/hooks.json`, grouped shape, events `Stop` / `PreToolUse` / `SessionStart` | `hooks.json` → `.cursor/hooks.json`, `{ version: 1, hooks: { stop, beforeShellExecution, sessionStart } }`, one `{ command }` per entry | `hooks.json` → `.agents/hooks.json`, grouped, `Stop` / `PreToolUse` (matcher `run_command`) / **`PreInvocation`** — there is no SessionStart event | `hooks/hooks.json`, byte for byte |
 | model map (`--models`) | not on the appendix; `config.toml.fragment` carries `[agents] default_subagent_model = <models.codex.fast>`, and the TOML personas carry `model` | **`model: inherit` for every persona** — the page documents `model:` as inherit (the default) or a specific model ID, and a tier alias from `models.cursor` is neither, so the tier is resolved (a bad value is still refused) and reported as `modelMapped: <persona>: <tier> -> inherit`; an explicit `inherit` is carried | `model: <tier>` → `models.antigravity.<tier>`; `inherit` carried; an alias outside `inherit`/`flash`/`pro` is emitted and named | none |
-| rules (`--rules`) | none — `AGENTS.md` is the prose surface, read up to 32 KiB (`project_doc_max_bytes`); an appendix past it is named in the report | `rules/<stem>.mdc` → `.cursor/rules/`, with `description: <stem>` / `alwaysApply: true` frontmatter; no character limit, the page advises under 500 lines | `rules/<stem>.md` → `.agents/rules/`, with `trigger: always_on` / `description: <stem>` frontmatter -- the page (re-read 2026-09-28) says every rules file must open with one or is silently discarded; **24,000-byte limit**, over it refused ([docs](https://antigravity.google/docs/rules)) | none |
+| rules (`--rules`) | none — `AGENTS.md` is the prose surface, read up to 32 KiB (`project_doc_max_bytes`); an appendix past it is refused before writing, naming the first affected section and its zero-based UTF-8 byte range | `rules/<stem>.mdc` → `.cursor/rules/`, with `description: <stem>` / `alwaysApply: true` frontmatter; no character limit, the page advises under 500 lines | `rules/<stem>.md` → `.agents/rules/`, with `trigger: always_on` / `description: <stem>` frontmatter -- the page (re-read 2026-09-28) says every rules file must open with one or is silently discarded; **24,000-byte limit**, over it refused ([docs](https://antigravity.google/docs/rules)) | none |
 | description budget | **186** chars | **30** chars | none | none here (the documented 1,536 is a capabilities fact) |
 | permissions (`--permissions`) | `config.toml` → `.codex/config.toml` (approval policy, sandbox, `writable_roots = []` for the installer to fill) | `cli.json` → `.cursor/cli.json` (`Shell(exe:args)` / `Shell(exe)` allow/deny — the documented grammar — plus whatever `surfaces.cursor` in the source declares, verbatim) | **none** — no allowlist file exists, and `commandExecutionPolicy: auto` would approve arbitrary commands, so nothing is written and the report says `not supported` | `settings.local.json` (`Bash(exe args)` allow/deny), for the consumer to merge |
 
@@ -20188,10 +20254,10 @@ plan: 1 runner(s) for zheref/nen, pool windows-x64
 nen runner plan: warning: .\lordzheref already runs 11 runner service(s) on this host for repositories whose visibility differs from zheref/nen's (public) or cannot be told -- one account is one trust domain, so either repository's jobs can rewrite the other's runners (#330):
 nen runner plan:   actions.runner.example-alpha.NZ-BCR1 -- example/alpha, private
 ...
-nen runner plan:   actions.runner.zheref-KroWindows.NZ-KWIR5 -- zheref/KroWindows, private
+nen runner plan:   actions.runner.example-fixture-windows.HOST-FWR5 -- example/fixture-windows, private
 nen runner plan: recommended: a local account for zheref/nen alone, e.g. --service-account runner-nen (create it yourself first; nen never creates an account or handles its password).
 ```
-(run for real on the maintainer's Windows host, 2026-10-02: exit 0; the plan
+(sanitized transcript derived from a Windows run on 2026-10-02: exit 0; service and repository names are fictional; the plan
 and nine of the eleven service lines abridged)
 
 ```bash
@@ -21444,7 +21510,7 @@ archive`, a local `eas build`). `expo run:*` builds *and launches*, so it is
 never the `build` row; `run` stays withheld naming both values the repository's
 own scripts spell, because `expo run:{platform}` names a native lane neither of
 whose halves is the other's default. A **bare-workflow** Expo tree (`ios/` and
-`android/` prebuild output committed, as in `zheref/food-diary`) is proposed as
+`android/` prebuild output committed, as in `sourceworkspace`) is proposed as
 **three** lanes, with the Apple one's shared scheme read and cross-checked
 against the project's own targets.
 
@@ -21637,3 +21703,24 @@ the decoded content is base64 and is never altered by it. An index whose
 uncaught error. `--dry-run` on an oversized slice previews every part write and
 the index with `<part N url>` placeholders, so the preview names the writes a
 live post makes.
+
+<a id="family-tool"></a>
+### `nen tool install`
+
+```text
+nen tool install --contract /trusted/hatsu/contracts/scans.json --row secretScan --bin-dir /existing/PATH/bin [--json]
+```
+
+The caller explicitly selects the trusted declaration and existing PATH destination. The row supplies `tool`, exact semver `version`, `assets` keyed by Node platform/architecture (`darwin-arm64`, `linux-x64`, `win32-x64`, etc.), `checksumsUrl`, and `assetUrlTemplate` containing one `<asset>`. Optional `versionArgv` is a literal array, default `["version"]`. Hatsu's existing `contracts/scans.json` `secretScan` row is directly supported. Prose declaration fields are not executable instructions. No version bump, platform substitution, PATH/profile edit or elevation occurs.
+
+The HTTPS checksum manifest must contain exactly one SHA256 line for the host asset. Archive bytes must match before archive parsing, staging or execution. Only the regular root executable (`tool.exe` on Windows) is staged; other members are never written to disk. Traversal, links, special types, duplicate paths, malformed metadata/CRC and excessive sizes refuse. Supported formats are basic regular-file tar.gz and single-volume stored/deflated ZIP; unsupported tar extensions and ZIP features refuse explicitly. Bounds: 2MiB manifest, 128MiB download, 256MiB expanded contents, 4096 ZIP entries, five HTTPS redirects and 120s request budget; downloads/checksum failures are never retried. HTTPS downgrades and credential-bearing destinations refuse. Certificate verification is forced; runtime proxy and additional trust-store settings may still apply. No cookies or credential headers are attached.
+
+The staged, verified executable must report exactly the declared version (a leading `v` is optional). Publication is atomic and never replaces an existing destination. An exact installed version changes nothing and fetches nothing; a different/unreadable existing version refuses. The destination must already be on PATH; choose its directory explicitly. A cleanup failure preserves the truthful installed result and `path`, with `cleanupWarning` naming residual staging.
+
+Exit0 installed/unchanged; exit1 named fetch, checksum, archive, version or install refusal; exit2 declaration/destination wiring; exit3 `not-scanned` with unsupported host named. **`--json`** top-level keys (`nen.tool.install/v0.1`): `host`, `tool`, `version`, `verdict`, `exit`, `path`, `check`, `detail`, optional `cleanupWarning`. This installs the pinned tool; it does not claim a security scan ran or passed.
+
+### Exact public verification-prose recovery
+
+`nen pr ledger post --dry-run --json` retains its credential scan and private-name guard on every caller field. One built-in false-positive corpus entry cites [NN#580](https://github.com/zheref/nen/issues/580): the exact already-public harmless candidate `matchingmanualcapturewithGitTree/buildproof/JUnitLCOVhashes` is classified as verification prose only within phase notes. Run the normal dry run again; original local rows and portable note bytes remain unchanged. There is no recovery flag, caller allowlist, dictionary heuristic, escaping, omission or rewritten history. Prefixes, suffixes, case changes, other fields and other entropy candidates retain the original policy; named credential patterns still scan the original note, including credentials elsewhere in that same note.
+
+This fixed case establishes no general proof that English-looking text is safe. Other refusals name field and shape, never values. Inspect the named field locally, preserve the original evidence, resolve the suspected credential and rerun the dry run; never paste suspected values into a report. JSON refusal adds `nextStep`. Existing public-name checks remain mandatory before publication.
