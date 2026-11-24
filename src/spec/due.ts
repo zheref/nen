@@ -15,11 +15,16 @@
 // THE CAPTURE RECORD is the committed `capture/<CODE>/inventory.json` of the
 // spec checkout, read with diff.ts's own loader (the shape `spec inventory
 // --out` writes); its `sha` is the recorded commit and its `origin` must be the
-// repository `product_codes` names for the code.
+// repository the code resolves to through nen/repos.json (compared without
+// case). It is the committed capture, not the local `hatsu.spec.run/v0.1` run
+// record (zheref/nen#673 AS-1): that record is local state with no lookup from
+// a family to its latest run.
 //
 // NEWER IS GITHUB'S ANSWER, NEVER A DATE. The newest tag is the highest
 // `v<major>.<minor>.<patch>` by the comparator below (a prerelease or any other
-// `v*` spelling is no release); whether it is newer than the recorded commit is
+// `v*` spelling is no release, and a `v*` tag outside that grammar -- a calendar
+// version, `v1.2` -- leaves the member not read, since it cannot be ordered);
+// whether it is newer than the recorded commit is
 // `repos/{slug}/compare/{recorded}...{tag}`'s status, so a tag cut on an older
 // commit after the capture is not mistaken for a release since it.
 //
@@ -76,10 +81,23 @@ export interface SpecDueReport {
 
 /** A release tag: `v` and three dot-separated whole numbers, no leading zeros, no prerelease or build suffix. */
 const RELEASE_TAG = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+const PLAIN_CODE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 const HEX_SHA = /^[0-9a-f]{7,40}$/;
 const FULL_SHA = /^[0-9a-f]{40}$/;
 
-/** The version a release tag names, or null for a prerelease, a non-semver `v*` or any other tag. */
+/** A prerelease tag: a release version with a `-suffix`; it is never the newest release. */
+const PRERELEASE_TAG = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-[0-9A-Za-z.-]+$/;
+
+/**
+ * The `v*` tags that are neither a release (`v1.2.3`) nor a prerelease (`v1.2.3-rc.1`): a calendar
+ * version, `v1.2`, a floating `v1`, a build-metadata tag. They cannot be ordered against a release, so a
+ * member carrying one cannot be said to be current (zheref/nen#673 AC-4); other names are not release tags.
+ */
+export function unorderedTags(tags: readonly Tag[]): string[] {
+  return tags.map((tag): string => tag.name).filter((name): boolean => name.startsWith("v") && !RELEASE_TAG.test(name) && !PRERELEASE_TAG.test(name));
+}
+
+/** The version a release tag names, or null for a prerelease, a non-semver `v*` or any other tag (the last two are `unorderedTags`' business). */
 export function releaseVersion(name: string): readonly [bigint, bigint, bigint] | null {
   const match = RELEASE_TAG.exec(name);
   if (match === null) return null;
@@ -163,8 +181,8 @@ type CaptureRead = { readonly kind: "absent" } | { readonly kind: "read"; readon
 /** `capture/<CODE>/inventory.json` of the spec checkout, read with `spec diff`'s loader. */
 function readCapture(repo: string, file: string): CaptureRead {
   const absolute = join(repo, file);
-  if (lstatSync(absolute, { throwIfNoEntry: false }) === undefined) return { kind: "absent" };
   try {
+    if (lstatSync(absolute, { throwIfNoEntry: false }) === undefined) return { kind: "absent" };
     assertInsideRepo(repo, absolute, file);
     const loaded = loadInventory(absolute);
     if (loaded.sha === null) return { kind: "unread", reason: `${file} records no sha, so there is no recorded commit to compare` };
@@ -172,6 +190,9 @@ function readCapture(repo: string, file: string): CaptureRead {
     return { kind: "read", sha: loaded.sha, origin: loaded.origin };
   } catch (error) {
     if (error instanceof InventoryReadError || error instanceof SpecContainmentError) return { kind: "unread", reason: error.message.replace(absolute, file) };
+    // ENOTDIR (capture/<CODE> is a file), EACCES and the like: this member is unread, the other families still report.
+    const code = (error as NodeJS.ErrnoException).code;
+    if (typeof code === "string") return { kind: "unread", reason: `${file} could not be read (${code})` };
     throw error;
   }
 }
@@ -191,7 +212,9 @@ function resolveSlug(registry: RepoRegistry, code: string): { slug: string | nul
 function dueFamily(seams: Seams, repo: string, registry: RepoRegistry, family: ProductFamily): DueFamily {
   const read = family.members.map((member) => {
     const file = `capture/${member.code}/inventory.json`;
-    return { member, file, capture: readCapture(repo, file), resolved: resolveSlug(registry, member.code) };
+    // A code is a registry key; one that is not a plain name is never joined into a path.
+    const capture: CaptureRead = PLAIN_CODE.test(member.code) ? readCapture(repo, file) : { kind: "unread", reason: `member code '${member.code}' is not a plain name, so no capture path is formed from it` };
+    return { member, file, capture, resolved: resolveSlug(registry, member.code) };
   });
   if (read.every((entry): boolean => entry.capture.kind === "absent")) {
     return {
@@ -207,12 +230,14 @@ function dueFamily(seams: Seams, repo: string, registry: RepoRegistry, family: P
     if (capture.kind === "absent") return unread(`${file} does not exist while a sibling member's capture does, so this member's recorded commit is unknown`, null);
     if (capture.kind === "unread") return unread(capture.reason, null);
     if (resolved.slug === null) return unread(resolved.reason ?? `code ${member.code} names no repository`, capture.sha);
-    if (capture.origin !== resolved.slug) return unread(`${file} records origin ${capture.origin ?? "(none)"}, not ${resolved.slug}, so it is not this member's capture`, capture.sha);
+    if (capture.origin?.toLowerCase() !== resolved.slug.toLowerCase()) return unread(`${file} records origin ${capture.origin ?? "(none)"}, not ${resolved.slug}, so it is not this member's capture`, capture.sha);
     let newest: Tag | null;
     let count: number;
     try {
       const tags = readTags(seams, resolved.slug);
       count = tags.length;
+      const unordered = unorderedTags(tags);
+      if (unordered.length > 0) return unread(`${unordered.length} v* tag(s) outside vMAJOR.MINOR.PATCH (${unordered.slice(0, 3).join(", ")}${unordered.length > 3 ? ", ..." : ""}), so the newest release cannot be ordered and nothing is assumed current`, capture.sha);
       newest = newestRelease(tags);
     } catch (error) {
       if (error instanceof MemberUnread) return unread(error.message, capture.sha);

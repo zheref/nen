@@ -239,12 +239,70 @@ describe("nen spec due", () => {
     expect((await spec(["due", "--family", "Not A Slug"], repo, seams, true)).code).toBe(2);
   });
 
-  it("orders tags by semver (v1.10.0 above v1.9.0), ignoring prereleases and non-semver v* tags, across every page", async () => {
+  it("AC-4: a v* tag outside vMAJOR.MINOR.PATCH (calendar version, v1.2, floating v1, build metadata) leaves the member not read, never current", async () => {
+    for (const odd of ["v2026.01.15", "v1.2", "v1", "v1.2.3+build.5", "vnext"]) {
+      const repo = specRepo([{ name: "port", members: [{ code: "PW" }] }], capture("PW", RECORDED));
+      const seams = new ScriptedSeams([tagsCall("acme/port-web", [[["v1.0.0", RECORDED], [odd, sha("9")]]])]);
+      const run = await spec(["due"], repo, seams, true);
+      expect(run.code, odd).toBe(1);
+      const [family] = familiesOf(run.json());
+      expect(family?.answer, odd).toBe("not-decided");
+      expect(family?.members[0]?.state, odd).toBe("not-read");
+      expect(family?.members[0]?.reason, odd).toContain(odd);
+    }
+  });
+
+  it("AC-4: every other unread path is not read and the family not decided, exit 1 (the decision table's rows)", async () => {
+    const cases: readonly { readonly why: string; readonly files: Record<string, string>; readonly calls: ScriptedCall[]; readonly reason: RegExp }[] = [
+      { why: "capture with no sha", files: { "capture/PW/inventory.json": JSON.stringify({ contract: "nen.spec.inventory/v0.1", verdict: "read", origin: "acme/port-web", rows: [] }) }, calls: [], reason: /records no sha/ },
+      { why: "capture sha that is not hex", files: capture("PW", "not-a-commit"), calls: [], reason: /not a 7-40 character hex commit/ },
+      { why: "capture with no origin", files: capture("PW", RECORDED, null), calls: [], reason: /origin \(none\)/ },
+      { why: "tags that are not JSON", files: capture("PW", RECORDED), calls: [{ match: "gh api --paginate --slurp repos/acme/port-web/tags?per_page=100", result: ok("<html>") }], reason: /not JSON/ },
+      { why: "tags that are not a list", files: capture("PW", RECORDED), calls: [{ match: "gh api --paginate --slurp repos/acme/port-web/tags?per_page=100", result: ok(JSON.stringify({ message: "x" })) }], reason: /not a list/ },
+      { why: "a tag entry without a commit sha", files: capture("PW", RECORDED), calls: [{ match: "gh api --paginate --slurp repos/acme/port-web/tags?per_page=100", result: ok(JSON.stringify([[{ name: "v1.0.0" }]])) }], reason: /is not \{name, commit/ },
+      { why: "a compare that is not JSON", files: capture("PW", RECORDED), calls: [tagsCall("acme/port-web", [[["v1.1.0", NEWER]]]), { match: `gh api repos/acme/port-web/compare/${RECORDED}...${NEWER}`, result: ok("nope") }], reason: /not JSON/ },
+      { why: "a compare with an unknown status", files: capture("PW", RECORDED), calls: [tagsCall("acme/port-web", [[["v1.1.0", NEWER]]]), compareCall("acme/port-web", RECORDED, NEWER, "weird", 1, 0)], reason: /answered no \{status/ },
+      { why: "gh that cannot start", files: capture("PW", RECORDED), calls: [{ match: "gh api --paginate --slurp repos/acme/port-web/tags?per_page=100", result: { code: 127, stdout: "", stderr: "", spawnFailed: true } }], reason: /could not be started/ },
+    ];
+    for (const { why, files, calls, reason } of cases) {
+      const repo = specRepo([{ name: "port", members: [{ code: "PW" }] }], files);
+      const run = await spec(["due"], repo, new ScriptedSeams(calls), true);
+      expect(run.code, why).toBe(1);
+      const [family] = familiesOf(run.json());
+      expect(family?.answer, why).toBe("not-decided");
+      expect(family?.members[0]?.state, why).toBe("not-read");
+      expect(family?.members[0]?.reason, why).toMatch(reason);
+    }
+  });
+
+  it("AC-4 / SC-1: a capture path that cannot be read (capture/<CODE> is a file) is one member not read, and the other families still report", async () => {
+    const repo = specRepo(
+      [
+        { name: "broken", members: [{ code: "PW" }] },
+        { name: "fine", members: [{ code: "PI" }] },
+      ],
+      { "capture/PW": "a file where a directory should be", ...capture("PI", RECORDED) },
+    );
+    const run = await spec(["due"], repo, new ScriptedSeams([tagsCall("acme/port-ios", [[["v1.0.0", RECORDED]]])]), true);
+    expect(run.code).toBe(1);
+    const families = familiesOf(run.json());
+    expect(families.map((family) => `${family.name} ${family.answer}`)).toEqual(["broken not-decided", "fine current"]);
+    expect(families[0]?.members[0]?.reason).toMatch(/could not be read \(ENOTDIR\)/);
+  });
+
+  it("matches a capture's origin to the registry's repository without case", async () => {
+    const repo = specRepo([{ name: "port", members: [{ code: "PW" }] }], capture("PW", RECORDED, "ACME/Port-Web"));
+    const run = await spec(["due"], repo, new ScriptedSeams([tagsCall("acme/port-web", [[["v1.0.0", RECORDED]]])]), true);
+    expect(run.code).toBe(0);
+    expect(familiesOf(run.json())[0]?.answer).toBe("current");
+  });
+
+  it("orders tags by semver (v1.10.0 above v1.9.0), ignoring prereleases and tags that are not v*, across every page", async () => {
     const repo = specRepo([{ name: "port", members: [{ code: "PW" }] }], capture("PW", RECORDED));
     const seams = new ScriptedSeams([
       tagsCall("acme/port-web", [
-        [["v1.9.0", sha("1")], ["v2.0.0-rc.1", sha("2")], ["vnext", sha("3")]],
-        [["v1.10.0", NEWER], ["v1.2", sha("4")], ["release-9.0.0", sha("5")], ["v01.20.0", sha("6")]],
+        [["v1.9.0", sha("1")], ["v2.0.0-rc.1", sha("2")], ["nightly", sha("3")]],
+        [["v1.10.0", NEWER], ["release-9.0.0", sha("5")], ["2026.01.15", sha("6")]],
       ]),
       compareCall("acme/port-web", RECORDED, NEWER, "ahead", 7, 0),
     ]);

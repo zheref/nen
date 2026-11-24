@@ -351,6 +351,8 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     expect(classifyCommand("nen spec index --repo .").classification).toBe("read-only");
     expect(classifyCommand("nen spec index --repo . --write").classification).toBe("mutating");
     expect(classifyCommand("nen spec index --repo . --write --dry-run").classification).toBe("read-only");
+    // zheref/nen#673: the due-check is read-only, so an unattended weekly task may run it.
+    expect(classifyCommand("nen spec due --repo . --family port --json").classification).toBe("read-only");
     // The canon prose verbs (SDD piece N9): four reads.
     expect(classifyCommand("nen canon lint --root . --rules contracts/prose.lint.json --baseline b.json --base origin/main --json").classification).toBe("read-only");
     expect(classifyCommand("nen canon clause check --file docs/ROSTER.md --prefix HR --base origin/main:docs/ROSTER.md --leaves 'claude/**/*.md'").classification).toBe("read-only");

@@ -13437,12 +13437,18 @@ the one `--family` names), each member's newest release tag is held against
 the commit the family's capture record holds for it — the committed
 `capture/<CODE>/inventory.json`, read with [`spec diff`](#nen-spec-diff)'s own
 loader, whose `sha` is the recorded commit and whose `origin` must be the
-repository `product_codes` names for the code. A release tag is `v` plus three
-whole numbers (`v1.10.0` sorts above `v1.9.0`); a prerelease (`v1.2.0-rc.1`) or
-any other `v*` spelling is no release. **Newer is GitHub's answer, never a
+repository the code resolves to through `nen/repos.json` (compared without
+case). That committed capture is the record this reads, not the local
+`hatsu.spec.run/v0.1` run record, which has no lookup from a family to its
+latest run. A release tag is `v` plus three whole numbers (`v1.10.0` sorts
+above `v1.9.0`); a prerelease (`v1.2.0-rc.1`) is no release; a member that
+carries any other `v*` tag (a calendar version, `v1.2`, a floating `v1`)
+cannot have its newest release ordered and is **not read**. **Newer is GitHub's answer, never a
 date**: `gh api repos/{slug}/compare/{recorded}...{tag}` says `ahead` or
-`diverged` (due) or `identical` or `behind` (current); a tag on the recorded
-commit itself needs no call. Each family gets one of four answers:
+`diverged` (due: the tag holds commits the capture never read, so a family
+whose releases are cut on a branch that never merges back stays due until it
+does) or `identical` or `behind` (current); a tag on the recorded commit itself
+needs no call. Each family gets one of four answers:
 
 - **due** — a member released since the capture; its row names the member, its
   newest tag and the recorded commit.
@@ -13450,9 +13456,14 @@ commit itself needs no call. Each family gets one of four answers:
   no release tag at all is current).
 - **no-capture** — no member has a capture record yet. Never current.
 - **not-decided** — some member is **not read**: its tags or compare could not
-  be read, or its capture entry is absent while a sibling's is present,
-  malformed, or records another repository's origin. Never current; a due
-  member beside it is still named in its row.
+  be read, it carries a `v*` tag outside `vMAJOR.MINOR.PATCH`, or its capture
+  entry is absent while a sibling's is present, malformed, or records another
+  repository's origin. Never current; a due member beside it is still named in
+  its row.
+
+The run's verdict is the worst family answer, in the order not-decided, due,
+no-capture, current (`no-family` when the registry declares none); the exit
+code is `0` only for `current`.
 
 The verb **writes nothing and starts no recapture** — every GitHub read is a
 `gh api` GET — so the real recapture stays the maintainer's own typed command.
