@@ -193,6 +193,110 @@ describe("nen canon lint -- every fail rule fires on a planted copy, by id", () 
   });
 });
 
+describe("bare references in rendered ruling rows", () => {
+  const stem = "effort--R-2026-11-04-02";
+  const record = "ruling-records/" + stem + ".json";
+  const lead = '| <a id="hr-42"></a>**HR-42** · [' + stem + "](" + record + ") |";
+
+  function rulingFixture(): string {
+    const root = base();
+    put(root, "docs/" + record, "{}\n");
+    return root;
+  }
+
+  it("exempts the question, options and answer, including an escaped pipe before a reference", async () => {
+    const root = rulingFixture();
+    put(root, "docs/ROSTER.md", lead + " Question #101 | (A) option \\| or #102 | Picked #103 | ruled | Settled |\n");
+    await expectClean(root);
+  });
+
+  function bareRefOnly(root: string, rulingsFile?: unknown): void {
+    put(root, "contracts/prose.lint.json", JSON.stringify({
+      paths: { include: ["docs/*.md"] },
+      rulingsFile,
+      rules: [{ id: "REF-1", class: "bare-ref", severity: "fail", pattern: "#\\d+" }],
+    }));
+  }
+
+  it("exempts a rendered row with a bare-ref-only contract that declares its rulings file", async () => {
+    const root = base();
+    bareRefOnly(root, "docs/rulings.md");
+    put(root, "docs/rulings.md", lead + " Question #101 | Option #102 | Answer #103 | ruled | Settled |\n");
+    await expectClean(root);
+  });
+
+  it("still reports a rendered reference when a bare-ref-only contract omits the rulings file", async () => {
+    const root = base();
+    bareRefOnly(root);
+    put(root, "docs/ROSTER.md", lead + " Question #101 | Option | Answer | ruled | Settled |\n");
+    await expectFinding(root, "REF-1", /#101/);
+  });
+
+  it("still reports lead-authored references with a bare-ref-only contract", async () => {
+    const root = base();
+    bareRefOnly(root, "docs/rulings.md");
+    put(root, "docs/rulings.md", lead + " Question | Option | Answer | Status #104 | Settled |\n");
+    await expectFinding(root, "REF-1", /#104/);
+  });
+
+  it("lints included files without loading an unused rulings file for reading status", async () => {
+    const root = base();
+    bareRefOnly(root, "excluded/rulings.md");
+    await expectClean(root);
+  });
+
+  it.each([42, null, " "])("refuses an invalid optional rulingsFile (%j)", async (rulingsFile) => {
+    const root = base();
+    bareRefOnly(root, rulingsFile);
+    await expectWiring(root, /rulingsFile must be a nonempty string/);
+  });
+
+  it("still requires a readable rulings file for reading-status checks", async () => {
+    const root = base();
+    const rulesPath = "contracts/prose.lint.json";
+    const config = {
+      paths: { include: ["docs/*.md"] },
+      rules: [{ id: "REF-2", class: "reading-cited-as-ruled", severity: "fail", pattern: "(HR-\\d+)" }],
+    };
+    put(root, rulesPath, JSON.stringify(config));
+    await expectWiring(root, /lacks rulingsFile/);
+    put(root, rulesPath, JSON.stringify({ ...config, rulingsFile: "docs/missing.md" }));
+    await expectWiring(root, /rulings file docs\/missing\.md is missing/);
+  });
+
+  it("still lints status, settlement and ordinary prose", async () => {
+    const root = rulingFixture();
+    put(root, "docs/ROSTER.md", lead + " Question #101 | Option #102 | Answer #103 | Status #104 | Settlement #105 |\n\nSee #106.\n");
+    const result = await lint(root, [], true);
+    expect(result.code).toBe(1);
+    const { findings } = JSON.parse(result.stdout) as { findings: { rule: string; line: number; text: string }[] };
+    expect(findings.map(({ rule, line }) => [rule, line])).toEqual([["PL-05", 1], ["PL-05", 1], ["PL-05", 3]]);
+    expect(findings[0]?.text).toContain("#104");
+    expect(findings[1]?.text).toContain("#105");
+    expect(findings[2]?.text).toContain("#106");
+  });
+
+  it("still lints the same rendered form outside the declared rulings file", async () => {
+    const root = rulingFixture();
+    put(root, "docs/other.md", lead + " Question #107 | Option | Answer | ruled | Settled |\n");
+    await expectFinding(root, "PL-05", /#107/);
+  });
+
+  it.each([
+    ["mismatched anchor", lead.replace("hr-42", "hr-43"), "Option | Answer | ruled | Settled |"],
+    ["mismatched record label", lead.replace("[" + stem + "]", "[other]"), "Option | Answer | ruled | Settled |"],
+    ["unrecognised record path", lead.replace("ruling-records/", ""), "Option | Answer | ruled | Settled |"],
+    ["missing closing pipe", lead, "Option | Answer | ruled | Settled"],
+    ["missing cell", lead, "Option | Answer | ruled |"],
+    ["extra unescaped pipe", lead, "Option | A fragment | Answer | ruled | Settled |"],
+  ])("still lints a row with %s", async (_reason, prefix, cells) => {
+    const root = rulingFixture();
+    put(root, "docs/" + stem + ".json", "{}\n");
+    put(root, "docs/ROSTER.md", prefix + " Question #108 | " + cells + "\n");
+    await expectFinding(root, "PL-05", /#108/);
+  });
+});
+
 describe("nen canon lint -- advisory rules", () => {
   it("PL-07..PL-10 print in --json advisory[] and never count", async () => {
     const root = base();

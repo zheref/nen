@@ -101,3 +101,13 @@ describe("escaping -- a regex metacharacter in a pattern is literal", () => {
     expect(matchesGlob("a(1).png", "a(1).png")).toBe(true);
   });
 });
+
+
+describe("whole-path matching with line terminators", () => {
+  it.each(["\n", "\r", "\u2028", "\u2029"])("globstars match a filename containing %j", (separator) => {
+    expect(matchesGlob(`dir/file${separator}name.ts`, "**")).toBe(true);
+    expect(matchesGlob(`dir/file${separator}name.ts`, "dir/**")).toBe(true);
+    expect(matchesGlob(`dir/sub${separator}dir/file.ts`, "dir/**/file.ts")).toBe(true);
+    expect(matchesGlob(`dir/file.ts${separator}`, "dir/*.ts")).toBe(false);
+  });
+});
