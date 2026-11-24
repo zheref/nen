@@ -1463,6 +1463,10 @@ export async function fetchPrState(
     };
   }
 
+  if (node.state !== "OPEN" && node.state !== "MERGED" && node.state !== "CLOSED") {
+    return { ok: false, reason: "the pull request state is missing or unrecognised", remedy: "Ask GitHub again; readiness requires an explicit OPEN, MERGED or CLOSED state." };
+  }
+
   if (node.state === "MERGED" || node.state === "CLOSED") {
     if ((node.state === "MERGED" || node.mergeCommitOid !== null && node.mergeCommitOid !== undefined) && (typeof node.mergeCommitOid !== "string" || !/^[0-9a-f]{40}$/i.test(node.mergeCommitOid))) return { ok: false, reason: "terminal pull request has no valid full merge commit SHA", remedy: "Ask GitHub again; a merged PR must name its merge commit." };
     return { ok: true, warnings: [], state: { pr_state: node.state, merge_commit: node.mergeCommitOid, head_sha: node.headRefOid } };

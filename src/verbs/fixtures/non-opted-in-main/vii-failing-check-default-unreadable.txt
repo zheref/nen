@@ -1,3 +1,4 @@
-acme/widget#9: not-ready: required checks reported but are not all green (CON-32a) — failing: ci / build
+acme/widget#9: not-ready: required checks reported but are not all green (CON-32a) — failing: ci / build (FAILURE)
   judged head: cafebabe (GitHub's head for this pull request when it was read; the verdict is about this commit)
   aiReviewers required; base basebase: required (workflow file absent); default tip basebase: required (workflow file absent)
+  CHECK ci / build: FAILURE

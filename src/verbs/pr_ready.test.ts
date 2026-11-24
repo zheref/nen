@@ -651,6 +651,7 @@ describe("renderExplain", () => {
 function stubSource(overrides: Partial<PrStateSource> = {}): PrStateSource {
   const snapshot: PullRequestSnapshot = {
     pullRequest: {
+      state: "OPEN",
       number: 9,
       mergeable: "MERGEABLE",
       isDraft: false,
@@ -953,6 +954,7 @@ describe("prReady -- the checks-rollup distinction (zheref/nen#14, empty vs. unr
       repository: {
         defaultBranchRef: { name: "main" },
         pullRequest: {
+          state: "OPEN",
           number: 9,
           mergeable: "MERGEABLE",
           isDraft: false,
@@ -1024,6 +1026,7 @@ describe("prReady -- check-rollup pagination (zheref/nen#14's fact-check, zheref
   function pagedSnapshot(): PullRequestSnapshot {
     return {
       pullRequest: {
+        state: "OPEN",
         number: 9,
         mergeable: "MERGEABLE",
         isDraft: false,
@@ -1387,6 +1390,7 @@ describe("prReady -- the happy path and the frozen --json contract", () => {
     const notReady = stubSource({
       pullRequestSnapshot: async (): Promise<PullRequestSnapshot> => ({
         pullRequest: {
+          state: "OPEN",
           number: 9,
           mergeable: "CONFLICTING",
           isDraft: false,
@@ -1421,6 +1425,7 @@ describe("prReady -- --exclude-check (zheref/hatsu#81)", () => {
     const onlyOwnCheck = stubSource({
       pullRequestSnapshot: async (): Promise<PullRequestSnapshot> => ({
         pullRequest: {
+          state: "OPEN",
           number: 9,
           mergeable: "MERGEABLE",
           isDraft: false,
@@ -1480,6 +1485,7 @@ describe("prReady -- --exclude-check (zheref/hatsu#81)", () => {
     const onlyExcluded = stubSource({
       pullRequestSnapshot: async (): Promise<PullRequestSnapshot> => ({
         pullRequest: {
+          state: "OPEN",
           number: 9,
           mergeable: "MERGEABLE",
           isDraft: false,
@@ -1630,6 +1636,7 @@ function redCheckAndThreads(): PrStateSource {
   return stubSource({
     pullRequestSnapshot: async (): Promise<PullRequestSnapshot> => ({
       pullRequest: {
+        state: "OPEN",
         number: 9,
         mergeable: "MERGEABLE",
         isDraft: false,
@@ -1860,6 +1867,7 @@ describe("prReady -- --require-head <sha> (zheref/nen#245)", () => {
     const headless = stubSource({
       pullRequestSnapshot: async (): Promise<PullRequestSnapshot> => ({
         pullRequest: {
+          state: "OPEN",
           number: 9,
           mergeable: "MERGEABLE",
           isDraft: false,
@@ -1979,6 +1987,7 @@ describe("prReady -- declared checks.excluded (zheref/nen#249)", () => {
     return stubSource({
       pullRequestSnapshot: async (): Promise<PullRequestSnapshot> => ({
         pullRequest: {
+          state: "OPEN",
           number: 9,
           mergeable: "MERGEABLE",
           isDraft: false,
@@ -3154,7 +3163,9 @@ describe("terminal pull requests (#531)", () => {
       expect(report.conjuncts).toEqual([]);
       const text = capture();
       expect(await prReady(input({ booleans: new Set() }), text.io, stubDeps(terminal))).toBe(10);
-      expect(text.out).toHaveLength(1);
+      expect(text.out).toHaveLength(2);
+      expect(report.judgedHead).toBe("cafebabe");
+      expect(text.out[1]).toContain("judged head: cafebabe");
       expect(text.out[0]).toContain(`${state.toLowerCase()}: merge commit`);
     }
   });
@@ -3205,3 +3216,13 @@ it("honours the requested head before reporting a terminal state (#531)", async 
     expect(JSON.parse(out.join("\n")).status).toBe("head-mismatch");
   }
 });
+
+ it.each([undefined, null, "UNKNOWN", "open", 123])("refuses missing or foreign PR state %s (#531)", async (state) => {
+  const source = stubSource();
+  const snapshot = await source.pullRequestSnapshot({ owner: "o", repo: "n" }, 9);
+  if (snapshot.pullRequest === undefined) throw new Error("missing fixture PR");
+  const invalid = stubSource({ pullRequestSnapshot: async () => ({ ...snapshot, pullRequest: { ...snapshot.pullRequest!, state } }) });
+  const { io, out } = capture();
+  expect(await prReady(input(), io, stubDeps(invalid))).toBe(1);
+  expect(JSON.parse(out.join("\n")).verdict).toBe("unevaluated");
+ });

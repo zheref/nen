@@ -56,6 +56,7 @@ function baseOptions(overrides: Partial<FetchStateOptions> = {}): FetchStateOpti
 function snapshot(overrides: Partial<PullRequestSnapshot> = {}): PullRequestSnapshot {
   return {
     pullRequest: {
+      state: "OPEN",
       number: 1,
       mergeable: "MERGEABLE",
       isDraft: false,
@@ -742,6 +743,7 @@ describe("fetchPrState -- the happy path's state shape", () => {
       pullRequestSnapshot: async (): Promise<PullRequestSnapshot> =>
         snapshot({
           pullRequest: {
+            state: "OPEN",
             number: 1,
             mergeable: "MERGEABLE",
             isDraft: false,

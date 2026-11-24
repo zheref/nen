@@ -26,6 +26,7 @@ const REQUIREMENTS = [{ name: "verify", pattern: "^## How to verify$" }];
 function readySource(head: string = HEAD, approved = true): PrStateSource {
   const snapshot: PullRequestSnapshot = {
     pullRequest: {
+      state: "OPEN",
       number: 5,
       mergeable: "MERGEABLE",
       isDraft: false,

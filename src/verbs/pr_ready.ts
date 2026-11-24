@@ -1957,7 +1957,7 @@ export async function readReady(
     const state = observedState === "MERGED" ? "merged" : "closed";
     const mergeCommit = typeof fetched.state["merge_commit"] === "string" ? fetched.state["merge_commit"] : null;
     const report = unevaluatedReport(ref, deps.now(), deps.executable(), applied, policy, stallMinutes, excludeRun, excludeCheckNames, [...flagWarnings(applied), ...applied.warnings], `PR is ${state}`, "No readiness decision is needed for a terminal pull request.");
-    return verdictOf({ ...report, conjuncts: [], verdict: state, gateLine: `${state}: merge commit ${mergeCommit ?? "(none recorded)"}`, terminal: { state, mergeCommit } });
+    return verdictOf({ ...report, judgedHead: githubHead === "" ? null : githubHead, meta: { ...report.meta, requiredHead: requiredHead ?? null }, conjuncts: [], verdict: state, gateLine: `${state}: merge commit ${mergeCommit ?? "(none recorded)"}`, terminal: { state, mergeCommit } });
   }
 
   // ── the local tip, for the warning only ──────────────────────────────────
@@ -2400,7 +2400,10 @@ function unevaluatedReport(
 function emit(io: Io, json: boolean, explain: boolean, report: ReadyReport): number {
   if (report.terminal !== undefined) {
     if (json) io.out(JSON.stringify(report, null, 2));
-    else io.out(plainLine(`${report.meta.repo}#${report.meta.pr}: ${report.gateLine}`));
+    else {
+      io.out(plainLine(`${report.meta.repo}#${report.meta.pr}: ${report.gateLine}`));
+      io.out(plainLine(judgedHeadLine(report)));
+    }
     return 10;
   }
 

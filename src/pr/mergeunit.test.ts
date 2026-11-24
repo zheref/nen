@@ -40,6 +40,7 @@ function tmpRoot(): string {
 function readySource(head: string = HEAD): PrStateSource {
   const snapshot: PullRequestSnapshot = {
     pullRequest: {
+      state: "OPEN",
       number: 9,
       mergeable: "MERGEABLE",
       isDraft: false,

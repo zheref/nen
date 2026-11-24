@@ -41,6 +41,7 @@ type RunnerReads = Pick<
 function source(reads: RunnerReads, calls: string[] = [], checkName = WINDOWS_CHECK, appSlug = "github-actions"): PrStateSource {
   const snapshot: PullRequestSnapshot = {
     pullRequest: {
+      state: "OPEN",
       number: 9,
       mergeable: "MERGEABLE",
       isDraft: false,

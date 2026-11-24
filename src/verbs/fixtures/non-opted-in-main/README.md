@@ -16,3 +16,8 @@ Normalised identically on both sides, and nothing else: the two temp paths
 (`<GATES>`, `<ROOT>`), the build's version (`<VERSION>`), and the
 `version_collision (nen >= …)` entry in the list of keys a build reads, which
 only scenario `v` prints (inside the unknown-key refusal).
+
+NEN-531 additive output update: scenario vii now names the failing check's
+conclusion in text and includes the structured `checks` detail. Its verdict,
+exit codes, policy reads, warnings, and version-collision behavior stay unchanged;
+all six other scenarios retain their original golden bytes.

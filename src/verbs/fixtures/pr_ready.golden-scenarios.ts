@@ -27,6 +27,7 @@ import { makeTempDir } from "../../testing/tempdir.js";
 function stubSource(overrides: Partial<PrStateSource> = {}, snapshotOverrides: Partial<PullRequestSnapshot> = {}): PrStateSource {
   const snapshot: PullRequestSnapshot = {
     pullRequest: {
+      state: "OPEN",
       number: 9,
       mergeable: "MERGEABLE",
       isDraft: false,

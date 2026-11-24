@@ -1,4 +1,4 @@
-acme/widget#9: not-ready: required checks reported but are not all green (CON-32a) — failing: ci / build
+acme/widget#9: not-ready: required checks reported but are not all green (CON-32a) — failing: ci / build (FAILURE)
   judged head: cafebabe (GitHub's head for this pull request when it was read; the verdict is about this commit)
 aiReviewers required; base basebase: required (workflow file absent); default tip basebase: required (workflow file absent)
 
@@ -7,6 +7,7 @@ aiReviewers required; base basebase: required (workflow file absent); default ti
   decided by nen 0.30.0 (/opt/nen/nen-linux-x64) at 2025-01-01T00:00:00Z
   note: could not confirm the pull request's base declares no exclusion: the pull request's base could not be read (HTTP 502: upstream) at acme/widget@basebase:nen/gates.json. No declared exclusion was applied; every check counts on CON-32(a).
   note: could not confirm the default-branch tip declares no exclusion: the default-branch tip could not be read (HTTP 502: upstream) at acme/widget@basebase:nen/gates.json. No declared exclusion was applied; every check counts on CON-32(a).
+  CHECK ci / build: FAILURE
 
   The gate is a CONJUNCTION. Every row is evaluated; the verdict is ready only
   when every row is ready, and the line above is the first failing row's reason.
@@ -16,7 +17,7 @@ aiReviewers required; base basebase: required (workflow file absent); default ti
 
   1  ready       CON-42/1          Mergeable
   2  FAILED      CON-32(a)         Every reported check green, on the latest run per check name
-        └ not-ready: required checks reported but are not all green (CON-32a) — failing: ci / build
+        └ not-ready: required checks reported but are not all green (CON-32a) — failing: ci / build (FAILURE)
   3  ready       CON-32(b)         No configured reviewer's requested round has stalled
   4  ready       CON-32(b)         No configured reviewer's round owed at the current head
   5  ready       CON-32(b)/CON-16  Every approving reviewer's latest round is an APPROVE at the current head
