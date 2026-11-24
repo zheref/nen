@@ -25,7 +25,7 @@ import { MARKER_FILE, parseMarker } from "../stop/marker.js";
 import { assertRepoRoot, type RepoRootOptions } from "../repo/root.js";
 import { loadColorVocabulary, type ColorVocabulary } from "./colors.js";
 import { describeContract, loadContract, precedenceRestatementFindings, withinOneEdit, type DeployTarget } from "./contract.js";
-import { GatesDuplicateKeyError, GatesUnknownKeyError, loadGateIdentities, pointerSegment, producerOptInWarnings, visibleKey, type GateIdentities } from "./gates.js";
+import { GatesDuplicateKeyError, GatesUnknownKeyError, loadGateIdentities, pointerSegment, producerOptInWarnings, visibleKey, type DeliveryIdentity, type GateIdentities } from "./gates.js";
 import { loadLabelTaxonomy, type LabelTaxonomy } from "./labels.js";
 import { loadRepoRegistry, type RepoRegistry } from "./repos.js";
 import { SchemaError } from "./errors.js";
@@ -41,6 +41,8 @@ import {
   DEFAULT_TARGET_NONE,
   loadWorkflow,
   WORKFLOW_FILE,
+  type BranchPolicy,
+  type ModelsPolicy,
   type Workflow,
 } from "./workflow.js";
 import { describeDecisions, loadDecisions } from "./decisions.js";
@@ -705,6 +707,189 @@ function defaultTargetCheck(root: string): SchemaCheck {
   return row(true, false, `${shown} (a nonProduction key of ${CONTRACT_FILE} → project.targets)`);
 }
 
+// ── nen/gates.json#delivery.head_ref_prefixes (zheref/nen#657) ──────────────
+//
+// THE DELIVERY PREFIX LIST IS DECLARED, NEVER INFERRED, so it can drift from the
+// branch template the same repository cuts its branches under. This row holds
+// the two together: the fixed head of every branch `branch.template` can cut
+// must start with some declared prefix. A WARN at most, never a required FAIL:
+// a consumer upgrading nen must not turn red on this alone.
+//
+// THE RULE IS isDeliveryPr's OWN. Every head ref the template cuts begins with
+// its fixed head -- the template with `{model}` replaced by one fill, up to the
+// first remaining `{` -- so a declared prefix P matches EVERY such ref exactly
+// when `head.startsWith(P)`. A P longer than the head (`delivery-x` against
+// `delivery-{descriptor}`) matches only the refs whose token happens to spell
+// it, so it does not cover the head. A prefix that covers no head (an
+// `integration/` carve-out) is allowed on purpose and is listed, never drift.
+//
+// AND THE OPPOSITE HAZARD (Chrollo 1 on NN#657): when the prefixes cover every
+// head, the prefix conjunct filters nothing -- every pull request the template
+// produces, by the delivery author into the default branch, is a delivery PR.
+// That is harmless until a reviewer opts into `delivery_holistic_pass`, whose
+// carve-out then replaces its round at head on every such pull request. So a
+// holistic reviewer inverts the reading of an uncovered head (NN-PR-#677):
+//
+//   prefixes   holistic reviewer   outcome
+//   none       either              ok    label-only, prefixes not checked
+//   all heads  no                  ok    covered (extra prefixes listed)
+//   all heads  yes                 warn  holistic-wide: every branch is a delivery PR
+//   some       no                  warn  drift: the uncovered heads, and the fix
+//   some       yes                 ok    narrow on purpose: the carve-out stays on the declared prefixes
+//   (template unjudgeable)         warn  cannot judge: the reason
+
+const DELIVERY_PREFIXES_POINTER = "delivery.head_ref_prefixes";
+const MODEL_TOKEN = "{model}";
+
+/** The verdict of {@link deliveryPrefixDrift}. */
+export type DeliveryPrefixVerdict =
+  | { readonly kind: "covered"; readonly heads: readonly string[]; readonly extra: readonly string[] }
+  | { readonly kind: "holistic-wide"; readonly heads: readonly string[]; readonly reviewers: readonly string[]; readonly extra: readonly string[] }
+  | { readonly kind: "narrow"; readonly heads: readonly string[]; readonly uncovered: readonly string[]; readonly reviewers: readonly string[] }
+  | { readonly kind: "uncovered"; readonly heads: readonly string[]; readonly uncovered: readonly string[]; readonly extra: readonly string[] }
+  | { readonly kind: "label-only"; readonly labels: readonly string[] }
+  | { readonly kind: "not-judged"; readonly reason: string };
+
+/**
+ * The fixed heads of every branch `branch.template` can cut: the template with
+ * each `{model}` replaced by one fill -- every surface name and every tier
+ * alias of `models` (a tier keyed `note`, or `$`-prefixed, is prose, not an
+ * alias) -- cut at the first remaining `{`. Order is the file's; repeats
+ * collapse. `heads: null` carries the reason no head can be stated.
+ */
+export function branchTemplateHeads(
+  template: string,
+  models: Pick<ModelsPolicy, "surfaces">,
+): { readonly heads: readonly string[]; readonly reason: null } | { readonly heads: null; readonly reason: string } {
+  if (template.startsWith("/")) {
+    return { heads: null, reason: `${WORKFLOW_FILE} branch.template ${visibleKey(template)} starts with an empty segment, which no git branch name can, so no head ref it cuts can be compared` };
+  }
+  const fills: string[] = [];
+  if (template.includes(MODEL_TOKEN)) {
+    const add = (fill: string): void => {
+      if (fill !== "" && !fills.includes(fill)) fills.push(fill);
+    };
+    for (const [surface, tiers] of Object.entries(models.surfaces)) {
+      add(surface);
+      for (const [tier, alias] of Object.entries(tiers)) {
+        if (tier.startsWith("$") || tier === "note" || typeof alias !== "string") continue;
+        add(alias);
+      }
+    }
+    if (fills.length === 0) {
+      // A HEAD FIXED BEFORE `{model}` is judged by that literal alone
+      // ('release/{model}/{descriptor}' -> 'release/'): no fill can move it.
+      const brace = template.indexOf("{");
+      if (brace > 0) return { heads: [template.slice(0, brace)], reason: null };
+      if (template.startsWith(MODEL_TOKEN)) return { heads: null, reason: `${WORKFLOW_FILE} branch.template ${visibleKey(template)} carries '${MODEL_TOKEN}', but its models block declares no surface, so what a '${MODEL_TOKEN}' fill renders is unknown` };
+    }
+  }
+  const heads: string[] = [];
+  for (const fill of fills.length === 0 ? [null] : fills) {
+    const rendered = fill === null ? template : template.split(MODEL_TOKEN).join(fill);
+    const brace = rendered.indexOf("{");
+    const head = brace === -1 ? rendered : rendered.slice(0, brace);
+    if (head === "") {
+      const token = /^\{[^}]*\}?/.exec(rendered)?.[0] ?? rendered;
+      return { heads: null, reason: `${WORKFLOW_FILE} branch.template ${visibleKey(template)} starts with ${visibleKey(token)}, a token whose value no declaration fixes, so a branch it cuts can start with anything` };
+    }
+    if (!heads.includes(head)) heads.push(head);
+  }
+  return { heads, reason: null };
+}
+
+/**
+ * Pure: does `delivery.head_ref_prefixes` cover every fixed head
+ * `branch.template` renders, and does full coverage meet a reviewer that opts
+ * into the CON-40 holistic pass? `holisticReviewers` names those reviewers.
+ */
+export function deliveryPrefixDrift(
+  branch: Pick<BranchPolicy, "template">,
+  models: Pick<ModelsPolicy, "surfaces">,
+  delivery: Pick<DeliveryIdentity, "headRefPrefixes" | "labels">,
+  holisticReviewers: readonly string[] = [],
+): DeliveryPrefixVerdict {
+  if (delivery.headRefPrefixes.length === 0) return { kind: "label-only", labels: delivery.labels };
+  const rendered = branchTemplateHeads(branch.template, models);
+  if (rendered.heads === null) return { kind: "not-judged", reason: rendered.reason };
+  const heads = rendered.heads;
+  const covers = (head: string): boolean => delivery.headRefPrefixes.some((prefix): boolean => head.startsWith(prefix));
+  const extra = delivery.headRefPrefixes.filter((prefix): boolean => !heads.some((head): boolean => head.startsWith(prefix)));
+  const uncovered = heads.filter((head): boolean => !covers(head));
+  if (uncovered.length > 0) {
+    return holisticReviewers.length > 0
+      ? { kind: "narrow", heads, uncovered, reviewers: holisticReviewers }
+      : { kind: "uncovered", heads, uncovered, extra };
+  }
+  if (holisticReviewers.length > 0) return { kind: "holistic-wide", heads, reviewers: holisticReviewers, extra };
+  return { kind: "covered", heads, extra };
+}
+
+function deliveryPrefixesCheck(root: string): SchemaCheck {
+  const resolved = resolveSchemaFile(root, GATES_FILE);
+  const row = (ok: boolean, detail: string): SchemaCheck => ({
+    file: `${resolved.relative}#${DELIVERY_PREFIXES_POINTER}`,
+    path: resolved.path,
+    ok,
+    detail,
+    required: false,
+    legacy: false,
+    note: null,
+  });
+  if (!resolved.canonical.present) return row(true, `not checked -- ${GATES_FILE} is absent, so there is no delivery block to compare`);
+  let gates: GateIdentities;
+  try {
+    gates = loadGateIdentities(root);
+  } catch {
+    return row(true, `not read -- ${GATES_FILE} did not load; see that row`);
+  }
+  let workflow: Workflow;
+  try {
+    const loaded = loadWorkflow(root);
+    if (!loaded.present) {
+      return row(true, `not checked -- no ${WORKFLOW_FILE}: the default branch.template starts with '${MODEL_TOKEN}' and the default models block declares no surface, so there is no fill to compare`);
+    }
+    workflow = loaded.workflow;
+  } catch {
+    return row(true, `not read -- ${WORKFLOW_FILE} did not load; see that row`);
+  }
+  const holistic = gates.reviewers.filter((reviewer): boolean => reviewer.deliveryHolisticPass).map((reviewer): string => reviewer.name);
+  const verdict = deliveryPrefixDrift(workflow.branch, workflow.models, gates.delivery, holistic);
+  const list = (items: readonly string[]): string => items.map(visibleKey).join(", ");
+  const extraText = (extra: readonly string[]): string =>
+    extra.length === 0 ? "" : `; also declared, covering no template head (allowed, not drift): ${list(extra)}`;
+  switch (verdict.kind) {
+    case "label-only":
+      return row(true, `label-only, prefixes not checked (delivery.labels: ${list(verdict.labels)})`);
+    case "not-judged":
+      return row(false, `cannot judge -- ${verdict.reason}. Make the template start with a literal or '${MODEL_TOKEN}' fill a declared prefix can cover`);
+    case "covered":
+      return row(
+        true,
+        `${verdict.heads.length} branch head${verdict.heads.length === 1 ? "" : "s"} of ${WORKFLOW_FILE} branch.template covered (${list(verdict.heads)})${extraText(verdict.extra)}`,
+      );
+    case "holistic-wide": {
+      const many = verdict.reviewers.length !== 1;
+      return row(
+        false,
+        `every branch ${WORKFLOW_FILE} branch.template cuts (${list(verdict.heads)}) starts with a ${GATES_FILE} ${DELIVERY_PREFIXES_POINTER} entry, and ${list(verdict.reviewers)} declare${many ? "" : "s"} delivery_holistic_pass: true -- so CON-40's holistic-pass carve-out applies to every pull request the template produces by an author matching delivery.author_pattern into the default branch, and ${many ? "those reviewers owe" : "that reviewer owes"} one holistic pass instead of a round at head. Narrow ${DELIVERY_PREFIXES_POINTER} to the prefixes only delivery branches carry, ones the everyday template does not produce (that reads ok), or drop delivery_holistic_pass from ${many ? "those reviewers" : "that reviewer"}${extraText(verdict.extra)}`,
+      );
+    }
+    case "narrow": {
+      const many = verdict.reviewers.length !== 1;
+      return row(
+        true,
+        `narrow on purpose: ${verdict.uncovered.length} of ${verdict.heads.length} branch head${verdict.heads.length === 1 ? "" : "s"} of ${WORKFLOW_FILE} branch.template not covered (${list(verdict.uncovered)}) while ${list(verdict.reviewers)} declare${many ? "" : "s"} delivery_holistic_pass: true, so CON-40's carve-out applies only to head refs starting ${list(gates.delivery.headRefPrefixes)} -- not drift`,
+      );
+    }
+    case "uncovered":
+      return row(
+        false,
+        `drift: ${WORKFLOW_FILE} branch.template ${visibleKey(workflow.branch.template)} cuts branches starting ${list(verdict.uncovered)}, which no ${GATES_FILE} ${DELIVERY_PREFIXES_POINTER} entry (${list(gates.delivery.headRefPrefixes)}) covers, so a pull request from such a branch is never a CON-40 delivery PR. Add each prefix to ${GATES_FILE} ${DELIVERY_PREFIXES_POINTER}, or change ${WORKFLOW_FILE} branch.template`,
+      );
+  }
+}
+
 // Load every schema file and report each one's verdict, never stopping at the
 // first failure. Reporting one problem at a time is how a repository adopting
 // nen makes four round trips to learn four things it could have been told at
@@ -841,6 +1026,10 @@ export function checkTaxonomy(options: CheckOptions = {}): CheckReport {
     // ...and the `deploy.defaultTarget` row (zheref/nen#300): the one pointer
     // row that can FAIL, because it is checked against a second file.
     defaultTargetCheck(root),
+    // ...and the delivery prefix drift row (zheref/nen#657): gates.json's
+    // declared delivery prefixes against workflow.json's branch template. A
+    // warn at most, never a required FAIL.
+    deliveryPrefixesCheck(root),
     // The release unit's path/content bounds (zheref/nen#348).
     pointerCheck(root, "release", describeRelease),
     // The idle profile (HR-5), cross-checked against nen/decisions.json.

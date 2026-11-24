@@ -91,6 +91,7 @@ describe("checkTaxonomy", () => {
       "nen/workflow.json#profile",
       "nen/workflow.json#runners",
       "nen/workflow.json#deploy.defaultTarget",
+      "nen/gates.json#delivery.head_ref_prefixes",
       "nen/workflow.json#release",
       // The idle profile row (HR-5), cross-checked against nen/decisions.json.
       "nen/workflow.json#idle",
@@ -122,6 +123,7 @@ describe("checkTaxonomy", () => {
       "nen/workflow.json#profile",
       "nen/workflow.json#runners",
       "nen/workflow.json#deploy.defaultTarget",
+      "nen/gates.json#delivery.head_ref_prefixes",
       "nen/workflow.json#release",
       "nen/workflow.json#idle",
       "nen/workflow.json#alwaysOverlaps",

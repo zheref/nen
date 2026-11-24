@@ -1,0 +1,32 @@
+{
+  "json": {
+    "code": 0,
+    "err": "",
+    "reads": [
+      "nen/gates.json@basebase",
+      "nen/gates.json@defa017",
+      "nen/workflow.json@basebase",
+      "nen/workflow.json@defa017"
+    ]
+  },
+  "plain": {
+    "code": 0,
+    "err": "",
+    "reads": [
+      "nen/gates.json@basebase",
+      "nen/gates.json@defa017",
+      "nen/workflow.json@basebase",
+      "nen/workflow.json@defa017"
+    ]
+  },
+  "explain": {
+    "code": 0,
+    "err": "",
+    "reads": [
+      "nen/gates.json@basebase",
+      "nen/gates.json@defa017",
+      "nen/workflow.json@basebase",
+      "nen/workflow.json@defa017"
+    ]
+  }
+}

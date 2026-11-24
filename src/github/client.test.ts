@@ -452,6 +452,68 @@ describe("GitHubClient.pullRequestFiles -- the PR's changed files, paginated (zh
   });
 });
 
+describe("GitHubClient's version-collision reads (zheref/nen#663) -- read-only GETs", () => {
+  const SHA_A = "a".repeat(40);
+  const SHA_B = "b".repeat(40);
+
+  it("openPullRequestsPage is ONE GraphQL query (never a mutation), paged by cursor, answering the raw connection", async () => {
+    const page = (n: number, next: boolean): unknown => ({
+      data: {
+        repository: {
+          pullRequests: {
+            pageInfo: { hasNextPage: next, endCursor: next ? `cursor-${n}` : null },
+            nodes: [{ number: n, isDraft: false, isCrossRepository: false, baseRefName: "main", headRefOid: SHA_A, headRepository: { nameWithOwner: "zheref/nen" } }],
+          },
+        },
+      },
+    });
+    const { fetch: stub, calls } = recordingFetch((_call, index) => ({ body: page(index + 1, index === 0) }));
+    const client = clientWith(stub);
+    const first = (await drive(client.openPullRequestsPage(REPO, null))) as { pageInfo: { endCursor: string } };
+    expect(first.pageInfo).toEqual({ hasNextPage: true, endCursor: "cursor-1" });
+    const second = await drive(client.openPullRequestsPage(REPO, first.pageInfo.endCursor));
+    expect(second).toMatchObject({ pageInfo: { hasNextPage: false }, nodes: [{ number: 2 }] });
+    expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      expect(call.method).toBe("POST");
+      expect(call.url).toMatch(/\/graphql$/);
+      const query = String(call.body?.["query"]);
+      expect(query.trim()).toMatch(/^query\(/);
+      expect(query).not.toMatch(/mutation/i);
+      expect(query).toContain("pullRequests(states: OPEN, first: 100, after: $cursor, orderBy: {field: CREATED_AT, direction: ASC})");
+      expect(query).toContain("nodes { number isDraft isCrossRepository baseRefName headRefOid headRepository { nameWithOwner } }");
+    }
+    expect(calls.map((call) => call.body?.["variables"])).toEqual([
+      { owner: "zheref", name: "nen", cursor: null },
+      { owner: "zheref", name: "nen", cursor: "cursor-1" },
+    ]);
+  });
+
+  it("branchTip GETs git/ref/heads/<branch>, slashes kept, and answers the object's SHA", async () => {
+    const { fetch: stub, calls } = recordingFetch(() => ({ body: { ref: "refs/heads/feature/a b", object: { sha: SHA_A, type: "commit" } } }));
+    expect(await drive(clientWith(stub).branchTip(REPO, "feature/a b"))).toBe(SHA_A);
+    expect(calls[0]?.method).toBe("GET");
+    expect(calls[0]?.url).toContain("/repos/zheref/nen/git/ref/heads/feature/a%20b");
+  });
+
+  it("branchTip refuses an answer with no 40-hex SHA, and passes a 404 through", async () => {
+    const { fetch: garbled } = recordingFetch(() => ({ body: { object: { sha: "cafebabe" } } }));
+    expect(String(await rejection(clientWith(garbled).branchTip(REPO, "main")))).toMatch(/answered no commit SHA/);
+    const { fetch: missing } = recordingFetch(() => ({ status: 404, body: { message: "Not Found" } }));
+    expect(await rejection(clientWith(missing).branchTip(REPO, "gone"))).toMatchObject({ status: 404 });
+  });
+
+  it("mergeBase GETs compare/<base>...<head> (one commit per page) and answers merge_base_commit.sha", async () => {
+    const { fetch: stub, calls } = recordingFetch(() => ({ body: { merge_base_commit: { sha: SHA_B } } }));
+    expect(await drive(clientWith(stub).mergeBase(REPO, "release/1.x", SHA_A))).toBe(SHA_B);
+    expect(calls[0]?.method).toBe("GET");
+    expect(calls[0]?.url).toContain(`/repos/zheref/nen/compare/release/1.x...${SHA_A}`);
+    expect(calls[0]?.url).toMatch(/per_page=1\b/);
+    const { fetch: garbled } = recordingFetch(() => ({ body: { merge_base_commit: null } }));
+    expect(String(await rejection(clientWith(garbled).mergeBase(REPO, "main", SHA_A)))).toMatch(/answered no merge base/);
+  });
+});
+
 describe("diagnoseWaitingChecks over a REAL GitHubClient (zheref/nen#224 round 1, N2)", () => {
   // The diagnosis must CALL the client's methods on the client: a detached
   // `const read = client.orgRunnersPage; read(...)` loses `this` and throws

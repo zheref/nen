@@ -14,6 +14,7 @@ import type { PrReadyDeps } from "../verbs/pr_ready.js";
 import type { PrStateSource } from "../github/pr_state.js";
 import type { PullRequestSnapshot } from "../github/graphql.js";
 import { MergeUnitUsageError } from "./mergeunit.js";
+import { manifest, sha, VERSION_FILE, withOptIn } from "./version_collision.testkit.js";
 import { mergeExit } from "./command.js";
 import {
   deliveryExit,
@@ -548,6 +549,30 @@ describe("mergeDelivery -- a non-main base, every gate reused", () => {
     const outcome = await run(tmpRoot(), script({ files: [{ match: "gh api --paginate --slurp repos/zheref/example/pulls/9/files", result: { code: 1, stderr: "HTTP 502" } }] }));
     expect(outcome.report.ok).toBe(false);
     expect(outcome.lines.join("\n")).toMatch(/^policy files: the changed files could not be read in full .* -- refused\.$/m);
+  });
+
+  it("refuses a live plugin-version collision through its in-process readiness gate (zheref/nen#663, AC-3)", async () => {
+    // The base tip already carries the version the head proposes; every check
+    // is green and the head is unchanged. Only the live limb refuses.
+    const plain = readySource();
+    const source: PrStateSource = {
+      ...plain,
+      // The default tip, opted in, is a commit GitHub names.
+      pullRequestSnapshot: async (repo, n): Promise<PullRequestSnapshot> => ({ ...(await plain.pullRequestSnapshot(repo, n)), defaultBranchOid: sha("d1") }),
+      fileAtRef: async (_repo, path): Promise<string | null> =>
+        path === "nen/gates.json" ? withOptIn(readFileSync(join(BANKAI_REPO, "nen", "gates.json"), "utf8")) : path === VERSION_FILE ? manifest("1.4.0") : null,
+      pullRequestFiles: async (): Promise<unknown[]> => [{ filename: "claude/skills/x.md" }],
+      // The cursor-paged connection the reader walks: one empty page, the subject not listed.
+      openPullRequestsPage: async (): Promise<unknown> => ({ nodes: [], pageInfo: { hasNextPage: false, endCursor: null } }),
+      branchTip: async (_repo, branch): Promise<string> => sha(branch === "main" ? "d1" : "e2"),
+      mergeBase: async (): Promise<string> => sha("0a"),
+    };
+    const outcome = await run(tmpRoot(), script(), { deps: readyDeps(source) });
+    expect(outcome.report.ready).toBe(false);
+    expect(outcome.report.ok).toBe(false);
+    expect(outcome.lines.join("\n")).toContain("pr ready: not-ready: version collision (CON-32a, zheref/nen#663): collision: version 1.4.0 is already at the tip of");
+    // A complete view: the collision stands on its own, with nothing left unread.
+    expect(outcome.lines.join("\n")).not.toContain("also not read");
   });
 
   it("refuses a 'ready' judged on the checkout's own gates file (zheref/nen#372, Feitan 3)", async () => {
