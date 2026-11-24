@@ -293,7 +293,7 @@ usage:
       flag (zheref/nen#28).
 
   nen canon mirror generate --repo <consumer> --canon-values <path>
-                            (--rules-dir <dir> | --stack-dir <dir> --leaf <name>
+                            (--rules-dir <dir> [--canon-root <path>] | --stack-dir <dir> --leaf <name>
                              [--canon-checkout <path>])
                             [--source <owner/name>] [--ref <tag>]
                             [--surfaces <a,b,...>] [--scenario <name>]
@@ -350,10 +350,12 @@ ${SURFACE_LIST}
       malformed nen/repos.json, and a checkout that does not resolve or verify
       (never exit 1, which on 'check' is drift). The output names the
       checkout and how it was resolved; --json adds rulesDir and
-      canonCheckout (null under --rules-dir).
+      canonCheckout (null only for standalone --rules-dir without --canon-root).
+      --canon-root includes incoming port rules after verifying that root as
+      the clean pinned source checkout and containing --rules-dir within it.
 
   nen canon mirror check --repo <consumer> --canon-values <path>
-                         (--rules-dir <dir> | --stack-dir <dir> --leaf <name>
+                         (--rules-dir <dir> [--canon-root <path>] | --stack-dir <dir> --leaf <name>
                           [--canon-checkout <path>])
                          [--source <owner/name>] [--ref <tag>]
                          [--surfaces <a,b,...>] [--scenario <name>]
@@ -1098,7 +1100,7 @@ function required(context: CommandContext, flag: string, why: string): string {
 interface MirrorInputs {
   readonly root: string;
   readonly rulesDir: string;
-  /** How the canon checkout was resolved, when `--rules-dir` was not given; null when it was. */
+  /** How the source checkout was verified; null for standalone rules without a canon root. */
   readonly checkout: CheckoutResolution | null;
   readonly pin: CanonPin;
   readonly rows: readonly SurfaceRow[];
