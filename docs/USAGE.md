@@ -12,7 +12,7 @@ repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
 what each version changed: 49 command
-families, 180 verbs, every flag checked against that binary.
+families, 181 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -258,7 +258,7 @@ including every refusal reason. The raw NUL-delimited stream
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **111 shapes** and **115 ids** (`nen.runner.plan`
+binary carries**, writing or reading — **112 shapes** and **116 ids** (`nen.runner.plan`
 and `nen.wc.worktree.copies` each have two versions, `nen.stop.mark` three, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -308,7 +308,7 @@ file formats).
 - **`pr`** — `nen.pr.converge/v0.1` · `nen.pr.edit-body/v0.1` · `nen.pr.edit-title/v0.1` · `nen.pr.ledger/v0.1` · `nen.pr.mark-ready/v0.1` · `nen.pr.merge-delivery/v0.1` · `nen.pr.merge-unit/v0.1` · `nen.pr.open/v0.1` · `nen.pr.sections/v0.1` · `nen.pr.ready.head-mismatch/v0.1` · `nen.pr.ready/v0.1` · `nen.pr.threads-settle/v0.1` · `nen.pr.threads/v0.1` · `nen.pr.version-collision/v0.1`
 - **`prose-lint`** — `nen.prose-lint/v0.1` (the `$schema` a [`canon lint`](#nen-canon-lint) rules contract may carry)
 - **`ref`** — `nen.ref.resolve/v0.1`
-- **`release`** — `nen.release.unit-check/v0.1`
+- **`release`** — `nen.release.state/v0.1` · `nen.release.unit-check/v0.1`
 - **`repo`** — `nen.repo.classify/v0.1` · `nen.repo.family/v0.1`
 - **`refusal`** — `nen.refusal/v0.1`
 - **`report`** — `nen.report.data/v0.1` · `nen.report.graph/v0.1` · `nen.report.render/v0.1`
@@ -1075,7 +1075,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 180 verbs, grouped as the README groups them. **Reads** is what a
+All 181 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -1154,6 +1154,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`ref`](#family-ref) | [`nen ref format`](#nen-ref-format) | formats the &lt;CODE&gt;-&lt;IS\|PR&gt;-#&lt;N&gt; notation, checking the code against the registry first | nen/repos.json | yes |
 | [`ref`](#family-ref) | [`nen ref parse`](#nen-ref-parse) | parses a token in object notation | none | yes |
 | [`ref`](#family-ref) | [`nen ref resolve`](#nen-ref-resolve) | where one canon citation (`<path> § N`, `§ *Title*`, `#anchor`, `HR-n`, `CON-n`) lands, or `unresolved` with candidates; never re-aims one | the cited Markdown file under --root | yes |
+| [`release`](#family-release) | [`nen release state`](#nen-release-state) | one tag’s absent, draft or published GitHub Release state and complete asset list | github (authenticated read-only GraphQL query) | yes |
 | [`release`](#family-release) | [`nen release preflight`](#nen-release-preflight) | every getsuga §2 release-cut precondition, checked and reported whole | github (gh variable get, git ls-remote), CHANGELOG.md, changelog.d/, git log --merges, git ls-tree/cat-file (the CHANGELOG's history, for the release-PR allowance) | yes |
 | [`release`](#family-release) | [`nen release resolve-target`](#nen-release-resolve-target) | resolve a release token (main/last-commit/checkout/hash/branch) to a SHA and test trunk ancestry | git (fetch/rev-parse/merge-base, reaches origin) | yes |
 | [`release`](#family-release) | [`nen release self-check`](#nen-release-self-check) | whether a release PR should list itself in its own range | git (merge-base ancestry, local only) | yes |
@@ -9445,6 +9446,37 @@ one declaring none did not move it above. This is a test rather than a
 repo-agnostic and runs against any repository's cut point, while the floor is a
 literal compiled into *this* binary and can only be reconciled against *this*
 repository's changelog.
+
+### `nen release state`
+
+Reads one exact tag’s GitHub Release and all its asset pages. It is a separate,
+read-only act from `shu release`; it never creates, edits, publishes, retries or
+repairs a release, cuts a tag, or downloads an asset.
+
+```text
+nen release state --kind github --repo-slug <owner/name> --tag <tag> [--json]
+```
+
+An authenticated GitHub user with repository write access is required to prove
+visibility of draft releases. A read-only or GitHub App credential whose viewer
+permission cannot establish that visibility returns “could not look”, including
+when the named release is not visible. Authentication uses `gh`’s existing
+credential on github.com; no credential is printed or written.
+
+| Exit | Meaning |
+|---|---|
+| `0` | `absent`, `draft` or `published`, plus the complete assets array (id, name, size in bytes, downloadUrl); empty for absent |
+| `1` | Could not look: credential/tool/network/timeout failure, query errors, malformed response, incomplete or changing asset evidence; `state` and `assets` are null |
+| `2` | Invalid flags or an unsupported destination kind, named before any query |
+
+`--json` emits contract `nen.release.state/v0.1`, kind, repo, tag, state and assets;
+unknown state also carries a reason. The named-tag GraphQL query sees draft
+releases, unlike REST’s published-only by-tag endpoint. Asset pagination rejects
+repeated cursors, duplicates, missing items or changing release identity/state,
+update timestamp or total count. A 1,000-page ceiling fails as unknown. This is
+an observed read, not an atomic snapshot: a concurrent change that leaves those
+fields unchanged cannot be detected. A timeout reported by `gh` is unknown;
+the verb does not add a separate process timeout.
 
 ### `nen release preflight`
 
