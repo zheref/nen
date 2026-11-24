@@ -71,6 +71,14 @@
 // the verb's exit 3, with the commit left in place and never amended.
 // ./readback.ts's header has the three rules and why both sides are read by
 // git's own parser; an added key nothing refuses is a `note`, not a failure.
+//
+// AND THE CHILD `git commit` RUNS WITH `NEN_COMPOSED_TRAILER_KEYS` SET
+// (zheref/nen#594). A repository that lists keys under `commits.stripInjected`
+// gets a commit-msg hook that removes such a key from the trailer block when
+// a hook added it and the composed message did not carry it; the hook names
+// each removal in a sidecar this verb reads, cross-checks against the
+// read-back and reports as `stripped`, exit 4. ./strip.ts's header has the
+// three steps; 3 (still injected) wins over 4, and 4 over 0.
 
 import { existsSync, mkdirSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -79,6 +87,7 @@ import { parseCommitMessageFile } from "../wc/messagefile.js";
 import { validateCommitMessage, type Trailer } from "./format.js";
 import { proofVerdict } from "./check.js";
 import { addedNote, admittedAdditions, readBack, sentTrailers, type InjectedFinding } from "./readback.js";
+import { collectStripSidecar, composedKeysEnv, confirmStripped, discardStripSidecar, prepareStripSidecar, stripFailureHint } from "./strip.js";
 import { CommitlintConfigError, declaredSubjectCase, readSubjectCaseRule, subjectCaseFindings } from "./commitlint.js";
 import { declaredBodyWidth, lineLengthFindings, readLineLengthRules } from "./bodywidth.js";
 import { SchemaError } from "../schema/errors.js";
@@ -114,6 +123,15 @@ export interface WriteReport {
    */
   readonly injected: readonly string[] | null;
   readonly dryRun: boolean;
+  /**
+   * Every key the repository's commit-msg hook STRIPPED from the trailer block
+   * because a hook added it and the composed message did not carry it
+   * (`commits.stripInjected`, zheref/nen#594) -- confirmed absent from the
+   * written commit by the read-back. Non-empty is exit 4, unless `injected`
+   * is non-empty too (exit 3 wins). `null` on a dry run, `[]` when nothing was
+   * stripped. APPENDED LAST: the keys before it are where they always were.
+   */
+  readonly stripped: readonly string[] | null;
 }
 
 /** A config the repository carries that nen could not read: its nen/workflow.json, or its .commitlintrc. */
@@ -261,13 +279,19 @@ export function write(seams: Seams, root: string, options: WriteOptions): WriteO
     return { kind: "refused", reason: "nothing staged: the index equals HEAD, so there is nothing to commit. Stage the change first ('git add'), then run this again." };
   }
 
-  const report = (sha: string | null, written: readonly Trailer[] = trailers, injected: readonly string[] | null = null): WriteReport => ({
+  const report = (
+    sha: string | null,
+    written: readonly Trailer[] = trailers,
+    injected: readonly string[] | null = null,
+    stripped: readonly string[] | null = null,
+  ): WriteReport => ({
     contract: WRITE_CONTRACT,
     sha,
     subject,
     trailers: written,
     injected,
     dryRun: options.dryRun,
+    stripped,
   });
   const messageLines = message.replace(/\n$/, "").split("\n").map((line): string => `  ${line}`);
   if (options.dryRun) {
@@ -289,17 +313,25 @@ export function write(seams: Seams, root: string, options: WriteOptions): WriteO
   if (loaded === null) throw new Error("the commit policy was not loaded before the write");
   const policy = loaded;
   const sent = sentTrailers(seams, root, message);
+  // 3b. THE STRIP SIDECAR (zheref/nen#594): a fresh run id names this run's
+  // own sidecar, resolved before the write; no other run's file is read.
+  const sidecar = prepareStripSidecar(seams, root);
 
   // 4. THE WRITE. The message file lands under .nen/ and is removed after the
   // commit whatever git answered: a stale message file is a message file
-  // somebody will commit twice.
+  // somebody will commit twice. The child runs with the composed keys in
+  // NEN_COMPOSED_TRAILER_KEYS -- the generated hook strips only a listed key
+  // NOT among them.
   const messagePath = join(root, ...COMMIT_MESSAGE_PATH.split("/"));
   mkdirSync(dirname(messagePath), { recursive: true });
   writeFileSync(messagePath, message, "utf8");
   try {
-    const commit = seams.run(GIT, ["commit", "-F", COMMIT_MESSAGE_PATH], { cwd: root });
+    const commit = seams.run(GIT, ["commit", "-F", COMMIT_MESSAGE_PATH], { cwd: root, env: composedKeysEnv(sent, sidecar) });
     if (commit.spawnFailed || commit.code !== 0) {
-      throw new Error(`'git commit -F ${COMMIT_MESSAGE_PATH}' failed: ${gitError(commit.stderr, commit.code)}. Nothing was committed; the index is as you staged it.`);
+      discardStripSidecar(sidecar.path);
+      throw new Error(
+        `'git commit -F ${COMMIT_MESSAGE_PATH}' failed: ${gitError(commit.stderr, commit.code)}. Nothing was committed; the index is as you staged it.${stripFailureHint(policy, commit.stderr)}`,
+      );
     }
   } finally {
     if (existsSync(messagePath)) rmSync(messagePath, { force: true });
@@ -311,18 +343,24 @@ export function write(seams: Seams, root: string, options: WriteOptions): WriteO
       /* not empty, or already gone -- either way not this verb's to force */
     }
   }
+  // The sidecar is read (and deleted) before anything else can throw, so a
+  // failed read-back never leaves it for the next run to misreport.
+  const reported = collectStripSidecar(sidecar.path);
   const head = seams.run(GIT, ["rev-parse", "HEAD"], { cwd: root });
   if (head.code !== 0) throw new Error(`committed, but could not read the new commit's sha ('git rev-parse HEAD' failed: ${gitError(head.stderr, head.code)}).`);
   const sha = head.stdout.trim();
 
   // 5. THE READ-BACK (zheref/nen#273): what the commit actually carries,
-  // against what nen sent and what the policy refuses. Never an amend.
+  // against what nen sent and what the policy refuses. Never an amend. A key
+  // the hook reported stripping counts as stripped only when the commit really
+  // lacks it (./strip.ts's cross-check).
   const back = readBack(seams, root, sha, sent, policy);
   const admitted = admittedAdditions(back);
   if (admitted.length > 0) options.note(addedNote(sha, admitted));
+  const stripped = confirmStripped(reported, back.written);
   return {
     kind: "done",
-    report: report(sha, back.written, back.injected),
+    report: report(sha, back.written, back.injected, stripped),
     message,
     lines: [`committed ${sha}: ${subject}`],
     findings: back.findings,

@@ -482,16 +482,17 @@ it stays pending and holds every pull request's checks with it.
 `nen --help` lists every command family (49); each
 family's own `--help` (`nen pr --help`, `nen board --help`, ...) documents
 its verbs and flags in full. [`docs/USAGE.md`](docs/USAGE.md) documents all
-177 verbs outside the binary — each one's purpose, arguments, exit codes and
+180 verbs outside the binary — each one's purpose, arguments, exit codes and
 `--json` shape — plus the conventions they share and the developer workflows
 they compose into. The families group roughly as:
 
-- **Readiness & pull requests** — `pr` (ready, staleness, body-check, fetch,
+- **Readiness & pull requests** — `pr` (ready, version-collision, staleness, body-check, fetch,
   next-blocker, cascade-main, retarget, request-reviews, edit-body,
   edit-title, mark-ready, threads, open, merge), `gate`, `split`, `wc` (classify, squash,
   catch-up, publish, prune, worktrees, swap, worktree), `stage` (triage, list)
 - **Backlog & boards** — `backlog`, `board`, `epic`, `effort`, `loop`,
-  `phase`, `usage` (the per-effort timing and spend ledgers),
+  `phase`, `usage` (the per-effort timing and spend ledgers; `phase list`
+  lists every effort's),
   `warmup` (a *registry* stale-pin sweep — not `shu warmup`, below, which warms
   a working copy), `watch`
 - **Labels, issues & taxonomy** — `label`, `labels`, `classify` (`labels`,
@@ -505,7 +506,7 @@ they compose into. The families group roughly as:
   acceptance criteria against the tests that name them, with a red-first
   checkpoint over a before and an after run)
 - **Repository scaffolding & canon** — `scaffold`, `canon`, `quality`, `commit`,
-  `spec` (`number`, `check`, `cite-check`, `index`: a Spec Kit spec repository, read),
+  `spec` (`number`, `check`, `cite-check`, `index`, `due`: a Spec Kit spec repository, read),
   `decisions` (`summary`: the decision matrix counted, so prose never carries
   the numbers); `canon lint` and `canon clause check` hold a canon's prose to a
   caller-owned rules contract and its clause ids unique, and `ref resolve`

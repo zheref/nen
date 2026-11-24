@@ -2908,7 +2908,7 @@ describe("nen pr mark-ready (registry wiring onto ./markready.ts)", () => {
     const seams = new ScriptedSeams([]);
     const result = await capture([...base, "--token-env", "MY_TOKEN"], null, seams);
     expect(result.code).toBe(2);
-    expect(result.err.join("\n")).toContain("--token-env is only read by 'pr ready'; mark-ready runs on whatever credential gh resolves");
+    expect(result.err.join("\n")).toContain("--token-env is only read by 'pr ready' and 'pr version-collision'; mark-ready runs on whatever credential gh resolves");
     expect(seams.calls.length).toBe(0);
   });
 
@@ -3060,7 +3060,7 @@ describe("the family's one flag guard (zheref/nen#351)", () => {
       expect(result.code).toBe(2);
       const err = result.err.join("\n");
       expect(err).toContain(`--token-env is not read by 'pr ${label}'.`);
-      expect(err).toContain("--token-env is only read by 'pr ready';");
+      expect(err).toContain("--token-env is only read by 'pr ready' and 'pr version-collision';");
       expect(seams.calls.length).toBe(0);
     });
 
@@ -3070,7 +3070,7 @@ describe("the family's one flag guard (zheref/nen#351)", () => {
       expect(result.code).toBe(2);
       const err = result.err.join("\n");
       expect(err).toContain(`--gh-repo is not read by 'pr ${label}'.`);
-      expect(err).toContain("--gh-repo is only read by 'pr ready'");
+      expect(err).toContain("--gh-repo is only read by 'pr ready' and 'pr version-collision'");
       expect(seams.calls.length).toBe(0);
     });
   }
@@ -3092,7 +3092,7 @@ describe("the family's one flag guard (zheref/nen#351)", () => {
   it("points --gh-repo at --target on a subcommand that reads --target", async () => {
     const result = await capture(["pr", "fetch", "--target", "zheref/nen", "--pr", "12", "--gh-repo", "acme/widgets"], null, new ScriptedSeams([]));
     expect(result.code).toBe(2);
-    expect(result.err.join("\n")).toContain("--gh-repo is only read by 'pr ready'; 'pr fetch' names its repository with --target <owner/name>.");
+    expect(result.err.join("\n")).toContain("--gh-repo is only read by 'pr ready' and 'pr version-collision'; 'pr fetch' names its repository with --target <owner/name>.");
   });
 
   it("names EVERY subcommand that reads a flag, not only 'pr ready'", async () => {
@@ -3103,7 +3103,7 @@ describe("the family's one flag guard (zheref/nen#351)", () => {
       [[...mark, "--base", "main"], "--base is only read by 'pr body-check', 'pr retarget' and 'pr open'."],
       [[...mark, "--body-file", BODY], "--body-file is only read by 'pr edit-body', 'pr threads reply' and 'pr open'."],
       [["pr", "fetch", "--target", "zheref/nen", "--pr", "12", "--from", SETTLE], "--from is only read by 'pr threads settle'."],
-      [["pr", "fetch", "--target", "zheref/nen", "--pr", "12", "--require-head", "abcdef1"], "--require-head is only read by 'pr ready', 'pr converge', 'pr mark-ready' and 'pr merge --delivery'."],
+      [["pr", "fetch", "--target", "zheref/nen", "--pr", "12", "--require-head", "abcdef1"], "--require-head is only read by 'pr ready', 'pr version-collision', 'pr converge', 'pr mark-ready' and 'pr merge --delivery'."],
     ];
     for (const [argv, message] of cases) {
       const result = await capture(argv, null, new ScriptedSeams([]));
@@ -3180,18 +3180,18 @@ describe("the family's one flag guard (zheref/nen#351)", () => {
     const err = list.err.join("\n");
     expect(err).toContain("--from is not read by 'pr threads list'. --from is only read by 'pr threads settle'.");
     expect(err).toContain("--thread is not read by 'pr threads list'. --thread is only read by 'pr threads reply' and 'pr threads resolve'.");
-    expect(err).toContain("--token-env is not read by 'pr threads list'. --token-env is only read by 'pr ready';");
+    expect(err).toContain("--token-env is not read by 'pr threads list'. --token-env is only read by 'pr ready' and 'pr version-collision';");
     expect(seams.calls.length).toBe(0);
   });
 
   // Nobunaga 9 (hanten round 1): the form that reads it, not the one that refuses it.
   it("names 'pr merge --delivery' for --require-head", () => {
-    expect(prFlagOwners("require-head")).toEqual(["'pr ready'", "'pr converge'", "'pr mark-ready'", "'pr merge --delivery'"]);
+    expect(prFlagOwners("require-head")).toEqual(["'pr ready'", "'pr version-collision'", "'pr converge'", "'pr mark-ready'", "'pr merge --delivery'"]);
   });
 
   // Nobunaga 6 (hanten round 1): no default credential claim.
   it("states --token-env advice for every subcommand but ready, and has no default", () => {
-    expect([...PR_TOKEN_ENV_ADVICE_KEYS].sort()).toEqual(PR_SUBCOMMANDS.filter((name): boolean => name !== "ready").sort());
+    expect([...PR_TOKEN_ENV_ADVICE_KEYS].sort()).toEqual(PR_SUBCOMMANDS.filter((name): boolean => name !== "ready" && name !== "version-collision").sort());
   });
 
   // Nobunaga 5, BC-9 (hanten round 1): the derived tests above take both sides
@@ -3205,6 +3205,7 @@ describe("the family's one flag guard (zheref/nen#351)", () => {
         booleans: ["explain", "require-base-gates"],
         lists: ["exclude-check", "reviewer-login"],
       },
+      "version-collision": { values: ["target", "pr", "gh-repo", "token-env", "require-head"], booleans: ["explain"] },
       staleness: { values: ["wakes-from", "last-activity", "now", "min-verified-wakes", "idle-minutes"], booleans: ["ready"] },
       "body-check": { values: ["body-from", "requirements-from", "base", "max", "prose-budget", "criteria", "criteria-from", "criteria-issue", "catalogue"], booleans: ["exact"] },
       sections: { values: ["catalogue", "kind", "family", "with", "overrides", "taxonomy", "jobs"] },
@@ -3236,8 +3237,8 @@ describe("the family's one flag guard (zheref/nen#351)", () => {
     }
     // The spread zheref/nen#351 named is no longer the family's: --token-env
     // and --gh-repo belong to 'pr ready' alone.
-    expect(prFlagOwners("token-env")).toEqual(["'pr ready'"]);
-    expect(prFlagOwners("gh-repo")).toEqual(["'pr ready'"]);
+    expect(prFlagOwners("token-env")).toEqual(["'pr ready'", "'pr version-collision'"]);
+    expect(prFlagOwners("gh-repo")).toEqual(["'pr ready'", "'pr version-collision'"]);
   });
 });
 
