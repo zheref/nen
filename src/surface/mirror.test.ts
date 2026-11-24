@@ -810,11 +810,31 @@ describe("the report's not-supported paths", () => {
     expect(report.files.map((file): string => file.path)).toEqual(["alpha/SKILL.md", "beta/SKILL.md"]);
   });
 
-  it("names an appendix past the surface's documented read limit", () => {
+  it("refuses an appendix past the surface's documented read limit (NN#641/AC-1)", () => {
     const agents = tempDir();
     writeFileSync(join(agents, "big.md"), `---\nname: big\n---\n${"prose ".repeat(6_000)}\n`);
-    const report = generateSurfaceMirrorReport({ row: row("codex"), skills: readSourceSkills(SKILLS), agents: readSourceAgents(agents), invocationPrefix: null });
-    expect(report.notes[0]).toMatch(/AGENTS\.md is \d+ bytes, past the 32768-byte read limit/);
+    expect(() => generateSurfaceMirrorReport({ row: row("codex"), skills: readSourceSkills(SKILLS), agents: readSourceAgents(agents), invocationPrefix: null }))
+      .toThrow(/AGENTS\.md.*32768.*big.*byte/s);
+  });
+
+  it("accepts the exact byte ceiling and refuses the next UTF-8 byte in a shared include", () => {
+    const lead: SourceAgent = { stem: "lead", name: "lead", relative: "lead.md", text: "Lead rules." };
+    const shared: SourceAgent = { stem: "_shared", name: "_shared", relative: "_shared.md", text: "é" };
+    const options = { row: row("codex"), skills: readSourceSkills(SKILLS), agents: [lead], includes: [shared], invocationPrefix: null };
+    const small = at(generateSurfaceMirror(options), "AGENTS.md");
+    const padding = 32_768 - Buffer.byteLength(small, "utf8");
+    const exact = { ...options, includes: [{ ...shared, text: `${"x".repeat(padding)}é` }] };
+    expect(Buffer.byteLength(at(generateSurfaceMirror(exact), "AGENTS.md"), "utf8")).toBe(32_768);
+    expect(() => generateSurfaceMirror({ ...exact, includes: [{ ...shared, text: `${"x".repeat(padding + 1)}é` }] }))
+      .toThrow(/section '_shared' \(_shared\.md\).*32769\).*first unread byte offset 32768/);
+  });
+
+  it("names a section crossing the ceiling and leaves other surfaces unchanged", () => {
+    const body = "x".repeat(32_768);
+    const lead: SourceAgent = { stem: "lead", name: "lead", relative: "lead.md", text: `---\nname: lead\ndescription: Lead the work\n---\n${body}` };
+    const options = { skills: readSourceSkills(SKILLS), agents: [lead], invocationPrefix: null };
+    expect(() => generateSurfaceMirror({ ...options, row: row("codex") })).toThrow(/section 'lead'.*byte offsets/);
+    expect(at(generateSurfaceMirror({ ...options, row: row("cursor") }), "agents/lead.md")).toContain(body);
   });
 
   it("refuses a models fragment whose tier the map lacks", () => {

@@ -383,7 +383,7 @@ export interface GenerateReport {
    */
   readonly permissionSandbox: { readonly networkAccess: boolean | null } | null;
   readonly manifest: "written" | "not supported" | "none";
-  /** Everything else worth a line: unmapped hook events, an appendix past the read limit, a long rules file. */
+  /** Everything else worth a line: unmapped hook events, a long rules file. */
   readonly notes: readonly string[];
   /** The shared includes carried beside the personas, by source filename (`_shared.md`). */
   readonly includes: readonly string[];
@@ -922,21 +922,33 @@ function agentFiles(options: GenerateOptions, relink: Relink): AgentOutput {
   // The includes follow the personas as `## _<stem>` sections (S11): a
   // persona's "read _review-preamble first" then lands on a heading in the
   // same document rather than on a file the surface never received.
-  const appendixOf = (aim: boolean): string => {
-    const sections = [
-      ...options.agents.map((agent): string => section(agent, agent.name, aim)),
-      ...includes.map((include): string => section(include, include.stem, aim)),
-    ];
-    return rewriteInvocations(`${markerFor(row.surface, stamp)}\n\n${sections.join("\n")}`, row, options.invocationPrefix);
-  };
+  const sources = [
+    ...options.agents.map((agent) => ({ agent, heading: agent.name })),
+    ...includes.map((agent) => ({ agent, heading: agent.stem })),
+  ];
+  const prefix = `${markerFor(row.surface, stamp)}\n\n`;
+  const sectionsOf = (aim: boolean): readonly string[] => sources.map(({ agent, heading }): string =>
+    rewriteInvocations(section(agent, heading, aim), row, options.invocationPrefix));
+  const appendixOf = (aim: boolean): string => `${prefix}${sectionsOf(aim).join("\n")}`;
   const appendix = appendixOf(true);
   const files: GeneratedFile[] = [relinked(rule.file, appendix, appendixOf(false))];
   if (rule.warnBytes !== null) {
     const bytes = Buffer.byteLength(appendix, "utf8");
     if (bytes > rule.warnBytes) {
-      notes.push(
-        `${rule.file} is ${bytes} bytes, past the ${rule.warnBytes}-byte read limit the surface documents (${row.agentSource}); a persona past the cut-off is one the surface never meets`,
-      );
+      // No persona is inferred to be optional. Check the final UTF-8 bytes,
+      // including rewritten links/invocations, headings, marker and separators.
+      let start = Buffer.byteLength(prefix, "utf8");
+      const sections = sectionsOf(true);
+      for (const [index, text] of sections.entries()) {
+        const end = start + Buffer.byteLength(text, "utf8");
+        if (end > rule.warnBytes) {
+          const source = sources[index]!;
+          throw new SurfaceMirrorError(
+            `${rule.file} is ${bytes} bytes, exceeding the ${rule.warnBytes}-byte read limit; section '${source.heading}' (${source.agent.relative}) occupies byte offsets [${start}, ${end}), first unread byte offset ${Math.max(start, rule.warnBytes)} (zero-based UTF-8). Split the source instructions before regenerating; no truncated mirror is written (${row.agentSource}).`,
+          );
+        }
+        start = end + 1; // the newline between sections
+      }
     }
   }
 
