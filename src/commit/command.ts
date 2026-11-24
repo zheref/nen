@@ -53,7 +53,7 @@ import { CommitlintConfigError, declaredSubjectCase, readSubjectCaseRule, subjec
 import { declaredBodyWidth, lineLengthFindings, readLineLengthRules, wrapFormatBody } from "./bodywidth.js";
 import { COMMIT_MESSAGE_PATH, write, WRITE_CONTRACT } from "./write.js";
 import { injectedMessage } from "./readback.js";
-import { COMPOSED_KEYS_ENV, strippedMessage, STRIPPED_EXIT, writtenExit } from "./strip.js";
+import { COMPOSED_KEYS_ENV, STRIP_RUN_ENV, strippedMessage, STRIPPED_EXIT, writtenExit } from "./strip.js";
 import {
   COMMIT_TYPES,
   formatCommitMessage,
@@ -248,19 +248,23 @@ A HOOK-INJECTED KEY CAN BE STRIPPED, ONLY WHERE THE REPOSITORY OPTS IN
 refused key a harness's own hook adds is a refusal with no sanctioned way
 around it (never --no-verify). With keys listed and the commit-msg hook
 regenerated ('nen scaffold init ... --force'), the child 'git commit' runs
-with ${COMPOSED_KEYS_ENV} set to the composed message's keys, and the
-hook removes a listed key from the trailer block when the message nen
-composed did not carry it, naming it in <git dir>/nen-stripped-trailers. This
-verb deletes a stale sidecar first, reads and deletes it after, and reports a
-key as stripped only when the read-back confirms the commit lacks it. The
-strip never removes a key the composed message carried, never admits a
-refused key, and never amends. A failed commit under a non-empty list says
-the hook may predate the list.
+with ${COMPOSED_KEYS_ENV} set to the composed message's keys and
+${STRIP_RUN_ENV} to a fresh random run id, and the hook removes a listed key
+from the trailer block when the message nen composed did not carry it,
+naming it in <git dir>/nen-stripped-trailers.<run id> -- this run's file
+alone, read and deleted after the commit. A key is reported as stripped only
+when the read-back confirms the commit lacks it. Neither variable is ever
+exported by hand: the hook reads a composed-keys variable with no run id as
+leaked, and records nothing. The strip never removes a key the composed
+message carried, never admits a refused key, and never amends. A commit the
+hook refused for a listed key adds a hint: the hook may predate
+commits.stripInjected.
 
 Exits: 0 committed (and nothing refused was added); 1 a broken config, a
 refused proof, an empty index, a failed git; 2 the shape; 3 committed, and a
 hook injected a refused trailer; 4 committed, and the hook stripped a
-hook-injected key (3 wins over 4, 4 over 0). --json's contract is
+hook-injected key (3 wins over 4, 4 over 0). 4 is a COMMITTED outcome, as 0
+and 3 are: never retry it. --json's contract is
 '${WRITE_CONTRACT}': { contract, sha (null on a dry run), subject, trailers:
 [{ key, value }] (READ BACK from the written commit; the composed message's
 on a dry run), injected: [key, ...] (null on a dry run -- not checked),

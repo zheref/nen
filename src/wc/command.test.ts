@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
@@ -369,14 +369,14 @@ describe("nen wc squash -- CLI wiring", () => {
       NAME_OK, CLEAN, MERGE_BASE, ANCESTOR_OK, TWO_COMMITS, NO_UPSTREAM, ...BASE_CLEAR,
       { match: "git rev-parse --git-dir", result: { stdout: ".git\n" } },
       { match: "git reset --soft base0000", result: { code: 0 } },
-      { match: `git commit -F ${path}`, result: failCommit ? { code: 1, stderr: "commit-msg: refused" } : { code: 0 } },
+      { match: `git commit -F ${path}`, result: failCommit ? { code: 1, stderr: "commit-msg: this message carries a 'Co-Authored-By:' trailer, which this repository's nen/workflow.json does not list under commits.allowedAttributionTrailers." } : { code: 0 } },
       { match: "git rev-parse HEAD", result: { stdout: "newsha00\n" } },
       ...readBackScript("Hatsu-Agent: kurapika\n", written),
     ]);
     const original = seams.run;
     seams.run = (command, args, options): ReturnType<typeof original> => {
       const result = original(command, args, options);
-      if (args[0] === "commit" && sidecarText !== null) writeFileSync(join(repo, ".git", "nen-stripped-trailers"), sidecarText);
+      if (args[0] === "commit" && sidecarText !== null) writeFileSync(join(repo, ".git", `nen-stripped-trailers.${options?.env?.["NEN_STRIP_RUN"] ?? "missing"}`), sidecarText);
       return result;
     };
     const out: string[] = [];
@@ -394,7 +394,8 @@ describe("nen wc squash -- CLI wiring", () => {
     expect(Object.keys(result.doc ?? {}).at(-1)).toBe("stripped");
     expect(result.err.join("\n")).toMatch(/^nen wc: the written commit newsha00 does not carry 'Co-authored-by'/m);
     const commit = result.seams.calls.find((call): boolean => call.args[0] === "commit");
-    expect(commit?.env).toEqual({ NEN_COMPOSED_TRAILER_KEYS: "hatsu-agent" });
+    expect(commit?.env).toEqual({ NEN_COMPOSED_TRAILER_KEYS: "hatsu-agent", NEN_STRIP_RUN: expect.stringMatching(/^[0-9a-f]{16}$/) as unknown });
+    expect(readdirSync(join(result.repo, ".git")).filter((name): boolean => name.startsWith("nen-stripped-trailers"))).toEqual([]);
     // The reset and the git-dir read carry no strip variable; only the commit does.
     expect(result.seams.calls.find((call): boolean => call.args[0] === "reset")?.env).toBeNull();
     const calls = result.seams.calls.map((call): string => call.args.join(" "));
@@ -411,7 +412,8 @@ describe("nen wc squash -- CLI wiring", () => {
   it("a fold whose commit fails under a non-empty list names the regeneration, and leaves no sidecar (zheref/nen#594)", async () => {
     const result = await stripRun("Co-authored-by\n", "", true);
     expect(result.code).toBe(1);
-    expect(result.err.join("\n")).toMatch(/git reset --hard ORIG_HEAD.*lists commits\.stripInjected \('Co-authored-by'\).*nen scaffold init \.\.\. --force/);
+    expect(result.err.join("\n")).toMatch(/git reset --hard ORIG_HEAD.*The commit-msg hook refused 'Co-authored-by'.*the hook may predate commits\.stripInjected; regenerate it with 'nen scaffold init \.\.\. --force'/);
+    expect(readdirSync(join(result.repo, ".git")).filter((name): boolean => name.startsWith("nen-stripped-trailers"))).toEqual([]);
   });
 
   it("--json --dry-run reports injected: null -- nothing was written, nothing read back (hanten N7)", async () => {

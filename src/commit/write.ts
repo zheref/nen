@@ -326,11 +326,11 @@ export function write(seams: Seams, root: string, options: WriteOptions): WriteO
   mkdirSync(dirname(messagePath), { recursive: true });
   writeFileSync(messagePath, message, "utf8");
   try {
-    const commit = seams.run(GIT, ["commit", "-F", COMMIT_MESSAGE_PATH], { cwd: root, env: composedKeysEnv(sent) });
+    const commit = seams.run(GIT, ["commit", "-F", COMMIT_MESSAGE_PATH], { cwd: root, env: composedKeysEnv(sent, sidecar) });
     if (commit.spawnFailed || commit.code !== 0) {
-      discardStripSidecar(sidecar);
+      discardStripSidecar(sidecar.path);
       throw new Error(
-        `'git commit -F ${COMMIT_MESSAGE_PATH}' failed: ${gitError(commit.stderr, commit.code)}. Nothing was committed; the index is as you staged it.${stripFailureHint(policy)}`,
+        `'git commit -F ${COMMIT_MESSAGE_PATH}' failed: ${gitError(commit.stderr, commit.code)}. Nothing was committed; the index is as you staged it.${stripFailureHint(policy, commit.stderr)}`,
       );
     }
   } finally {
@@ -345,7 +345,7 @@ export function write(seams: Seams, root: string, options: WriteOptions): WriteO
   }
   // The sidecar is read (and deleted) before anything else can throw, so a
   // failed read-back never leaves it for the next run to misreport.
-  const reported = collectStripSidecar(sidecar);
+  const reported = collectStripSidecar(sidecar.path);
   const head = seams.run(GIT, ["rev-parse", "HEAD"], { cwd: root });
   if (head.code !== 0) throw new Error(`committed, but could not read the new commit's sha ('git rev-parse HEAD' failed: ${gitError(head.stderr, head.code)}).`);
   const sha = head.stdout.trim();

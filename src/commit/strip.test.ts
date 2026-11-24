@@ -3,11 +3,11 @@
 // and the exit precedence, with no git in them.
 
 import { describe, expect, it } from "vitest";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { makeTempDir } from "../testing/tempdir.js";
 import { ScriptedSeams } from "../seam/scripted.js";
-import { HOOK_COMPOSED_KEYS_ENV, STRIP_SIDECAR_FILE } from "../scaffold/hook.js";
+import { HOOK_COMPOSED_KEYS_ENV, HOOK_STRIP_RUN_ENV, STRIP_SIDECAR_FILE } from "../scaffold/hook.js";
 import { parseWorkflow, type LoadedWorkflow } from "../schema/workflow.js";
 import {
   collectStripSidecar,
@@ -15,7 +15,9 @@ import {
   composedKeysEnv,
   confirmStripped,
   discardStripSidecar,
+  newStripRunId,
   prepareStripSidecar,
+  STRIP_RUN_ENV,
   STRIP_SIDECAR,
   stripFailureHint,
   STRIPPED_EXIT,
@@ -31,24 +33,54 @@ describe("the names the hook and the verbs share", () => {
     expect(COMPOSED_KEYS_ENV).toBe(HOOK_COMPOSED_KEYS_ENV);
     expect(COMPOSED_KEYS_ENV).toBe("NEN_COMPOSED_TRAILER_KEYS");
     expect(STRIP_SIDECAR).toBe(STRIP_SIDECAR_FILE);
+    expect(STRIP_RUN_ENV).toBe(HOOK_STRIP_RUN_ENV);
+    expect(STRIP_RUN_ENV).toBe("NEN_STRIP_RUN");
   });
 });
 
+const RUN = { runId: "abc123", path: "/unused" };
+
 describe("composedKeysEnv", () => {
   it("lower-cases and comma-joins the composed keys, first-seen unique, and is SET even when empty", () => {
-    expect(composedKeysEnv([{ key: "Hatsu-Agent", value: "k" }, { key: "Closes", value: "#1" }, { key: "closes", value: "#2" }])).toEqual({
+    expect(composedKeysEnv([{ key: "Hatsu-Agent", value: "k" }, { key: "Closes", value: "#1" }, { key: "closes", value: "#2" }], RUN)).toEqual({
       NEN_COMPOSED_TRAILER_KEYS: "hatsu-agent,closes",
+      NEN_STRIP_RUN: "abc123",
     });
-    expect(composedKeysEnv([])).toEqual({ NEN_COMPOSED_TRAILER_KEYS: "" });
+    expect(composedKeysEnv([], RUN)).toEqual({ NEN_COMPOSED_TRAILER_KEYS: "", NEN_STRIP_RUN: "abc123" });
   });
 });
 
 describe("the sidecar's lifecycle", () => {
-  it("prepare resolves a RELATIVE git dir against the root and deletes a stale file", () => {
+  it("prepare draws a hex run id and resolves a RELATIVE git dir against the root, naming the run's own file", () => {
     const root = makeTempDir("nen-strip-");
     const seams = new ScriptedSeams([{ match: "git rev-parse --git-dir", result: { stdout: "gitdir\n" } }]);
-    const path = prepareStripSidecar(seams, root);
-    expect(path).toBe(join(root, "gitdir", STRIP_SIDECAR));
+    const run = prepareStripSidecar(seams, root);
+    expect(run.runId).toMatch(/^[0-9a-f]{16}$/);
+    expect(run.path).toBe(join(root, "gitdir", `${STRIP_SIDECAR}.${run.runId}`));
+    expect(newStripRunId()).not.toBe(newStripRunId());
+  });
+
+  it("refuses a run id the hook would not accept", () => {
+    const seams = new ScriptedSeams([]);
+    expect((): unknown => prepareStripSidecar(seams, "/r", "ABC")).toThrow(/lower-case hex/);
+    expect((): unknown => prepareStripSidecar(seams, "/r", "")).toThrow(/lower-case hex/);
+  });
+
+  it("two INTERLEAVED runs in one git dir never see each other's sidecar (hanten round 1, E)", () => {
+    const root = makeTempDir("nen-strip-");
+    const gitDir = join(root, ".git");
+    mkdirSync(gitDir);
+    const answer = { match: "git rev-parse --git-dir", result: { stdout: ".git\n" } };
+    const first = prepareStripSidecar(new ScriptedSeams([answer]), root, "aaaa");
+    const second = prepareStripSidecar(new ScriptedSeams([answer]), root, "bbbb");
+    // The hook, inside the FIRST run's commit, records under the first run's id only.
+    writeFileSync(join(gitDir, `${STRIP_SIDECAR}.aaaa`), "Co-authored-by\n");
+    expect(collectStripSidecar(second.path)).toEqual([]);
+    expect(existsSync(first.path)).toBe(true);
+    // And preparing a THIRD run does not sweep the first run's file out from under it.
+    prepareStripSidecar(new ScriptedSeams([answer]), root, "cccc");
+    expect(collectStripSidecar(first.path)).toEqual(["Co-authored-by"]);
+    expect(existsSync(first.path)).toBe(false);
   });
 
   it("prepare throws, naming git's reason, when the git dir cannot be resolved", () => {
@@ -94,16 +126,24 @@ describe("writtenExit -- 3 wins over 4, 4 over 0", () => {
   });
 });
 
-describe("stripFailureHint", () => {
-  it("is empty with no policy, an absent policy, or an empty list", () => {
-    expect(stripFailureHint(null)).toBe("");
-    expect(stripFailureHint({ ...loaded({}), present: false })).toBe("");
-    expect(stripFailureHint(loaded({ commits: { stripInjected: [] } }))).toBe("");
+describe("stripFailureHint -- only for the hook's refusal of a LISTED key (hanten round 1, B)", () => {
+  const REFUSED = "commit-msg: this message carries a 'Co-Authored-By:' trailer, which this repository's nen/workflow.json does not list under commits.allowedAttributionTrailers.";
+
+  it("is empty with no policy, an absent policy, or an empty list, whatever git said", () => {
+    expect(stripFailureHint(null, REFUSED)).toBe("");
+    expect(stripFailureHint({ ...loaded({}), present: false }, REFUSED)).toBe("");
+    expect(stripFailureHint(loaded({ commits: { stripInjected: [] } }), REFUSED)).toBe("");
   });
 
-  it("names the list and the regeneration when the list is non-empty", () => {
-    const hint = stripFailureHint(loaded({ commits: { stripInjected: ["Co-authored-by"] } }));
-    expect(hint).toMatch(/^ \/r\/nen\/workflow\.json lists commits\.stripInjected \('Co-authored-by'\)/);
-    expect(hint).toContain("nen scaffold init ... --force");
+  it("names the key and the regeneration, as a POSSIBILITY, when the hook refused a listed key (any case)", () => {
+    const hint = stripFailureHint(loaded({ commits: { stripInjected: ["Co-authored-by"] } }), REFUSED);
+    expect(hint).toMatch(/^ The commit-msg hook refused 'Co-authored-by', which \/r\/nen\/workflow\.json lists under commits\.stripInjected: the hook may predate commits\.stripInjected; regenerate it with 'nen scaffold init \.\.\. --force'/);
+  });
+
+  it("is empty when the commit failed for another reason, or the hook refused a key the list does not name", () => {
+    const policy = loaded({ commits: { stripInjected: ["Co-authored-by"] } });
+    expect(stripFailureHint(policy, "pre-commit: refusing a commit on 'main'")).toBe("");
+    expect(stripFailureHint(policy, "commit-msg: this message carries a 'Claude-Session:' trailer, which ...")).toBe("");
+    expect(stripFailureHint(policy, "")).toBe("");
   });
 });

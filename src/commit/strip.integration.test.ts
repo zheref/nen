@@ -22,7 +22,7 @@
 
 import { beforeAll, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
 import { defaultSeams } from "../seam/exec.js";
@@ -69,6 +69,7 @@ const NO_OPT_IN = { commits: { allowedAttributionTrailers: ADMITS } };
 function plainEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env };
   delete env["NEN_COMPOSED_TRAILER_KEYS"];
+  delete env["NEN_STRIP_RUN"];
   return env;
 }
 
@@ -165,17 +166,29 @@ function headMessage(repo: string): string {
   return raw.slice(raw.indexOf("\n\n") + 2);
 }
 
-/** The generated hook, driven directly on a message file in `repo`, with `composed` as the variable (null: unset). */
-function driveHook(repo: string, message: string, composed: string | null): { code: number; stderr: string; message: string } {
+/** The run id the directly-driven hook is given, as a verb would give one: lower-case hex. */
+const RUN_ID = "0123abcd";
+
+/**
+ * The generated hook, driven directly on a message file in `repo`, with
+ * `composed` as NEN_COMPOSED_TRAILER_KEYS and `run` as NEN_STRIP_RUN (null:
+ * unset) -- exactly the two variables a verb sets on its child `git commit`.
+ */
+function driveHook(repo: string, message: string, composed: string | null, run: string | null = RUN_ID): { code: number; stderr: string; message: string } {
   const path = join(repo, ".git", `drive-${counter}-${Math.random().toString(36).slice(2)}.txt`);
   writeFileSync(path, message);
   const env = plainEnv();
   if (composed !== null) env["NEN_COMPOSED_TRAILER_KEYS"] = composed;
+  if (run !== null) env["NEN_STRIP_RUN"] = run;
   const result = spawnSync("sh", [join(hooksDir(repo), "commit-msg"), path], { cwd: repo, encoding: "utf8", env });
   return { code: result.status ?? 1, stderr: result.stderr ?? "", message: readFileSync(path, "utf8") };
 }
 
-const sidecar = (repo: string): string => join(repo, ".git", "nen-stripped-trailers");
+/** The directly-driven hook's sidecar: this test run's id. */
+const sidecar = (repo: string): string => join(repo, ".git", `nen-stripped-trailers.${RUN_ID}`);
+
+/** Every strip sidecar under the repository's git dir, whatever run wrote it. */
+const sidecars = (repo: string): string[] => readdirSync(join(repo, ".git")).filter((name): boolean => name.startsWith("nen-stripped-trailers"));
 
 describe.skipIf(!HAVE_GIT)("commits.stripInjected through the real hooks (zheref/nen#594)", () => {
   it("(a) opt-in + nen commit write: the commit lands WITHOUT the injected key, the composed trailers intact, exit 4 (AC-1)", async () => {
@@ -197,7 +210,7 @@ describe.skipIf(!HAVE_GIT)("commits.stripInjected through the real hooks (zheref
     expect(written).not.toMatch(/co-authored-by/i);
     expect(written).toContain("Hatsu-Agent: kurapika");
     expect(result.err.join("\n")).toMatch(/^nen commit write: the written commit [0-9a-f]+ does not carry 'Co-authored-by': the repository's commit-msg hook stripped that key/m);
-    expect(existsSync(sidecar(repo))).toBe(false);
+    expect(sidecars(repo)).toEqual([]);
   });
 
   it("(b) NO opt-in: exit 1, nothing committed, today's refusal line -- the default is unchanged", async () => {
@@ -222,7 +235,7 @@ describe.skipIf(!HAVE_GIT)("commits.stripInjected through the real hooks (zheref
     const result = await run(commitCommand, ["commit", "write", "--message-file", message, "--trailer", "Hatsu-Agent: kurapika", "--trailer", "Co-authored-by: Somebody <s@example.invalid>"], repo);
     expect(result.code).toBe(2);
     expect(mustGit(repo, ["rev-parse", "HEAD"])).toBe(before);
-    expect(existsSync(sidecar(repo))).toBe(false);
+    expect(sidecars(repo)).toEqual([]);
   });
 
   it.skipIf(!HAVE_SH)("(c) the hook itself, told the composed message carried the key, REFUSES rather than strips (AC-2)", () => {
@@ -233,7 +246,7 @@ describe.skipIf(!HAVE_GIT)("commits.stripInjected through the real hooks (zheref
     expect(driven.stderr).toMatch(/carries a 'Co-Authored-By:' trailer/);
     expect(driven.stderr).not.toMatch(/stripped/);
     expect(driven.message).toBe(text);
-    expect(existsSync(sidecar(repo))).toBe(false);
+    expect(sidecars(repo)).toEqual([]);
     // ...and with the composed keys naming only Hatsu-Agent, the same message IS stripped and passes.
     const stripped = driveHook(repo, text, "hatsu-agent");
     expect(stripped.code).toBe(0);
@@ -253,7 +266,7 @@ describe.skipIf(!HAVE_GIT)("commits.stripInjected through the real hooks (zheref
     expect(result.stderr).toMatch(/carries a 'Co-Authored-By:' trailer/);
     expect(result.stderr).not.toMatch(/stripped/);
     expect(mustGit(repo, ["rev-parse", "HEAD"])).toBe(before);
-    expect(existsSync(sidecar(repo))).toBe(false);
+    expect(sidecars(repo)).toEqual([]);
   });
 
   it.skipIf(!HAVE_SH)("(e) a body PROSE line that starts with the key is never touched -- only the trailer block is edited", () => {
@@ -267,11 +280,72 @@ describe.skipIf(!HAVE_GIT)("commits.stripInjected through the real hooks (zheref
     // A last paragraph that is prose, not a trailer block, is left whole -- nothing stripped, nothing recorded.
     const prose = `feat: add e\n\nCo-authored-by: Cursor <c@c> wrote this line\nwhich is body text, not a trailer block.\n`;
     expect(rmSidecarThen(repo, (): ReturnType<typeof driveHook> => driveHook(repo, prose, "hatsu-agent")).message).toBe(prose);
-    expect(existsSync(sidecar(repo))).toBe(false);
+    expect(sidecars(repo)).toEqual([]);
     // And the subject is never a trailer block, whatever it starts with.
     const subject = "Co-authored-by: a subject\n";
     expect(driveHook(repo, subject, "").message).toBe(subject);
-    expect(existsSync(sidecar(repo))).toBe(false);
+    expect(sidecars(repo)).toEqual([]);
+  });
+
+  // hanten round 1, C: the strip's promised edge cases, each pinned against the real hook.
+  it.skipIf(!HAVE_SH)("(C) a CRLF message: the key's line goes, every kept line keeps its CRLF", () => {
+    const repo = repository(OPT_IN);
+    const driven = driveHook(repo, `feat: crlf\r\n\r\nHatsu-Agent: kurapika\r\n${CURSOR}\r\n`, "hatsu-agent");
+    expect(driven.code).toBe(0);
+    expect(driven.message).toBe("feat: crlf\r\n\r\nHatsu-Agent: kurapika\r\n");
+    expect(readFileSync(sidecar(repo), "utf8")).toBe("Co-authored-by\n");
+  });
+
+  it.skipIf(!HAVE_SH)("(C) NO trailing newline: the key on the last line is still removed", () => {
+    const repo = repository(OPT_IN);
+    const driven = driveHook(repo, `feat: no newline\n\nHatsu-Agent: kurapika\n${CURSOR}`, "hatsu-agent");
+    expect(driven.code).toBe(0);
+    expect(driven.message).toBe("feat: no newline\n\nHatsu-Agent: kurapika\n");
+  });
+
+  it.skipIf(!HAVE_SH)("(C) 'Co-authored-by-bot:' is ANOTHER key: kept, while 'Co-authored-by:' beside it goes", () => {
+    const repo = repository(OPT_IN);
+    const driven = driveHook(repo, `feat: bot\n\nHatsu-Agent: kurapika\nCo-authored-by-bot: Robot <r@example.invalid>\n${CURSOR}\n`, "hatsu-agent");
+    expect(driven.code).toBe(0);
+    expect(driven.message).toBe("feat: bot\n\nHatsu-Agent: kurapika\nCo-authored-by-bot: Robot <r@example.invalid>\n");
+  });
+
+  it.skipIf(!HAVE_SH)("(C) a key BELOW a scissors line is never stripped, and the refusal then fires (fail closed)", () => {
+    const repo = repository(OPT_IN);
+    const text = `feat: scissors\n\nHatsu-Agent: kurapika\n# ------------------------ >8 ------------------------\n${CURSOR}\n`;
+    const driven = driveHook(repo, text, "hatsu-agent");
+    expect(driven.message).toBe(text);
+    expect(driven.code).toBe(1);
+    expect(driven.stderr).toMatch(/carries a 'Co-Authored-By:' trailer/);
+    expect(sidecars(repo)).toEqual([]);
+  });
+
+  it.skipIf(!HAVE_SH)("(C) two spellings of the key in different case: BOTH removed, ONE sidecar line", () => {
+    const repo = repository(OPT_IN);
+    const driven = driveHook(repo, `feat: twice\n\nHatsu-Agent: kurapika\nCo-authored-by: A <a@example.invalid>\nCO-AUTHORED-BY: B <b@example.invalid>\n`, "hatsu-agent");
+    expect(driven.code).toBe(0);
+    expect(driven.message).toBe("feat: twice\n\nHatsu-Agent: kurapika\n");
+    expect(readFileSync(sidecar(repo), "utf8")).toBe("Co-authored-by\n");
+  });
+
+  it.skipIf(!HAVE_SH)("(C/D) the SPACED form 'Key : value', which git parses as the same trailer, is stripped too", () => {
+    const repo = repository(OPT_IN);
+    const driven = driveHook(repo, "feat: spaced\n\nHatsu-Agent: kurapika\nCo-authored-by \t: Cursor <c@example.invalid>\n", "hatsu-agent");
+    expect(driven.code).toBe(0);
+    expect(driven.message).toBe("feat: spaced\n\nHatsu-Agent: kurapika\n");
+    expect(readFileSync(sidecar(repo), "utf8")).toBe("Co-authored-by\n");
+  });
+
+  it.skipIf(!HAVE_SH)("(E) a LEAKED composed-keys variable -- no run id, or a malformed one -- still strips, says it leaked, and writes no sidecar", () => {
+    const repo = repository(OPT_IN);
+    const text = `feat: leaked\n\nHatsu-Agent: kurapika\n${CURSOR}\n`;
+    for (const run of [null, "", "NOT-HEX", "0123ABCD"]) {
+      const driven = driveHook(repo, text, "hatsu-agent", run);
+      expect(driven.code, String(run)).toBe(0);
+      expect(driven.message).toBe("feat: leaked\n\nHatsu-Agent: kurapika\n");
+      expect(driven.stderr).toContain("but NEN_COMPOSED_TRAILER_KEYS was found without a nen run id (NEN_STRIP_RUN missing or malformed): it was exported or leaked rather than set by a nen verb, so no sidecar was written");
+      expect(sidecars(repo)).toEqual([]);
+    }
   });
 
   it("(f) a FOLDED (multi-line) injected trailer is removed whole: exit 4, no fragment left", async () => {
@@ -302,7 +376,7 @@ describe.skipIf(!HAVE_GIT)("commits.stripInjected through the real hooks (zheref
     expect(mustGit(repo, ["rev-parse", "HEAD~1"])).toBe(mustGit(repo, ["rev-parse", "main"]));
     expect(headMessage(repo)).not.toMatch(/co-authored-by/i);
     expect(result.err.join("\n")).toMatch(/^nen wc: the written commit [0-9a-f]+ does not carry 'Co-authored-by'/m);
-    expect(existsSync(sidecar(repo))).toBe(false);
+    expect(sidecars(repo)).toEqual([]);
   });
 });
 

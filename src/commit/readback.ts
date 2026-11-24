@@ -52,7 +52,7 @@
 
 import { GIT, outputLines, type Seams } from "../seam/exec.js";
 import { rawLines } from "../seam/lines.js";
-import { trailerAdmitted, trailerRefusal, type LoadedWorkflow } from "../schema/workflow.js";
+import { ATTRIBUTION_SHAPED_KEY, trailerAdmitted, trailerRefusal, type LoadedWorkflow } from "../schema/workflow.js";
 import type { Trailer } from "./format.js";
 
 /**
@@ -79,8 +79,8 @@ export function catFileArgs(sha: string): readonly string[] {
   return ["cat-file", "commit", sha];
 }
 
-/** Hatsu's guard's rule for an attribution-shaped key nen's list may not name (hanten N1). */
-const ATTRIBUTION_SHAPED = /-(by|with)$/i;
+/** Hatsu's guard's rule for an attribution-shaped key nen's list may not name (hanten N1) -- ../schema/workflow.ts's, which commits.stripInjected's validation reads too. */
+const ATTRIBUTION_SHAPED = ATTRIBUTION_SHAPED_KEY;
 
 /** Why one key is refused, and where it came from -- each a different sentence. */
 export interface InjectedFinding {

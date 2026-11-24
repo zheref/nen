@@ -2,7 +2,7 @@
 // and the fake seam: every refusal before the write, then the one write.
 
 import { describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
@@ -669,12 +669,21 @@ describe("nen commit write -- a whitespace-only line after the trailers moves no
 });
 
 describe("nen commit write -- commits.stripInjected, the opt-in strip (zheref/nen#594)", () => {
+  /** Every strip sidecar under `root`'s .git, any run. */
+  const sidecars = (root: string): string[] => {
+    try {
+      return readdirSync(join(root, ".git")).filter((name): boolean => name.startsWith("nen-stripped-trailers"));
+    } catch {
+      return [];
+    }
+  };
   const STRIP_POLICY = { commits: { allowedAttributionTrailers: ["Hatsu-Agent"], stripInjected: ["Co-authored-by"] } };
 
   /**
    * The verb through a scripted seam whose `git commit` also does what the
-   * generated hook does on a strip: append the key to the sidecar under the
-   * git dir `git rev-parse --git-dir` names (`.git`, under the temp root).
+   * generated hook does on a strip: append the key to THIS RUN's sidecar
+   * (`nen-stripped-trailers.<NEN_STRIP_RUN>`, read off the child's env) under
+   * the git dir `git rev-parse --git-dir` names (`.git`, under the temp root).
    */
   async function withHook(root: string, argv: readonly string[], script: readonly ScriptedCall[], sidecarText: string | null): Promise<Captured> {
     const out: string[] = [];
@@ -686,7 +695,7 @@ describe("nen commit write -- commits.stripInjected, the opt-in strip (zheref/ne
       const result = original(command, args, options);
       if (args[0] === "commit" && sidecarText !== null) {
         mkdirSync(join(root, ".git"), { recursive: true });
-        writeFileSync(join(root, ".git", "nen-stripped-trailers"), sidecarText);
+        writeFileSync(join(root, ".git", `nen-stripped-trailers.${options?.env?.["NEN_STRIP_RUN"] ?? "missing"}`), sidecarText);
       }
       return result;
     };
@@ -704,8 +713,8 @@ describe("nen commit write -- commits.stripInjected, the opt-in strip (zheref/ne
     expect(doc["stripped"]).toEqual(["Co-authored-by"]);
     expect(doc["injected"]).toEqual([]);
     expect(result.err.join("\n")).toMatch(/^nen commit write: the written commit newsha00 does not carry 'Co-authored-by': the repository's commit-msg hook stripped that key/m);
-    // The sidecar is read AND deleted -- the next run starts clean.
-    expect(existsSync(join(root, ".git", "nen-stripped-trailers"))).toBe(false);
+    // The run's sidecar is read AND deleted -- nothing is left under the git dir.
+    expect(sidecars(root)).toEqual([]);
   });
 
   it("hands the child git commit NEN_COMPOSED_TRAILER_KEYS: the composed keys, lower-cased, comma-joined", async () => {
@@ -714,11 +723,13 @@ describe("nen commit write -- commits.stripInjected, the opt-in strip (zheref/ne
     const result = await withHook(root, ["--message-file", "message.txt", "--trailer", "Hatsu-Agent: kurapika"], [STAGED, GIT_DIR, COMMITTED, HEAD, ...readBackScript(both, both)], null);
     expect(result.code).toBe(0);
     const commit = result.seams.calls.find((call): boolean => call.args[0] === "commit");
-    expect(commit?.env).toEqual({ NEN_COMPOSED_TRAILER_KEYS: "closes,hatsu-agent" });
+    expect(commit?.env).toEqual({ NEN_COMPOSED_TRAILER_KEYS: "closes,hatsu-agent", NEN_STRIP_RUN: expect.stringMatching(/^[0-9a-f]{16}$/) as unknown });
     // SET-BUT-EMPTY is still set: a message with no trailers names none, and the hook still knows nen started it.
     const bare = repo({ message: "feat: x\n" });
     const none = await withHook(bare, ["--message-file", "message.txt"], [STAGED, GIT_DIR, COMMITTED, HEAD, ...READ_BACK], null);
-    expect(none.seams.calls.find((call): boolean => call.args[0] === "commit")?.env).toEqual({ NEN_COMPOSED_TRAILER_KEYS: "" });
+    expect(none.seams.calls.find((call): boolean => call.args[0] === "commit")?.env).toEqual({ NEN_COMPOSED_TRAILER_KEYS: "", NEN_STRIP_RUN: expect.stringMatching(/^[0-9a-f]{16}$/) as unknown });
+    // A fresh run id per invocation.
+    expect(none.seams.calls.find((call): boolean => call.args[0] === "commit")?.env?.["NEN_STRIP_RUN"]).not.toBe(commit?.env?.["NEN_STRIP_RUN"]);
   });
 
   it("3 wins over 4: a stripped key AND a refused key still on the commit is exit 3, with both reported", async () => {
@@ -745,23 +756,31 @@ describe("nen commit write -- commits.stripInjected, the opt-in strip (zheref/ne
     expect(result.err.join("\n")).not.toMatch(/does not carry/);
   });
 
-  it("deletes a STALE sidecar before the commit, so an earlier run's strip is never this one's", async () => {
+  it("never reads ANOTHER run's sidecar, and never sweeps it: a leftover under the git dir is not this run's strip (hanten round 1, E)", async () => {
     const root = repo({ message: "feat: x\n", policy: STRIP_POLICY });
     mkdirSync(join(root, ".git"), { recursive: true });
-    writeFileSync(join(root, ".git", "nen-stripped-trailers"), "Co-authored-by\n");
+    writeFileSync(join(root, ".git", "nen-stripped-trailers.deadbeef"), "Co-authored-by\n");
     const result = await withHook(root, ["--message-file", "message.txt", "--trailer", "Hatsu-Agent: kurapika"], [STAGED, GIT_DIR, COMMITTED, HEAD, ...readBackScript("Hatsu-Agent: kurapika\n", "Hatsu-Agent: kurapika\n")], null);
     expect(result.code).toBe(0);
     expect((JSON.parse(result.out.join("\n")) as Record<string, unknown>)["stripped"]).toEqual([]);
-    expect(existsSync(join(root, ".git", "nen-stripped-trailers"))).toBe(false);
+    expect(sidecars(root)).toEqual(["nen-stripped-trailers.deadbeef"]);
   });
 
-  it("resolves an ABSOLUTE git dir as given -- a linked worktree's own", async () => {
+  it("resolves an ABSOLUTE git dir as given -- a linked worktree's own -- and reads the run's file there", async () => {
     const root = repo({ message: "feat: x\n", policy: STRIP_POLICY });
     const gitDir = makeTempDir("nen-commit-write-gitdir-");
-    writeFileSync(join(gitDir, "nen-stripped-trailers"), "stale\n");
-    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, { match: GIT_DIR_CALL, result: { stdout: `${gitDir}\n` } }, COMMITTED, HEAD, ...READ_BACK], true);
-    expect(result.code).toBe(0);
-    expect(existsSync(join(gitDir, "nen-stripped-trailers"))).toBe(false);
+    const out: string[] = [];
+    const seams = new ScriptedSeams([STAGED, { match: GIT_DIR_CALL, result: { stdout: `${gitDir}\n` } }, COMMITTED, HEAD, ...READ_BACK]);
+    const original = seams.run;
+    seams.run = (command, args, options): ReturnType<typeof original> => {
+      const result = original(command, args, options);
+      if (args[0] === "commit") writeFileSync(join(gitDir, `nen-stripped-trailers.${options?.env?.["NEN_STRIP_RUN"] ?? "missing"}`), "Co-authored-by\n");
+      return result;
+    };
+    const code = await runFamily(commitCommand, ["commit", "write", "--message-file", "message.txt"], root, true, { out: (line): void => void out.push(line), err: (): void => undefined }, seams);
+    expect(code).toBe(4);
+    expect((JSON.parse(out.join("\n")) as Record<string, unknown>)["stripped"]).toEqual(["Co-authored-by"]);
+    expect(readdirSync(gitDir)).toEqual([]);
   });
 
   it("--dry-run reports stripped: null -- nothing was written, and never asks for the git dir", async () => {
@@ -782,19 +801,28 @@ describe("nen commit write -- commits.stripInjected, the opt-in strip (zheref/ne
     expect(gitCalls(result.seams).some((call): boolean => call.startsWith("git commit"))).toBe(false);
   });
 
-  it("a failed commit under a NON-EMPTY list names the regeneration; under an empty one it says nothing new", async () => {
-    const failing: ScriptedCall = { match: `git commit -F ${COMMIT_MESSAGE_PATH}`, result: { code: 1, stderr: "commit-msg: this message carries a 'Co-authored-by:' trailer" } };
+  it("a commit the hook refused for a LISTED key names the regeneration as a possibility; under an empty list it says nothing new (hanten round 1, B)", async () => {
+    const failing: ScriptedCall = { match: `git commit -F ${COMMIT_MESSAGE_PATH}`, result: { code: 1, stderr: "commit-msg: this message carries a 'Co-Authored-By:' trailer, which this repository's nen/workflow.json does not list under commits.allowedAttributionTrailers." } };
     const opted = repo({ message: "feat: x\n", policy: STRIP_POLICY });
     mkdirSync(join(opted, ".git"), { recursive: true });
     const withList = await withHook(opted, ["--message-file", "message.txt"], [STAGED, GIT_DIR, CONFIG_UNSET, READ_BACK[1] as ScriptedCall, failing], "Co-authored-by\n");
     expect(withList.code).toBe(1);
-    expect(withList.err.join("\n")).toMatch(/lists commits\.stripInjected \('Co-authored-by'\), but a commit-msg hook generated before that list was written.*nen scaffold init \.\.\. --force/);
-    // A strip the failed commit recorded is not left behind for the next run.
-    expect(existsSync(join(opted, ".git", "nen-stripped-trailers"))).toBe(false);
+    expect(withList.err.join("\n")).toMatch(/The commit-msg hook refused 'Co-authored-by', which .* lists under commits\.stripInjected: the hook may predate commits\.stripInjected; regenerate it with 'nen scaffold init \.\.\. --force'/);
+    // A strip the failed commit recorded is not left behind.
+    expect(sidecars(opted)).toEqual([]);
     const plain = repo({ message: "feat: x\n", policy: { commits: { allowedAttributionTrailers: ["Hatsu-Agent"] } } });
     const without = await capture(plain, ["--message-file", "message.txt"], [STAGED, GIT_DIR, CONFIG_UNSET, READ_BACK[1] as ScriptedCall, failing]);
     expect(without.code).toBe(1);
     expect(without.err.join("\n")).not.toMatch(/stripInjected/);
+  });
+
+  it("a commit that failed for ANOTHER reason under a non-empty list gets no hint (hanten round 1, B)", async () => {
+    const opted = repo({ message: "feat: x\n", policy: STRIP_POLICY });
+    const other: ScriptedCall = { match: `git commit -F ${COMMIT_MESSAGE_PATH}`, result: { code: 1, stderr: "pre-commit: refusing a commit on 'main'" } };
+    const result = await capture(opted, ["--message-file", "message.txt"], [STAGED, GIT_DIR, CONFIG_UNSET, READ_BACK[1] as ScriptedCall, other]);
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/refusing a commit on 'main'/);
+    expect(result.err.join("\n")).not.toMatch(/stripInjected|may predate/);
   });
 
   it("the exit-3 line for a HOOK-added key names the opt-in as a second remedy; a message-carried key's does not", async () => {

@@ -144,6 +144,16 @@ export const ATTRIBUTION_TRAILERS: readonly string[] = [
   "Signed-off-by",
 ];
 
+/**
+ * The READ-BACK's second rule (../commit/readback.ts, hanten N1): a key ending
+ * in `-by` or `-with`, any case, that `commits.allowedAttributionTrailers`
+ * does not admit is refused when a hook added it -- a harness's stamp is not
+ * always on the enumeration above (`Made-with: Cursor`). Here, rather than in
+ * that module, because `commits.stripInjected` (zheref/nen#594) is validated
+ * against the same rule: ONE pattern, read by both.
+ */
+export const ATTRIBUTION_SHAPED_KEY = /-(by|with)$/i;
+
 // ── the blocks ──────────────────────────────────────────────────────────────
 
 export interface BranchPolicy {
@@ -482,9 +492,13 @@ export interface CommitsPolicy {
    * removes it, only inside a commit `nen commit write` or `nen wc squash`
    * started (the hook is gated on `NEN_COMPOSED_TRAILER_KEYS`), only when the
    * message nen composed did not itself carry it, and every removal is
-   * reported and moves the verb's exit code to 4. So a key this policy ADMITS
-   * is refused here at load -- "strip a key we admit" is two answers for one
-   * key, exactly like a key on both allow and forbid lists.
+   * reported and moves the verb's exit code to 4. So every entry must be a key
+   * this policy REFUSES -- one `refusedTrailerKeys` returns for this block (the
+   * list the hook bakes in), or one the read-back refuses by its -by/-with
+   * shape (`ATTRIBUTION_SHAPED_KEY`) -- and anything else is refused here at
+   * load: a key nothing refuses is never stripped (there is no refusal to
+   * remedy), and a key the policy ADMITS is two answers for one key, exactly
+   * like a key on both allow and forbid lists.
    */
   readonly stripInjected: readonly string[];
   readonly raw: Readonly<Record<string, unknown>>;
@@ -2213,21 +2227,35 @@ function parseCommits(path: string, value: unknown): CommitsPolicy {
       );
     }
   }
-  // A STRIP KEY THIS POLICY ADMITS IS TWO ANSWERS FOR ONE KEY (zheref/nen#594),
-  // the both-lists rule above applied to the third list: the hook would remove
-  // a trailer the allow-list says a commit may carry. Refused by pointer, at
-  // the entry, case-insensitively -- the comparison every other trailer check
-  // here makes. A key the policy neither admits nor refuses ('Made-with') is
-  // accepted: the read-back refuses it by its -by/-with shape, so stripping it
-  // is the same remedy for the same refusal.
+  // EVERY STRIP KEY MUST BE A KEY THIS POLICY REFUSES (zheref/nen#594). The
+  // strip is a remedy for a refusal, so a key nothing refuses has nothing to be
+  // a remedy for, and stripping it would be nen silently editing a commit the
+  // repository never objected to. "Refuses" is read from the TWO sources the
+  // refusals themselves use, and nothing else: `refusedTrailerKeys` for this
+  // same block -- the list the generated hook bakes in and `commit format`
+  // asks -- and `ATTRIBUTION_SHAPED_KEY`, the read-back's -by/-with rule for a
+  // hook-added key the allow-list does not admit ('Made-with'). An ADMITTED
+  // key is two answers for one key, the both-lists rule above applied to the
+  // third list. Both refused by pointer, at the entry, case-insensitively --
+  // the comparison every other trailer check here makes.
   const stripInjected = read("stripInjected");
+  const refusedHere = refusedTrailerKeys({ allowedAttributionTrailers, forbiddenTrailers, runTrailer: null, subjectCase: null, bodyMaxLineLength: null, stripInjected: [], raw: {} }).map(
+    (key): string => key.toLowerCase(),
+  );
   stripInjected.forEach((key, index): void => {
     const admitted = allowedAttributionTrailers.find((other): boolean => other.toLowerCase() === key.toLowerCase());
-    if (admitted === undefined) return;
+    if (admitted !== undefined) {
+      throw new SchemaError(
+        path,
+        `commits.stripInjected[${index}]`,
+        `'${key}' is a key this policy ADMITS ('${admitted}' is listed under commits.allowedAttributionTrailers), and a key the policy admits is never stripped: the generated hook would remove a trailer the allow-list says a commit may carry. List it in one place or the other, not both`,
+      );
+    }
+    if (refusedHere.includes(key.toLowerCase()) || ATTRIBUTION_SHAPED_KEY.test(key)) return;
     throw new SchemaError(
       path,
       `commits.stripInjected[${index}]`,
-      `'${key}' is a key this policy ADMITS ('${admitted}' is listed under commits.allowedAttributionTrailers), and a key the policy admits is never stripped: the generated hook would remove a trailer the allow-list says a commit may carry. List it in one place or the other, not both`,
+      `'${key}' is a key nothing refuses -- it is not an attribution trailer this policy refuses (the built-in list or commits.forbiddenTrailers), and it does not end in -by or -with -- and a key nothing refuses is never stripped: the strip is a remedy for a refusal, and without one it would only edit a commit nobody objected to. Add it to commits.forbiddenTrailers first, or drop it from this list`,
     );
   });
   return {

@@ -555,6 +555,21 @@ describe("commits.stripInjected -- the opt-in strip list (zheref/nen#594)", () =
     expect(error.message).toContain("commits.allowedAttributionTrailers");
   });
 
+  it("refuses a key NOTHING refuses, by pointer -- a key nothing refuses is never stripped (hanten round 1, A)", () => {
+    const error = refusal({ commits: { allowedAttributionTrailers: ["Hatsu-Agent"], stripInjected: ["Co-authored-by", "Refs"] } });
+    expect(error.pointer).toBe("commits.stripInjected[1]");
+    expect(error.message).toContain("'Refs' is a key nothing refuses");
+    expect(error.message).toContain("a key nothing refuses is never stripped");
+    expect(error.message).toContain("commits.forbiddenTrailers");
+  });
+
+  it("accepts a REFUSED key in another case, a forbiddenTrailers key, and a -by/-with key the allow-list does not admit", () => {
+    const commits = loadWorkflow(
+      repoWith({ commits: { allowedAttributionTrailers: ["Hatsu-Agent"], forbiddenTrailers: ["X-Harness"], stripInjected: ["CO-AUTHORED-BY", "x-harness", "Made-with"] } }),
+    ).workflow.commits;
+    expect(commits.stripInjected).toEqual(["CO-AUTHORED-BY", "x-harness", "Made-with"]);
+  });
+
   it("compares CASE-INSENSITIVELY, as every trailer check does", () => {
     const error = refusal({ commits: { allowedAttributionTrailers: ["Co-Authored-By"], stripInjected: ["co-authored-by"] } });
     expect(error.pointer).toBe("commits.stripInjected[0]");

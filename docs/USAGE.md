@@ -435,7 +435,7 @@ The complete list:
 | every [`runner`](#family-runner) verb that calls `gh` | `5` | `gh` could not be started, in `shu`'s sense; a GitHub refusal there is `1`, because this table reserves no code for a network failure |
 | [`commit write`](#nen-commit-write) | `3` | committed, and the read-back found a trailer the policy refuses — **injected** by a hook, or carried by the message where git's parser read one nen's did not; the commit is left in place ([#273](https://github.com/zheref/nen/issues/273)) |
 | [`wc squash`](#nen-wc-squash) | `3` | squashed, and the read-back found a refused trailer on the fold — as `commit write`'s `3` ([#273](https://github.com/zheref/nen/issues/273)) |
-| [`commit write`](#nen-commit-write), [`wc squash`](#nen-wc-squash) | `4` | committed (squashed), and the repository's commit-msg hook **stripped** a hook-injected key it opted into stripping under `commits.stripInjected`, confirmed absent from the written commit; `3` wins over `4`, and `4` over `0` ([#594](https://github.com/zheref/nen/issues/594)) |
+| [`commit write`](#nen-commit-write), [`wc squash`](#nen-wc-squash) | `4` | committed (squashed), and the repository's commit-msg hook **stripped** a hook-injected key it opted into stripping under `commits.stripInjected`, confirmed absent from the written commit; `3` wins over `4`, and `4` over `0`. A **committed** outcome: callers treat it like `0`/`3` and never retry ([#594](https://github.com/zheref/nen/issues/594)) |
 | [`issue edit-body`](#nen-issue-edit-body) | `3` | conflict, nothing written: under `--expect-body-sha256` the current body is not the version the replacement was prepared from ([#205](https://github.com/zheref/nen/issues/205)) |
 | [`issue file`](#nen-issue-file), [`issue comment`](#nen-issue-comment), [`issue edit-body`](#nen-issue-edit-body), [`issue consolidate-close`](#nen-issue-consolidate-close), [`idea file`](#nen-idea-file), [`pr open`](#nen-pr-open), [`pr edit-body`](#nen-pr-edit-body), [`pr edit-title`](#nen-pr-edit-title), [`pr threads reply\|settle`](#nen-pr-threads), [`pr ledger`](#nen-pr-ledger) (post), [`wake fire`](#nen-wake-fire), [`wake verify`](#nen-wake-verify), `release-publish` | `4` | a private repository named in text bound for a PUBLIC target; nothing written ([private-name guard](#the-private-name-guard), [#329](https://github.com/zheref/nen/issues/329), [#363](https://github.com/zheref/nen/issues/363)). A check that could not run is `1`, never `4` and never `0`. On `pr threads` `4` is shared (no such thread / the pull request is not visible): `privateNameCheck` tells the two apart |
 | [`wc swap`](#nen-wc-swap) | `3` | a tree is dirty; nothing moved |
@@ -797,7 +797,7 @@ they assumed instead); they come back empty or `null`.
 | `commits.runTrailer` | the trailer key an AUTOMATED commit must ALSO carry, alongside the one attribution trailer the hook requires. Absent (`null`) by default — a run identifier is optional, never itself an attribution trailer, so it is never folded into `allowedAttributionTrailers` | the generated `commit-msg` hook's automated half |
 | `commits.subjectCase` | the commitlint `subject-case` rule, **declared as data** ([#263](https://github.com/zheref/nen/issues/263)): the string `"config-conventional"` (`@commitlint/config-conventional`'s published default, `[2, "never", ["sentence-case", "start-case", "pascal-case", "upper-case"]]`) or an explicit commitlint rule `[level, "always"\|"never", cases]` — level `0`, `1` or `2`; `[0]` alone disables; each case one of the names `@commitlint/ensure` accepts, bare or as `{ "case": …, "when": "never" }`. **Precedence:** a commitlint config the verbs can read as data wins, and this key is then reported as *not applied*; it **binds** where that config is JavaScript/TypeScript (which nen never executes), otherwise unreadable, or absent — level 2 refuses at exit 2, and the output names this file as the rule's source. Any other string (another preset is a JavaScript package), a non-list value, or a tuple commitlint would reject is refused **by pointer** at load, down to the element (`commits.subjectCase[2][0]`). Absent (`null`) by default — no rule is ever assumed | [`commit format`](#nen-commit-format), [`commit write`](#nen-commit-write) |
 | `commits.bodyMaxLineLength` | the commitlint `body-max-line-length` WIDTH, **declared as data** ([#290](https://github.com/zheref/nen/issues/290); the maintainer's ruling, "Refuse at 100, declarable"): a whole number of at least 1. **Precedence, as `subjectCase`'s:** a commitlint config the verbs can read as data wins, and this key is then reported as *not applied* — agreeing or **DIFFERING**, both named; it **binds** where that config is JavaScript/TypeScript, otherwise unreadable, or absent — a body line over it is refused at exit 2, and the output names this file as the width's source. Without it, an unreadable config means 100, assumed and binding. **The body only**: `footer-max-line-length` has no declared form. A string, a fraction, a width below 1 or any other value is refused **by pointer** at load (`commits.bodyMaxLineLength`), never coerced. Absent (`null`) by default — no width is ever declared for a repository | [`commit format`](#nen-commit-format) (its `--body` wrap and check), [`commit write`](#nen-commit-write) |
-| `commits.stripInjected` | trailer keys the generated `commit-msg` hook may **remove** from a message's trailer block when a hook added them inside a commit `nen commit write` or `nen wc squash` started ([#594](https://github.com/zheref/nen/issues/594)) — Cursor's cloud agents append `Co-authored-by:` in a `prepare-commit-msg` nobody can switch off. **Opt-in, and empty (`[]`) by default**: with nothing listed the hook is byte-identical to one generated before the key existed. Each entry is a trailer key (the same shape rule as every other key here); an entry the policy **admits** (listed under `allowedAttributionTrailers`, any case) is refused **by pointer** at load (`commits.stripInjected[0]`) — a key the policy admits is never stripped. **It never admits a key**: see [the strip](#a-hook-injected-refused-key-and-the-opt-in-strip) below. Edit it, then regenerate the hook with `nen scaffold init … --force` | the generated `commit-msg` hook; [`commit write`](#nen-commit-write) and [`wc squash`](#nen-wc-squash) (exit `4`, `stripped`) |
+| `commits.stripInjected` | trailer keys the generated `commit-msg` hook may **remove** from a message's trailer block when a hook added them inside a commit `nen commit write` or `nen wc squash` started ([#594](https://github.com/zheref/nen/issues/594)) — Cursor's cloud agents append `Co-authored-by:` in a `prepare-commit-msg` nobody can switch off. **Opt-in, and empty (`[]`) by default**: with nothing listed the hook is byte-identical to one generated before the key existed. Each entry is a trailer key (the same shape rule as every other key here) that this policy **refuses** — one the generated hook's refused list holds (an attribution-shaped key `allowedAttributionTrailers` does not admit, or a `forbiddenTrailers` key), or one the [read-back](#nen-commit-write) refuses by its `-by`/`-with` shape (`Made-with`). Anything else is refused **by pointer** at load (`commits.stripInjected[0]`): a key **nothing refuses** (`Refs`) is never stripped, because there is no refusal to remedy, and a key the policy **admits** (listed under `allowedAttributionTrailers`, any case) is never stripped either. **It never admits a key**: see [the strip](#a-hook-injected-refused-key-and-the-opt-in-strip) below. Edit it, then regenerate the hook with `nen scaffold init … --force` | the generated `commit-msg` hook; [`commit write`](#nen-commit-write) and [`wc squash`](#nen-wc-squash) (exit `4`, `stripped`) |
 | `monitor.maxCycles` / `pollSeconds` | how long a monitoring loop may run | callers |
 | `monitor.localSlotFrees` | when a LOCAL concurrency slot frees (Hatsu's ruling HR-5), a **closed** set: `"ready+prompted"` (the default — the PR is ready and the human has been prompted), `"merged"` (only once the PR merged), `"stacked-open"` (a PR open and stacked onto another effort's branch frees; every other effort as `ready+prompted`). Any other value is refused by pointer | [`loop slots`](#nen-loop-slots) |
 | `idle` | a typed **idle profile** (HR-5): `decisions` maps an ask-once row id (`[a-z0-9][a-z0-9-]*`, as `nen/decisions.json` spells one) to `"default"` \| `"hold"` \| `"refuse"`; `terminal` is the terminal state the batch runs to, a non-empty string in the repository's own words; `budget` is `{ "minutes": <n>, "tokens": <n> }`, positive whole numbers, `minutes` being **wall-clock minutes from the run manifest's `startedAt`** (the consumer's catalogue row owns the key's meaning); `localSlotFrees` is the slot rule under an idle profile, the same closed set as `monitor.localSlotFrees`, read by [`loop slots`](#nen-loop-slots) before it (stating both with two values is refused). Every key is optional; a stated one is validated by pointer, a near-miss key is refused, and any other key nen does not read is a warn on the `#idle` row, never accepted silently. **No default**, and nen never runs a batch or picks a resolution. [`schema check`](#nen-schema-check)'s `nen/workflow.json#idle` row cross-checks each id against `nen/decisions.json`: a row declared there with a class other than `ask-once-per-run` is a required FAIL; an id that file does not declare (or no file) is a warn, never a pass — the row may be the canon matrix's, which the checkout cannot see | callers; [`schema check`](#nen-schema-check) |
@@ -899,10 +899,22 @@ folded continuations included, from the message's **trailer block** only (the
 final paragraph, as git defines it — never the subject or body prose), prints
 `commit-msg: stripped the hook-injected '<Key>:' trailer
 (commits.stripInjected)` on stderr and appends the key to
-`<git dir>/nen-stripped-trailers`. The verb deletes a stale sidecar before
-the commit, reads and deletes it after, and reports a key as **stripped** only
-when the read-back confirms the written commit lacks it: exit `4`, the key
-on stderr and in `--json`'s `stripped`.
+`<git dir>/nen-stripped-trailers.<run id>`, where the run id is the random
+lower-case hex the verb sets in `NEN_STRIP_RUN` beside the composed keys — so
+two runs in one git dir never read each other's file. The verb reads and
+deletes its own run's file after the commit (other runs' files are never
+swept), and reports a key as **stripped** only when the read-back confirms
+the written commit lacks it: exit `4`, the key on stderr and in `--json`'s
+`stripped`. **Exit `4` is a committed outcome**, exactly as `0` and `3`
+are: a caller treats it like them and never retries. **Neither variable is
+ever exported by hand**: nen sets both on the one child `git commit` it runs.
+A `NEN_COMPOSED_TRAILER_KEYS` the hook finds without a well-formed run id was
+exported or leaked; the hook still strips (the commit cannot carry the key
+either way), says on stderr that the variable leaked, and writes no sidecar,
+so no verb reports the strip. The key spelled with spaces before its colon
+(`Key : value`, which git parses as that trailer) is stripped too; a longer
+key that merely starts with it (`Co-authored-by-bot:`) is not, and a key
+below a scissors line is never stripped and is refused (fail closed).
 
 **What the strip never does.** It never removes a key the composed message
 carried (a `--trailer` naming a listed key is refused as before, at exit
@@ -911,7 +923,9 @@ carried (a `--trailer` naming a listed key is refused as before, at exit
 variable unset — strips nothing and is refused exactly as before); and it
 never amends. A key the read-back still finds on the commit is **injected**
 (exit `3`, which wins over `4`), never reported as stripped. A failed
-commit under a non-empty list adds a hint that the hook may predate it.
+commit the hook refused **for a listed key** adds a hint that the hook may
+predate `commits.stripInjected`, naming the regeneration; a commit that
+failed for any other reason gets none.
 
 **Two values leave the file and become part of a script**, so both are held to a
 shape at load: `branch.base` (a git branch name a shell reads only once) and
@@ -4779,7 +4793,7 @@ read-back) — never folded into one of the exit-2 refusals, exactly as
 `nen/workflow.json` is present and malformed; **exit 3 when the fold landed
 and a hook injected a trailer the policy refuses**; **exit 4 when the fold
 landed and the commit-msg hook stripped a hook-injected key under
-`commits.stripInjected`** — `3` wins over `4`, and `4` over `0`.
+`commits.stripInjected`** — `3` wins over `4`, and `4` over `0`. Exit `4` is a **committed** outcome: a caller treats it like `0` and `3` and never retries, and the Hatsu repin updates its commit steps to read it so.
 
 **The folded commit is read back** ([#273](https://github.com/zheref/nen/issues/273)),
 exactly as [`commit write`](#nen-commit-write) reads its own and under the
@@ -4800,8 +4814,8 @@ a trailer or for `branch.base`.
 write`](#nen-commit-write) handles it and with [the same
 limits](#a-hook-injected-refused-key-and-the-opt-in-strip): the fold's `git
 commit -F` runs with `NEN_COMPOSED_TRAILER_KEYS` set to the message file's
-keys, a stale `<git dir>/nen-stripped-trailers` is deleted before the reset
-and the sidecar is read after; a key the folded commit really lacks is
+keys and `NEN_STRIP_RUN` to a fresh run id, and the run's own
+`<git dir>/nen-stripped-trailers.<run id>` is read and deleted after; a key the folded commit really lacks is
 `stripped[]`, named on stderr, exit **4**. Without the opt-in a
 hook-injected refused key is a refusal with no sanctioned way around it (the
 hook refuses, the commit fails at exit `1`, and `git reset --hard ORIG_HEAD`
@@ -11417,7 +11431,7 @@ Eleven steps, each reporting `created` / `appended` / `skipped` / `would-create`
 
 **The commit-msg hook's automated half is itself DERIVED from the resolved policy (zheref/nen#167), not a fixed pair baked in regardless of it.** It requires exactly the one attribution trailer `--agent-trailer` resolved to, plus `commits.runTrailer` too when that key is stated — never a hard-coded pair. When an **existing** `nen/workflow.json`'s `commits.allowedAttributionTrailers` does **not** admit the key `--agent-trailer` resolved to, the generated hook's automated half refuses **every** automated commit outright, naming the missing policy: there is no message such a repository could ever write that would satisfy a check for a trailer it does not admit, so the hook does not pretend to check for one. Regenerating a hook from an **unchanged** policy is byte-stable.
 
-**`commits.stripInjected` adds one step, and only when it lists a key ([#594](https://github.com/zheref/nen/issues/594)).** With keys listed, the commit-msg hook gains a strip step that runs **before** the refusals and **only** when `NEN_COMPOSED_TRAILER_KEYS` is set (set-but-empty counts) — the variable [`commit write`](#nen-commit-write) and [`wc squash`](#nen-wc-squash) give their child `git commit`, naming the composed message's keys. For each listed key that is **not** among them, it removes that key's lines and their folded continuations from the message's **trailer block** only — the final paragraph, as git defines it, never the subject or a prose line in the body — with portable POSIX `sh` and `awk`, reports each removal as `commit-msg: stripped the hook-injected '<Key>:' trailer (commits.stripInjected)` on stderr and appends the key to `<git dir>/nen-stripped-trailers` (`git rev-parse --git-dir`, so a linked worktree records its own). The variable is **not** an in-band override: it cannot let a refused key through (the refusals still run on what is left), it only removes keys this repository listed, never one the composed message carried, a plain `git commit` (the variable unset) strips nothing, and every removal is reported and moves the verb's exit to `4`. **With the list empty — the default — the hook is byte-identical to one generated before the key existed**, so `init` keeps reporting an existing hook `unchanged`. A repository that edits the list regenerates its hook with `nen scaffold init … --force`; until it does, the old hook refuses the key rather than stripping it, and the verbs' failure line says so. [The strip, in full](#a-hook-injected-refused-key-and-the-opt-in-strip).
+**`commits.stripInjected` adds one step, and only when it lists a key ([#594](https://github.com/zheref/nen/issues/594)).** With keys listed, the commit-msg hook gains a strip step that runs **before** the refusals and **only** when `NEN_COMPOSED_TRAILER_KEYS` is set (set-but-empty counts) — the variable [`commit write`](#nen-commit-write) and [`wc squash`](#nen-wc-squash) give their child `git commit`, naming the composed message's keys. For each listed key that is **not** among them, it removes that key's lines and their folded continuations from the message's **trailer block** only — the final paragraph, as git defines it, never the subject or a prose line in the body — with portable POSIX `sh` and `awk`, reports each removal as `commit-msg: stripped the hook-injected '<Key>:' trailer (commits.stripInjected)` on stderr and appends the key to `<git dir>/nen-stripped-trailers.<run id>` (`git rev-parse --git-dir`, so a linked worktree records its own; the run id is the hex the verb sets in `NEN_STRIP_RUN`). **Neither variable is ever exported by hand**: found without a well-formed run id, the step still strips, says on stderr that the variable was exported or leaked, and writes no sidecar. When the list is non-empty the hook's header comment gains one line saying so. The variable is **not** an in-band override: it cannot let a refused key through (the refusals still run on what is left), it only removes keys this repository listed, never one the composed message carried, a plain `git commit` (the variable unset) strips nothing, and every removal is reported and moves the verb's exit to `4`. **With the list empty — the default — the hook is byte-identical to one generated before the key existed**, so `init` keeps reporting an existing hook `unchanged`. A repository that edits the list regenerates its hook with `nen scaffold init … --force`; until it does, the old hook refuses the key rather than stripping it, and the verbs' failure line says so. [The strip, in full](#a-hook-injected-refused-key-and-the-opt-in-strip).
 
 `--agent-trailer`/`--run-trailer`/`--marker-env` are caller data (which trailer key(s) and environment variable mark an automated commit is a convention of the target repository, not a literal this binary ships) and are validated as legal git-trailer-key / shell-identifier shapes, since each is interpolated into the generated hook script. **Only `--marker-env` is required.** `--agent-trailer` is optional and defaults to this project family's own CI-plane provenance trailer ([Two provenance trailers](#two-provenance-trailers)) when omitted; `--run-trailer` is optional with no default, and when given is the key `commits.runTrailer` takes.
 
@@ -12605,18 +12619,20 @@ adds is refused by the generated `commit-msg` hook, the commit fails at exit
 `1`, and there is no sanctioned way around it — never `--no-verify`; see
 zheref/hatsu's
 [`docs/AGENT-ATTRIBUTION.md`](https://github.com/zheref/hatsu/blob/main/docs/AGENT-ATTRIBUTION.md)
-for the stop. **With it**, the verb resolves `<git dir>/nen-stripped-trailers`
-through `git rev-parse --git-dir` and deletes a stale one, runs `git commit
--F` with `NEN_COMPOSED_TRAILER_KEYS` set to the composed message's keys
-(lower-cased, comma-joined, possibly empty), then reads and deletes the
-sidecar. A key it names that the read-back confirms **absent** from the
+for the stop. **With it**, the verb draws a random run id, resolves
+`<git dir>/nen-stripped-trailers.<run id>` through `git rev-parse --git-dir`,
+runs `git commit -F` with `NEN_COMPOSED_TRAILER_KEYS` set to the composed
+message's keys (lower-cased, comma-joined, possibly empty) and `NEN_STRIP_RUN`
+to the run id — neither is ever exported by hand — then reads and deletes
+that run's sidecar. A key it names that the read-back confirms **absent** from the
 written commit is **stripped**: `nen commit write: the written commit <sha>
 does not carry '<Key>': the repository's commit-msg hook stripped that key …`
 on stderr, `stripped: [key, ...]` in `--json`, exit **4**. A key the commit
 still carries stays **injected** (exit `3`). The strip never removes a key the
 composed message carried, never admits a refused key, never amends. A failed
-`git commit` under a non-empty list adds a hint: the hook may predate the
-list — regenerate it with `nen scaffold init … --force`.
+`git commit` the hook refused for a **listed** key adds a hint: the hook may
+predate `commits.stripInjected` — regenerate it with `nen scaffold init …
+--force`. Any other failure gets no hint.
 
 **Exit codes** — `0` committed, nothing refused added; `1` a broken config, a
 refused proof, an empty index, a failed `git commit` or read-back; `2` the
@@ -12624,7 +12640,7 @@ message or a `--trailer` failing the shape; **`3` committed, and a hook
 injected a trailer the policy refuses**; **`4` committed, and the commit-msg
 hook stripped a hook-injected key under `commits.stripInjected`**.
 Precedence: `3` wins over `4`, and `4` over `0` — a strip beside a key
-still on the commit never hides it.
+still on the commit never hides it. Exit `4` is a **committed** outcome: a caller treats it like `0` and `3` and never retries, and the Hatsu repin updates its commit steps to read it so.
 
 **`--json`** — `nen.commit.write/v0.1`: `{ contract, sha, subject, trailers:
 [{ key, value }], injected: [key, ...], dryRun, stripped: [key, ...] }`. `sha` is `null` on a dry

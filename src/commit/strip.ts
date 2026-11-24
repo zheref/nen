@@ -7,14 +7,22 @@
 // the message nen composed did not carry it; this module only tells the hook
 // which keys nen composed and reads back what the hook removed:
 //
-//   1. BEFORE the commit, the sidecar (`<git dir>/nen-stripped-trailers`) is
-//      resolved through `git rev-parse --git-dir` -- the hook resolves it the
-//      same way, so a linked worktree names its own -- and a stale one from an
-//      earlier run is deleted, so nothing it says can be blamed on this one;
+//   1. BEFORE the commit, a fresh RUN ID is drawn (random lower-case hex) and
+//      the sidecar `<git dir>/nen-stripped-trailers.<run id>` is resolved
+//      through `git rev-parse --git-dir` -- the hook resolves it the same way,
+//      so a linked worktree names its own. The file is this run's alone (hanten
+//      round 1, Feitan SEC-12): two runs interleaved in one git dir never read
+//      each other's. Other runs' files are NOT swept -- one is only ever left
+//      by a run that died between its commit and its read-back, nothing reads
+//      it, and deleting a file another live run is about to read would be the
+//      race this id exists to close;
 //   2. the child `git commit` runs with `NEN_COMPOSED_TRAILER_KEYS` set to the
 //      composed message's keys, lower-cased and comma-joined (possibly empty:
-//      SET is the signal, the value is the list). A plain `git commit` has no
-//      such variable and the hook strips nothing;
+//      SET is the signal, the value is the list), and `NEN_STRIP_RUN` set to
+//      the run id. A plain `git commit` has neither and the hook strips
+//      nothing. NEITHER IS EVER EXPORTED BY HAND: the hook reads a
+//      composed-keys variable with no well-formed run id as exported or
+//      leaked, still strips, says so, and records nothing;
 //   3. AFTER it, the sidecar is read and deleted. Every key it names is
 //      cross-checked against the read-back: a key the written commit still
 //      carries was not stripped -- it is an injected key (exit 3), exactly as
@@ -27,19 +35,34 @@
 // key a harness added -- said on stderr, in `--json`'s `stripped`, and in the
 // exit code.
 
+import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { GIT, outputLines, type Seams } from "../seam/exec.js";
 import { rawLines } from "../seam/lines.js";
 import type { LoadedWorkflow } from "../schema/workflow.js";
 import type { Trailer } from "./format.js";
-import { HOOK_COMPOSED_KEYS_ENV, STRIP_SIDECAR_FILE } from "../scaffold/hook.js";
+import { HOOK_COMPOSED_KEYS_ENV, HOOK_STRIP_RUN_ENV, STRIP_SIDECAR_FILE } from "../scaffold/hook.js";
 
 /** The variable whose PRESENCE tells the generated hook a nen verb started this commit; its value is the composed keys. ONE name, the hook's. */
 export const COMPOSED_KEYS_ENV = HOOK_COMPOSED_KEYS_ENV;
 
-/** The file under the git dir the hook appends one stripped key per line to. ONE name, the hook's. */
+/** The variable naming this run's id, which names its sidecar. ONE name, the hook's. */
+export const STRIP_RUN_ENV = HOOK_STRIP_RUN_ENV;
+
+/** The file under the git dir the hook appends one stripped key per line to, `.<run id>` appended. ONE name, the hook's. */
 export const STRIP_SIDECAR = STRIP_SIDECAR_FILE;
+
+/** One run's strip bookkeeping: its id, and the sidecar that id names. */
+export interface StripRun {
+  readonly runId: string;
+  readonly path: string;
+}
+
+/** A fresh run id: 16 lower-case hex digits, the shape the hook accepts (`^[0-9a-f]+$`). */
+export function newStripRunId(): string {
+  return randomBytes(8).toString("hex");
+}
 
 /** The exit a verb gives a commit it wrote with a hook-injected key stripped. */
 export const STRIPPED_EXIT = 4;
@@ -48,11 +71,14 @@ export const STRIPPED_EXIT = 4;
 export const GIT_DIR_ARGS: readonly string[] = ["rev-parse", "--git-dir"];
 
 /**
- * Resolve the sidecar and delete a stale one -- step 1 above. Throws when git
- * cannot name the git dir: the commit has not been attempted, and a strip the
- * verb could not read back would be a strip nobody reported.
+ * Draw the run id and resolve its sidecar -- step 1 above -- deleting a file
+ * already at that path (only an id collision could put one there). Throws when
+ * git cannot name the git dir: the commit has not been attempted, and a strip
+ * the verb could not read back would be a strip nobody reported. `runId` is a
+ * parameter so a test can name two runs; a verb never passes one.
  */
-export function prepareStripSidecar(seams: Seams, root: string): string {
+export function prepareStripSidecar(seams: Seams, root: string, runId: string = newStripRunId()): StripRun {
+  if (!/^[0-9a-f]+$/.test(runId)) throw new Error(`a strip run id is lower-case hex, got '${runId}'`);
   const result = seams.run(GIT, [...GIT_DIR_ARGS], { cwd: root });
   if (result.spawnFailed || result.code !== 0) {
     throw new Error(
@@ -60,19 +86,19 @@ export function prepareStripSidecar(seams: Seams, root: string): string {
     );
   }
   const dir = result.stdout.trim();
-  const path = join(isAbsolute(dir) ? dir : join(root, dir), STRIP_SIDECAR);
+  const path = join(isAbsolute(dir) ? dir : join(root, dir), `${STRIP_SIDECAR}.${runId}`);
   rmSync(path, { force: true });
-  return path;
+  return { runId, path };
 }
 
-/** The child environment -- step 2: the composed keys, lower-cased, comma-joined, first-seen unique. */
-export function composedKeysEnv(sent: readonly Trailer[]): Readonly<Record<string, string>> {
+/** The child environment -- step 2: the composed keys, lower-cased, comma-joined, first-seen unique; and the run id. */
+export function composedKeysEnv(sent: readonly Trailer[], run: StripRun): Readonly<Record<string, string>> {
   const keys: string[] = [];
   for (const trailer of sent) {
     const lower = trailer.key.toLowerCase();
     if (!keys.includes(lower)) keys.push(lower);
   }
-  return { [COMPOSED_KEYS_ENV]: keys.join(",") };
+  return { [COMPOSED_KEYS_ENV]: keys.join(","), [STRIP_RUN_ENV]: run.runId };
 }
 
 /** Read the sidecar and delete it -- step 3's first half. Absent is "nothing stripped". */
@@ -122,11 +148,21 @@ export function writtenExit(injected: number, stripped: number): 0 | 3 | 4 {
 }
 
 /**
- * The hint appended to a failed `git commit` when the policy lists keys to
- * strip, or "" when it lists none: a hook generated before the list was
- * written refuses the key rather than stripping it.
+ * The hint appended to a failed `git commit`, or "": only when the policy
+ * lists keys to strip AND git's stderr carries the generated hook's refusal
+ * line for one of THOSE keys (`commit-msg: this message carries a '<Key>:'
+ * trailer`, any case) -- the one failure a hook generated before the list
+ * was written would produce. Worded as a possibility, because the same line
+ * also comes from a current hook refusing a listed key it could not strip (one
+ * below a scissors line, or in body prose). A commit that failed for any other
+ * reason gets no hint: it would send the caller to regenerate a hook that is
+ * not the problem.
  */
-export function stripFailureHint(policy: LoadedWorkflow | null): string {
-  if (policy === null || !policy.present || policy.workflow.commits.stripInjected.length === 0) return "";
-  return ` ${policy.path} lists commits.stripInjected (${policy.workflow.commits.stripInjected.map((key): string => `'${key}'`).join(", ")}), but a commit-msg hook generated before that list was written refuses those keys instead of stripping them: regenerate it with 'nen scaffold init ... --force', then commit again.`;
+export function stripFailureHint(policy: LoadedWorkflow | null, gitStderr: string): string {
+  if (policy === null || !policy.present) return "";
+  const listed = policy.workflow.commits.stripInjected;
+  const said = gitStderr.toLowerCase();
+  const refused = listed.filter((key): boolean => said.includes(`commit-msg: this message carries a '${key.toLowerCase()}:' trailer`));
+  if (refused.length === 0) return "";
+  return ` The commit-msg hook refused ${refused.map((key): string => `'${key}'`).join(", ")}, which ${policy.path} lists under commits.stripInjected: the hook may predate commits.stripInjected; regenerate it with 'nen scaffold init ... --force', then commit again.`;
 }

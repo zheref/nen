@@ -374,8 +374,8 @@ export function performSquash(
   commitOptions: {
     /** Extra environment for the child `git commit` only -- ../commit/strip.ts's NEN_COMPOSED_TRAILER_KEYS (zheref/nen#594). */
     readonly env?: Readonly<Record<string, string>>;
-    /** Appended to the failed-commit error -- ../commit/strip.ts's stripFailureHint. */
-    readonly failureHint?: string;
+    /** Appended to the failed-commit error, given git's stderr -- ../commit/strip.ts's stripFailureHint. */
+    readonly failureHint?: (gitStderr: string) => string;
   } = {},
 ): string {
   const reset = runGit(seams, cwd, ["reset", "--soft", mergeBaseSha]);
@@ -387,7 +387,7 @@ export function performSquash(
   const commit = runGit(seams, cwd, ["commit", "-F", messageFile], commitOptions.env);
   if (commit.code !== 0) {
     throw new SquashStateError(
-      `reset to '${mergeBaseSha}' but 'git commit -F ${messageFile}' failed: ${commit.error}. The original commits are not lost -- recover them with 'git reset --hard ORIG_HEAD'.${commitOptions.failureHint ?? ""}`,
+      `reset to '${mergeBaseSha}' but 'git commit -F ${messageFile}' failed: ${commit.error}. The original commits are not lost -- recover them with 'git reset --hard ORIG_HEAD'.${commitOptions.failureHint?.(commit.error) ?? ""}`,
     );
   }
   const head = runGit(seams, cwd, ["rev-parse", "HEAD"]);

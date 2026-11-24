@@ -189,12 +189,15 @@ reports.dir beside '.nen/'.
 commits.stripInjected (zheref/nen#594) is the one OPT-IN that adds a step:
 with keys listed, the commit-msg hook gains a strip step, run before the
 refusals and only when NEN_COMPOSED_TRAILER_KEYS is set (the variable 'nen
-commit write' and 'nen wc squash' give their child 'git commit'), that
-removes a listed key a hook added -- and the composed message did not carry
--- from the trailer block, reporting each removal on stderr and in
-<git dir>/nen-stripped-trailers (the verbs' exit 4). It admits nothing: a
-plain 'git commit' strips nothing, and a key the message carried is refused
-as before. With the list empty (the default) the hook is byte-identical to
+commit write' and 'nen wc squash' give their child 'git commit', beside a
+run id in NEN_STRIP_RUN), that removes a listed key a hook added -- and the
+composed message did not carry -- from the trailer block, reporting each
+removal on stderr and in <git dir>/nen-stripped-trailers.<run id> (the verbs'
+exit 4). Neither variable is ever exported by hand: found without a
+well-formed run id, the hook still strips but says the variable leaked and
+records nothing. It admits nothing: a plain 'git commit' strips nothing, and
+a key the message carried is refused as before. Every listed key must be one
+the policy refuses. With the list empty (the default) the hook is byte-identical to
 one generated before the key existed, so 'init' still reports it unchanged. A
 repository that edits the list regenerates the hook with 'nen scaffold init
 ... --force'.

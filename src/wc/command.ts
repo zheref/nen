@@ -32,6 +32,7 @@ import {
   collectStripSidecar,
   COMPOSED_KEYS_ENV,
   composedKeysEnv,
+  STRIP_RUN_ENV,
   confirmStripped,
   discardStripSidecar,
   prepareStripSidecar,
@@ -237,11 +238,13 @@ even with --base and no trailer.
 
 A HOOK-INJECTED KEY IS STRIPPED ONLY WHERE THE REPOSITORY OPTS IN
 (zheref/nen#594), exactly as 'nen commit write' does: the fold's 'git commit'
-runs with ${COMPOSED_KEYS_ENV} set to the message file's keys, and a
-commit-msg hook regenerated from a non-empty commits.stripInjected removes a
-listed key a hook added from the trailer block, naming it in <git
-dir>/nen-stripped-trailers; this verb clears a stale one before the reset,
-reads it after, and reports a key the fold really lacks as stripped. Without
+runs with ${COMPOSED_KEYS_ENV} set to the message file's keys and
+${STRIP_RUN_ENV} to a fresh run id, and a commit-msg hook regenerated from a
+non-empty commits.stripInjected removes a listed key a hook added from the
+trailer block, naming it in <git dir>/nen-stripped-trailers.<run id>; this
+verb reads and deletes its own run's file after the fold, and reports a key
+the fold really lacks as stripped. Neither variable is ever exported by
+hand. Without
 the opt-in a hook-injected refused key is a refusal with no sanctioned way
 around it. The strip never removes a key the message carried, never admits
 a refused key, never amends.
@@ -249,7 +252,8 @@ a refused key, never amends.
 Exits: 0 squashed, dry run, or nothing to squash; 1 a git failure or a
 policy nen cannot read; 2 every refusal above; 3 squashed, and a hook
 injected a refused trailer; 4 squashed, and the commit-msg hook stripped a
-hook-injected key (3 wins over 4, 4 over 0).
+hook-injected key (3 wins over 4, 4 over 0). 4 is a COMMITTED outcome, as 0
+and 3 are: never retry it.
 
 --json's contract is '${SQUASH_CONTRACT}': { contract, onto, mergeBase,
 folded: [sha, ...], newSha, dryRun, base, baseRefs: [ref, ...], injected:
@@ -773,14 +777,14 @@ function squash(context: CommandContext): number {
   let newSha: string;
   try {
     newSha = performSquash(context.seams, root, plan.mergeBase, messageFilePath, {
-      env: composedKeysEnv(sent),
-      failureHint: stripFailureHint(policy),
+      env: composedKeysEnv(sent, sidecar),
+      failureHint: (gitStderr): string => stripFailureHint(policy, gitStderr),
     });
   } catch (error) {
-    discardStripSidecar(sidecar);
+    discardStripSidecar(sidecar.path);
     throw error;
   }
-  const reported = collectStripSidecar(sidecar);
+  const reported = collectStripSidecar(sidecar.path);
   // THE READ-BACK (../commit/readback.ts): the trailers the folded commit
   // actually carries, against the ones the message file did and the policy
   // loaded above. Never an amend.

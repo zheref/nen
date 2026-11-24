@@ -85,11 +85,22 @@ export interface HookSpec {
   readonly markerEnvVar: string;
 }
 
-/** The sidecar under the git dir the strip step names each removed key in -- ../commit/strip.ts reads it. */
+/** The sidecar under the git dir the strip step names each removed key in -- `<git dir>/nen-stripped-trailers.<run id>`; ../commit/strip.ts reads it. */
 export const STRIP_SIDECAR_FILE = "nen-stripped-trailers";
 
 /** The variable whose PRESENCE gates the strip step -- ../commit/strip.ts sets it on the child `git commit`. */
 export const HOOK_COMPOSED_KEYS_ENV = "NEN_COMPOSED_TRAILER_KEYS";
+
+/**
+ * The variable naming the nen RUN a strip is recorded for: lower-case hex,
+ * fresh per invocation of `nen commit write` / `nen wc squash`. The sidecar
+ * is `<git dir>/nen-stripped-trailers.<run>`, so two runs never read each
+ * other's (hanten round 1, Feitan SEC-12). Missing or malformed while
+ * HOOK_COMPOSED_KEYS_ENV is set means that variable was exported or leaked
+ * rather than set by a verb: the hook still strips, says so, and writes no
+ * sidecar.
+ */
+export const HOOK_STRIP_RUN_ENV = "NEN_STRIP_RUN";
 
 /**
  * The awk program the strip step runs once per key, with `key` the lower-cased
@@ -99,12 +110,21 @@ export const HOOK_COMPOSED_KEYS_ENV = "NEN_COMPOSED_TRAILER_KEYS";
  * as "nothing removed", so the refusal below then decides (fail closed).
  *
  * THE TRAILER BLOCK IS FOUND AS GIT FINDS IT: below a scissors line nothing
- * counts; trailing blank and '#' lines are skipped; the block is the last
- * paragraph, and never the FIRST one (that is the subject). Every non-'#'
- * line in it must be a trailer (`Key:` or `Key :`) or a continuation (leading
- * whitespace, not first) -- a paragraph of prose with one `Key:` line in it
- * is body text, and nothing in it is touched. CRLF is matched through, and
- * every kept line is printed exactly as it was read.
+ * counts -- a key there is never stripped and is left for the refusal below,
+ * which greps the whole file (fail closed); trailing blank and '#' lines are
+ * skipped; the block is the last paragraph, and never the FIRST one (that is
+ * the subject). Every non-'#' line in it must be a trailer (`Key:` or
+ * `Key :`) or a continuation (leading whitespace, not first) -- a paragraph of
+ * prose with one `Key:` line in it is body text, and nothing in it is
+ * touched. CRLF is matched through, and every kept line is printed exactly as
+ * it was read.
+ *
+ * THE KEY MATCHES EXACTLY, IN EITHER FORM GIT PARSES: `Key:` and the spaced
+ * `Key : value` (spaces or tabs before the colon), any case -- never a prefix
+ * (`Co-authored-by-bot:` is another key and is kept). The spaced form is
+ * stripped HERE only: the refusal greps below match `^Key:` and are left byte
+ * for byte as they were, so outside the opt-in a spaced key still reaches the
+ * read-back, which refuses it at exit 3 as before.
  */
 const STRIP_AWK = String.raw`{ raw[NR] = $0; t = $0; sub(/\r$/, "", t); txt[NR] = t }
 END {
@@ -124,12 +144,12 @@ END {
   }
   hit = 0
   skip = 0
-  k = length(key) + 1
+  k = length(key)
   for (i = 1; i <= NR; i++) {
     if (ok && i >= s && i <= e) {
       if (skip && txt[i] ~ /^[ \t]/) continue
       skip = 0
-      if (tolower(substr(txt[i], 1, k)) == key ":") { skip = 1; hit = 1; continue }
+      if (tolower(substr(txt[i], 1, k)) == key && substr(txt[i], k + 1) ~ /^[ \t]*:/) { skip = 1; hit = 1; continue }
     }
     print raw[i]
   }
@@ -137,30 +157,42 @@ END {
   exit 1
 }`;
 
-/**
- * The strip step, or "" when the repository lists no key -- the empty string is
- * what keeps an unchanged policy's hook byte-identical (renderCommitMsgHook's
- * header). Keys are baked in, de-duplicated case-insensitively, in the
- * policy's own spelling: that spelling is what the report and the sidecar say.
- */
-function renderStripStep(stripInjected: readonly string[]): string {
+/** The listed keys, de-duplicated case-insensitively, in the policy's own spelling -- what the report and the sidecar say. */
+function stripKeys(stripInjected: readonly string[]): readonly string[] {
   const keys: string[] = [];
   for (const key of stripInjected) {
     if (!keys.some((other): boolean => other.toLowerCase() === key.toLowerCase())) keys.push(key);
   }
+  return keys;
+}
+
+/**
+ * The strip step, or "" when the repository lists no key -- the empty string is
+ * what keeps an unchanged policy's hook byte-identical (renderCommitMsgHook's
+ * header).
+ */
+function renderStripStep(keys: readonly string[]): string {
   if (keys.length === 0) return "";
   return `
 # commits.stripInjected (zheref/nen#594). Only inside a commit a nen verb
-# started -- NEN_COMPOSED_TRAILER_KEYS set, even empty, to the keys the message
+# started -- ${HOOK_COMPOSED_KEYS_ENV} set, even empty, to the keys the message
 # nen composed carries -- remove each key listed here that the composed message
 # did NOT carry from the message's trailer block: a hook (a harness's own
 # prepare-commit-msg) added it. This is not an override: it never lets a
 # refused key through (the refusals below still run on what is left), never
 # touches a key the composed message carried, and a plain 'git commit' (the
-# variable unset) strips nothing. Every removal is reported on stderr and in
-# ${STRIP_SIDECAR_FILE} under the git dir, which the verb reports as exit 4.
+# variable unset) strips nothing. Every removal is reported on stderr and, for
+# the nen run ${HOOK_STRIP_RUN_ENV} names, in ${STRIP_SIDECAR_FILE}.<run> under
+# the git dir, which the verb reports as exit 4. NEITHER VARIABLE IS EVER
+# EXPORTED BY HAND: nen sets both on the one child 'git commit' it runs, and a
+# composed-keys variable found without a well-formed run id was exported or
+# leaked -- the strip still happens, says so, and records nothing.
 if [ -n "\${${HOOK_COMPOSED_KEYS_ENV}+x}" ]; then
   nen_composed=",\$(printf '%s' "\$${HOOK_COMPOSED_KEYS_ENV}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]'),"
+  nen_run="\${${HOOK_STRIP_RUN_ENV}:-}"
+  case "\$nen_run" in
+    ''|*[!0-9a-f]*) nen_run='' ;;
+  esac
   # The listed keys, space-separated: each is [A-Za-z0-9][A-Za-z0-9-]* (held
   # to that shape at load), so the unquoted expansion below splits on spaces
   # and nothing else.
@@ -170,16 +202,24 @@ if [ -n "\${${HOOK_COMPOSED_KEYS_ENV}+x}" ]; then
     case "\$nen_composed" in
       *",\$nen_lower,"*) continue ;;
     esac
-    if awk -v key="\$nen_lower" '${STRIP_AWK}' "\$msg_file" >"\$msg_file.nen-strip"; then
-      nen_git_dir="\$(git rev-parse --git-dir)" || {
-        rm -f "\$msg_file.nen-strip"
-        echo "commit-msg: could not resolve the git dir to record a stripped '\$nen_key:' trailer (commits.stripInjected), so nothing is stripped." >&2
-        exit 1
-      }
+    # A stripped message always keeps its subject, so EMPTY output is never a
+    # strip: nothing is replaced, and the refusal below decides.
+    if awk -v key="\$nen_lower" '${STRIP_AWK}' "\$msg_file" >"\$msg_file.nen-strip" && [ -s "\$msg_file.nen-strip" ]; then
+      if [ -n "\$nen_run" ]; then
+        nen_git_dir="\$(git rev-parse --git-dir)" || {
+          rm -f "\$msg_file.nen-strip"
+          echo "commit-msg: could not resolve the git dir to record a stripped '\$nen_key:' trailer (commits.stripInjected), so nothing is stripped." >&2
+          exit 1
+        }
+      fi
       cat "\$msg_file.nen-strip" >"\$msg_file"
       rm -f "\$msg_file.nen-strip"
-      printf '%s\\n' "\$nen_key" >>"\$nen_git_dir/${STRIP_SIDECAR_FILE}"
-      echo "commit-msg: stripped the hook-injected '\$nen_key:' trailer (commits.stripInjected)" >&2
+      if [ -n "\$nen_run" ]; then
+        printf '%s\\n' "\$nen_key" >>"\$nen_git_dir/${STRIP_SIDECAR_FILE}.\$nen_run"
+        echo "commit-msg: stripped the hook-injected '\$nen_key:' trailer (commits.stripInjected)" >&2
+      else
+        echo "commit-msg: stripped the hook-injected '\$nen_key:' trailer (commits.stripInjected), but ${HOOK_COMPOSED_KEYS_ENV} was found without a nen run id (${HOOK_STRIP_RUN_ENV} missing or malformed): it was exported or leaked rather than set by a nen verb, so no sidecar was written and no verb will report this strip." >&2
+      fi
     else
       rm -f "\$msg_file.nen-strip"
     fi
@@ -276,6 +316,11 @@ fi
 `,
     )
     .join("");
+  const keys = stripKeys(stripInjected);
+  // H: one header line when the strip step is rendered; none (byte-identical) when it is not.
+  const stripHeader = keys.length === 0
+    ? ""
+    : "#\n# It also REMOVES a listed trailer a hook injected, first (commits.stripInjected),\n# and only inside a commit a nen verb started -- see the step below.\n";
   const required = spec.runTrailer === null ? spec.agentTrailer : `${spec.agentTrailer}:/${spec.runTrailer}`;
   const automatedHalf = !agentTrailerAdmitted
     ? `  echo "commit-msg: ${spec.markerEnvVar} is set (an automated commit), but this repository's nen/workflow.json does not admit '${spec.agentTrailer}' under commits.allowedAttributionTrailers -- no automated commit can carry a trailer this policy does not list. Add '${spec.agentTrailer}' to that list (or regenerate this hook with a different --agent-trailer), then re-run 'nen scaffold init'." >&2
@@ -309,11 +354,11 @@ ${
 # own policy admits, were both read from nen/workflow.json when this file was
 # generated and are baked in as data: this hook needs no nen on PATH. Re-run
 # 'nen scaffold init' after changing that policy.
-
+${stripHeader}
 set -eu
 
 msg_file="\$1"
-${renderStripStep(stripInjected)}${refusals}
+${renderStripStep(keys)}${refusals}
 if [ -z "\${${spec.markerEnvVar}:-}" ]; then
   # Not an automated commit -- nothing further to enforce.
   exit 0
