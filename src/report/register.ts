@@ -245,7 +245,7 @@ export function parseDesk(document: unknown, display: string): Desk {
     const pr = entry["pr"];
     if (pr !== undefined && pr !== null) {
       const reference = typeof pr === "string" || typeof pr === "number" ? parseReference(pr) : null;
-      if (reference === null || (reference.form !== "slug" && reference.kind === "issue")) {
+      if (reference === null || !Number.isSafeInteger(reference.number) || reference.number <= 0 || (reference.form !== "slug" && reference.kind === "issue")) {
         refuseDesk(display, where, "has an invalid 'pr', not a pull-request reference (a number, notation, or owner/name#<n>)");
       }
     }
@@ -260,9 +260,10 @@ export function parseDesk(document: unknown, display: string): Desk {
       if (seenLetters.has(option.letter)) refuseDesk(display, `${where}.options[${index}].letter`, "repeats an earlier option's letter; the picker cannot ask that");
       seenLetters.add(option.letter);
     }
-    if (Array.isArray(entry["options"]) && entry["options"].every((option) => isRecord(option) && (option["star"] === undefined || typeof option["star"] === "boolean"))) {
-      const stars = options.filter((option): boolean => option.star).length;
-      if (stars !== 1) refuseDesk(display, where, `stars ${stars} options; an ask recommends exactly one, the same one the surface's picker stars`);
+    const stars = options.filter((option): boolean => option.star).length;
+    const allStarsKnown = Array.isArray(entry["options"]) && entry["options"].every((option) => isRecord(option) && (option["star"] === undefined || typeof option["star"] === "boolean"));
+    if (stars > 1 || (allStarsKnown && stars === 0)) {
+      refuseDesk(display, where, `stars ${stars} options; an ask recommends exactly one, the same one the surface's picker stars`);
     }
     const objects = list(entry, "objects", display, where, false).map((object, index): { label: string; url: string } => {
       const at = `${where}.objects[${index}]`;

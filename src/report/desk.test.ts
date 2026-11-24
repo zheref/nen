@@ -115,3 +115,16 @@ it("withholds rejected string values and avoids errors inferred from invalid con
   expect(message).toContain("options[0]");
   expect(message).toContain("options[1]");
 });
+
+it("reports invalid reference numbers and a definite excess of stars despite a malformed peer", () => {
+  for (const pr of ["NN-PR-#0", "pr#9007199254740993", 9007199254740992]) {
+    const document = desk();
+    const option = document.gates[0]!.asks[0]!.options[0]!;
+    Object.assign(document.gates[0]!.asks[0]!, {pr, options: [option, {...option, letter: "B"}, null]});
+    let message = "";
+    try { parseDesk(document, "bad.json"); } catch (error) { message = String(error); }
+    expect(message).toContain("invalid 'pr'");
+    expect(message).toContain("stars 2 options");
+    expect(message).toContain("options[2]");
+  }
+});
