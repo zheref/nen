@@ -1240,8 +1240,9 @@ export function manageWorktree(
         tipKnown = local.code === 0;
         if (tipKnown) {
           // A treeless partial clone can hold the commit but not its root or
-          // nested trees. Prove every tree needed by preflights without fetching.
-          const trees = git.run(core, ["ls-tree", "-r", "--name-only", "--full-tree", "--end-of-options", tip]);
+          // nested trees. Traverse this commit's trees without fetching blobs or
+          // buffering pathnames; --quiet keeps this availability probe bounded.
+          const trees = git.run(core, ["rev-list", "--objects", "--filter=blob:none", "--missing=error", "--no-walk", "--quiet", tip]);
           if (trees.spawnFailed) throw new WorktreeStepError(trees.error);
           if (trees.code !== 0) {
             if (!/not a tree object|unable to read tree|bad tree object/.test(trees.error)) {

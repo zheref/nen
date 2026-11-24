@@ -349,15 +349,18 @@ describe.skipIf(!HAVE_GIT)("NN#650 pinned PR worktrees", () => {
     expect(readFileSync(join(w.W, "README"), "utf8")).toBe("PR 650 change\n");
   });
 
-  it("AC-5 plans a locally held pin whose tree is missing without lazy fetching", async () => {
+  it.each([0, 1])("AC-5 plans a locally held pin with tree:%i missing objects without lazy fetching", async (depth) => {
     const w = world();
+    mkdirSync(join(w.O, "nested"));
+    writeFileSync(join(w.O, "nested", "file"), "nested PR bytes\n");
     const head = publishPr(w);
     mustGit(w.origin, ["config", "uploadpack.allowFilter", "true"]);
     mustGit(w.C, ["config", "remote.origin.promisor", "true"]);
-    mustGit(w.C, ["config", "remote.origin.partialclonefilter", "tree:0"]);
-    mustGit(w.C, [...PINNED, "fetch", "--quiet", "--filter=tree:0", "origin", "refs/pull/650/head"]);
+    mustGit(w.C, ["config", "remote.origin.partialclonefilter", `tree:${depth}`]);
+    mustGit(w.C, [...PINNED, "fetch", "--quiet", `--filter=tree:${depth}`, "origin", "refs/pull/650/head"]);
     expect(git(w.C, ["--no-lazy-fetch", "cat-file", "-e", head]).code).toBe(0);
-    expect(git(w.C, ["--no-lazy-fetch", "cat-file", "-e", `${head}^{tree}`]).code).not.toBe(0);
+    expect(git(w.C, ["--no-lazy-fetch", "cat-file", "-e", `${head}^{tree}`]).code === 0).toBe(depth === 1);
+    expect(git(w.C, ["--no-lazy-fetch", "cat-file", "-e", `${head}:nested`]).code).not.toBe(0);
     const before = mustGit(w.C, ["count-objects", "-v"]);
     const run = await wc([...prArgs(head), ...COPY, "--dry-run"], w.C);
     expect(run.code, run.err).toBe(0);
