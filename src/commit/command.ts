@@ -155,7 +155,7 @@ for reference only.
 'format --message-file <path>' validates the existing file without rewriting it,
 wrapping its body, reading the index, or committing. Relative paths resolve
 against --repo. It cannot be combined with message-building flags (--type,
---scope, --subject, --body, --trailer, --breaking). On success it emits the
+--scope, --subject, --body, --body-file, --trailer, --breaking). On success it emits the
 original message (or { message } with --json); shape refusals exit 2 and
 broken policy/configuration exits 1, using the same validators as 'write'.
 
