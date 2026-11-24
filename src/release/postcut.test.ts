@@ -14,7 +14,7 @@ async function read(listing: string, post = true, extra: string[] = [], failRead
   const calls: ScriptedCall[] = [
     {match: "gh variable get RELEASE_HOLD --repo o/r", result: {code: 1, stderr: "variable RELEASE_HOLD was not found"}},
     {match: "git log --merges --format=%s --end-of-options v1.0.0..main", result: {stdout: ""}},
-    {match: `git cat-file -t ${SHA}`, result: objectType === "unreadable" ? {code: 128, stderr: "object unavailable"} : {stdout: `${objectType}\n`}},
+    {match: `git --no-lazy-fetch cat-file -t ${SHA}`, result: objectType === "old-git" ? {code: 129, stderr: "unknown option: --no-lazy-fetch"} : objectType === "unreadable" ? {code: 128, stderr: "object unavailable"} : {stdout: `${objectType}\n`}},
     {match: "git ls-remote --tags origin", result: failRead ? {code: 128, stderr: "remote unavailable"} : {stdout: listing}},
   ];
   const seams = new ScriptedSeams(calls), out: string[] = [], err: string[] = [];
@@ -90,17 +90,18 @@ it("refuses the new flag on another release verb", async () => {
   expect(seams.calls).toHaveLength(0);
 });
 
-it.each(["tree", "blob", "tag", "unreadable"])("refuses an expected object that is %s rather than a commit", async objectType => {
+it.each(["tree", "blob", "tag", "unreadable", "old-git"])("refuses an expected object that is %s rather than a commit", async objectType => {
   const result = await read(`${SHA}\trefs/tags/${TAG}\n`, true, [], false, objectType);
   expect(result.code, result.err).toBe(1);
   expect(JSON.parse(result.out).checks.at(-1).detail).toContain("expected SHA");
+  if (objectType === "old-git") expect(JSON.parse(result.out).checks.at(-1).detail).toContain("Git 2.45+");
 });
 it("reads the exact expected object locally without lazy fetching", async () => {
   const result = await read(`${SHA}\trefs/tags/${TAG}\n`);
-  const typeRead = result.seams.calls.find(call => call.args[0] === "cat-file");
+  const typeRead = result.seams.calls.find(call => call.args.includes("cat-file"));
   expect(typeRead).toBeDefined();
-  expect(typeRead?.args).toEqual(["cat-file", "-t", SHA]);
+  expect(typeRead?.args).toEqual(["--no-lazy-fetch", "cat-file", "-t", SHA]);
   expect(typeRead?.env).toMatchObject({GIT_NO_LAZY_FETCH: "1", GIT_NO_REPLACE_OBJECTS: "1"});
   const before = await read("", false);
-  expect(before.seams.calls.some(call => call.args[0] === "cat-file")).toBe(false);
+  expect(before.seams.calls.some(call => call.args.includes("cat-file"))).toBe(false);
 });

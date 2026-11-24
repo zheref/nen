@@ -168,7 +168,8 @@ preflight:
                             Post-cut reading: require the tag on origin at this
                             full 40-character commit SHA (the caller's cut
                             commit). It must be a locally readable commit,
-                            checked without replacements or lazy fetching.
+                            checked without replacements or lazy fetching
+                            (requires Git with --no-lazy-fetch, Git 2.45+).
                             Annotated tags use the peeled object.
                             Absent, mismatched or unreadable tag evidence fails.
                             Every other row is unchanged. Omit for the original
@@ -449,7 +450,7 @@ export const releaseCommand: Command = {
       fragmentNames: fragmentFiles,
     });
 
-    const expectedType = expectedCommit === null ? null : context.seams.run(GIT, ["cat-file", "-t", expectedCommit], {
+    const expectedType = expectedCommit === null ? null : context.seams.run(GIT, ["--no-lazy-fetch", "cat-file", "-t", expectedCommit], {
       cwd: root, env: { GIT_NO_LAZY_FETCH: "1", GIT_NO_REPLACE_OBJECTS: "1" },
     });
     const expectedIsCommit = expectedType !== null && !expectedType.spawnFailed && expectedType.code === 0 && expectedType.stdout.trim() === "commit";

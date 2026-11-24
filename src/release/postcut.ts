@@ -10,7 +10,7 @@ export interface PostCutTag {
 /** Read exact remote refs, preferring the peeled object for an annotated tag. */
 export function postCutTagCheck(tag: string, input: PostCutTag): PreflightCheck {
   const name = "tag exists at expected commit", ref = `refs/tags/${tag}`, peeledRef = `${ref}^{}`;
-  if (!input.expectedIsCommit) return {name, ok: false, detail: "expected SHA does not name a locally readable commit (replacement objects and lazy fetch disabled)"};
+  if (!input.expectedIsCommit) return {name, ok: false, detail: "expected SHA does not name a locally readable commit (Git 2.45+ with --no-lazy-fetch required; replacement objects and lazy fetch disabled)"};
   const malformed = (): PreflightCheck => ({name, ok: false, detail: "remote tag evidence is unreadable (malformed, duplicate or orphaned ref)"});
   const refs = new Map<string, string>();
   for (const line of input.listing.split(/\r?\n/)) {
