@@ -288,7 +288,11 @@ export function parseLintContract(raw: unknown, rel: string): LintContract {
     if (raw["markerLimit"] !== undefined && (!Number.isInteger(raw["markerLimit"]) || (raw["markerLimit"] as number) < 0)) wiring(`${rel}: markerLimit is not a whole number`);
     markerLimit = (raw["markerLimit"] as number | undefined) ?? null;
   }
-  if (has("reading-cited-as-ruled") && typeof raw["rulingsFile"] !== "string") wiring(`${rel} lacks rulingsFile`);
+  const rulingsFile = raw["rulingsFile"];
+  if (rulingsFile === undefined && has("reading-cited-as-ruled")) return wiring(`${rel} lacks rulingsFile`);
+  if (rulingsFile !== undefined && (typeof rulingsFile !== "string" || rulingsFile.trim() === "")) {
+    return wiring(`${rel}: rulingsFile must be a nonempty string`);
+  }
   const declaredValues = has("number-not-declared") ? stringList(raw["declaredValues"], `${rel}: declaredValues`) : [];
   const emptyBaseline = raw["emptyBaseline"] === undefined ? [] : stringList(raw["emptyBaseline"], `${rel}: emptyBaseline`);
   const skillPaths = raw["skillPaths"] === undefined ? null : stringList(raw["skillPaths"], `${rel}: skillPaths`);
@@ -310,7 +314,7 @@ export function parseLintContract(raw: unknown, rel: string): LintContract {
     markerRows,
     markerLimit,
     emptyBaseline,
-    rulingsFile: has("reading-cited-as-ruled") ? (raw["rulingsFile"] as string) : null,
+    rulingsFile: rulingsFile ?? null,
     declaredValues,
     skillPaths,
     rules,
@@ -476,6 +480,26 @@ function insideSpan(spans: readonly (readonly [number, number])[], offset: numbe
   return false;
 }
 
+// The rendered answer record identifies the first cell. The row's next
+// three cells preserve the captured question, options and answer.
+const RENDERED_RULING = /^\| <a id="([a-z][a-z0-9]*-\d+)"><\/a>\*\*([A-Z][A-Z0-9]*-\d+)\*\* · \[([A-Za-z0-9._-]+--R-\d{4}-\d{2}-\d{2}-\d{2,})\]\(ruling-records\/\3\.json\) \|/;
+
+function renderedRecordCells(para: Para): readonly [number, number] | null {
+  if (para.kind !== "table") return null;
+  const marker = RENDERED_RULING.exec(para.text);
+  if (marker === null || marker[1] !== marker[2]?.toLowerCase()) return null;
+  // Read the original delimiters. The quotation mask preserves offsets
+  // but may blank a pipe, and the renderer escapes pipes inside cells.
+  const bars: number[] = [];
+  for (const bar of para.text.matchAll(/(?<!\\)\|/g)) {
+    if (bars.length === 7) return null;
+    bars.push(bar.index);
+  }
+  const [, start, , , end, , last] = bars;
+  if (bars.length !== 7 || last !== para.text.trimEnd().length - 1 || start === undefined || end === undefined) return null;
+  return [start + 1, end];
+}
+
 function checkDoc(ctx: Ctx, doc: Doc): Finding[] {
   const out: Finding[] = [];
   const c = ctx.contract;
@@ -497,6 +521,7 @@ function checkDoc(ctx: Ctx, doc: Doc): Finding[] {
       if (match !== null) section = match[1] ?? "";
       continue;
     }
+    const recordCells = doc.path === c.rulingsFile ? renderedRecordCells(para) : null;
     const masked = c.quotedWords ? exemptQuoted(para.text) : para.text;
     const flat = masked.replace(/\n/g, " ");
     const around = (offset: number, length: number): string => flat.slice(Math.max(0, offset - 24), offset + length + 24);
@@ -562,6 +587,7 @@ function checkDoc(ctx: Ctx, doc: Doc): Finding[] {
           const spans = linkTargetSpans(flat);
           for (const m of flat.matchAll(re(rule))) {
             if (insideSpan(spans, m.index)) continue; // inside a link target
+            if (recordCells !== null && m.index >= recordCells[0] && m.index + m[0].length <= recordCells[1]) continue;
             add(rule, para, m.index, around(m.index, m[0].length));
           }
           break;
@@ -831,11 +857,11 @@ export function canonLint(options: LintOptions, seams: Seams): { readonly report
   }
   const docs = new Map<string, Doc>();
   let reading = new Set<string>();
-  if (contract.rulingsFile !== null) {
+  const readingRule = contract.rules.find((rule): boolean => rule.class === "reading-cited-as-ruled");
+  if (readingRule !== undefined && contract.rulingsFile !== null) {
     const rulings = loadDoc({ root, realRoot, docs }, contract.rulingsFile);
-    if (rulings === null) wiring(`rulings file ${contract.rulingsFile} is missing`);
-    const rule = contract.rules.find((r): boolean => r.class === "reading-cited-as-ruled");
-    reading = readingClauses(rulings as Doc, (rule?.["prefix"] as string | undefined) ?? "HR");
+    if (rulings === null) return wiring(`rulings file ${contract.rulingsFile} is missing`);
+    reading = readingClauses(rulings, (readingRule["prefix"] as string | undefined) ?? "HR");
   }
   const ctx: Ctx = {
     root,

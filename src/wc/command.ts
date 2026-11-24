@@ -494,7 +494,7 @@ paths } on exit 3, else null) }. After --return, active is false and the
 other fields describe the swap that was undone.
 
 worktree:
-  nen wc worktree --repo <path> --name <name> --base <branch>
+  nen wc worktree --repo <path> --name <name> (--base <branch> | --pr <n> --head <sha>)
                   [--copy-from-core <path>]... [--dry-run] [--json]
 
   --repo            ANY checkout of the project; core (the checkout whose .git
@@ -508,18 +508,30 @@ worktree:
                     origin/<base>: a short name 'git check-ref-format
                     --branch' returns unchanged, never shaped like an option,
                     a refspec or a force.
+  --pr / --head     fetch refs/pull/<n>/head from origin and require that it
+                    matches the full lowercase 40-character pinned commit.
+                    Mutually exclusive with --base. Metadata (open/closed,
+                    trust and forks) is the caller's responsibility.
+                    A unique scratch ref isolates the fetch from FETCH_HEAD;
+                    it is removed before any worktree move or copy.
   --copy-from-core  a repo-relative path copied FROM CORE into the worktree;
                     repeatable. Its segments obey --name's platform rules.
                     Only this flag names the list today: reading
                     nen/contract.json's project.fromCore[] is a follow-up.
   --dry-run         fetch nothing (the tip is read as last fetched), write
                     nothing; print the state and every planned action.
+                    For a PR, print the fetch and detached placement plan.
+                    Remote head verification stays pending. If the pinned
+                    commit or a required tree is absent, tree/overwrite checks also
+                    stay pending; the printed state is conditional on them.
+                    PR dry runs require Git >= 2.44 to disable lazy fetch.
+                    All PR reads and placement disable replacement objects.
 
 --onto, --message-file, --strategy, --abort and --set-upstream are refused
 here, as --name and --copy-from-core are on every other subcommand.
 
-THE STATE TABLE, at <core>/${WORKTREES_DIR}/<name>, DETACHED at origin/<base>'s
-fetched tip ('git fetch --end-of-options origin
+THE STATE TABLE, at <core>/${WORKTREES_DIR}/<name>, DETACHED at the verified
+PR pin or base tip. With --base, the tip is fetched ('git fetch --end-of-options origin
 refs/heads/<base>:refs/remotes/origin/<base>', after 'git remote get-url
 origin' proves there is an origin -- no origin is a refusal, dry or real --
 with no '+': a rewound trunk fails
@@ -595,7 +607,7 @@ it leaves the worktree where it reached ('reached'); 1 a git step or a write
 that failed part-way, the message saying which, and NO --json document.
 
 --json's contract is '${WORKTREE_CONTRACT}': { contract, core, name, path, base,
-tip, fetched, state (created | reused | moved | recreated | refused), reached
+tip, fetched, optional pr/pinnedHead/verificationPending for PR plans, state (created | reused | moved | recreated | refused), reached
 (created | reused | moved | recreated, or null when refused before the state
 step), dryRun, headBefore, head, dropped, coreIgnored, copies: [{ path, action
 (copied | would-copy) }], removed: [{ path, action (removed | would-remove) }],
@@ -603,7 +615,7 @@ kept: [{ path, reason (edited since copy | not a regular file | tracked at the
 tip | not ignored | unverifiable record) }], refusal:
 null | { kind, reason, paths } }. Under --dry-run state is what WOULD happen
 and fetched is false. On a refusal the document is still printed, with state
-'refused' and head null; refusal.kind is one of not-a-checkout, base,
+'refused' and head null; refusal.kind is one of not-a-checkout, base, pr, head-mismatch,
 name-alias, parent-symlink, symlink, stray, locked, not-root, dirty,
 would-overwrite-ignored, copy-source, copy-destination.`;
 
@@ -984,7 +996,20 @@ function doWorktree(context: CommandContext): number {
   const extra = extraPositionals(context);
   if (extra.length > 0) throw new VerbUsageError(plainLine(`'wc worktree' takes no positional argument; got '${extra[0]}'.`));
   const name = requireValue(context.args, "name", `The worktree's directory under <core>/${WORKTREES_DIR}/.`);
-  const base = requireValue(context.args, "base", "The branch whose fetched tip, origin/<base>, the worktree stands at.");
+  const prText = context.args.values["pr"];
+  const head = context.args.values["head"];
+  const base = context.args.values["base"];
+  if (prText !== undefined || head !== undefined) {
+    if (base !== undefined) throw new VerbUsageError("--pr/--head and --base are mutually exclusive.");
+    if (prText === undefined || !/^[1-9][0-9]*$/.test(prText) || !Number.isSafeInteger(Number(prText))) {
+      throw new VerbUsageError("--pr must be a positive safe integer and must be paired with --head.");
+    }
+    if (head === undefined || !/^[0-9a-f]{40}$/.test(head)) {
+      throw new VerbUsageError("--head must be a full 40-character lowercase commit SHA and must be paired with --pr.");
+    }
+  } else if (base === undefined) {
+    throw new VerbUsageError("Name --base <branch> or --pr <number> --head <full-sha>.");
+  }
   // Every refusal below echoes the caller's own text, stripped (Feitan F7).
   const nameProblem = nameRefusal(name);
   if (nameProblem !== null) throw new VerbUsageError(nameProblem);
@@ -1000,7 +1025,7 @@ function doWorktree(context: CommandContext): number {
 
   const outcome = manageWorktree(context.seams, root, {
     name,
-    base,
+    ...(base === undefined ? { pr: Number(prText), head: head! } : { base }),
     copyFromCore,
     dryRun: context.args.booleans.has("dry-run"),
   });
@@ -1135,17 +1160,20 @@ export const wcCommand: Command = {
   summary: "Classify the working copy, squash it, catch it up, publish it, list the worktrees, swap one into core, keep one at a fixed path, compute whether efforts overlap, or count the commits beyond a reviewed head.",
   usage: USAGE,
   flags: {
-    values: ["base", "onto", "message-file", "strategy", "remote", "name", "plan", "efforts", "always-overlaps", "declared", "of", "head", "proved", "persona", "lane"],
+    values: ["base", "onto", "message-file", "strategy", "remote", "name", "plan", "efforts", "always-overlaps", "declared", "of", "head", "pr", "proved", "persona", "lane"],
     booleans: ["dry-run", "abort", "set-upstream", "take", "return", "status", "run", "gated"],
     lists: ["copy-from-core"],
   },
   run(context: CommandContext): number | Promise<number> {
     const subcommand = requireSubcommand("wc", context.args, ["classify", "squash", "catch-up", "publish", "worktrees", "swap", "worktree", "prune", "overlap", "ahead"]);
+    if (subcommand !== "worktree" && context.args.values["pr"] !== undefined) {
+      throw new VerbUsageError("--pr is only read by wc worktree.");
+    }
     if (subcommand === "publish" && context.args.booleans.has("gated")) return runGatedPublish(context);
     if (context.args.booleans.has("gated") || ["proved", "persona", "lane"].some((flag) => context.args.values[flag] !== undefined)) throw new VerbUsageError("gated flags belong to wc publish --gated");
     if (subcommand === "ahead") return doAhead(context);
-    // --of / --head ARE AHEAD'S ALONE.
-    for (const flag of ["of", "head", "proved", "persona", "lane"]) {
+    // --of belongs to ahead; worktree also consumes its pinned --head.
+    for (const flag of subcommand === "worktree" ? ["of"] : ["of", "head"]) {
       if (context.args.values[flag] !== undefined) {
         throw new VerbUsageError(`--${flag} is not read by 'wc ${subcommand}'; only 'wc ahead' takes it. A flag accepted and ignored is worse than one refused.`);
       }

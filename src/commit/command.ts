@@ -51,7 +51,7 @@ import { readTextFile } from "../cli/inputs.js";
 import { runCheck } from "./check.js";
 import { CommitlintConfigError, declaredSubjectCase, readSubjectCaseRule, subjectCaseFindings } from "./commitlint.js";
 import { declaredBodyWidth, lineLengthFindings, readLineLengthRules, wrapFormatBody } from "./bodywidth.js";
-import { COMMIT_MESSAGE_PATH, write, WRITE_CONTRACT } from "./write.js";
+import { COMMIT_MESSAGE_PATH, validateMessageText, write, WRITE_CONTRACT } from "./write.js";
 import { injectedMessage } from "./readback.js";
 import { COMPOSED_KEYS_ENV, STRIP_RUN_ENV, strippedMessage, STRIPPED_EXIT, writtenExit } from "./strip.js";
 import {
@@ -81,6 +81,7 @@ const USAGE = `nen commit -- Conventional Commits formatting (tensho §4), and t
 build-proof check that says whether this tree is the one a build proved.
 
 usage:
+  nen commit format --repo <path> --message-file <path>
   nen commit format --type feat --subject "a short imperative subject"
                     [--scope <scope>] [--breaking] [--body "paragraph one" | --body-file <path>]
                     [--trailer key=value,key2=value2] [--repo <path>]
@@ -150,6 +151,13 @@ ASSUMED AND BINDING (the maintainer's ruling) -- on every line before the
 trailer block, prose commitlint reads as footer included. The trailer block
 has no declared form: under an unreadable config it is judged against 100
 for reference only.
+
+'format --message-file <path>' validates the existing file without rewriting it,
+wrapping its body, reading the index, or committing. Relative paths resolve
+against --repo. It cannot be combined with message-building flags (--type,
+--scope, --subject, --body, --trailer, --breaking). On success it emits the
+original message (or { message } with --json); shape refusals exit 2 and
+broken policy/configuration exits 1, using the same validators as 'write'.
 
 'format' WRAPS every --body line the rule would refuse to that width -- 100
 where no readable rule or declaration states one, and not at all under a rule
@@ -291,7 +299,7 @@ function policyFailure(error: SchemaError, act: "shape a message" | "commit"): s
  * the instruction somebody gave.
  */
 const COMMIT_SUBCOMMAND_FLAGS: Readonly<Record<string, readonly string[]>> = {
-  format: ["type", "scope", "subject", "body", "body-file", "trailer", "breaking"],
+  format: ["message-file", "type", "scope", "subject", "body", "body-file", "trailer", "breaking"],
   check: ["require-proof"],
   write: ["message-file", "trailer", "require-proof", "dry-run"],
 };
@@ -325,6 +333,30 @@ function refuseForeignFlags(subcommand: string, context: CommandContext): void {
 function commitlintFailure(error: CommitlintConfigError): string {
   const what = error.rule === "subject-case" ? "a subject" : "a message";
   return `nen: ${error.message}. nen will not call ${what} well-formed under a ${error.rule} rule it could not read: fix the file, then run this again.`;
+}
+
+function runFormatFile(context: CommandContext): number {
+  const mixed = ["type", "scope", "subject", "body", "body-file", "trailer", "breaking"].filter(
+    (flag): boolean => context.args.values[flag] !== undefined || context.args.lists[flag] !== undefined || context.args.booleans.has(flag),
+  );
+  if (mixed.length > 0) throw new VerbUsageError(`--message-file cannot be combined with --${mixed.join(", --")}.`);
+  const root = assertRepoRoot({ repoFlag: context.repoFlag });
+  const path = requireValue(context.args, "message-file", "The existing message to validate.");
+  const message = readTextFile(path, root, "The message is validated without rewriting it or reading the index.", true);
+  const result = validateMessageText(root, message, {
+    warn: (warning): void => context.io.err(`nen: warning: ${warning}`),
+    note: (note): void => context.io.err(`nen: note: ${note}`),
+  });
+  const failures = result.failures.map((error): string => error instanceof CommitlintConfigError ? commitlintFailure(error) : policyFailure(error, "shape a message"));
+  if (failures.length > 0) {
+    if (context.json) return refuse(context.io, true, "commit format", 1, [...failures, ...result.reasons]);
+    for (const failure of failures) context.io.err(failure);
+    for (const reason of result.reasons) context.io.err(`nen: ${reason}`);
+    return 1;
+  }
+  if (result.reasons.length > 0) return refuse(context.io, context.json, "commit format", 2, result.reasons);
+  context.io.out(context.json ? JSON.stringify({ message }, null, 2) : message);
+  return 0;
 }
 
 function runWrite(context: CommandContext): number {
@@ -401,6 +433,7 @@ export const commitCommand: Command = {
     refuseForeignFlags(subcommand, context);
     if (subcommand === "check") return runCheck(context);
     if (subcommand === "write") return runWrite(context);
+    if (context.args.values["message-file"] !== undefined) return runFormatFile(context);
     const type = context.args.values["type"] as CommitType | undefined;
     if (type === undefined) throw new VerbUsageError("--type is required.");
     const subject = context.args.values["subject"];

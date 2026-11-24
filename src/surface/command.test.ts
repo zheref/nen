@@ -66,6 +66,35 @@ const PACKS = join(process.cwd(), "src", "surface", "fixtures", "packs");
 const MODEL_AGENTS = join(process.cwd(), "src", "surface", "fixtures", "models", "agents");
 const json = (result: { out: string[] }): Record<string, unknown> => JSON.parse(result.out.join("\n")) as Record<string, unknown>;
 
+describe("Codex instruction read limit (NN#641)", () => {
+  for (const verb of ["generate", "check"]) {
+    it(`${verb} refuses oversized source before writing, even with a matching stamp (AC-1/AC-2)`, async () => {
+      const agents = tempDir();
+      const out = tempDir();
+      writeFileSync(join(agents, "lead.md"), `---\nname: lead\n---\n${"rule ".repeat(7_000)}\n`);
+      const prior = `${markerFor("codex", "1.0.0")}\n\n## lead\n\n${"rule ".repeat(7_000).trim()}\n`;
+      writeFileSync(join(out, "AGENTS.md"), prior);
+      const result = await capture(["surface", "mirror", verb, "--source", SKILLS, "--agents", agents, "--surface", "codex", "--out", out, "--stamp", "1.0.0"]);
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toMatch(/AGENTS\.md.*32768.*lead.*byte/s);
+      expect(readFileSync(join(out, "AGENTS.md"), "utf8")).toBe(prior);
+      expect(readdirSync(out)).toEqual(["AGENTS.md"]);
+    });
+  }
+
+  it("places the persona and shared rules entirely inside the bytes Codex reads (AC-3)", async () => {
+    const out = tempDir();
+    const result = await capture(generateArgv("codex", out));
+    expect(result.code).toBe(0);
+    const placed = readFileSync(join(out, "AGENTS.md"));
+    expect(placed.byteLength).toBeLessThanOrEqual(32_768);
+    const read = placed.subarray(0, 32_768).toString("utf8");
+    expect(read).toContain("## scout");
+    expect(read).toContain("## _shared");
+    expect(read).toBe(placed.toString("utf8"));
+  });
+});
+
 describe("nen surface mirror generate", () => {
   it("writes the mirror and reports the three lists", async () => {
     const out = tempDir();

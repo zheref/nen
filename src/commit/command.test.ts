@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
@@ -102,6 +102,92 @@ describe("nen commit format -- CLI wiring", () => {
 
   it("refuses an unknown subcommand", async () => {
     expect((await capture(["commit", "bogus"])).code).toBe(2);
+  });
+});
+
+describe("NN#606: validate an existing message file", () => {
+  it("AC-1: accepts the documented gate without touching the file or index", async () => {
+    const root = repoWithPolicy({ allowedAttributionTrailers: ["X-Agent"] });
+    const message = "fix(cli): validate the message\n\nKeep the existing text.\n\nX-Agent: tester\n";
+    writeFileSync(join(root, "message.txt"), message);
+    const result = await capture(["commit", "format", "--message-file", "message.txt"], true, root);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.out.join("\n"))).toEqual({ message });
+    expect(readFileSync(join(root, "message.txt"), "utf8")).toBe(message);
+  });
+
+  it("AC-2: reports the same subject and trailer findings as the flag-built form", async () => {
+    const root = repoWithPolicy({ subjectCase: [2, "always", "lower-case"], forbiddenTrailers: ["X-Agent"] });
+    writeFileSync(join(root, "message.txt"), "fix: Capitalized\n\nX-Agent: tester\n");
+    const fromFile = await capture(["commit", "format", "--message-file", "message.txt"], true, root);
+    const fromFlags = await capture(["commit", "format", "--type", "fix", "--subject", "Capitalized", "--trailer", "X-Agent=tester"], true, root);
+    expect(fromFile.code).toBe(2);
+    expect(fromFile.out).toEqual(fromFlags.out);
+  });
+
+  it("AC-2: checks a CRLF file's subject without changing its line endings", async () => {
+    const root = repoWithPolicy({ subjectCase: [2, "always", "lower-case"] });
+    writeFileSync(join(root, "message.txt"), "fix: Capitalized\r\n");
+    const result = await capture(["commit", "format", "--message-file", "message.txt"], false, root);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("subject-case");
+    const valid = "fix: lowercase\r\n";
+    writeFileSync(join(root, "message.txt"), valid);
+    const accepted = await capture(["commit", "format", "--message-file", "message.txt"], true, root);
+    expect(accepted.code).toBe(0);
+    expect(JSON.parse(accepted.out.join("\n"))).toEqual({ message: valid });
+    expect(readFileSync(join(root, "message.txt"), "utf8")).toBe(valid);
+  });
+
+  it("AC-3: executes the invocation published in the command help", async () => {
+    const root = repoWithPolicy({});
+    writeFileSync(join(root, "message.txt"), "fix: validate the message\n");
+    const line = commitCommand.usage.split("\n").find((entry) => entry.includes("nen commit format --repo <path> --message-file <path>"));
+    expect(line).toBeDefined();
+    const argv = line!.trim().split(/\s+/).slice(1);
+    argv[argv.indexOf("--repo") + 1] = root;
+    argv[argv.indexOf("--message-file") + 1] = "message.txt";
+    expect((await capture(argv)).code).toBe(0);
+  });
+
+  it.each(["--type", "--scope", "--subject", "--body", "--body-file", "--trailer", "--breaking"])("refuses mixed input %s", async (flag) => {
+    const root = repoWithPolicy({});
+    writeFileSync(join(root, "message.txt"), "fix: validate the message\n");
+    const args = ["commit", "format", "--message-file", "message.txt", flag];
+    if (flag !== "--breaking") args.push("x");
+    const result = await capture(args, false, root);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("cannot be combined");
+  });
+
+  it("validates line widths without silently wrapping the supplied file", async () => {
+    const root = repoWithPolicy({ bodyMaxLineLength: 10 });
+    const message = "fix: validate the message\n\na body that exceeds ten characters\n";
+    writeFileSync(join(root, "message.txt"), message);
+    const result = await capture(["commit", "format", "--message-file", "message.txt"], false, root);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("commits.bodyMaxLineLength");
+    expect(readFileSync(join(root, "message.txt"), "utf8")).toBe(message);
+  });
+
+  it.each([false, true])("reports broken policy and shape together (json=%s)", async (json) => {
+    const root = repoWithPolicy({ subjectCase: "invalid-policy" });
+    writeFileSync(join(root, "message.txt"), "not a conventional commit\n");
+    const result = await capture(["commit", "format", "--message-file", "message.txt"], json, root);
+    expect(result.code).toBe(1);
+    const output = [...result.out, ...result.err].join("\n");
+    expect(output).toContain("subjectCase");
+    expect(output).toContain("header");
+  });
+
+  it("refuses unreadable and empty messages and preserves plain output", async () => {
+    const root = repoWithPolicy({});
+    expect((await capture(["commit", "format", "--message-file", "missing.txt"], false, root)).code).toBe(2);
+    writeFileSync(join(root, "message.txt"), "");
+    expect((await capture(["commit", "format", "--message-file", "message.txt"], false, root)).code).toBe(2);
+    const message = "fix: validate the message\n";
+    writeFileSync(join(root, "message.txt"), message);
+    expect((await capture(["commit", "format", "--message-file", join(root, "message.txt")], false, root)).out).toEqual([message]);
   });
 });
 
