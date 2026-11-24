@@ -46,10 +46,11 @@
       "turn": "rung1"
     },
     "commits": {
-      "$comment": "Hatsu-Agent (a local-plane agent, working on a human's own credentials) and Akatsuki-Agent (an autonomous CI-plane agent) are the two conventional provenance-trailer keys this project's family uses -- never an AI-authorship claim. nen ships neither as a default: this list stays empty until a repository states which of the two (or both) it admits, e.g. [\"Hatsu-Agent\", \"Akatsuki-Agent\"]. `nen scaffold init`'s own --agent-trailer defaults to Akatsuki-Agent and writes its resolved key here for you. runTrailer is a SEPARATE, OPTIONAL key, e.g. \"Akatsuki-Run\" -- absent (null) by default, and never itself an attribution trailer: it names which RUN produced a commit, not who or what did, so it never belongs in the list above. Set it (--run-trailer, then re-run 'nen scaffold init' to regenerate the hook) only if this repository also wants a run identifier required on every automated commit.",
+      "$comment": "Hatsu-Agent (a local-plane agent, working on a human's own credentials) and Akatsuki-Agent (an autonomous CI-plane agent) are the two conventional provenance-trailer keys this project's family uses -- never an AI-authorship claim. nen ships neither as a default: this list stays empty until a repository states which of the two (or both) it admits, e.g. [\"Hatsu-Agent\", \"Akatsuki-Agent\"]. `nen scaffold init`'s own --agent-trailer defaults to Akatsuki-Agent and writes its resolved key here for you. runTrailer is a SEPARATE, OPTIONAL key, e.g. \"Akatsuki-Run\" -- absent (null) by default, and never itself an attribution trailer: it names which RUN produced a commit, not who or what did, so it never belongs in the list above. Set it (--run-trailer, then re-run 'nen scaffold init' to regenerate the hook) only if this repository also wants a run identifier required on every automated commit. stripInjected (empty, so OFF) lists refused keys a harness's own hook adds inside a nen-started commit -- e.g. [\"Co-authored-by\"] for Cursor's cloud agents -- which the generated commit-msg hook then removes from the trailer block, reports, and turns into exit 4 on 'nen commit write' / 'nen wc squash'. Every entry must be a key this policy REFUSES (an attribution trailer not admitted above, a forbiddenTrailers key, or a -by/-with key not admitted): a key nothing refuses, or one admitted above, is refused at load. It never admits a key, never touches one the composed message carried, and takes effect only after 'nen scaffold init ... --force' regenerates the hook.",
       "allowedAttributionTrailers": [],
       "forbiddenTrailers": [],
-      "runTrailer": null
+      "runTrailer": null,
+      "stripInjected": []
     },
     "monitor": {
       "maxCycles": 20,
