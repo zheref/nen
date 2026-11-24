@@ -7,6 +7,7 @@
     "$schema": "nen.workflow/v0.1",
     "$comment": "Written by `nen scaffold init`. This file is POLICY -- what the delivery loop's parameters are. What nen EXECUTES lives in nen/contract.json. Every key here is optional and carries the default nen applies when it is absent; delete anything you do not want to state. `nen schema check` validates it.",
     "branch": {
+      "$comment": "A pull request is a delivery PR only when its head ref starts with an entry of nen/gates.json delivery.head_ref_prefixes (case-sensitive), its author matches delivery.author_pattern and its base is the default branch; see docs/USAGE.md#delivery-pr-identity. nen never infers that list from {model}; 'nen schema check' warns about a branch head it does not cover (zheref/nen#657).",
       "template": "{model}/{persona}/{descriptor}",
       "base": "main"
     },

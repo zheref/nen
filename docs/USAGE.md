@@ -1856,6 +1856,27 @@ same name declared twice. **Compatibility:** an optional key, so `version`
 stays `1`; a nen older than the release that reads it ignores the block, which
 leaves the excluded check counted — a stricter verdict, never a wider one.
 
+<a id="delivery-pr-identity"></a>
+**CON-40's delivery-PR identity (`delivery.*`, [#657](https://github.com/zheref/nen/issues/657)).**
+A pull request is a **delivery PR** when all three hold: (a) its head ref
+starts with an entry of `delivery.head_ref_prefixes`, compared
+case-sensitively, **or** it carries a `delivery.labels` label; **and** (b) its
+author matches `delivery.author_pattern`; **and** (c) its base is the
+repository's default branch. The prefix list is a **separate declared list**:
+nen never infers it from `nen/workflow.json`'s `branch.template` or its
+`{model}` token. So a run on any surface — Codex included — that wants its pull
+request read as a delivery PR must cut a branch whose head ref starts with an
+entry of that list (in nen's own repository, every surface name and alias of its `models`
+block: `claude/`, `fable/`, `opus/`, `codex/`, `astra/`, …), opened by the
+`author_pattern` account into the default branch.
+[`nen schema check`](#nen-schema-check)'s `nen/gates.json#delivery.head_ref_prefixes`
+row warns about a template or `models` fill the list does not cover. **Beside a
+reviewer that declares `delivery_holistic_pass`, the prefix should be one the
+everyday branch template does not produce** (an `integration/` assembly
+branch): a list covering every branch the template cuts makes every pull
+request by that author into the default branch a delivery PR, and the same row
+warns about it.
+
 **CON-30's dependency-author carve-out.** `nen/gates.json` may declare an
 optional `dependabot_carve_out`:
 
@@ -8025,6 +8046,46 @@ not required, reading `not checked -- …`: there is a name, a check that was no
 performed is not one that passed, and the contract row already fails the
 report.
 
+**The `nen/gates.json#delivery.head_ref_prefixes` row
+([#657](https://github.com/zheref/nen/issues/657))**, immediately under
+`#deploy.defaultTarget`, also reads two files: the declared
+[delivery prefixes](#delivery-pr-identity) in `nen/gates.json` and
+`branch.template` plus `models` in `nen/workflow.json`. It holds the **fixed
+head** of every branch the template cuts — the template with `{model}`
+replaced by one fill, up to the first other token — against the prefixes. The
+fills are every surface name and every tier alias of `models`; `rule`,
+`roles`, `$` keys and a tier keyed `note` (prose, not an alias) are not fills.
+So `{model}/{persona}/{descriptor}` has the heads `claude/`, `fable/`, …;
+`delivery/{descriptor}` has `delivery/`; `delivery-{descriptor}` has
+`delivery-`; `{model}-bot/{descriptor}` has `claude-bot/`, …. A head is
+**covered** when it starts with a declared prefix — the same case-sensitive
+`startsWith` [`nen pr ready`](#nen-pr-ready) runs, and the only rule under
+which that prefix matches *every* branch cut from it: a prefix longer than the
+head (`delivery-x` against `delivery-{descriptor}`) matches only the branches
+whose token happens to spell it, so it does not cover the head. A declared
+prefix that covers no head — an `integration/` carve-out, say — is **allowed
+on purpose and is not drift**; the `ok` row lists it as information.
+
+A **`delivery_holistic_pass` reviewer inverts the reading of an uncovered
+head**: with one, a narrow list is the intended state — CON-40's holistic-pass
+carve-out stays on the declared prefixes — and full coverage is the hazard.
+One outcome per state, and only the `ok` rows open with `not checked`:
+
+| Prefixes cover | Holistic reviewer | Outcome |
+|---|---|---|
+| (no prefixes) | either | `ok` — `label-only, prefixes not checked (delivery.labels: …)` |
+| every head | no | `ok` — `13 branch heads of nen/workflow.json branch.template covered ('claude/', 'fable/', …)`, then `; also declared, covering no template head (allowed, not drift): …` when a prefix covers no head |
+| every head | yes | **warn** — `every branch nen/workflow.json branch.template cuts (…) starts with a nen/gates.json delivery.head_ref_prefixes entry, and 'sasuke' declares delivery_holistic_pass: true -- …`: every pull request the template produces by the delivery author into the default branch is a delivery PR, so that reviewer owes one holistic pass instead of a round at head. The fix: narrow the list to prefixes only delivery branches carry — ones the everyday template does not produce, which then reads `ok` — or drop the flag. A one-head template (`delivery/{descriptor}`) covered by `delivery/` is this case too: every branch it cuts is a delivery branch. It lists extra prefixes the same way the `ok` row does |
+| some heads | no | **warn** — `drift: nen/workflow.json branch.template '{model}/{persona}/{descriptor}' cuts branches starting 'fable/', …, which no nen/gates.json delivery.head_ref_prefixes entry ('codex/') covers, so a pull request from such a branch is never a CON-40 delivery PR. Add each prefix to nen/gates.json delivery.head_ref_prefixes, or change nen/workflow.json branch.template` |
+| some heads | yes | `ok` — `narrow on purpose: 13 of 13 branch heads of nen/workflow.json branch.template not covered (…) while 'sasuke', 'tenma' declare delivery_holistic_pass: true, so CON-40's carve-out applies only to head refs starting 'integration/' -- not drift` |
+| (template unjudgeable) | either | **warn** — `cannot judge -- …` with the reason: a template that starts with another token (`{persona}/…`), starts with an empty segment, or starts with `{model}` while `models` declares no surface. A head fixed before `{model}` (`release/{model}/{descriptor}`) is judged by that literal, surface or not |
+
+Every warn is `ok: false`, not required, never a FAIL, so the exit code does
+not move. An absent `nen/gates.json`, or no `nen/workflow.json` at all, reads
+`not checked -- …` (`ok`, the reason given); and a `nen/gates.json` or
+`nen/workflow.json` that did not load reads `not read -- … see that row`, as
+`#deploy.defaultTarget` does.
+
 **The `nen/workflow.json#idle` row (Hatsu's ruling HR-5)**, immediately under
 `#release`, also reads two files: the [idle profile](#nenworkflowjson) in
 `nen/workflow.json` and the rows it resolves in `nen/decisions.json`. No `idle`
@@ -11519,7 +11580,7 @@ That example leaves `--marker-env` out on purpose: on `new` it is optional, and 
 
 **Only absence is written, and a second run writes nothing.** A path that exists in any form — a file, a directory, a symlink dangling or not, a file this process cannot read — is reported `kept` and is never opened, read or compared: the repository's existing config is not this verb's to judge, and `schema check` judges it. The write is an exclusive create, so a file that appears between the check and the write is left alone and reported `refused`. A second run finds every seeded file present and reports every row `kept`, exit 0. A legacy `schemas/` copy of a seeded file is `refused`, naming [`scaffold init --accept-detected`](#nen-scaffold-init)'s copy, which keeps that config — a seed would shadow it. A `nen/` that is a symlink is refused before anything is written through it.
 
-**Each seed widens nothing.** `nen/colors.yml` declares **no category**: an empty vocabulary and an absent file answer every colour verb the same way, and nen invents no status or severity names. `nen/gates.json` **fails closed**: Copilot (`base_reviewers: ["copilot"]`, `review-round-only`, no separate approver) owes a round **at head on every pull request, requested or not** — it is deliberately not `bounded_policy_exempt`, which would excuse it whenever no request is pending and let a pull request nobody reviewed read ready — so where the readiness verbs refused for want of a gate, they now wait for a review. Its required `delivery` carve-out matches no author — its pattern carries a space, which no GitHub login can. Both are seeds, not rulings: tune them, commit them, then re-run `schema check`. **`nen/labels.json` and `nen/repos.json` are never seeded** — a label set and a registry are names only the repository can choose.
+**Each seed widens nothing.** `nen/colors.yml` declares **no category**: an empty vocabulary and an absent file answer every colour verb the same way, and nen invents no status or severity names. `nen/gates.json` **fails closed**: Copilot (`base_reviewers: ["copilot"]`, `review-round-only`, no separate approver) owes a round **at head on every pull request, requested or not** — it is deliberately not `bounded_policy_exempt`, which would excuse it whenever no request is pending and let a pull request nobody reviewed read ready — so where the readiness verbs refused for want of a gate, they now wait for a review. Its required `delivery` carve-out matches no author — its pattern carries a space, which no GitHub login can. Its `head_ref_prefixes` cover every fill of the `models` block `nen scaffold init` writes, so [`schema check`](#nen-schema-check) reads no drift on a freshly seeded repository — and once `author_pattern` names a login, every branch cut under the default template is a delivery PR; trim the list if that is wider than intended. Both are seeds, not rulings: tune them, commit them, then re-run `schema check`. **`nen/labels.json` and `nen/repos.json` are never seeded** — a label set and a registry are names only the repository can choose.
 
 **Usage**
 
