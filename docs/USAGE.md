@@ -5754,7 +5754,7 @@ ports that skill's `scripts/kagutsuchi_worktree.sh` state table and copy proofs.
 **Usage**
 
 ```text
-nen wc worktree --repo <path> --name <name> --base <branch>
+nen wc worktree --repo <path> --name <name> (--base <branch> | --pr <n> --head <sha>)
                 [--copy-from-core <path>]... [--dry-run] [--json]
 ```
 
@@ -5762,7 +5762,8 @@ nen wc worktree --repo <path> --name <name> --base <branch>
 |---|---|---|
 | `--repo <path>` | **yes** | any checkout of the project; core is resolved from it |
 | `--name <name>` | **yes** | one plain path segment (letters, digits, `.`, `_`, `-`; no `..`; not ending in `.lock`); the worktree is `<core>/.nen/worktrees/<name>` |
-| `--base <branch>` | **yes** | the branch whose fetched tip the worktree stands at, as `origin/<base>`; a short name `git check-ref-format --branch` returns unchanged, never shaped like an option, a refspec or a force |
+| `--base <branch>` | unless `--pr`/`--head` | the branch whose fetched tip the worktree stands at, as `origin/<base>`; a short name `git check-ref-format --branch` returns unchanged, never shaped like an option, a refspec or a force |
+| `--pr <n>` / `--head <sha>` | together, instead of `--base` | Fetch `refs/pull/<n>/head` into an isolated scratch ref and compare against the full lowercase 40-character SHA before placement. |
 | `--copy-from-core <path>` | no, repeatable | a repo-relative path copied from core into the worktree. Only this flag names the list today; reading `nen/contract.json` → `project.fromCore[]` is a follow-up |
 | `--dry-run` | no | fetch nothing (the tip is read as last fetched) and write nothing; print the state and every planned action, retention included |
 | `--json` | no | `nen.wc.worktree/v0.1`, described below |
@@ -5770,6 +5771,13 @@ nen wc worktree --repo <path> --name <name> --base <branch>
 `--onto`, `--message-file`, `--strategy`, `--abort` and `--set-upstream` are
 refused here, and `--name` and `--copy-from-core` are refused on every other
 `wc` subcommand.
+
+The [pinned PR guide](WC-PR-WORKTREES.md) covers the selector, caller-owned
+metadata/trust checks and conditional dry-run plans. PR JSON adds `pr` and
+`pinnedHead`, sets `base: null`, and includes `verificationPending` on dry runs.
+PR dry runs require Git 2.44 or newer and disable lazy fetch; all PR reads and
+placement disable replacement objects. A pin mismatch refuses as `head-mismatch`;
+an absent PR ref refuses as `pr`. Neither creates or moves a worktree.
 
 **Names every platform can hold.** The `--name` and every `--copy-from-core`
 segment are refused, on every platform, when they:

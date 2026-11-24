@@ -332,12 +332,17 @@ interface GitCall {
 class Git {
   private readonly env: Record<string, string | undefined>;
 
-  constructor(private readonly seams: Seams) {
-    this.env = scrubbedGitEnv(seams.env);
+  constructor(private readonly seams: Seams, private readonly pinned = false, private readonly dryRun = false) {
+    this.env = { ...scrubbedGitEnv(seams.env), ...(pinned ? { GIT_NO_REPLACE_OBJECTS: "1" } : {}),
+      ...(pinned && dryRun ? { GIT_NO_LAZY_FETCH: "1", GIT_OPTIONAL_LOCKS: "0" } : {}) };
   }
 
   run(cwd: string, args: readonly string[]): GitCall {
-    const result = this.seams.run(GIT, [...args], { cwd, env: this.env });
+    const flags = this.pinned ? ["--no-replace-objects", ...(this.dryRun ? ["--no-lazy-fetch"] : [])] : [];
+    const result = this.seams.run(GIT, [...flags, ...args], { cwd, env: this.env });
+    if (this.pinned && this.dryRun && /unknown option:?\s*'?--no-lazy-fetch/.test(result.stderr)) {
+      throw new WorktreeStepError("PR --dry-run needs git >= 2.44 to disable lazy fetching; this git refused --no-lazy-fetch. Nothing was read or written.");
+    }
     const error = result.spawnFailed
       ? `git could not be started (${result.stderr.trim()}); put it on PATH`
       : outputLines(result.stderr).join(" ") || `exit ${result.code}`;
@@ -993,12 +998,13 @@ function inTheWay(fs: WorktreeFs, worktree: string, path: string): boolean {
 function fetchPrTip(git: Git, core: string, source: string): string {
   const scratch = `refs/nen/worktree-pr/${randomBytes(16).toString("hex")}`;
   try {
-    const args = ["fetch", "--quiet", "--no-write-fetch-head", "--end-of-options", REMOTE, `${source}:${scratch}`];
+    const args = ["fetch", "--quiet", "--no-write-fetch-head", "--refmap=", "--no-tags", "--no-prune", "--no-prune-tags",
+      "--no-recurse-submodules", "--no-auto-gc", "--end-of-options", REMOTE, `${source}:${scratch}`];
     const fetched = git.run(core, args);
     if (fetched.spawnFailed) throw new WorktreeStepError(fetched.error);
     if (fetched.code !== 0) {
       const probe = git.run(core, ["ls-remote", "--exit-code", "--end-of-options", REMOTE, source]);
-      if (probe.code === 2) throw new WorktreeRefusal("pr", `${REMOTE} has no ${source}; nothing was created or moved.`);
+      if (probe.code === 2 || (probe.code === 0 && !rawLines(probe.stdout).some((line): boolean => line.split("\t")[1] === source))) throw new WorktreeRefusal("pr", `${REMOTE} has no ${source}; nothing was created or moved.`);
       throw new WorktreeStepError(`fetching ${REMOTE}/${source} failed: ${fetched.error}`);
     }
     return firstLine(git.must(core, ["rev-parse", "--verify", "--end-of-options", `${scratch}^{commit}`], `resolving fetched ${source}`));
@@ -1188,7 +1194,7 @@ export function manageWorktree(
   options: WorktreeOptions,
   fs: WorktreeFs = nativeWorktreeFs,
 ): WorktreeOutcome {
-  const git = new Git(seams);
+  const git = new Git(seams, options.pr !== undefined, options.dryRun);
   const platform = seams.platform;
   let report = emptyReport(options);
   try {

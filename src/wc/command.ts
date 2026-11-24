@@ -511,12 +511,14 @@ worktree:
                     Remote head verification stays pending. If the pinned
                     commit is absent locally, tree/overwrite checks also
                     stay pending; the printed state is conditional on them.
+                    PR dry runs require Git >= 2.44 to disable lazy fetch.
+                    All PR reads and placement disable replacement objects.
 
 --onto, --message-file, --strategy, --abort and --set-upstream are refused
 here, as --name and --copy-from-core are on every other subcommand.
 
-THE STATE TABLE, at <core>/${WORKTREES_DIR}/<name>, DETACHED at origin/<base>'s
-fetched tip ('git fetch --end-of-options origin
+THE STATE TABLE, at <core>/${WORKTREES_DIR}/<name>, DETACHED at the verified
+PR pin or base tip. With --base, the tip is fetched ('git fetch --end-of-options origin
 refs/heads/<base>:refs/remotes/origin/<base>', after 'git remote get-url
 origin' proves there is an origin -- no origin is a refusal, dry or real --
 with no '+': a rewound trunk fails

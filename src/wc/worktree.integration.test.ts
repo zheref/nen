@@ -317,6 +317,50 @@ describe.skipIf(!HAVE_GIT)("NN#650 pinned PR worktrees", () => {
     expect(mustGit(w.C, ["for-each-ref", "--format=%(refname)", "refs/nen/worktree-pr/"])).toBe("");
   });
 
+  it("AC-2 isolates a mismatched fetch from configured ref mappings and tags", async () => {
+    const w = world();
+    const head = publishPr(w);
+    mustGit(w.O, ["tag", "pr-tag", head]);
+    mustGit(w.O, [...PINNED, "push", "--quiet", "origin", "refs/tags/pr-tag"]);
+    mustGit(w.C, ["config", "--add", "remote.origin.fetch", "+refs/pull/*/head:refs/remotes/origin/pr/*"]);
+    const refs = mustGit(w.C, ["show-ref"]);
+    const run = await wc(prArgs(w.firstTip), w.C, true);
+    expect(refusalKind(run)).toBe("head-mismatch");
+    expect(mustGit(w.C, ["show-ref"])).toBe(refs);
+  });
+
+  it("refuses a suffix-only advertised ref as an absent PR", async () => {
+    const w = world();
+    mustGit(w.O, [...PINNED, "push", "--quiet", "origin", "HEAD:refs/heads/mirror/refs/pull/650/head"]);
+    const run = await wc(prArgs(w.firstTip), w.C, true);
+    expect(run.code).toBe(2);
+    expect(refusalKind(run)).toBe("pr");
+    expect(existsSync(w.W)).toBe(false);
+  });
+
+  it("AC-1 places the pinned bytes despite a local commit replacement", async () => {
+    const w = world();
+    const head = publishPr(w);
+    mustGit(w.C, [...PINNED, "fetch", "--quiet", "origin", "refs/pull/650/head"]);
+    mustGit(w.C, ["replace", head, w.firstTip]);
+    const run = await wc(prArgs(head), w.C, true);
+    expect(run.code, run.err).toBe(0);
+    expect(headOf(w.W)).toBe(head);
+    expect(readFileSync(join(w.W, "README"), "utf8")).toBe("PR 650 change\n");
+  });
+
+  it("AC-5 never lazy-fetches an absent pin from a promisor remote", async () => {
+    const w = world();
+    const head = publishPr(w);
+    mustGit(w.C, ["config", "remote.origin.promisor", "true"]);
+    mustGit(w.C, ["config", "remote.origin.partialclonefilter", "blob:none"]);
+    const before = mustGit(w.C, ["count-objects", "-v"]);
+    const run = await wc([...prArgs(head), "--dry-run"], w.C);
+    expect(run.code, run.err).toBe(0);
+    expect(mustGit(w.C, ["count-objects", "-v"])).toBe(before);
+    expect(existsSync(w.W)).toBe(false);
+  });
+
   it("AC-5 dry run prints fetch and detached placement without fetching or writing an unknown head", async () => {
     const w = world();
     const head = publishPr(w);

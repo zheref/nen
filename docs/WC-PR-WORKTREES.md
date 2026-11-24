@@ -11,3 +11,8 @@ no PR metadata. A mismatch names both commits and leaves the worktree untouched.
 placement; remote-head verification remains pending, and when the commit is not
 local, destination/overwrite checks remain pending too. The displayed state is
 conditional on those checks passing on the real run.
+
+PR dry runs require Git 2.44 or newer and disable lazy fetch for all reads.
+PR reads and placement ignore local replacement objects. Fetches suppress
+configured ref mappings, tag following, pruning, recursive submodule fetching
+and automatic maintenance; the scratch ref is removed before placement.
