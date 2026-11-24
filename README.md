@@ -482,11 +482,11 @@ it stays pending and holds every pull request's checks with it.
 `nen --help` lists every command family (49); each
 family's own `--help` (`nen pr --help`, `nen board --help`, ...) documents
 its verbs and flags in full. [`docs/USAGE.md`](docs/USAGE.md) documents all
-178 verbs outside the binary — each one's purpose, arguments, exit codes and
+179 verbs outside the binary — each one's purpose, arguments, exit codes and
 `--json` shape — plus the conventions they share and the developer workflows
 they compose into. The families group roughly as:
 
-- **Readiness & pull requests** — `pr` (ready, staleness, body-check, fetch,
+- **Readiness & pull requests** — `pr` (ready, version-collision, staleness, body-check, fetch,
   next-blocker, cascade-main, retarget, request-reviews, edit-body,
   edit-title, mark-ready, threads, open, merge), `gate`, `split`, `wc` (classify, squash,
   catch-up, publish, prune, worktrees, swap, worktree), `stage` (triage, list)

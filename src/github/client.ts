@@ -445,6 +445,66 @@ export class GitHubClient {
     });
   }
 
+  // ONE page of the repository's OPEN pull requests, oldest first, raw (REST
+  // `pulls?state=open&sort=created&direction=asc&per_page=100&page=N`) --
+  // the inventory the version-collision limb compares against
+  // (zheref/nen#663). Oldest first so a pull request opened mid-walk lands on
+  // a LATER page instead of shifting every page after it; the walk, its cap
+  // and what a short or unreadable page means are
+  // ../pr/version_collision.ts's. Needs `pull_requests:read`.
+  async openPullRequestsPage(repo: RepoRef, page: number): Promise<unknown> {
+    const response = await this.octokit.request("GET /repos/{owner}/{repo}/pulls", {
+      owner: repo.owner,
+      repo: repo.repo,
+      state: "open",
+      sort: "created",
+      direction: "asc",
+      per_page: 100,
+      page,
+    });
+    return response.data;
+  }
+
+  // ONE branch's LIVE tip commit (REST `git/ref/heads/{branch}`), never a
+  // snapshot's `baseRefOid` -- the collision limb compares against the tip
+  // as it is now (zheref/nen#663). Each segment encoded on its own and the
+  // slashes kept, as fileAtRef does, so `feature/a` is `heads/feature/a`.
+  // Throws unless GitHub answers a 40-hex commit SHA. Needs `contents:read`.
+  async branchTip(repo: RepoRef, branch: string): Promise<string> {
+    const encoded = branch
+      .split("/")
+      .map((segment): string => encodeURIComponent(segment))
+      .join("/");
+    const response = await this.octokit.request(`GET /repos/{owner}/{repo}/git/ref/heads/${encoded}`, {
+      owner: repo.owner,
+      repo: repo.repo,
+    });
+    const sha = digSha((response.data as { object?: unknown }).object);
+    if (sha === null) throw new Error(`GET git/ref/heads/${branch} answered no commit SHA`);
+    return sha;
+  }
+
+  // The MERGE BASE of a branch and a commit (REST `compare/{base}...{head}`,
+  // `merge_base_commit.sha`) -- where a pull request's version came from,
+  // so a child that inherited it is told from one that proposed it
+  // (zheref/nen#663). One page of one commit: only the merge base is read.
+  // Throws unless GitHub answers a 40-hex commit SHA. Needs `contents:read`.
+  async mergeBase(repo: RepoRef, base: string, head: string): Promise<string> {
+    const encode = (name: string): string =>
+      name
+        .split("/")
+        .map((segment): string => encodeURIComponent(segment))
+        .join("/");
+    const response = await this.octokit.request(`GET /repos/{owner}/{repo}/compare/${encode(base)}...${encode(head)}`, {
+      owner: repo.owner,
+      repo: repo.repo,
+      per_page: 1,
+    });
+    const sha = digSha((response.data as { merge_base_commit?: unknown }).merge_base_commit);
+    if (sha === null) throw new Error(`GET compare/${base}...${head} answered no merge base`);
+    return sha;
+  }
+
   // The login of the identity this token authenticates as (`GET /user`) --
   // the identity RUNNING the gate, which `pr ready`'s own-request reading
   // compares a pending request's requester against (zheref/nen#240). An App
@@ -522,6 +582,12 @@ export class GitHubClient {
     });
     return normalizeReviewRequestsPageResponse(response);
   }
+}
+
+/** `object.sha` when it is a full 40-hex commit SHA, else `null`. */
+function digSha(object: unknown): string | null {
+  const sha = typeof object === "object" && object !== null ? (object as { sha?: unknown }).sha : undefined;
+  return typeof sha === "string" && /^[0-9a-f]{40}$/i.test(sha) ? sha : null;
 }
 
 export function createClient(

@@ -452,6 +452,45 @@ describe("GitHubClient.pullRequestFiles -- the PR's changed files, paginated (zh
   });
 });
 
+describe("GitHubClient's version-collision reads (zheref/nen#663) -- read-only GETs", () => {
+  const SHA_A = "a".repeat(40);
+  const SHA_B = "b".repeat(40);
+
+  it("openPullRequestsPage GETs pulls?state=open&sort=created&direction=asc&per_page=100&page=N, one page, raw", async () => {
+    const { fetch: stub, calls } = recordingFetch(() => ({ body: [{ number: 3 }] }));
+    expect(await drive(clientWith(stub).openPullRequestsPage(REPO, 2))).toEqual([{ number: 3 }]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.method).toBe("GET");
+    const url = new URL(calls[0]?.url ?? "");
+    expect(url.pathname).toBe("/repos/zheref/nen/pulls");
+    expect(Object.fromEntries(url.searchParams)).toEqual({ state: "open", sort: "created", direction: "asc", per_page: "100", page: "2" });
+  });
+
+  it("branchTip GETs git/ref/heads/<branch>, slashes kept, and answers the object's SHA", async () => {
+    const { fetch: stub, calls } = recordingFetch(() => ({ body: { ref: "refs/heads/feature/a b", object: { sha: SHA_A, type: "commit" } } }));
+    expect(await drive(clientWith(stub).branchTip(REPO, "feature/a b"))).toBe(SHA_A);
+    expect(calls[0]?.method).toBe("GET");
+    expect(calls[0]?.url).toContain("/repos/zheref/nen/git/ref/heads/feature/a%20b");
+  });
+
+  it("branchTip refuses an answer with no 40-hex SHA, and passes a 404 through", async () => {
+    const { fetch: garbled } = recordingFetch(() => ({ body: { object: { sha: "cafebabe" } } }));
+    expect(String(await rejection(clientWith(garbled).branchTip(REPO, "main")))).toMatch(/answered no commit SHA/);
+    const { fetch: missing } = recordingFetch(() => ({ status: 404, body: { message: "Not Found" } }));
+    expect(await rejection(clientWith(missing).branchTip(REPO, "gone"))).toMatchObject({ status: 404 });
+  });
+
+  it("mergeBase GETs compare/<base>...<head> (one commit per page) and answers merge_base_commit.sha", async () => {
+    const { fetch: stub, calls } = recordingFetch(() => ({ body: { merge_base_commit: { sha: SHA_B } } }));
+    expect(await drive(clientWith(stub).mergeBase(REPO, "release/1.x", SHA_A))).toBe(SHA_B);
+    expect(calls[0]?.method).toBe("GET");
+    expect(calls[0]?.url).toContain(`/repos/zheref/nen/compare/release/1.x...${SHA_A}`);
+    expect(calls[0]?.url).toMatch(/per_page=1\b/);
+    const { fetch: garbled } = recordingFetch(() => ({ body: { merge_base_commit: null } }));
+    expect(String(await rejection(clientWith(garbled).mergeBase(REPO, "main", SHA_A)))).toMatch(/answered no merge base/);
+  });
+});
+
 describe("diagnoseWaitingChecks over a REAL GitHubClient (zheref/nen#224 round 1, N2)", () => {
   // The diagnosis must CALL the client's methods on the client: a detached
   // `const read = client.orgRunnersPage; read(...)` loses `this` and throws

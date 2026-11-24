@@ -1183,6 +1183,8 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
   pr: {
     subcommands: {
       ready: RO("reports CON-32 readiness -- reads GitHub, never labels, merges or comments"),
+      // zheref/nen#663: the same reads `pr ready`'s version-collision limb makes.
+      "version-collision": RO("reports one pull request's live plugin-version collision -- reads GitHub (pulls, git refs, compare, contents, files), never labels, merges or comments"),
       staleness: RO("computes staleness from a wakes file -- pure computation"),
       "body-check": RO("checks a body against requirements -- reads files only"),
       // fetch/next-blocker run ../pr/fetch.ts's REST reviews call, which is

@@ -124,6 +124,15 @@ import {
   renderRunnerAvailability,
   type WaitingCheckDiagnosis,
 } from "../pr/runner_stall.js";
+import {
+  policyFromRead,
+  readVersionCollision,
+  renderVersionCollisionDetail,
+  resolveCollisionPolicy,
+  type PolicyCopy,
+  type VersionCollisionOutcome,
+  type VersionCollisionResult,
+} from "../pr/version_collision.js";
 
 /**
  * The flags this verb adds to the CLI's declared surface.
@@ -560,6 +569,15 @@ export interface ReadyMeta {
    * verdict, a row or the exit code. Additive to v0.1.
    */
   readonly runnerAvailability?: readonly WaitingCheckDiagnosis[];
+  /**
+   * The live plugin-version collision limb's whole result (zheref/nen#663):
+   * status, line, the policy source (always the default-branch tip's
+   * `nen/gates.json`), the proposed version, every collision, every missing
+   * piece of evidence and the read counts. ABSENT when the repository has not
+   * opted in, so such a report is byte-identical. The verdict reads it only
+   * through the `checks-green` row. Additive to v0.1.
+   */
+  readonly versionCollision?: VersionCollisionResult;
   readonly deliveryPr: boolean | null;
   /**
    * Whether CON-30's `dependabot_carve_out` fired for this pull request
@@ -1399,6 +1417,13 @@ export function renderExplain(report: ReadyReport): string[] {
     );
     if (conjunct.reason !== null) lines.push(`        └ ${conjunct.reason}`);
     if (conjunct.missing !== null) lines.push(`        └ unknown: ${conjunct.missing}`);
+    // zheref/nen#663: the limb, its policy source and its read counts.
+    if (conjunct.versionCollision !== undefined) {
+      lines.push(`        └ version collision: ${conjunct.versionCollision.line}`);
+      if (report.meta.versionCollision !== undefined) {
+        for (const line of renderVersionCollisionDetail(report.meta.versionCollision)) lines.push(`        └ ${line}`);
+      }
+    }
     // CON-30's "never a silent exemption" (zheref/nen#18). A CON-32(b) row that
     // passed because a review shim covered it, on a pull request nobody
     // reviewed, must say so on the row itself -- a reader who sees `ready`
@@ -1443,19 +1468,19 @@ export const HEAD_MISMATCH_CONTRACT = "nen.pr.ready.head-mismatch/v0.1";
 // `--require-head` takes a full or abbreviated commit SHA. Seven hex digits is
 // git's own default abbreviation and the shortest a caller would paste; forty is
 // a full SHA-1. Anything else is a typo, refused at exit 2 before GitHub is read.
-const SHA_PREFIX = /^[0-9a-f]{7,40}$/i;
+export const SHA_PREFIX = /^[0-9a-f]{7,40}$/i;
 
-/** Normalize only the public ready invocation; readReady's in-process callers
+/** Normalize only the public ready (and version-collision, zheref/nen#663) invocation; readReady's in-process callers
  * (watch, merge, reports) retain their existing targeting contracts. */
-function readyInvocation(input: PrReadyInput): { typedRef: string; input: PrReadyInput } {
+export function readyInvocation(input: PrReadyInput, verb = "ready"): { typedRef: string; input: PrReadyInput } {
   const typedRef = input.positionals[2] ?? input.values["pr"];
-  if (typedRef === undefined) throw new RefError("'pr ready' requires a pull-request reference. Try 'pr ready <CODE>#<N>', 'pr ready <N> --gh-repo owner/name', or 'pr ready --target owner/name --pr <N>'.");
+  if (typedRef === undefined) throw new RefError(`'pr ${verb}' requires a pull-request reference. Try 'pr ${verb} <CODE>#<N>', 'pr ${verb} <N> --gh-repo owner/name', or 'pr ${verb} --target owner/name --pr <N>'.`);
   const target = input.values["target"];
   const number = input.values["pr"];
   // The historical --gh-repo override of a coded ref is deliberate. Preserve
   // it when no new target alias was declared; new aliases must agree.
   if (target === undefined && number === undefined) return { typedRef, input };
-  if (input.positionals.length > 3) throw new RefError("'pr ready' accepts only one positional reference; --pr must agree with it.");
+  if (input.positionals.length > 3) throw new RefError(`'pr ${verb}' accepts only one positional reference; --pr must agree with it.`);
   if (number !== undefined && (!/^[0-9]+$/.test(number) || !Number.isSafeInteger(Number(number)) || Number(number) <= 0)) throw new RefError("--pr takes a positive whole pull-request number.");
   if (target !== undefined && splitSlug(target) === null) throw new RefError(`--target takes an 'owner/name' slug, got '${target}'.`);
   const legacyRepo = input.values["gh-repo"];
@@ -1464,7 +1489,7 @@ function readyInvocation(input: PrReadyInput): { typedRef: string; input: PrRead
   const registry = (): ProductCodeRegistry => loadRepoRegistry(assertRepoRoot({ repoFlag: input.repoFlag }));
   if (repository === undefined && BARE_REF.test(typedRef)) throw new RefError("A bare positional number or --pr needs --target owner/name or --gh-repo owner/name; no repository is inferred from the checkout.");
   const resolved = resolveRef(typedRef, repository, registry);
-  if (!Number.isSafeInteger(resolved.number) || resolved.number <= 0) throw new RefError("'pr ready' aliases require a positive whole pull-request number.");
+  if (!Number.isSafeInteger(resolved.number) || resolved.number <= 0) throw new RefError(`'pr ${verb}' aliases require a positive whole pull-request number.`);
   if (number !== undefined && resolved.number !== Number(number)) throw new RefError("--pr and the positional reference name conflicting pull-request numbers; nothing was read from GitHub.");
   if (target !== undefined && !BARE_REF.test(typedRef)) {
     const coded = resolveRef(typedRef, undefined, registry);
@@ -1962,6 +1987,14 @@ export async function readReady(
     : { exclusions: [], warnings: [], notes: [], source: undefined, origin: null };
   const aiReviewers = await readAiReviewers(opened.source, ref, stateBaseSha(fetched.state), defaultSha);
   const trustedBots = trustedBotReviewers(baseRead?.read, defaultRead?.read, applied.identities);
+  // ── the live version-collision limb (zheref/nen#663) ─────────────────────
+  //
+  // The policy is the DEFAULT-BRANCH TIP's own nen/gates.json -- the copy
+  // already read above for the exclusions intersection, so a repository that
+  // has not opted in costs no read at all. The base's, the checkout's and a
+  // --gates copy only warn when they differ. Read FRESH on every call, so
+  // `watch until`, `pr merge` and `loop slots --from-run` get it unchanged.
+  const collision = await versionCollisionOf(opened.source, ref, fetched.state, defaultRead, baseRead, resolved, input.values["gates"] !== undefined);
   const evaluation: ReadyEvaluation = evaluateReady(
     { ...applied.identities, excludedChecks: base.exclusions },
     fetched.state,
@@ -1974,6 +2007,7 @@ export async function readReady(
       now: deps.now(),
       excludeCheckNames,
       ...(base.source === undefined ? {} : { declaredExclusionsSource: base.source }),
+      ...(collision.optedIn ? { versionCollision: collision.result } : {}),
     },
   );
 
@@ -2008,8 +2042,9 @@ export async function readReady(
       excludedChecks: excludeCheckNames,
       declaredExclusions: evaluation.context.declaredExclusions,
       declaredExclusionsSource: base.origin,
-      notes: base.notes,
+      notes: [...base.notes, ...collision.result.notes],
       ...(evaluation.context.roundCounts === undefined ? {} : { roundCounts: evaluation.context.roundCounts }),
+      ...(collision.optedIn ? { versionCollision: collision.result } : {}),
       deliveryPr: evaluation.context.deliveryPr,
       identities: { source: applied.source, path: applied.path, read: applied.read },
       dependabotCarveOut: evaluation.context.dependabotCarveOut,
@@ -2019,6 +2054,7 @@ export async function readReady(
         ...fetched.warnings,
         ...base.warnings,
         ...evaluation.context.warnings,
+        ...collision.result.warnings,
       ],
       evaluatedAt: deps.now(),
       generator: { program: PROGRAM, version: VERSION, executable: deps.executable() },
@@ -2089,7 +2125,7 @@ function verdictOf(report: ReadyReport): ReadyRead {
 }
 
 /** `nen/gates.json` as read at one base commit, named for every message about it. */
-interface BaseGatesAt {
+export interface BaseGatesAt {
   readonly read: BaseGatesRead;
   /** `<owner>/<repo>@<sha>:nen/gates.json`. */
   readonly where: string;
@@ -2109,7 +2145,7 @@ function stateBaseSha(state: Record<string, unknown>): string {
  * callers resolve: no exclusion honoured (../gates/base_exclusions.ts), the
  * local identities with a warning (../gates/base_identities.ts). Never throws.
  */
-async function readBaseGates(source: PrStateSource, ref: ResolvedRef, baseSha: string, label = "base"): Promise<BaseGatesAt> {
+export async function readBaseGates(source: PrStateSource, ref: PrRef, baseSha: string, label = "base"): Promise<BaseGatesAt> {
   const origin = `${ref.owner}/${ref.repo}@${baseSha === "" ? `(unknown ${label})` : baseSha}`;
   const where = `${origin}:${BASE_GATES_PATH}`;
   let read: BaseGatesRead;
@@ -2126,6 +2162,44 @@ async function readBaseGates(source: PrStateSource, ref: ResolvedRef, baseSha: s
     }
   }
   return { read, where, origin };
+}
+
+/**
+ * The version-collision limb for one fetched state (zheref/nen#663): the
+ * policy from the DEFAULT-BRANCH TIP's read, every other copy as a diagnostic,
+ * then ../pr/version_collision.ts's one reader and evaluator.
+ */
+async function versionCollisionOf(
+  source: PrStateSource,
+  ref: ResolvedRef,
+  state: Record<string, unknown>,
+  defaultRead: BaseGatesAt | undefined,
+  baseRead: BaseGatesAt | undefined,
+  resolved: ResolvedIdentities,
+  gatesFlag: boolean,
+): Promise<VersionCollisionOutcome> {
+  const text = (key: string): string => (typeof state[key] === "string" ? state[key] : "");
+  const defaultTip = defaultRead ?? {
+    where: `${ref.owner}/${ref.repo}@(unread default-branch tip):${BASE_GATES_PATH}`,
+    read: { kind: "failed" as const, message: "it was not read" },
+  };
+  const copies: PolicyCopy[] = [];
+  if (baseRead !== undefined && baseRead !== defaultRead) {
+    const atBase = policyFromRead(baseRead.where, baseRead.read);
+    copies.push({ label: `the pull request's base (${baseRead.where})`, policy: atBase.kind === "read" ? atBase.policy : undefined });
+  }
+  if (resolved.source === "schema") {
+    copies.push({
+      label: gatesFlag ? `--gates ${resolved.path ?? "?"}` : `the checkout's ${resolved.path ?? BASE_GATES_PATH}`,
+      policy: resolved.identities.versionCollision ?? null,
+    });
+  }
+  return readVersionCollision(
+    source,
+    ref,
+    { number: ref.number, headSha: text("head_sha"), baseRef: text("base_ref"), defaultBranch: text("default_branch") },
+    resolveCollisionPolicy({ where: defaultTip.where, read: defaultTip.read }, copies),
+  );
 }
 
 /** Both trusted reads' complete-declaration intersection, with combined provenance. */

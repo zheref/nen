@@ -12,6 +12,7 @@ import type { PrReadyDeps } from "../verbs/pr_ready.js";
 import type { PrRef, PrStateSource } from "../github/pr_state.js";
 import type { PullRequestSnapshot } from "../github/graphql.js";
 import { EXIT_GH_NOT_RUNNABLE, EXIT_GH_REFUSED, MergeUnitUsageError, mergeUnit } from "./mergeunit.js";
+import { manifest, sha, VERSION_FILE, withOptIn } from "./version_collision.testkit.js";
 import type { ReleaseUnitEntry } from "../schema/workflow.js";
 
 const HEAD = "cafebabe";
@@ -335,6 +336,25 @@ describe("mergeUnit -- every gate evaluated, every verdict line quoted", () => {
     expect(outcome.lines.join("\n")).toMatch(/pr ready: ready/);
     expect(outcome.lines.join("\n")).toMatch(/head pin: pinned to cafebabe/);
     expect(outcome.lines.join("\n")).toMatch(/plan only \(pass --run to execute\)/);
+  });
+
+  it("refuses a live plugin-version collision through its in-process readiness gate (zheref/nen#663, AC-3)", async () => {
+    // The base tip already carries the version the head proposes; every check
+    // is green and the head is unchanged. Only the live limb refuses.
+    const plain = readySource();
+    const source: PrStateSource = {
+      ...plain,
+      fileAtRef: async (_repo, path): Promise<string | null> =>
+        path === "nen/gates.json" ? withOptIn(readFileSync(join(BANKAI_REPO, "nen", "gates.json"), "utf8")) : path === VERSION_FILE ? manifest("1.4.0") : null,
+      pullRequestFiles: async (): Promise<unknown[]> => [{ filename: "claude/skills/x.md" }],
+      openPullRequestsPage: async (): Promise<unknown> => [],
+      branchTip: async (_repo, branch): Promise<string> => sha(branch === "main" ? "d1" : "e2"),
+      mergeBase: async (): Promise<string> => sha("0a"),
+    };
+    const outcome = await run(tmpRoot(), passingScript(), { deps: readyDeps(source) });
+    expect(outcome.report.ready).toBe(false);
+    expect(outcome.report.ok).toBe(false);
+    expect(outcome.lines.join("\n")).toContain("pr ready: not-ready: version collision (CON-32a, zheref/nen#663): collision: version 1.4.0 is already at the tip of");
   });
 
   it("refuses a 'ready' judged on the checkout's own gates file -- the base could not be read (zheref/nen#372, Feitan 3)", async () => {

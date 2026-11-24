@@ -52,6 +52,7 @@ import { declarationWarnings } from "../gates/ready.js";
 import { GH, must, redactRemoteCredentials, type Seams } from "../seam/exec.js";
 import { parseTarget, type Target , TargetError} from "../github/target.js";
 import { classifyGatesPath, PR_READY_FLAGS, prReady, resolveIdentities } from "../verbs/pr_ready.js";
+import { PR_VERSION_COLLISION_FLAGS, prVersionCollision } from "../verbs/pr_version_collision.js";
 import type { FlagSpec } from "../cli/args.js";
 import { conjoin } from "../cli/prose.js";
 import { checkBody, validateRequirements, BodyCheckError, type BodyRequirement, type BodyCheckOptions } from "./bodycheck.js";
@@ -160,6 +161,7 @@ function requirePr(context: CommandContext): number {
 
 const USAGE = `nen pr ready --target <owner/name> --pr <n> [the same ready options below]
 nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [--reviewer-login <name>=<login>]... [--approvers <a,b>] [--round-policy strict|bounded] [--exclude-run <id>] [--exclude-check <name>]... [--gates <path>] [--token-env <VAR>] [--require-head <sha>] [--require-base-gates]
+nen pr version-collision <ref> [--target <owner/name>] [--pr <n>] [--gh-repo <owner/name>] [--token-env <VAR>] [--require-head <sha>] [--explain] [--json]
 nen pr staleness --wakes-from <path> --last-activity <ISO> --now <ISO> [--ready] [--min-verified-wakes <n>] [--idle-minutes <n>]
 nen pr body-check --body-from <path> [--requirements-from <path> | --base <ref>]
                   [--exact [--max <n>]] [--prose-budget <words>]
@@ -381,6 +383,27 @@ ready:
                               anything else: exit 8, status head-mismatch, both
                               SHAs printed, and NO verdict. The verb never
                               waits or retries; polling is the caller's.
+
+version-collision:
+  The trusted-CI read of one pull request's LIVE plugin-version collision
+  (zheref/nen#663), by the SAME evaluator 'pr ready' folds into its CON-32(a)
+  row. Opt-in: nen/gates.json's version_collision block AT THE DEFAULT-BRANCH
+  TIP decides (the base's and the checkout's copies only warn when they
+  differ). A pull request that changes a shipped path must propose a version
+  no target tip holds and no other open same-repository pull request proposes
+  (drafts included; a fork never blocks, and is named in a warning). Status
+  not-applicable | clear | collision | unknown; unknown names every missing
+  piece of evidence -- a failed, capped or over-budget read, or anything that
+  moved between the two passes. Read-only. Exit 0 clear or not-applicable; 1
+  collision or unknown; 2 usage; 8 head-mismatch. --json: contract
+  'nen.pr.version-collision/v0.1' (status, line, judgedHead, base, default,
+  policySource, policy, proposedVersion, collisions[], missing[], inventory,
+  warnings, notes, generator).
+  <ref> --target --pr --gh-repo   As for 'ready'.
+  --token-env <VAR>           Environment variable holding the token (GH_TOKEN).
+  --require-head <sha>        Judge ONLY this commit; otherwise exit 8.
+  --explain                   Also the policy source, the read counts, each
+                              collision, and each missing piece.
 
 staleness:
   A pull request is STALE at >=2 verified no-commit wakes AND >=60 minutes
@@ -1267,6 +1290,22 @@ function ready(context: CommandContext): Promise<number> {
   );
 }
 
+/** `nen pr version-collision` (zheref/nen#663): the same input shape `ready` hands prReady. */
+function versionCollision(context: CommandContext): Promise<number> {
+  const booleans = new Set(context.args.booleans);
+  if (context.json) booleans.add("json");
+  return prVersionCollision(
+    {
+      positionals: context.args.positionals,
+      values: context.args.values,
+      booleans,
+      lists: context.args.lists,
+      repoFlag: context.repoFlag,
+    },
+    context.io,
+  );
+}
+
 // ── which flags each subcommand reads (zheref/nen#351) ──────────────────────
 
 /**
@@ -1303,6 +1342,11 @@ export const PR_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
     values: ["target", "pr", ...PR_READY_FLAGS.values],
     booleans: [...PR_READY_FLAGS.booleans],
     lists: [...PR_READY_FLAGS.lists],
+  },
+  // zheref/nen#663: the trusted-CI collision read, ../verbs/pr_version_collision.ts.
+  "version-collision": {
+    values: ["target", "pr", ...PR_VERSION_COLLISION_FLAGS.values],
+    booleans: [...PR_VERSION_COLLISION_FLAGS.booleans],
   },
   staleness: { values: ["wakes-from", "last-activity", "now", "min-verified-wakes", "idle-minutes"], booleans: ["ready"] },
   "body-check": { values: ["body-from", "requirements-from", "base", "max", "prose-budget", "criteria", "criteria-from", "criteria-issue", "catalogue"], booleans: ["exact"] },
@@ -1414,7 +1458,8 @@ const GH_RESOLVES = "runs on whatever credential gh resolves (GH_TOKEN/GITHUB_TO
  * What `--token-env` would have meant here, said truthfully per subcommand --
  * a refusal that asserts something false about the verb is one a caller stops
  * believing (../issue/command.ts's refuseForeignFlags, the same rule). Keyed
- * by EVERY subcommand but `ready` (the one that reads the flag) with no default
+ * by EVERY subcommand but `ready` and `version-collision` (the two that read
+ * the flag) with no default
  * branch, so a new subcommand gets no credential claim until one is written
  * for it (command.test.ts asserts the coverage; hanten round 1).
  */
@@ -1437,7 +1482,7 @@ const TOKEN_ENV_ADVICE: Readonly<Record<string, string>> = {
   merge: "merge judges readiness on GH_TOKEN and merges on whatever credential gh resolves (GH_TOKEN/GITHUB_TOKEN if exported, else its stored login); the variable --token-env names would have changed neither.",
 };
 
-/** Exported for the coverage test: every key of PR_SUBCOMMAND_FLAGS but `ready` has advice. */
+/** Exported for the coverage test: every key of PR_SUBCOMMAND_FLAGS but `ready` and `version-collision` has advice. */
 export const PR_TOKEN_ENV_ADVICE_KEYS: readonly string[] = Object.keys(TOKEN_ENV_ADVICE);
 
 /** What to type instead, where the owners alone are not the useful answer. */
@@ -1521,6 +1566,7 @@ export const prCommand: Command = {
     { verb: "pr merge", code: 6, meaning: "gh could not be started" },
     { verb: "pr merge", code: 7, meaning: "--delivery: merged without authority; GitHub reports a base other than the one gated" },
     { verb: "pr ready", code: 8, meaning: "--require-head did not match GitHub's head; no verdict" },
+    { verb: "pr version-collision", code: 8, meaning: "--require-head did not match GitHub's head; no collision decided" },
     { verb: "pr converge", code: 3, meaning: "--composite: a read did not finish, or was at another head than --require-head; no verdict" },
     { verb: "pr mark-ready", code: 3, meaning: "the pull request is CLOSED or MERGED; nothing sent" },
     { verb: "pr mark-ready", code: 8, meaning: "--require-head did not match GitHub's head" },
@@ -1544,6 +1590,8 @@ export const prCommand: Command = {
     switch (subcommand) {
       case "ready":
         return ready(context);
+      case "version-collision":
+        return versionCollision(context);
       case "staleness":
         return staleness(context);
       case "body-check":

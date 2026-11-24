@@ -252,6 +252,12 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     expect(result.classification).toBe("read-only");
   });
 
+  it("classifies nen pr version-collision as read-only, as pr ready (zheref/nen#663)", () => {
+    expect(classifyCommand("nen pr version-collision 925 --gh-repo owner/repo --json").classification).toBe("read-only");
+    expect(classifyCommand("nen pr version-collision --target owner/repo --pr 925 --require-head abcdef1 --explain").classification).toBe("read-only");
+    expect(classifyCommand("nen pr version-collision 925 --gh-repo o/r; git push").classification).toBe("unknown");
+  });
+
   it("refuses the issue's exact repro: nen label apply --run", () => {
     const result = classifyCommand("nen label apply XX-PR-#1 --label wake --repo-slug o/r --run");
     expect(result.classification).toBe("mutating");

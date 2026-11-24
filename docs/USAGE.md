@@ -12,7 +12,7 @@ repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
 what each version changed: 49 command
-families, 178 verbs, every flag checked against that binary.
+families, 179 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -258,7 +258,7 @@ including every refusal reason. The raw NUL-delimited stream
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **109 shapes** and **113 ids** (`nen.runner.plan`
+binary carries**, writing or reading — **110 shapes** and **114 ids** (`nen.runner.plan`
 and `nen.wc.worktree.copies` each have two versions, `nen.stop.mark` three, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -305,7 +305,7 @@ file formats).
 - **`issue`** — `nen.issue.body-check/v0.1` · `nen.issue.criteria/v0.1` · `nen.issue.edit-body/v0.3` · `nen.issue.questions/v0.1` · `nen.issue.questions.batch/v0.1` · `nen.issue.reconcile/v0.1`
 - **`loop`** — `nen.loop.iterate/v0.1`
 - **`phase`** — `nen.phase.ledger/v0.1`
-- **`pr`** — `nen.pr.converge/v0.1` · `nen.pr.edit-body/v0.1` · `nen.pr.edit-title/v0.1` · `nen.pr.ledger/v0.1` · `nen.pr.mark-ready/v0.1` · `nen.pr.merge-delivery/v0.1` · `nen.pr.merge-unit/v0.1` · `nen.pr.open/v0.1` · `nen.pr.sections/v0.1` · `nen.pr.ready.head-mismatch/v0.1` · `nen.pr.ready/v0.1` · `nen.pr.threads-settle/v0.1` · `nen.pr.threads/v0.1`
+- **`pr`** — `nen.pr.converge/v0.1` · `nen.pr.edit-body/v0.1` · `nen.pr.edit-title/v0.1` · `nen.pr.ledger/v0.1` · `nen.pr.mark-ready/v0.1` · `nen.pr.merge-delivery/v0.1` · `nen.pr.merge-unit/v0.1` · `nen.pr.open/v0.1` · `nen.pr.sections/v0.1` · `nen.pr.ready.head-mismatch/v0.1` · `nen.pr.ready/v0.1` · `nen.pr.threads-settle/v0.1` · `nen.pr.threads/v0.1` · `nen.pr.version-collision/v0.1`
 - **`prose-lint`** — `nen.prose-lint/v0.1` (the `$schema` a [`canon lint`](#nen-canon-lint) rules contract may carry)
 - **`ref`** — `nen.ref.resolve/v0.1`
 - **`release`** — `nen.release.unit-check/v0.1`
@@ -446,6 +446,7 @@ The complete list:
 | [`pr threads`](#nen-pr-threads) | `3` / `4` / `5` | the thread is already resolved / no thread with that id / the credential could not authenticate. `settle`: `3` every other entry settled and at least one was already resolved (nothing sent to it); an unknown id is `2` there, refused with the rest of the file before any write; `4` only when the pull request itself is not visible ([#230](https://github.com/zheref/nen/issues/230)) |
 | [`pr merge`](#nen-pr-merge) | `5` / `6` / `7` | `gh pr merge` refused / `gh` could not be started / `--delivery` only: **merged without authority** — GitHub reports the merge landed in a protected name or a base other than the one gated; tell the maintainer ([#286](https://github.com/zheref/nen/issues/286)). `--delivery`'s `2` is also **refused by ruling** (a protected base), told apart from usage by its stdout line and `refused: true` |
 | [`pr ready`](#nen-pr-ready) | `8` | `--require-head` did not match GitHub's head; no verdict |
+| [`pr version-collision`](#nen-pr-version-collision) | `8` | `--require-head` did not match GitHub's head; no collision decided — `pr ready`'s code for the same fact |
 | [`pr mark-ready`](#nen-pr-mark-ready) | `8` | `--require-head` did not match GitHub's head — deliberately `pr ready`'s code for the same fact, so a caller pinning a head across both verbs branches on one number |
 | [`pr request-reviews`](#nen-pr-request-reviews) | `9` | a bot request GitHub accepted but did not list in the response's pending-review page; this does not prove recording failure or allowance exhaustion. Its `2` is also **refused by the round ceiling** (`round_policy.maxRounds`, [#240](https://github.com/zheref/nen/issues/240)), told apart from usage by its `refused:` line |
 | [`pr mark-ready`](#nen-pr-mark-ready) | `3` | the pull request is CLOSED or MERGED; nothing sent |
@@ -529,7 +530,7 @@ repository's `nen/` directory, at the path `--repo` names:
 | `nen/labels.json` | the label set — names, colours, descriptions | [`labels sync`](#nen-labels-sync), [`label apply`](#nen-label-apply), [`issue file`](#nen-issue-file), [`issue consolidate-close`](#nen-issue-consolidate-close), [`idea file`](#nen-idea-file), [`schema check`](#nen-schema-check) |
 | `nen/repos.json` | the registry — consumers, product codes, per-consumer pins, recorded scenarios, and the **canon pin**: the `pinned` tag on the canonical handbooks repository's `maintained_tools` entry (`CON-13`), plus where that repository's checkout is found on a machine (`checkout_env`, `checkout` -- [#294](https://github.com/zheref/nen/issues/294)), and **product families** (`families[]`, [#453](https://github.com/zheref/nen/issues/453); see [Product families](#product-families-families)) | [`repo resolve`](#nen-repo-resolve), [`repo scenario`](#nen-repo-scenario), [`ref format`](#nen-ref-format), [`fanout compute`](#nen-fanout-compute), [`fanout record`](#nen-fanout-record), [`warmup`](#nen-warmup), [`canon resolve`](#nen-canon-resolve), [`canon pin`](#nen-canon-pin), [`canon checkout`](#nen-canon-checkout) (the pin and the checkout declaration), [`canon mirror generate`](#nen-canon-mirror-generate) and [`canon mirror check`](#nen-canon-mirror-check) (the pin, when `--source`/`--ref` are omitted; the checkout declaration, when `--rules-dir` is), [`parse futon`](#nen-parse-futon), [`pr ready`](#nen-pr-ready) (ref resolution), [`schema check`](#nen-schema-check) (reports the pin) |
 | `nen/colors.yml` | the status-colour precedence for board rendering | [`color status`](#nen-color-status), [`schema check`](#nen-schema-check), [`scaffold migrate`](#nen-scaffold-migrate) (seeds it into absence) |
-| `nen/gates.json` | reviewer identities for the readiness check, and optional declared check exclusions (`checks.excluded`, the intersection at pinned base and default-tip commits) | [`pr ready`](#nen-pr-ready), [`pr next-blocker`](#nen-pr-next-blocker), [`schema check`](#nen-schema-check), [`scaffold migrate`](#nen-scaffold-migrate) (seeds it into absence) |
+| `nen/gates.json` | reviewer identities for the readiness check, optional declared check exclusions (`checks.excluded`, the intersection at pinned base and default-tip commits), and the optional plugin-version collision opt-in (`version_collision`, read at the default-branch tip only — [#663](https://github.com/zheref/nen/issues/663)) | [`pr ready`](#nen-pr-ready), [`pr version-collision`](#nen-pr-version-collision), [`pr next-blocker`](#nen-pr-next-blocker), [`schema check`](#nen-schema-check), [`scaffold migrate`](#nen-scaffold-migrate) (seeds it into absence) |
 | `nen/contract.json` | optional — `dependency` (what this repository needs *from* nen: the version floor, the pinned ref, the bootstrap), `project` (its stack declaration: lanes, per-lane verbs, toolchain pins) and `mechanical` (the conflict set [`wc catch-up`](#nen-wc-catch-up) classifies: version manifests, changelog, generated mirrors and their regenerate argv — [#326](https://github.com/zheref/nen/issues/326)), and `precedence` (the repository's canon precedence, first wins — see [Canon precedence](#canon-precedence-precedence)) | [`wc catch-up`](#nen-wc-catch-up) (the `mechanical` block, read only on a conflict), [`shu detect`](#nen-shu-detect) (proposes the `project` block), [`shu build`/`test`/`lint`/…](#family-shu) (every argv they run comes from it), [`shu tools`](#nen-shu-tools) (the `toolchain` pins), [`scaffold init`](#nen-scaffold-init) and [`scaffold new`](#nen-scaffold-new) (write it into absence; `init` also reads `dependency.pinned_ref` for the CI file's ref), [`schema check`](#nen-schema-check) |
 | `nen/workflow.json` | optional — the delivery loop's **policy**: the branch template and trunk, the iteration checks, the coverage ladder, the attribution trailers a commit may carry, the declared subject-case rule and body width, the reports directory, the model matrix, the self-hosted runner pools. See [`nen/workflow.json`](#nenworkflowjson) | [`runner`](#family-runner) (the `runners` block), [`commit format`](#nen-commit-format) and [`commit write`](#nen-commit-write) (the trailer policy, `commits.subjectCase` and `commits.bodyMaxLineLength`), [`shu coverage`](#nen-shu-coverage) (the ladder, under `--touched` with no `--threshold`), [`scaffold init`](#nen-scaffold-init) and [`scaffold new`](#nen-scaffold-new) (write it into absence, and generate both git hooks out of it), [`schema check`](#nen-schema-check) |
 
@@ -1006,7 +1007,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 178 verbs, grouped as the README groups them. **Reads** is what a
+All 179 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -1015,6 +1016,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | Family | Verb | Purpose | Reads | `--json` |
 |---|---|---|---|---|
 | [`pr`](#family-pr) | [`nen pr ready`](#nen-pr-ready) | CON-32 readiness verdict for one pull request | nen/gates.json + nen/repos.json (or --gates/--reviewers/--gh-repo), github (gh api graphql/rest) | yes |
+| [`pr`](#family-pr) | [`nen pr version-collision`](#nen-pr-version-collision) | the live plugin-version collision of one pull request (opt-in `version_collision`), by the same evaluator `pr ready` folds into CON-32(a) | nen/gates.json at the default-branch tip, github (REST: pulls, git refs, compare, contents, files) | yes |
 | [`pr`](#family-pr) | [`nen pr staleness`](#nen-pr-staleness) | stale + Ready merge-permission arithmetic over a verified-wake history | caller-supplied --wakes-from JSON file, no schema/git/gh | yes |
 | [`pr`](#family-pr) | [`nen pr body-check`](#nen-pr-body-check) | checks a PR body against caller-supplied requirement patterns, or, with no `--requirements-from`, against the headings of the repository's own PR template, each required present and filled (named as derived, with where it was read) | caller-supplied --body-from/--requirements-from files; else the PR template (`pull_request_template.md`/`.txt` at the root, `.github/` or `docs/`, or `PULL_REQUEST_TEMPLATE/*.md`/`.txt`) in the working tree, or at `--base <ref>` through git (`rev-parse`, `ls-tree`, `cat-file`) | yes |
 | [`pr`](#family-pr) | [`nen pr sections resolve`](#nen-pr-sections-resolve) | resolves a caller-owned section catalogue by kind, family and conditional facts | --catalogue JSON; optional workflow.json pr.sections overrides | yes |
@@ -1212,7 +1214,9 @@ state snapshot (`fetch`), the first blocking condition in a fixed order
 edit` mutation (`retarget`), and reviewer requests routed by resolved kind
 (`request-reviews` — `gh pr edit --add-reviewer` for a User/Team, GitHub's
 `requestReviews` GraphQL mutation for a Bot), and the one draft-to-ready
-transition (`mark-ready` — a write, and never the readiness verdict).
+transition (`mark-ready` — a write, and never the readiness verdict), plus
+the live plugin-version collision read for trusted CI (`version-collision`,
+the same evaluator `ready` folds into CON-32(a)).
 `ready` and `next-blocker`
 read reviewer identities from `nen/gates.json` **at the pull request's base
 commit** (or an explicit `--gates` file, or a reduced `--reviewers` set with
@@ -1224,7 +1228,7 @@ never merges, labels, or comments on a pull request.
 Every `pr` subcommand refuses, at exit 2 and before any `gh` call, each flag it
 does not read, and the refusal names the subcommands that do read it:
 `nen pr edit-body … --token-env NARROW` answers *"--token-env is not read by
-'pr edit-body'. --token-env is only read by 'pr ready'; edit-body runs on
+'pr edit-body'. --token-env is only read by 'pr ready' and 'pr version-collision'; edit-body runs on
 whatever credential gh resolves (GH_TOKEN/GITHUB_TOKEN if exported, else its
 stored login), never on the variable --token-env names."*. An unknown flag is
 unknown to the **subcommand** — a `threads` action to its own action's flags:
@@ -1241,8 +1245,8 @@ naming a narrower credential still wrote with `gh`'s own. The global `--repo`,
 
 | Verb | Credential source |
 |---|---|
-| `ready` | Nen's direct GitHub client reads the explicitly selected environment variable: `GH_TOKEN` by default, or `--token-env <VAR>`. It never imports `gh`'s stored credential or discovers a token from the checkout. An unset/unusable token produces `unevaluated`, exit 1, with both token spellings in the remedy. |
-| `fetch`, `next-blocker`, `retarget`, `request-reviews`, `edit-body`, `edit-title`, `mark-ready`, `threads list/reply/resolve/settle`, `open`, `merge` | These invoke `gh`; its configured authentication and environment decide the credential. `threads` already uses this path and needs no separate Nen token export. `--token-env` selects only `ready`'s client, never the credential for these calls, and every one of them refuses it at exit 2 ([#351](https://github.com/zheref/nen/issues/351)). `open` and `merge` also use Git's configured transport where they perform Git operations. |
+| `ready`, `version-collision` | Nen's direct GitHub client reads the explicitly selected environment variable: `GH_TOKEN` by default, or `--token-env <VAR>`. It never imports `gh`'s stored credential or discovers a token from the checkout. An unset/unusable token produces `unevaluated` (`ready`) or `unknown` (`version-collision`), exit 1. |
+| `fetch`, `next-blocker`, `retarget`, `request-reviews`, `edit-body`, `edit-title`, `mark-ready`, `threads list/reply/resolve/settle`, `open`, `merge` | These invoke `gh`; its configured authentication and environment decide the credential. `threads` already uses this path and needs no separate Nen token export. `--token-env` selects only `ready`'s and `version-collision`'s client, never the credential for these calls, and every one of them refuses it at exit 2 ([#351](https://github.com/zheref/nen/issues/351)). `open` and `merge` also use Git's configured transport where they perform Git operations. |
 | `cascade-main` | Git's configured transport credentials for fetch/push; no direct Nen API token. |
 | `staleness`, `body-check` | Local inputs and files; no GitHub authentication. |
 
@@ -2476,6 +2480,87 @@ when its ordinary calculation ran), `caveats[]`, `remedy` and `meta`
 `conjuncts[].missing`, `conjuncts[].roundQuorum`, `conjuncts[].owedRounds` and
 `meta.requiredHead` are additive to
 `nen.pr.ready/v0.1`.
+<a id="pr-ready-version-collision"></a>
+
+**`version_collision`: a live plugin-version collision limb on row 2
+([#663](https://github.com/zheref/nen/issues/663)).** A repository that uses
+its plugin version as a cache key needs every delivery to publish a distinct
+version, and a head whose checks went green before its base took that version
+is still green afterwards. The opt-in is one optional block in
+`nen/gates.json`:
+
+```json
+"version_collision": {
+  "version_file": ".claude-plugin/plugin.json",
+  "version_pointer": "/version",
+  "shipped_paths": ["claude/**", ".claude-plugin/**"]
+}
+```
+
+- **The policy is the default branch's.** The block is read **only** from
+  `nen/gates.json` at the pinned default-branch tip, the copy `checks.excluded`
+  is already intersected with, so a repository that has not opted in costs no
+  extra read. The copy at the pull request's base, in the checkout and under
+  `--gates` is diagnostic: a difference is a `meta.warnings` line, and it never
+  decides. When the default tip's file cannot be read, the limb is `unknown`
+  if any other copy declares the block. Otherwise it is a `meta.notes` line
+  and not applicable.
+- **What it decides** — one evaluator, shared with
+  [`pr version-collision`](#nen-pr-version-collision), statuses
+  `not-applicable`, `clear`, `collision` and `unknown`:
+  - not applicable when the block is absent or `null`, or the pull request
+    changes no path matching `shipped_paths` (a rename's old path counts);
+  - `unknown` when the version is missing or unparseable at the head;
+  - `collision` when the head's version equals the version at the **live**
+    tip of the base branch (a branch read now, not the snapshot's
+    `baseRefOid`), or, on a stacked base, at the live default-branch tip. It
+    is also a collision when the head leaves the version as its merge base had
+    it while the base tip has moved to another, already published, version;
+  - `collision` when another **open** pull request proposes the same version.
+    A peer counts when its head is in this repository (drafts included), it
+    changes a shipped path, and the version at its **own** merge base differs.
+    A child that only inherited the version from its base reserves nothing
+    again; retargeted to the trunk, it counts. Every such number is named;
+  - a **fork** head never blocks, so an outsider cannot claim the next number.
+    It is named in a warning and not read. A peer whose manifest cannot be
+    parsed reserves nothing (a note); a peer read that **fails** is `unknown`;
+  - `unknown` on any failed, capped or over-budget read, or a transport
+    without the read, each missing piece named. The caps are 10 inventory
+    pages of 100 (a full tenth page is `unknown`), 3000 files per pull request
+    (at the cap is `unknown`) and 200 requests per evaluation. The inventory is
+    listed oldest first, then listed again and both tips re-read after every
+    other read; any difference in a `(number, head, base)` row or a tip is
+    `unknown: moved during inspection`, naming what moved. Nothing is retried.
+  - Versions compare as SemVer, ignoring build metadata, when both parse as
+    SemVer, and as exact strings otherwise.
+- **Folded into row 2, never a seventh row.** `conjuncts` stays the six rows
+  of `nen.pr.ready/v0.1`. A `collision` fails `checks-green` with
+  `not-ready: version collision (CON-32a, zheref/nen#663): collision: version
+  <v> …`. An `unknown` on otherwise green checks makes the row `unknown`
+  (never ready), with the missing evidence in `missing`. On a row that already
+  failed, the clause is appended after ` — and `, as the quorum's is on row 4.
+  The read is fresh on every call, so `watch until --pr`, both `pr merge`
+  forms and `loop slots --from-run` get it with no change of their own.
+- **`--explain` and `--json`.** `--explain` prints `└ version collision:
+  <line>` under row 2, then the policy source and the read counts. `--json`
+  adds `conjuncts[].versionCollision` on row 2 (`{ status, line,
+  proposedVersion, collisions, missing }`) and `meta.versionCollision`, the
+  whole result. Both are **absent** when the repository has not opted in, so
+  its report is byte-identical and the limb makes no inventory call.
+- **Refused at load, by pointer** (exit 2, like any other refused gates
+  file): `version_collision` not an object; `version_file` not one
+  repository-relative path (empty, a glob character, a `.` or `..` segment,
+  an empty segment, a backslash, a leading `/`, a control character);
+  `version_pointer` not an RFC 6901 pointer (it must start with `/`, every
+  `~` is `~0` or `~1`, and no control character). It is a pointer and never a
+  pattern, because a regex over the head's text is a ReDoS surface.
+  `shipped_paths` missing, empty, duplicated, or outside the
+  [`shu evidence`](#nen-shu-evidence) glob grammar (`*`, `**` as a whole
+  segment, `?`; no `[`, `]`, `{`, `}`).
+- **Known gap.** [`pr next-blocker`](#nen-pr-next-blocker) reads through `gh`
+  and does **not** evaluate this limb, so it can name no blocker while
+  `pr ready` is not ready on a collision. Quote `pr ready`.
+
 **AI reviewer policy (#408).** Readiness and `pr merge --release-unit` read
 root `aiReviewers` from `nen/workflow.json` at the immutable PR-base SHA and
 default-branch-tip SHA in the same fetched snapshot. The stricter value wins:
@@ -2559,6 +2644,68 @@ nen pr ready 5 --gh-repo zheref/nen --reviewers alice --token-env NEN_TEST_DEFIN
 ```
 exit 1 (no usable token, so GitHub could not be read — never read as ready)
 (from a real run — the first four keys of an eleven-key document, elided at `...`. This verb normally reaches GitHub, but an unset `--token-env` short-circuits before the network, so the invocation as printed is fully offline-runnable and the `unevaluated` verdict is produced without a token. The same shape is asserted by `src/pr/command.test.ts`'s "`--json` is the SAME invocation whether given before or after 'pr'" case.)
+
+### `nen pr version-collision`
+
+The trusted-CI read of one pull request's **live plugin-version collision**
+([#663](https://github.com/zheref/nen/issues/663)), by the **same evaluator**
+[`pr ready`](#nen-pr-ready) folds into its CON-32(a) row. The rules, the
+opt-in and the caps are in [`pr ready`'s
+section](#pr-ready-version-collision); this verb adds no decision of its own.
+It reads the pull request's snapshot and `nen/gates.json` at the default-branch
+tip, which decides, and at the base, which only warns. It also reads the
+checkout's copy under `--repo` (default the current directory), which only
+warns. Read-only: no label, comment or status. It needs `pull-requests:read`
+and `contents:read` and no new permission, and it never runs pull request
+content.
+
+**Usage**
+
+```text
+nen pr version-collision <ref> [--target <owner/name>] [--pr <n>] [--gh-repo <owner/name>] [--token-env <VAR>] [--require-head <sha>] [--explain] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `<ref>` | yes | `<CODE>#<N>` through `nen/repos.json`, or a bare `<N>` with `--gh-repo`/`--target` | `pr ready`'s own resolution, aliases included |
+| `--target <owner/name>` / `--gh-repo <owner/name>` | no | The repository | must agree with each other and a coded ref |
+| `--pr <n>` | no | Alias for the positional number | must agree with it |
+| `--token-env <VAR>` | no | Environment variable holding the token | default `GH_TOKEN`; never ambient |
+| `--require-head <sha>` | no | Judge only this commit | 7–40 hex digits; any other head is exit 8 |
+| `--explain` | no | Also the policy source, read counts, each collision and each missing piece | — |
+| `--json` | no | machine contract `nen.pr.version-collision/v0.1` | — |
+
+**Output and exit codes** — the first human line is `<owner>/<repo>#<n>:
+version collision <line>`, the second the judged head, then any warnings.
+`--json` prints the full document `{ contract: "nen.pr.version-collision/v0.1",
+status, line, judgedHead, base: { ref, sha }, default: { ref, sha },
+policySource, policy, proposedVersion, collisions: [{ kind, version, pr, head,
+baseRef, draft }], missing, inventory: { pages, inspected, reads, budget },
+warnings, notes, ref, repo, pr, evaluatedAt, generator }`. `status` is
+`not-applicable`, `clear`, `collision` or `unknown`. `kind` is `base` (a target
+tip already carries the version; `pr` and `draft` are `null`) or `peer`
+(another open pull request proposes it). A `--require-head` mismatch prints
+`pr ready`'s `nen.pr.ready.head-mismatch/v0.1` document.
+
+| Exit | Status | Meaning |
+|---|---|---|
+| 0 | `clear` · `not-applicable` | no conflict, or the repository has not opted in, or nothing shipped changed |
+| 1 | `collision` · `unknown` | a conflict, named, or missing evidence, named — never a pass |
+| 2 | — | usage: a malformed ref, alias, `--require-head`, or a flag this verb does not read |
+| 8 | `head-mismatch` | `--require-head` is not GitHub's head; no collision decided |
+
+**Example**
+
+```bash
+nen pr version-collision 42 --gh-repo acme/widget --require-head 0123456
+```
+```text
+acme/widget#42: version collision collision: version 1.4.0 is also proposed by open pull requests #40, #41 (draft)
+  judged head: 0123456789abcdef0123456789abcdef01234567 (GitHub's head for this pull request when it was read)
+```
+exit 1 (scripted — the repository, numbers and versions are synthetic)
 
 ### `nen pr staleness`
 

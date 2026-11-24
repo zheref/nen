@@ -2192,6 +2192,9 @@ describe("prReady -- declared checks.excluded (zheref/nen#249)", () => {
     expect(json.report?.meta.notes).toEqual([
       "could not confirm the pull request's base declares no exclusion: the pull request's base could not be read (HTTP 403: Resource not accessible by integration) at zheref/example@basebase:nen/gates.json. No declared exclusion was applied; every check counts on CON-32(a).",
       "could not confirm the default-branch tip declares no exclusion: the default-branch tip could not be read (HTTP 403: Resource not accessible by integration) at zheref/example@basebase:nen/gates.json. No declared exclusion was applied; every check counts on CON-32(a).",
+      // zheref/nen#663: the unread default tip, and no copy declaring the
+      // collision block, is the same quiet note -- never a warning, never a row.
+      "version collision not applicable: the default-branch tip's nen/gates.json (zheref/example@basebase:nen/gates.json) could not be read (HTTP 403: Resource not accessible by integration), and no other copy declares version_collision",
     ]);
     const plain = await run(failing, null, "plain");
     expect(plain.out.join("\n")).not.toMatch(/could not confirm|NOT honoured/);
