@@ -932,3 +932,15 @@ describe("nen wc worktree -- CLI wiring and exit codes", () => {
     expect(result.err).toMatch(/LOCKED/);
   });
 });
+
+describe("NN#650 PR dry-run Git guard", () => {
+  it("fails closed on Git older than 2.44 and passes read-only environment guards", () => {
+    const seams = new ScriptedSeams([
+      { match: "git --no-replace-objects --no-lazy-fetch rev-parse --path-format=absolute --git-common-dir",
+        result: { code: 129, stderr: "unknown option: --no-lazy-fetch" } },
+    ]);
+    expect(() => manageWorktree(seams, CORE, { name: "kg", pr: 650, head: TIP, copyFromCore: [], dryRun: true }, fakeFs({ [CORE]: "dir" })))
+      .toThrow(/git >= 2.44/);
+    expect(seams.calls[0]?.env).toMatchObject({ GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1", GIT_OPTIONAL_LOCKS: "0" });
+  });
+});
