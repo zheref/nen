@@ -160,8 +160,9 @@ nen release unit-check --pr <n|owner/name#n|CODE#n> --repo <path> [--json]
 
 state:
   Read one GitHub Release by exact tag, including drafts and all asset pages.
-  Read-only authenticated GraphQL query; requires repository write access to
-  prove draft visibility. GitHub App or lesser/unknown permission fails closed.
+  Read-only authenticated GraphQL query; positive releases need read access.
+  Absence requires repository write access to prove draft visibility. Unknown
+  permission fails closed for absence. The whole read has a 30-second deadline.
   Exit 0: absent, draft or published. Exit 1: could not look (state and assets
   are null), including credential, transport, timeout or malformed evidence.
   Exit 2: bad flags or unsupported destination kind, named before any read.

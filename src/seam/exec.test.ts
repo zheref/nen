@@ -208,6 +208,13 @@ describe("spawnRunner -- the real Runner backing production Seams", () => {
     expect(result.stdout.trim()).toBe("hi");
   });
 
+  for (const bytes of [false, true]) it(`bounds a captured read with bytes=${bytes} (NN#652/AC-2)`, () => {
+    const result = spawnRunner(process.execPath, ["-e", "setTimeout(() => process.exit(0), 1500)"], { bytes, timeoutMs: 100 });
+    expect(result.code).not.toBe(0);
+    expect(result.spawnFailed).toBe(true);
+    expect(result.stdout).toBe("");
+  });
+
   // zheref/nen#237: `bytes` keeps stdout raw -- a non-UTF-8 byte survives for a
   // fatal decoder, and a CR/LF inside the output is not normalised away.
   it("with `bytes`, returns stdout's raw bytes and leaves the decoded text un-normalised", () => {

@@ -52,9 +52,9 @@
 // keep itself. It answers a PROMISE, because there is no synchronous way to
 // watch a process that is still running.
 //
-// WHAT IT DOES NOT DO IS KILL ANYTHING. The watcher is consulted and its
-// verdict is honoured; nen never signals the child it started, on any path, at
-// any budget. What to do about a stalled process is the target repository's own
+// THE WATCHED RUNNER DOES NOT KILL ANYTHING. The watcher is consulted and its
+// verdict is honoured; it never signals the watched child. Captured reads may
+// explicitly request a deadline through RunOptions.timeoutMs. What to do about a stalled process is the target repository's own
 // declared command (../shu/render.ts's `onStall`), spawned through `run` like
 // every other declared step, and this seam is only what makes the question
 // answerable.
@@ -98,6 +98,8 @@ export interface RunOptions {
   readonly cwd?: string;
   /** Extra environment, merged over the process environment. */
   readonly env?: Readonly<Record<string, string | undefined>>;
+  /** Deadline for an explicitly bounded captured read; kills only that child on expiry. */
+  readonly timeoutMs?: number;
   /** Text written to the child's stdin. */
   readonly stdin?: string;
   /**
@@ -556,6 +558,7 @@ export const spawnRunner: Runner = (command, args, options = {}): CommandResult 
       ? {}
       : { env: { ...process.env, ...options.env } as NodeJS.ProcessEnv }),
     ...(options.stdin === undefined ? {} : { input: options.stdin }),
+    ...(options.timeoutMs === undefined ? {} : { timeout: options.timeoutMs, killSignal: "SIGKILL" as const }),
     encoding: "utf8",
     // Generous, because a backlog sweep's response can be large and a truncated
     // JSON body would be parsed as a syntax error rather than reported as a
@@ -587,6 +590,7 @@ function spawnBytes(command: string, args: readonly string[], options: RunOption
       ? {}
       : { env: { ...process.env, ...options.env } as NodeJS.ProcessEnv }),
     ...(options.stdin === undefined ? {} : { input: options.stdin }),
+    ...(options.timeoutMs === undefined ? {} : { timeout: options.timeoutMs, killSignal: "SIGKILL" as const }),
     maxBuffer: CAPTURE_MAX_BUFFER,
   });
   if (result.error !== undefined) {

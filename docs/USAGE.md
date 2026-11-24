@@ -9457,26 +9457,29 @@ repairs a release, cuts a tag, or downloads an asset.
 nen release state --kind github --repo-slug <owner/name> --tag <tag> [--json]
 ```
 
-An authenticated GitHub user with repository write access is required to prove
-visibility of draft releases. A read-only or GitHub App credential whose viewer
-permission cannot establish that visibility returns “could not look”, including
-when the named release is not visible. Authentication uses `gh`’s existing
+A positively observed release can be read with read access. To prove absence,
+an authenticated GitHub user with repository write access must establish draft
+visibility. A read-only or GitHub App credential with an invisible release
+returns “could not look”. Repository redirects are disabled and the returned
+owner/name must match the requested destination. Authentication uses `gh`’s existing
 credential on github.com; no credential is printed or written.
 
 | Exit | Meaning |
 |---|---|
-| `0` | `absent`, `draft` or `published`, plus the complete assets array (id, name, size in bytes, downloadUrl); empty for absent |
+| `0` | `absent`, `draft` or `published`, plus the complete assets array (id, name, size in bytes); empty for absent |
 | `1` | Could not look: credential/tool/network/timeout failure, query errors, malformed response, incomplete or changing asset evidence; `state` and `assets` are null |
 | `2` | Invalid flags or an unsupported destination kind, named before any query |
 
-`--json` emits contract `nen.release.state/v0.1`, kind, repo, tag, state and assets;
+`--json` emits top-level keys: contract `nen.release.state/v0.1`, kind, repo, tag, state and assets;
 unknown state also carries a reason. The named-tag GraphQL query sees draft
 releases, unlike REST’s published-only by-tag endpoint. Asset pagination rejects
 repeated cursors, duplicates, missing items or changing release identity/state,
-update timestamp or total count. A 1,000-page ceiling fails as unknown. This is
+update timestamp or total count. Totals above GitHub’s 1,000-asset limit, pages above 100 items and
+contradictory continuation evidence fail as unknown. A 1,000-page ceiling
+also fails as unknown. This is
 an observed read, not an atomic snapshot: a concurrent change that leaves those
-fields unchanged cannot be detected. A timeout reported by `gh` is unknown;
-the verb does not add a separate process timeout.
+fields unchanged cannot be detected. The whole read has a 30-second deadline shared across captured queries; the
+current query child is terminated on expiry and the result is unknown.
 
 ### `nen release preflight`
 

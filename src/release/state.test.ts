@@ -3,11 +3,11 @@ import { runFamily, type Io } from "../index.js";
 import { ScriptedSeams } from "../seam/scripted.js";
 import { releaseCommand } from "./command.js";
 
-const asset = { id: "A1", name: "tool.zip", size: 42, downloadUrl: "https://github.com/o/r/releases/download/v1/tool.zip" };
+const asset = { id: "A1", name: "tool.zip", size: 42 };
 const release = (extra: Record<string, unknown> = {}): Record<string, unknown> => ({ id: "R1", tagName: "v1", isDraft: false, updatedAt: "2026-01-01T00:00:00Z", releaseAssets: { totalCount: 1, nodes: [asset], pageInfo: { hasNextPage: false, endCursor: "a1" } }, ...extra });
-const response = (value: unknown = release(), permission: unknown = "WRITE"): string => JSON.stringify({ data: { repository: { viewerPermission: permission, release: value } } });
-async function capture(results: readonly {stdout?: string; stderr?: string; code?: number; spawnFailed?: boolean}[], flags: string[] = []): Promise<{ code: number; out: string; err: string; seams: ScriptedSeams }> {
-  const seams = new ScriptedSeams(results.map(result => ({ match: "gh api graphql --hostname github.com --input -", result })));
+const response = (value: unknown = release(), permission: unknown = "WRITE"): string => JSON.stringify({ data: { repository: { nameWithOwner: "o/r", viewerPermission: permission, release: value } } });
+async function capture(results: readonly {stdout?: string; stderr?: string; code?: number; spawnFailed?: boolean}[], flags: string[] = [], now?: () => Date): Promise<{ code: number; out: string; err: string; seams: ScriptedSeams }> {
+  const seams = new ScriptedSeams(results.map(result => ({ match: "gh api graphql --hostname github.com --input -", result })), { now: now ?? ((): Date => new Date("2026-01-01T00:00:00Z")) });
   const out: string[] = [], err: string[] = [];
   const io: Io = { out: line => out.push(line), err: line => err.push(line) };
   const code = await runFamily(releaseCommand, ["release", "state", "--kind", flags[0] === "--kind" ? flags[1]! : "github", "--repo-slug", "o/r", "--tag", "v1", "--json", ...(flags[0] === "--kind" ? flags.slice(2) : flags)], null, false, io, seams);
@@ -47,7 +47,6 @@ describe("release state (NN#652)", () => {
     {tagName:"other"}, {isDraft:null}, {id:""}, {releaseAssets:null},
     {releaseAssets:{totalCount:-1,nodes:[],pageInfo:{hasNextPage:false}}},
     {releaseAssets:{totalCount:1,nodes:[{...asset,size:-1}],pageInfo:{hasNextPage:false}}},
-    {releaseAssets:{totalCount:1,nodes:[{...asset,downloadUrl:"javascript:bad"}],pageInfo:{hasNextPage:false}}},
     {releaseAssets:{totalCount:2,nodes:[asset,asset],pageInfo:{hasNextPage:false}}},
     {releaseAssets:{totalCount:0,nodes:[asset],pageInfo:{hasNextPage:false}}},
     {releaseAssets:{totalCount:1,nodes:[],pageInfo:{hasNextPage:true,endCursor:"x"}}},
@@ -68,6 +67,34 @@ describe("release state (NN#652)", () => {
   });
   it("rejects unrelated flags and surplus arguments before tools", async () => {
     for(const flags of [["--range","a..b"],["extra"],["--","extra"]]) {const r=await capture([],flags);expect(r.code).toBe(2);expect(r.seams.calls).toHaveLength(0);}
+  });
+
+  for (const permission of ["READ", null]) it("AC-1: a positively visible release needs no write permission", async () => {
+    const r=await capture([{stdout:response(release(),permission)}]);expect(r.code).toBe(0);expect(JSON.parse(r.out).state).toBe("published");
+  });
+  it("AC-2: a coercible permission array cannot prove absence", async () => {
+    const r=await capture([{stdout:response(null,["WRITE"])}]);expect(r.code).toBe(1);expect(JSON.parse(r.out).state).toBeNull();
+  });
+  it("AC-2: every query requests a bounded deadline", async () => {
+    const r=await capture([{stdout:response()}]);expect(r.code).toBe(0);expect(r.seams.calls[0]!.timeoutMs).toBe(30000);
+  });
+
+  it("AC-1: a renamed destination cannot masquerade as the requested repo", async () => {
+    const r=await capture([{stdout:response().replace('"nameWithOwner":"o/r"','"nameWithOwner":"elsewhere/r"')}]);expect(r.code).toBe(1);expect(JSON.parse(r.out).state).toBeNull();
+    expect(JSON.parse(r.seams.calls[0]!.stdin!).query).toContain("followRenames:false");
+  });
+
+  it("AC-2: the whole read has one deadline across pages", async () => {
+    const first=release({releaseAssets:{totalCount:2,nodes:[asset],pageInfo:{hasNextPage:true,endCursor:"x"}}});
+    let tick=0;const now=():Date=>new Date([0,0,31000][tick++] ?? 31000);
+    const r=await capture([{stdout:response(first)}],[],now);expect(r.code).toBe(1);expect(r.seams.calls).toHaveLength(1);expect(r.out).toContain("deadline");
+  });
+  for (const connection of [
+    {totalCount:1001,nodes:[],pageInfo:{hasNextPage:false}},
+    {totalCount:101,nodes:Array.from({length:101},(_,i)=>({...asset,id:`A${i}`})),pageInfo:{hasNextPage:false}},
+    {totalCount:1,nodes:[asset],pageInfo:{hasNextPage:true,endCursor:"x"}},
+  ]) it("AC-2: impossible asset page bounds remain unknown", async () => {
+    const r=await capture([{stdout:response(release({releaseAssets:connection}))}]);expect(r.code).toBe(1);expect(r.seams.calls).toHaveLength(1);
   });
 
 });

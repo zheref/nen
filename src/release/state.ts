@@ -6,12 +6,13 @@ import { GH } from "../seam/exec.js";
 // only finds published releases. Require a viewer allowed to see drafts before
 // interpreting null as absence. No release/tag mutation or asset download.
 const QUERY = `query ReleaseState($owner:String!,$name:String!,$tag:String!,$cursor:String) {
-  repository(owner:$owner,name:$name) {
+  repository(owner:$owner,name:$name,followRenames:false) {
+    nameWithOwner
     viewerPermission
     release(tagName:$tag) {
       id tagName isDraft updatedAt
       releaseAssets(first:100,after:$cursor) {
-        totalCount nodes { id name size downloadUrl }
+        totalCount nodes { id name size }
         pageInfo { hasNextPage endCursor }
       }
     }
@@ -26,7 +27,7 @@ const text = (value: unknown): string => {
   if (typeof value !== "string" || value === "") throw new Error("malformed response");
   return value;
 };
-interface Asset { readonly id: string; readonly name: string; readonly size: number; readonly downloadUrl: string }
+interface Asset { readonly id: string; readonly name: string; readonly size: number }
 
 export function releaseState(context: CommandContext): number {
   const kind = requireValue(context.args, "kind", "The destination kind; github has readable release state.");
@@ -42,30 +43,35 @@ export function releaseState(context: CommandContext): number {
   const [owner, name] = repo.split("/");
   const assets: Asset[] = [], ids = new Set<string>(), cursors = new Set<string>();
   let cursor: string | null = null, snapshot: string | null = null;
+  const deadline = context.seams.now().getTime() + 30000;
   try {
     for (let page = 0; page < 1000; page++) {
-      const result = context.seams.run(GH, ["api", "graphql", "--hostname", "github.com", "--input", "-"], { stdin: JSON.stringify({query:QUERY,variables:{owner,name,tag,cursor}}) });
+      const remaining = deadline - context.seams.now().getTime();
+      if (!Number.isFinite(remaining) || remaining <= 0 || remaining > 30000) return fail("read deadline expired or clock moved backwards");
+      const result = context.seams.run(GH, ["api", "graphql", "--hostname", "github.com", "--input", "-"], { timeoutMs: remaining, stdin: JSON.stringify({query:QUERY,variables:{owner,name,tag,cursor}}) });
       if (result.spawnFailed || result.code !== 0) return fail("GitHub query failed (credential, transport, timeout or tool failure); no release state established");
       const response = object(JSON.parse(result.stdout));
       if (response["errors"] !== undefined && (!Array.isArray(response["errors"]) || response["errors"].length !== 0)) return fail("GitHub returned query errors");
       const repository = object(object(response["data"])["repository"]);
-      if (!["ADMIN","MAINTAIN","WRITE"].includes(String(repository["viewerPermission"]))) return fail("draft visibility requires an authenticated viewer with repository write access");
+      if (typeof repository["nameWithOwner"] !== "string" || repository["nameWithOwner"].toLowerCase() !== repo.toLowerCase()) return fail("repository identity differs from the requested destination");
       if (repository["release"] === null) {
+        const permission = repository["viewerPermission"];
+        if (typeof permission !== "string" || !["ADMIN","MAINTAIN","WRITE"].includes(permission)) return fail("proving absence requires authenticated repository write access for draft visibility");
         if (page !== 0) return fail("release changed during the read");
         emit(context.io, context.json, {...base,state:"absent",assets:[]}, [`release state: ${plainLine(repo)} ${plainLine(tag)}: absent`]); return 0;
       }
       const release = object(repository["release"]), connection = object(release["releaseAssets"]), info = object(connection["pageInfo"]);
       if (release["tagName"] !== tag || typeof release["isDraft"] !== "boolean") return fail("release identity or state is unreadable");
       const total = connection["totalCount"];
-      if (typeof total !== "number" || !Number.isSafeInteger(total) || total < 0 || !Array.isArray(connection["nodes"]) || typeof info["hasNextPage"] !== "boolean") return fail("asset connection is unreadable");
+      if (typeof total !== "number" || !Number.isSafeInteger(total) || total < 0 || total > 1000 || !Array.isArray(connection["nodes"]) || typeof info["hasNextPage"] !== "boolean") return fail("asset connection is unreadable");
+      if (connection["nodes"].length > 100) return fail("asset page exceeds the requested bound");
       const current = JSON.stringify([text(release["id"]),release["isDraft"],text(release["updatedAt"]),total]);
       if (snapshot !== null && snapshot !== current) return fail("release changed during asset pagination");
       snapshot = current;
       for (const node of connection["nodes"]) {
         const item = object(node), id = text(item["id"]), size = item["size"];
         if (ids.has(id) || typeof size !== "number" || !Number.isSafeInteger(size) || size < 0) return fail("duplicate or malformed asset evidence");
-        const asset = {id,name:text(item["name"]),size,downloadUrl:text(item["downloadUrl"])};
-        if (!asset.downloadUrl.startsWith("https://")) return fail("asset URL is unreadable");
+        const asset = {id,name:text(item["name"]),size};
         ids.add(id); assets.push(asset);
       }
       if (assets.length > total) return fail("asset count changed during the read");
@@ -74,6 +80,7 @@ export function releaseState(context: CommandContext): number {
         const state = release["isDraft"] ? "draft" : "published";
         emit(context.io, context.json, {...base,state,assets}, [`release state: ${plainLine(repo)} ${plainLine(tag)}: ${state}; ${assets.length} asset(s)`, ...assets.map(asset => `  ${plainLine(asset.name)} (${asset.size} bytes)`)]); return 0;
       }
+      if (assets.length >= total) return fail("asset pagination contradicts the declared total");
       cursor = text(info["endCursor"]);
       if (cursors.has(cursor) || connection["nodes"].length === 0) return fail("asset pagination did not advance");
       cursors.add(cursor);
