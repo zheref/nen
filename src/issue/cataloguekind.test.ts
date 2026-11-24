@@ -70,6 +70,8 @@ describe("the kind a catalogue declares through its contract", () => {
     expect(declaredCatalogueKind({ contract: "acme.tools.issue-sections/v3" })?.kind).toBe("issue-sections");
     expect(declaredCatalogueKind({ contract: "pr-sections" })?.kind).toBe("pr-sections");
     expect(declaredCatalogueKind({ contract: "pr-sections@2" })?.kind).toBe("pr-sections");
+    expect(declaredCatalogueKind({ contract: "urn:acme:pr-sections:v1" })?.kind).toBe("pr-sections");
+    expect(declaredCatalogueKind({ contract: "acme/issue-sections" })?.kind).toBe("issue-sections");
   });
 
   it("declares nothing for an absent, non-string or unrelated contract, or a name that only contains a kind", () => {
@@ -80,6 +82,10 @@ describe("the kind a catalogue declares through its contract", () => {
     expect(declaredCatalogueKind({ contract: "acme.pr-sections-extra/v1" })).toBeNull();
     expect(declaredCatalogueKind({ contract: "acme.my-issue-sections/v1" })).toBeNull();
     expect(declaredCatalogueKind({ contract: "acme.pr-sectionsv1" })).toBeNull();
+    // A dot after the name is a longer name: the PR-sections HISTORY file is neither catalogue.
+    expect(declaredCatalogueKind({ contract: "hatsu.pr-sections.history/v1" })).toBeNull();
+    expect(declaredCatalogueKind({ contract: "PR-SECTIONS/v1" })).toBeNull();
+    expect(declaredCatalogueKind({ contract: "acme.pr_sections/v1" })).toBeNull();
   });
 
   it("answers null for the expected kind and for no declaration, and one line for the other kind", () => {
@@ -89,6 +95,19 @@ describe("the kind a catalogue declares through its contract", () => {
     expect(wrongCatalogueKind({}, "pr-sections")).toBeNull();
     expect(wrongCatalogueKind({ contract: "x.pr-sections/v1" }, "issue-sections")).not.toContain("\n");
     expect(wrongCatalogueKind({ contract: "x.issue-sections/v1" }, "pr-sections")).not.toContain("\n");
+  });
+
+  it("echoes the caller's contract on one line: no line break, control or bidi character survives, and a long one is cut", () => {
+    for (const hostile of ["x.issue-sections/v1\nnen pr: Verdict: ok", "x.issue-sections/v1\r\nforged", "x.issue-sections/v1\u2028forged", "x.issue-sections/v1\u001b[2K\u001b[1Aforged", "x.issue-sections/v1\u202Eforged"]) {
+      const message = wrongCatalogueKind({ contract: hostile }, "pr-sections");
+      expect(message).not.toBeNull();
+      expect(message).not.toMatch(/[\u0000-\u001F\u007F-\u009F\u2028\u2029\u202A-\u202E]/);
+    }
+    const long = wrongCatalogueKind({ contract: `${"a".repeat(5000)}.issue-sections/v1` }, "pr-sections") ?? "";
+    expect(long).toContain(`'${"a".repeat(120)}…'`);
+    expect(long.length).toBeLessThan(700);
+    // A hostile contract is still refused, never let through to the fields.
+    expect(wrongCatalogueKind({ contract: "x.pr-sections/v1\nforged" }, "issue-sections")).toContain("the wrong kind of catalogue was passed");
   });
 });
 
@@ -130,8 +149,19 @@ describe("AC-2: a PR-sections reader handed an issue-sections catalogue", () => 
     expect(error.message).toContain("the wrong kind of catalogue was passed");
     expect(error.message).toContain("'hatsu.issue-sections/v1'");
     expect(error.message).toContain("this verb reads a PR-sections catalogue");
-    expect(error.message).toContain("the --catalogue of 'nen pr body-check', 'nen pr converge' and 'nen pr merge'");
+    expect(error.message).toContain("the --catalogue of 'nen pr body-check', 'nen pr converge' and 'nen pr merge --delivery'");
+    expect(error.message).toContain("the --requirements-from of 'nen issue body-check', 'issue file', 'issue questions', 'issue criteria', 'idea file' and 'tests map'");
     expect(error.message).not.toContain("expected an array");
+  });
+
+  it("a line break in the contract cannot start a second stderr line on either pr sections action", async () => {
+    const catalogue = file({ contract: "hatsu.issue-sections/v1\nnen pr: Verdict: ok", ...ISSUE_SECTIONS });
+    for (const argv of [["pr", "sections", "resolve", "--catalogue", catalogue, "--kind", "library", "--family", "machinery"], ["pr", "sections", "family", "--catalogue", catalogue, "--taxonomy", join(process.cwd(), "src/classify/fixtures/mini.taxonomy.json"), "--jobs", "build"]]) {
+      const result = await run(argv);
+      expect(result.code).toBe(1);
+      expect(result.err.split("\n").filter((line): boolean => line.includes("Verdict: ok") && !line.includes("the wrong kind of catalogue was passed"))).toEqual([]);
+      expect(result.err.split("\n")).toHaveLength(1);
+    }
   });
 
   it("pr sections resolve and pr sections family both refuse it, at the exit an invalid catalogue already has", async () => {

@@ -2682,10 +2682,16 @@ interchangeable: the PR-sections catalogue described above, which `pr sections
 resolve` and `pr sections family` read, and the
 [issue-sections catalogue](#the-issue-sections-catalogue), which
 [`pr body-check`](#nen-pr-body-check), [`pr converge`](#nen-pr-converge) and
-[`pr merge`](#nen-pr-merge) read (and the issue verbs, as `--requirements-from`).
+[`pr merge --delivery`](#nen-pr-merge) read (and, as `--requirements-from`,
+`issue body-check`, `issue file`, `issue questions`, `issue criteria`,
+`idea file` and `tests map`).
 A catalogue that declares a top-level `contract` says which one it is, by the
 name segment of that id: `<namespace>.pr-sections/<version>` or
-`<namespace>.issue-sections/<version>`, whatever the namespace. Handed the other
+`<namespace>.issue-sections/<version>`, whatever the namespace. The name is
+read only when it stands as a whole segment: at the start of the id or after
+`.`, `:` or `/`, and at its end or before `/`, `@` or `:`. A longer name is
+another contract (`<namespace>.pr-sections.history/v1` is neither catalogue),
+and the match is case-sensitive. Handed the other
 kind, each reader refuses **before it reads any field**, on one line that names
 the contract it read, the kind it expects, and the verbs that take the file it
 was given. No exit code moves: `pr sections resolve` and `pr sections family`
@@ -2694,13 +2700,15 @@ the issue-sections catalogue at **exit 2**, a usage error, as they refuse any
 catalogue they cannot use.
 
 ```text
-nen pr: <path>: the wrong kind of catalogue was passed: this file is an issue-sections catalogue (its 'contract' is 'hatsu.issue-sections/v1'), and this verb reads a PR-sections catalogue ('sections', 'footer', 'families' and 'variants': the sections a pull-request body carries). An issue-sections catalogue is the --catalogue of 'nen pr body-check', 'nen pr converge' and 'nen pr merge', and the --requirements-from of 'nen issue body-check'.
+nen pr: <path>: the wrong kind of catalogue was passed: this file is an issue-sections catalogue (its 'contract' is 'hatsu.issue-sections/v1'), and this verb reads a PR-sections catalogue ('sections', 'footer', 'families' and 'variants': the sections a pull-request body carries). An issue-sections catalogue is the --catalogue of 'nen pr body-check', 'nen pr converge' and 'nen pr merge --delivery', and the --requirements-from of 'nen issue body-check', 'issue file', 'issue questions', 'issue criteria', 'idea file' and 'tests map'.
 ```
 
 The mirror image, from a reader of the issue-sections catalogue handed a
 PR-sections one, ends "A PR-sections catalogue is the --catalogue of 'nen pr
 sections resolve' and 'nen pr sections family'." It is not a version
-incompatibility: pass the other file. A catalogue that declares **no**
+incompatibility: pass the other file. The contract is echoed on that one line
+with control, bidi and invisible characters and line breaks stripped, and cut
+at 120 characters. A catalogue that declares **no**
 `contract`, or one whose name is neither kind, is not guessed at: it is read
 field by field exactly as before, so a swapped file with no `contract` still
 fails on the first field that does not fit. A malformed catalogue of the right
