@@ -54,7 +54,7 @@ export function globToRegExp(pattern: string): RegExp {
   // The whole pattern is one globstar: matches anything, any depth, and the
   // per-segment cases below cannot express "both leading and trailing" in one
   // segment, so this is its own case rather than a fold of the other two.
-  if (pattern === "**") return /^.*$/;
+  if (pattern === "**") return /^.*$/s;
 
   const segments = pattern.split("/");
   const pieces: string[] = [];
@@ -91,7 +91,10 @@ export function globToRegExp(pattern: string): RegExp {
     if (index > 0 && segments[index - 1] !== "**") pieces.push("/");
     pieces.push(segmentSource(segment));
   }
-  return new RegExp(`^${pieces.join("")}$`);
+  // Git filenames may contain line terminators. Dot-all lets globstars cross
+  // them, and the final lookahead requires the true end (JavaScript's `$`
+  // alone also accepts the position before a trailing line terminator).
+  return new RegExp(`^${pieces.join("")}(?![\\s\\S])`, "s");
 }
 
 /**

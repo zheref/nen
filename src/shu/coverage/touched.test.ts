@@ -207,3 +207,8 @@ it("renders excluded paths and patterns safely while retaining original JSON byt
   expect(report.touched?.exclusions?.excluded[0]?.path).toBe(path);
   expect(report.touched?.exclusions?.unmatchedPatterns).toEqual([pattern]);
 });
+
+
+it("AC-1 globstar excludes valid Git paths containing line terminators", () => {
+  expect(excludeTouched(["src/file\nname.ts", "src/ordinary.ts"], ["**"]).files).toEqual([]);
+});
