@@ -1865,12 +1865,17 @@ author matches `delivery.author_pattern`; **and** (c) its base is the
 repository's default branch. The prefix list is a **separate declared list**:
 nen never infers it from `nen/workflow.json`'s `branch.template` or its
 `{model}` token. So a run on any surface — Codex included — that wants its pull
-request read as a delivery PR must cut a branch whose first segment is in that
-list (in nen's own repository, every surface name and alias of its `models`
+request read as a delivery PR must cut a branch whose head ref starts with an
+entry of that list (in nen's own repository, every surface name and alias of its `models`
 block: `claude/`, `fable/`, `opus/`, `codex/`, `astra/`, …), opened by the
 `author_pattern` account into the default branch.
 [`nen schema check`](#nen-schema-check)'s `nen/gates.json#delivery.head_ref_prefixes`
-row warns about a template or `models` fill the list does not cover.
+row warns about a template or `models` fill the list does not cover. **Beside a
+reviewer that declares `delivery_holistic_pass`, the prefix should be one the
+everyday branch template does not produce** (an `integration/` assembly
+branch): a list covering every branch the template cuts makes every pull
+request by that author into the default branch a delivery PR, and the same row
+warns about it.
 
 **CON-30's dependency-author carve-out.** `nen/gates.json` may declare an
 optional `dependabot_carve_out`:
@@ -8061,28 +8066,22 @@ whose token happens to spell it, so it does not cover the head. A declared
 prefix that covers no head — an `integration/` carve-out, say — is **allowed
 on purpose and is not drift**; the `ok` row lists it as information.
 
-All covered reads `ok` (`13 branch heads of nen/workflow.json branch.template
-covered ('claude/', 'fable/', …)`). Every other judgement is a **warn**
-(`ok: false`, not required), never a FAIL, so the exit code does not move:
+A **`delivery_holistic_pass` reviewer inverts the reading of an uncovered
+head**: with one, a narrow list is the intended state — CON-40's holistic-pass
+carve-out stays on the declared prefixes — and full coverage is the hazard.
+One outcome per state, and only the `ok` rows open with `not checked`:
 
-- an **uncovered head**: `drift: nen/workflow.json branch.template
-  '{model}/{persona}/{descriptor}' cuts branches starting 'fable/', …, which
-  no nen/gates.json delivery.head_ref_prefixes entry ('codex/') covers, so a
-  pull request from such a branch is never a CON-40 delivery PR. Add each
-  prefix to nen/gates.json delivery.head_ref_prefixes, or change
-  nen/workflow.json branch.template`;
-- a template it **cannot judge** — one starting with another token
-  (`{persona}/…`), with an empty segment, or carrying `{model}` while `models`
-  declares no surface — reads `not checked -- …` with the reason;
-- **every head covered while a reviewer declares `delivery_holistic_pass:
-  true`**: the prefix conjunct then filters nothing, so CON-40's holistic-pass
-  carve-out applies to every pull request the template produces by the
-  delivery author into the default branch. The row names the reviewers and
-  the fix — narrow the prefixes to the branches that are deliveries, or drop
-  the reviewer's flag. With no such reviewer, full coverage is plain `ok`.
+| Prefixes cover | Holistic reviewer | Outcome |
+|---|---|---|
+| (no prefixes) | either | `ok` — `label-only, prefixes not checked (delivery.labels: …)` |
+| every head | no | `ok` — `13 branch heads of nen/workflow.json branch.template covered ('claude/', 'fable/', …)`, then `; also declared, covering no template head (allowed, not drift): …` when a prefix covers no head |
+| every head | yes | **warn** — `every branch nen/workflow.json branch.template cuts (…) starts with a nen/gates.json delivery.head_ref_prefixes entry, and 'sasuke' declares delivery_holistic_pass: true -- …`: every pull request the template produces by the delivery author into the default branch is a delivery PR, so that reviewer owes one holistic pass instead of a round at head. The fix: narrow the list to prefixes only delivery branches carry — ones the everyday template does not produce, which then reads `ok` — or drop the flag. A one-head template (`delivery/{descriptor}`) covered by `delivery/` is this case too: every branch it cuts is a delivery branch. It lists extra prefixes the same way the `ok` row does |
+| some heads | no | **warn** — `drift: nen/workflow.json branch.template '{model}/{persona}/{descriptor}' cuts branches starting 'fable/', …, which no nen/gates.json delivery.head_ref_prefixes entry ('codex/') covers, so a pull request from such a branch is never a CON-40 delivery PR. Add each prefix to nen/gates.json delivery.head_ref_prefixes, or change nen/workflow.json branch.template` |
+| some heads | yes | `ok` — `narrow on purpose: 13 of 13 branch heads of nen/workflow.json branch.template not covered (…) while 'sasuke', 'tenma' declare delivery_holistic_pass: true, so CON-40's carve-out applies only to head refs starting 'integration/' -- not drift` |
+| (template unjudgeable) | either | **warn** — `cannot judge -- …` with the reason: a template that starts with another token (`{persona}/…`), starts with an empty segment, or starts with `{model}` while `models` declares no surface. A head fixed before `{model}` (`release/{model}/{descriptor}`) is judged by that literal, surface or not |
 
-A delivery block with no prefixes reads `label-only, prefixes not checked`
-(`ok`); an absent `nen/gates.json`, or no `nen/workflow.json` at all, reads
+Every warn is `ok: false`, not required, never a FAIL, so the exit code does
+not move. An absent `nen/gates.json`, or no `nen/workflow.json` at all, reads
 `not checked -- …` (`ok`, the reason given); and a `nen/gates.json` or
 `nen/workflow.json` that did not load reads `not read -- … see that row`, as
 `#deploy.defaultTarget` does.

@@ -217,13 +217,15 @@ declared delivery prefixes against nen/workflow.json's branch.template: the
 fixed head of every branch it cuts (the template with '{model}' replaced by
 each models surface name and tier alias -- a tier keyed 'note' is prose, not
 an alias -- up to the first other token) must start with a declared prefix. A
-prefix no head needs is allowed. Each is a warn, never a FAIL: an uncovered
-head (naming it and the fix); a template starting with another token, an
-empty segment, or '{model}' with no models surface ('not checked', with why);
-and full coverage while a reviewer declares delivery_holistic_pass (naming
-it). A label-only delivery block reads 'label-only', an absent file 'not
-checked', and a gates.json or workflow.json that did not load 'not read --
-see that row'.
+prefix no head needs is allowed. A delivery_holistic_pass reviewer inverts
+the reading: with one, uncovered heads are 'narrow on purpose' (ok) and full
+coverage is the warn, naming the reviewers. Without one, full coverage is ok
+and an uncovered head is the 'drift' warn, naming it and the fix. A template
+that starts with another token, starts with an empty segment, or starts with
+'{model}' with no models surface is a 'cannot judge' warn, with why. Every
+warn leaves the exit code alone. A label-only delivery block reads
+'label-only', an absent file 'not checked', and a gates.json or
+workflow.json that did not load 'not read -- see that row'.
 
 Exit: 0 every required file loaded; 1 one did not; 2 nen/gates.json carries a
 key this build does not read.

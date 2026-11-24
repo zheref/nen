@@ -101,10 +101,24 @@ describe("deliveryPrefixDrift", () => {
     expect(deliveryPrefixDrift(template, MODELS, delivery([], ["ship"]))).toEqual({ kind: "label-only", labels: ["ship"] });
   });
 
-  it("holistic reviewer + full coverage is the holistic-wide hazard; partial coverage or label-only is not", () => {
-    expect(deliveryPrefixDrift(template, MODELS, delivery(all), ["sasuke"])).toEqual({ kind: "holistic-wide", heads: all, reviewers: ["sasuke"] });
-    expect(deliveryPrefixDrift(template, MODELS, delivery(["codex/"]), ["sasuke"]).kind).toBe("uncovered");
+  it("holistic reviewer + full coverage is the holistic-wide hazard; partial coverage is narrow on purpose; label-only is neither", () => {
+    expect(deliveryPrefixDrift(template, MODELS, delivery(all), ["sasuke"])).toEqual({ kind: "holistic-wide", heads: all, reviewers: ["sasuke"], extra: [] });
+    expect(deliveryPrefixDrift(template, MODELS, delivery(["integration/"]), ["sasuke"])).toEqual({
+      kind: "narrow",
+      heads: all,
+      uncovered: all,
+      reviewers: ["sasuke"],
+    });
     expect(deliveryPrefixDrift(template, MODELS, delivery([], ["ship"]), ["sasuke"]).kind).toBe("label-only");
+  });
+
+  it("a head fixed before {model} is judged by its literal even when models declares no surface (NN-PR-#677 J)", () => {
+    const none = parseModels("t", undefined);
+    expect(branchTemplateHeads("release/{model}/{descriptor}", none)).toEqual({ heads: ["release/"], reason: null });
+    expect(deliveryPrefixDrift({ template: "release/{model}/{descriptor}" }, none, delivery(["release/"])).kind).toBe("covered");
+    expect(deliveryPrefixDrift({ template: "release/{model}/{descriptor}" }, none, delivery(["codex/"]))).toMatchObject({ kind: "uncovered", uncovered: ["release/"] });
+    expect(branchTemplateHeads("{model}/{descriptor}", none).reason).toMatch(/models block declares no surface/);
+    expect(branchTemplateHeads("{persona}/{model}/{descriptor}", none).reason).toMatch(/starts with '\{persona\}'/);
   });
 });
 
@@ -171,11 +185,42 @@ describe("checkTaxonomy -- the nen/gates.json#delivery.head_ref_prefixes row", (
     expect(row).toMatchObject({ ok: false, required: false });
     expect(ok).toBe(true);
     expect(row?.detail).toMatch(/^every branch nen\/workflow\.json branch\.template cuts \('claude\/', 'fable\/', 'codex\/', 'sol\/'\) starts with a nen\/gates\.json delivery\.head_ref_prefixes entry, and 'sasuke', 'tenma' declare delivery_holistic_pass: true/);
-    expect(row?.detail).toMatch(/Narrow delivery\.head_ref_prefixes to the branches that are deliveries, or drop delivery_holistic_pass from the reviewer$/);
+    expect(row?.detail).toMatch(/those reviewers owe one holistic pass instead of a round at head\. Narrow delivery\.head_ref_prefixes to the prefixes only delivery branches carry, ones the everyday template does not produce \(that reads ok\), or drop delivery_holistic_pass from those reviewers$/);
   });
 
-  it("holistic reviewer + partial coverage or label-only: no holistic warn", () => {
-    expect(rowOf({ gates: withPrefixes(["codex/"], [], true), workflow: WORKFLOW }).row?.detail).toMatch(/^drift: /);
+  it("holistic-wide agrees in number with one reviewer and carries extra prefixes", () => {
+    const one = gatesWith({ author_pattern: { pattern: "^me$", ignoreCase: false }, head_ref_prefixes: [...FULL, "integration/"], labels: [] }, true) as {
+      reviewers: Record<string, unknown>[];
+    };
+    one.reviewers = one.reviewers.map((reviewer) => {
+      if (reviewer["name"] !== "tenma") return reviewer;
+      const rest = { ...reviewer };
+      delete rest["delivery_holistic_pass"];
+      return rest;
+    });
+    const { row } = rowOf({ gates: one, workflow: WORKFLOW });
+    expect(row?.ok).toBe(false);
+    expect(row?.detail).toContain("'sasuke' declares delivery_holistic_pass: true");
+    expect(row?.detail).toContain("that reviewer owes one holistic pass");
+    expect(row?.detail).toMatch(/or drop delivery_holistic_pass from that reviewer; also declared, covering no template head \(allowed, not drift\): 'integration\/'$/);
+  });
+
+  it("the bankai shape -- holistic reviewers, ['integration/'] and the {model} template -- reads ok, narrow on purpose", () => {
+    const { row, ok } = rowOf({ gates: withPrefixes(["integration/"], [], true), workflow: WORKFLOW });
+    expect(row).toMatchObject({ ok: true, required: false });
+    expect(ok).toBe(true);
+    expect(row?.detail).toBe(
+      "narrow on purpose: 4 of 4 branch heads of nen/workflow.json branch.template not covered ('claude/', 'fable/', 'codex/', 'sol/') while 'sasuke', 'tenma' declare delivery_holistic_pass: true, so CON-40's carve-out applies only to head refs starting 'integration/' -- not drift",
+    );
+  });
+
+  it("a literal one-head template fully covered beside a holistic reviewer is still holistic-wide", () => {
+    const { row } = rowOf({ gates: withPrefixes(["delivery/"], [], true), workflow: { branch: { template: "delivery/{descriptor}" } } });
+    expect(row?.ok).toBe(false);
+    expect(row?.detail).toMatch(/^every branch nen\/workflow\.json branch\.template cuts \('delivery\/'\)/);
+  });
+
+  it("holistic reviewer + label-only: no holistic warn", () => {
     expect(rowOf({ gates: withPrefixes([], ["ship"], true), workflow: WORKFLOW }).row).toMatchObject({ ok: true, detail: "label-only, prefixes not checked (delivery.labels: 'ship')" });
   });
 
@@ -200,7 +245,7 @@ describe("checkTaxonomy -- the nen/gates.json#delivery.head_ref_prefixes row", (
     const { row, ok } = rowOf({ gates: withPrefixes(["codex/"]), workflow: { branch: { template: "{persona}/{descriptor}" } } });
     expect(row).toMatchObject({ ok: false, required: false });
     expect(ok).toBe(true);
-    expect(row?.detail).toMatch(/^not checked -- nen\/workflow\.json branch\.template '\{persona\}\/\{descriptor\}' starts with '\{persona\}'/);
+    expect(row?.detail).toMatch(/^cannot judge -- nen\/workflow\.json branch\.template '\{persona\}\/\{descriptor\}' starts with '\{persona\}'/);
   });
 
   it("label-only delivery block", () => {

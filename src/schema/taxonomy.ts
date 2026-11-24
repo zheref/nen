@@ -727,8 +727,16 @@ function defaultTargetCheck(root: string): SchemaCheck {
 // head, the prefix conjunct filters nothing -- every pull request the template
 // produces, by the delivery author into the default branch, is a delivery PR.
 // That is harmless until a reviewer opts into `delivery_holistic_pass`, whose
-// carve-out then replaces its round at head on every such pull request; the
-// row warns on exactly that combination.
+// carve-out then replaces its round at head on every such pull request. So a
+// holistic reviewer inverts the reading of an uncovered head (NN-PR-#677):
+//
+//   prefixes   holistic reviewer   outcome
+//   none       either              ok    label-only, prefixes not checked
+//   all heads  no                  ok    covered (extra prefixes listed)
+//   all heads  yes                 warn  holistic-wide: every branch is a delivery PR
+//   some       no                  warn  drift: the uncovered heads, and the fix
+//   some       yes                 ok    narrow on purpose: the carve-out stays on the declared prefixes
+//   (template unjudgeable)         warn  cannot judge: the reason
 
 const DELIVERY_PREFIXES_POINTER = "delivery.head_ref_prefixes";
 const MODEL_TOKEN = "{model}";
@@ -736,7 +744,8 @@ const MODEL_TOKEN = "{model}";
 /** The verdict of {@link deliveryPrefixDrift}. */
 export type DeliveryPrefixVerdict =
   | { readonly kind: "covered"; readonly heads: readonly string[]; readonly extra: readonly string[] }
-  | { readonly kind: "holistic-wide"; readonly heads: readonly string[]; readonly reviewers: readonly string[] }
+  | { readonly kind: "holistic-wide"; readonly heads: readonly string[]; readonly reviewers: readonly string[]; readonly extra: readonly string[] }
+  | { readonly kind: "narrow"; readonly heads: readonly string[]; readonly uncovered: readonly string[]; readonly reviewers: readonly string[] }
   | { readonly kind: "uncovered"; readonly heads: readonly string[]; readonly uncovered: readonly string[]; readonly extra: readonly string[] }
   | { readonly kind: "label-only"; readonly labels: readonly string[] }
   | { readonly kind: "not-judged"; readonly reason: string };
@@ -768,7 +777,11 @@ export function branchTemplateHeads(
       }
     }
     if (fills.length === 0) {
-      return { heads: null, reason: `${WORKFLOW_FILE} branch.template ${visibleKey(template)} carries '${MODEL_TOKEN}', but its models block declares no surface, so what a '${MODEL_TOKEN}' fill renders is unknown` };
+      // A HEAD FIXED BEFORE `{model}` is judged by that literal alone
+      // ('release/{model}/{descriptor}' -> 'release/'): no fill can move it.
+      const brace = template.indexOf("{");
+      if (brace > 0) return { heads: [template.slice(0, brace)], reason: null };
+      if (template.startsWith(MODEL_TOKEN)) return { heads: null, reason: `${WORKFLOW_FILE} branch.template ${visibleKey(template)} carries '${MODEL_TOKEN}', but its models block declares no surface, so what a '${MODEL_TOKEN}' fill renders is unknown` };
     }
   }
   const heads: string[] = [];
@@ -803,8 +816,12 @@ export function deliveryPrefixDrift(
   const covers = (head: string): boolean => delivery.headRefPrefixes.some((prefix): boolean => head.startsWith(prefix));
   const extra = delivery.headRefPrefixes.filter((prefix): boolean => !heads.some((head): boolean => head.startsWith(prefix)));
   const uncovered = heads.filter((head): boolean => !covers(head));
-  if (uncovered.length > 0) return { kind: "uncovered", heads, uncovered, extra };
-  if (holisticReviewers.length > 0) return { kind: "holistic-wide", heads, reviewers: holisticReviewers };
+  if (uncovered.length > 0) {
+    return holisticReviewers.length > 0
+      ? { kind: "narrow", heads, uncovered, reviewers: holisticReviewers }
+      : { kind: "uncovered", heads, uncovered, extra };
+  }
+  if (holisticReviewers.length > 0) return { kind: "holistic-wide", heads, reviewers: holisticReviewers, extra };
   return { kind: "covered", heads, extra };
 }
 
@@ -845,17 +862,26 @@ function deliveryPrefixesCheck(root: string): SchemaCheck {
     case "label-only":
       return row(true, `label-only, prefixes not checked (delivery.labels: ${list(verdict.labels)})`);
     case "not-judged":
-      return row(false, `not checked -- ${verdict.reason}. Make the template start with a literal or '${MODEL_TOKEN}' fill a declared prefix can cover`);
+      return row(false, `cannot judge -- ${verdict.reason}. Make the template start with a literal or '${MODEL_TOKEN}' fill a declared prefix can cover`);
     case "covered":
       return row(
         true,
         `${verdict.heads.length} branch head${verdict.heads.length === 1 ? "" : "s"} of ${WORKFLOW_FILE} branch.template covered (${list(verdict.heads)})${extraText(verdict.extra)}`,
       );
-    case "holistic-wide":
+    case "holistic-wide": {
+      const many = verdict.reviewers.length !== 1;
       return row(
         false,
-        `every branch ${WORKFLOW_FILE} branch.template cuts (${list(verdict.heads)}) starts with a ${GATES_FILE} ${DELIVERY_PREFIXES_POINTER} entry, and ${list(verdict.reviewers)} declare${verdict.reviewers.length === 1 ? "s" : ""} delivery_holistic_pass: true -- so CON-40's holistic-pass carve-out applies to every pull request the template produces by an author matching delivery.author_pattern into the default branch, and that reviewer owes one holistic pass instead of a round at head. Narrow ${DELIVERY_PREFIXES_POINTER} to the branches that are deliveries, or drop delivery_holistic_pass from the reviewer`,
+        `every branch ${WORKFLOW_FILE} branch.template cuts (${list(verdict.heads)}) starts with a ${GATES_FILE} ${DELIVERY_PREFIXES_POINTER} entry, and ${list(verdict.reviewers)} declare${many ? "" : "s"} delivery_holistic_pass: true -- so CON-40's holistic-pass carve-out applies to every pull request the template produces by an author matching delivery.author_pattern into the default branch, and ${many ? "those reviewers owe" : "that reviewer owes"} one holistic pass instead of a round at head. Narrow ${DELIVERY_PREFIXES_POINTER} to the prefixes only delivery branches carry, ones the everyday template does not produce (that reads ok), or drop delivery_holistic_pass from ${many ? "those reviewers" : "that reviewer"}${extraText(verdict.extra)}`,
       );
+    }
+    case "narrow": {
+      const many = verdict.reviewers.length !== 1;
+      return row(
+        true,
+        `narrow on purpose: ${verdict.uncovered.length} of ${verdict.heads.length} branch head${verdict.heads.length === 1 ? "" : "s"} of ${WORKFLOW_FILE} branch.template not covered (${list(verdict.uncovered)}) while ${list(verdict.reviewers)} declare${many ? "" : "s"} delivery_holistic_pass: true, so CON-40's carve-out applies only to head refs starting ${list(gates.delivery.headRefPrefixes)} -- not drift`,
+      );
+    }
     case "uncovered":
       return row(
         false,

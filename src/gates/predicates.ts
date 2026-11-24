@@ -2270,7 +2270,8 @@ export function cancelledLatestReport(
 // (zheref/nen#657: nen lists every `{model}` fill). The prefix conjunct then
 // filters nothing, so author and base carry the identity alone, and
 // `nen schema check`'s delivery.head_ref_prefixes row warns when such a list
-// meets a `delivery_holistic_pass` reviewer.
+// meets a `delivery_holistic_pass` reviewer. The identity itself is stated
+// once, in docs/USAGE.md#delivery-pr-identity.
 
 export interface DeliveryEvidence {
   /** `""` when the fetch could not establish it. Never widens the gate. */
