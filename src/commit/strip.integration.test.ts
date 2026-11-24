@@ -358,6 +358,9 @@ describe.skipIf(!HAVE_GIT)("commits.stripInjected through the real hooks (zheref
   // J (zheref/nen#682's macOS runner): bash 3.2 as /bin/sh under en_US.UTF-8
   // read [!0-9a-f] as accepting 'A'-'E', so an upper-case run id passed as
   // well-formed. Every locale below must give the same answers as C.
+  // An explicit budget (zheref/nen#598): this synchronous test spawns real programs and runs
+  // about 6.2 s on the Windows runners. vitest 2 could not time out a test that never
+  // yields, so it passed past the 5 s default; vitest 4 checks the elapsed time when the test returns.
   it.skipIf(!HAVE_SH)("(J) under a UTF-8 locale the run-id check, the case-folding and the trailer-block test answer exactly as under C", () => {
     const repo = repository(OPT_IN);
     const text = `feat: locale\n\nHatsu-Agent: kurapika\n${CURSOR}\n`;
@@ -382,7 +385,7 @@ describe.skipIf(!HAVE_GIT)("commits.stripInjected through the real hooks (zheref
       expect(driveHook(repo, prose, "hatsu-agent", RUN_ID, locale).message, locale).toBe(prose);
       expect(sidecars(repo), locale).toEqual([]);
     }
-  });
+  }, 30_000);
 
   // L: a key refused ONLY by its -by/-with shape has no grep in the hook, and
   // below a scissors line it is no trailer to git's own parser either -- so the
