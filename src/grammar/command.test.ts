@@ -512,10 +512,9 @@ describe("published kage-bunshin grammar (#593)", () => {
 });
 
 
-it("refuses discarded custom grammar, mixed line sources and passthrough for kage-bunshin", async () => {
+it("refuses mixed line sources and passthrough for kage-bunshin", async () => {
   const line = "https://github.com/zheref/nen/issues/300 --parallel";
   for (const args of [
-    ["--grammar", "<anything>", "--line", line],
     [line, "--line", line],
     [line, "--", "discarded"],
   ]) {
@@ -523,4 +522,12 @@ it("refuses discarded custom grammar, mixed line sources and passthrough for kag
     expect(result.code).toBe(2);
     expect(result.out).toEqual([]);
   }
+});
+
+// Existing skills may still publish the same grammar explicitly.
+it("keeps an explicit kage-bunshin grammar usable for existing callers", async () => {
+  const urls = "https://github.com/zheref/hatsu/issues/470 https://github.com/zheref/nen/issues/300";
+  const result = await capture(["parse", "kage-bunshin", "--grammar", "<urls>{ } --<mode:sequential|parallel> [--cap <cap>]", "--line", `${urls} --parallel`, "--json"], [], { json: true });
+  expect(result.code).toBe(0);
+  expect(JSON.parse(result.out.join("\n")).slots[0].items).toEqual(urls.split(" "));
 });

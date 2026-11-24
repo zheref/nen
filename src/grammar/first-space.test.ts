@@ -14,7 +14,7 @@ describe("first-anchored trailing clauses (#458)", () => {
   });
   it("matches case-sensitive whole words and preserves internal text spacing", () => {
     const g = parseTemplate(`${grammar}{first}`);
-    for (const line of ["a to b Ruling text", "a to b overruling text"]) expect(parseInvocation("x", g, line).ok).toBe(false);
+    for (const line of ["a to b Ruling text", "a to b overruling text", "a to b ruling_text", "a to b ruling-text"]) expect(parseInvocation("x", g, line).ok).toBe(false);
     const result = parseInvocation("x", g, "a to b ruling x  ruling  y");
     expect(result.slots.at(-1)?.value).toBe("x  ruling  y");
     expect(parseInvocation("x", g, "a to b").echo).toContain("text: (clause absent)");
@@ -25,7 +25,7 @@ describe("first-anchored trailing clauses (#458)", () => {
   it("keeps a leading first-anchor case-sensitive without changing the default", () => {
     const marked = parseTemplate("[ruling <text>]{first}");
     expect(parseInvocation("x", marked, "ruling x ruling y").slots[0]?.value).toBe("x ruling y");
-    for (const line of ["Ruling x", "overruling x"]) {
+    for (const line of ["Ruling x", "overruling x", "ruling_text", "ruling-text"]) {
       expect(parseInvocation("x", marked, line).ok).toBe(false);
     }
     expect(parseInvocation("x", parseTemplate("[ruling <text>]"), "Ruling x").ok).toBe(true);
@@ -64,4 +64,19 @@ describe("space-joined lists and hyphen mode correction (#593)", () => {
     expect(missingIssues.ok).toBe(false);
     expect(missingIssues.missing).toContain("urls");
   });
+});
+
+it("preserves URL-internal hyphens when correcting a missing published mode", () => {
+  const url = "https://github.com/a/abc--def/issues/1";
+  const grammar = parseTemplate(KAGE_BUNSHIN_GRAMMAR);
+  const result = parseInvocation("kage-bunshin", grammar, url);
+  expect(result.ok).toBe(false);
+  expect(result.corrected).toContain(`${url} --<mode: sequential | parallel>`);
+  expect(parseInvocation("kage-bunshin", grammar, `${url} --parallel`).slots[0]?.items).toEqual([url]);
+});
+
+it("preserves generic inline hyphen separators", () => {
+  const result = parseInvocation("x", parseTemplate("<from>--<to>"), "a--b");
+  expect(result.ok).toBe(true);
+  expect(result.slots.map(slot => slot.value)).toEqual(["a", "b"]);
 });

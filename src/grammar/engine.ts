@@ -68,6 +68,8 @@ export interface Alternative {
 export interface Slot {
   /** An explicitly first-anchored trailing free-text clause. */
   readonly firstAnchored?: boolean;
+  /** A hyphen introducer separated from the preceding slot in the template. */
+  readonly separatorRequiresSpace?: boolean;
   /**
    * The position's name: its one alternative's name, or every alternative's
    * name joined by '|' (`gate|severity|label`) when the template alternates.
@@ -175,7 +177,7 @@ export function parseTemplate(template: string): Grammar {
   const slots: Slot[] = [];
   const clauses: OptionalClause[] = [];
   let pendingWords: PendingWord[] = [];
-  let pendingSymbol: { readonly symbol: string; readonly depth: number } | null = null;
+  let pendingSymbol: { readonly symbol: string; readonly depth: number; readonly requiresSpace: boolean } | null = null;
   let depth = 0;
   // `|` seen after a slot: the NEXT slot is another way to fill that position
   // (zheref/nen#410), not a new position.
@@ -292,7 +294,7 @@ export function parseTemplate(template: string): Grammar {
         }
         // A symbol like `@` or `#` glued to the next slot arrives as its own
         // token because TOKEN stops at `<`.
-        pendingSymbol = { symbol: raw, depth };
+        pendingSymbol = { symbol: raw, depth, requiresSpace: /^-+$/.test(raw) && /\s/.test(template[match.index - 1] ?? "") };
         continue;
       }
       pendingWords.push({ word: raw, depth });
@@ -370,6 +372,7 @@ export function parseTemplate(template: string): Grammar {
       values,
       separator,
       separatorKind: separator === null ? null : pendingSymbol !== null ? "symbol" : "word",
+      ...(pendingSymbol?.requiresSpace === true ? { separatorRequiresSpace: true } : {}),
       separatorOptional: separatorDepth !== null && separatorDepth > 0,
       optional,
       suffix: null,
@@ -442,10 +445,14 @@ export function splitLastWord(text: string, phrase: string): { head: string; tai
   return lastSplit(text, pattern);
 }
 
-/** First, case-sensitive whole-word anchor; its tail remains free text. */
-export function splitFirstWord(text: string, phrase: string): { head: string; tail: string } | null {
+/** Marked clauses use futon's whitespace-delimited, case-sensitive anchor. */
+function firstWordPattern(phrase: string, leading = false): RegExp {
   const words = phrase.trim().split(/\s+/).map(escapeRegex);
-  const hit = new RegExp(`(?<![A-Za-z0-9])${words.join("\\s+")}(?![A-Za-z0-9])`).exec(text);
+  return new RegExp(`${leading ? "^" : "(?<!\\S)"}${words.join("\\s+")}(?=\\s|$)`);
+}
+
+export function splitFirstWord(text: string, phrase: string): { head: string; tail: string } | null {
+  const hit = firstWordPattern(phrase).exec(text);
   return hit === null ? null : { head: text.slice(0, hit.index), tail: text.slice(hit.index + hit[0].length) };
 }
 
@@ -480,7 +487,7 @@ function stripLeading(text: string, separator: string, kind: "word" | "symbol" |
     return text.startsWith(separator) ? text.slice(separator.length) : null;
   }
   const words = separator.trim().split(/\s+/).map(escapeRegex);
-  const pattern = new RegExp(`^${words.join("\\s+")}(?![A-Za-z0-9])`, caseSensitive ? "" : "i");
+  const pattern = caseSensitive ? firstWordPattern(separator, true) : new RegExp(`^${words.join("\\s+")}(?![A-Za-z0-9])`, "i");
   const hit = pattern.exec(text);
   if (hit === null) return null;
   return text.slice(hit[0].length);
@@ -659,7 +666,9 @@ function parseInvocationOnce(skill: string, grammar: Grammar, line: string): Inv
     if (slot === undefined || slot.separator === null) continue;
     const split =
       slot.separatorKind === "symbol"
-        ? splitLastSymbol(remaining, slot.separator)
+        ? slot.separatorRequiresSpace === true
+          ? lastSplit(remaining, new RegExp(`(?<!\\S)${escapeRegex(slot.separator)}`, "g"))
+          : splitLastSymbol(remaining, slot.separator)
         : slot.firstAnchored === true ? splitFirstWord(remaining, slot.separator) : splitLastWord(remaining, slot.separator);
     if (split === null) {
       if (!slot.optional) missing.push(slot.name);

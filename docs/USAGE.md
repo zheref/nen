@@ -17468,14 +17468,15 @@ replayed 10 fixture(s): 10 passed, 0 failed
 Parse a skill invocation against the grammar that skill publishes, echo the
 parse, and refuse an unparseable line with a corrected line ready to paste.
 Three skills carry their own grammar and extra domain logic here because each
-does more than match a template; every other skill supplies its grammar as a
-`--grammar` template.
+does more than match a template. `kage-bunshin` also carries a published
+default template and still accepts explicit `--grammar`; other skills supply
+their grammar as a `--grammar` template.
 
 <a id="family-parse"></a>
 
 **`nen parse`**
 
-Parses a skill invocation against the grammar that skill itself publishes, echoes the parse, and refuses an unparseable line with a corrected line ready to paste -- it never decides that a parsed line is a good idea, only that it matches its own grammar. Three skills (`futon`, `izanagi`, `izanami`) carry their own grammar and extra domain logic baked into this binary because each does strictly more than "match a template": `futon` resolves its repo token against `nen/repos.json`, `izanami` classifies every command against its own read-only allow/refuse table, `izanagi` enforces that its cap is never defaulted. Every OTHER skill name is a caller-supplied `--grammar` template matched against `--line`.
+Parses a skill invocation against the grammar that skill itself publishes, echoes the parse, and refuses an unparseable line with a corrected line ready to paste -- it never decides that a parsed line is a good idea, only that it matches its own grammar. Three skills (`futon`, `izanagi`, `izanami`) carry their own grammar and extra domain logic baked into this binary because each does strictly more than "match a template": `futon` resolves its repo token against `nen/repos.json`, `izanami` classifies every command against its own read-only allow/refuse table, `izanagi` enforces that its cap is never defaulted. `kage-bunshin` defaults to its published template and accepts an explicit `--grammar` for existing callers. Other skill names use a caller-supplied `--grammar` template matched against `--line`.
 
 ### `nen parse <skill>`
 
@@ -17495,8 +17496,8 @@ nen parse <skill> --grammar <template> --line <invocation>
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
-| `<skill>` (positional) | yes | The skill name; used only to build the corrected line. | Any name other than `futon`/`izanagi`/`izanami`. |
-| `--grammar <template>` | yes | The template, exactly as the skill documents it. | A template the engine cannot split unambiguously is a usage error (exit 2), same as an unparseable `--line`. |
+| `<skill>` (positional) | yes | The skill name; used only to build the corrected line. | Any name other than `futon`/`izanagi`/`izanami`; `kage-bunshin` also has a default template. |
+| `--grammar <template>` | except for `kage-bunshin` | The template, exactly as the skill documents it. | A template the engine cannot split unambiguously is a usage error (exit 2), same as an unparseable `--line`. |
 | `--line <text>` | yes | The invocation to parse. | **May be empty** when every clause of the grammar is optional -- see below. |
 
 **An empty `--line` is a complete invocation when nothing is required.** For a

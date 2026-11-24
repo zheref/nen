@@ -55,6 +55,8 @@ parse, and refuse an unparseable line with the corrected line ready to paste.
                      UNLESS it is 'futon', 'izanagi' or 'izanami', each of
                      which carries its own grammar and additional domain
                      logic (see this file's header) and takes no --grammar.
+                     kage-bunshin defaults to its published template; an
+                     explicit --grammar remains supported.
   --grammar <t>      The template, written the way the skill documents it:
                        <name>            a slot
                        <name:a|b|c>      a slot with an enumerated value set
@@ -188,16 +190,15 @@ export const parseCommand: Command = {
     }
 
     if (skill === "kage-bunshin") {
-      if (context.args.values["grammar"] !== undefined) throw new VerbUsageError("parse kage-bunshin uses its published grammar and takes no --grammar; choose a different skill name for a custom template.");
       if (context.args.values["line"] !== undefined && context.args.positionals.length > 2) throw new VerbUsageError("parse kage-bunshin takes --line OR a positional invocation, never both.");
       if (context.args.passthrough.length > 0) throw new VerbUsageError("parse kage-bunshin takes nothing after '--'; include the complete invocation in --line or one quoted positional string.");
     }
 
-    const template = skill === "kage-bunshin" ? KAGE_BUNSHIN_GRAMMAR : requireValue(
+    const template = context.args.values["grammar"] ?? (skill === "kage-bunshin" ? KAGE_BUNSHIN_GRAMMAR : requireValue(
       context.args,
       "grammar",
-      "Nen carries no skill's grammar: the template comes from the skill that publishes it.",
-    );
+      "This skill needs a --grammar template from the skill that publishes it.",
+    ));
     const line = context.args.values["line"] ?? (skill === "kage-bunshin" ? context.args.positionals.slice(2).join(" ") : undefined);
     if (line === undefined) {
       throw new VerbUsageError("--line is required. It is the invocation to parse.");
