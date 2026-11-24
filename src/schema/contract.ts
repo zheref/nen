@@ -1621,6 +1621,12 @@ function checkCoverageExclusions(path: string, pointer: string, verb: string, in
   }
   for (const [index, entry] of requireArray(path, field, value).entries()) {
     const pattern = requireString(path, `${field}[${index}]`, entry);
+    const relativePattern = requireRepoGlob(path, `${field}[${index}]`, pattern.startsWith("=") ? pattern.slice(1) : pattern);
+    const segments = relativePattern.split("/");
+    if (/[\u0000-\u001f\u007f-\u009f]/.test(relativePattern) || segments.some((segment, at): boolean =>
+      segment === "." || segment === ".." || (segment === "" && at !== segments.length - 1))) {
+      throw new SchemaError(path, `${field}[${index}]`, "an exclusion must be repo-relative with no control characters, empty interior, '.' or '..' segments");
+    }
     const problem = exactPathProblem(pattern);
     if (pattern.trim() === "" || problem !== null) {
       throw new SchemaError(path, `${field}[${index}]`, problem ?? "an exclusion pattern must not be empty");

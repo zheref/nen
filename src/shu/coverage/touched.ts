@@ -34,6 +34,7 @@
 
 import { thresholdMet, type CoverageExclusions } from "./report.js";
 import { matchesPattern } from "../../report/patterns.js";
+import { matchesGlob } from "../evidence/glob.js";
 import type { CoverageTarget } from "./shape.js";
 
 export type CoverageGrain = "file" | "package";
@@ -223,7 +224,7 @@ export function excludeTouched(files: readonly string[], patterns: readonly stri
   const excluded: { path: string; patterns: readonly string[] }[] = [];
   const matched = new Set<string>();
   for (const file of files) {
-    const rules = (patterns ?? []).filter((pattern): boolean => matchesPattern(file, pattern));
+    const rules = (patterns ?? []).filter((pattern): boolean => pattern.startsWith("=") || !/[*?]/.test(pattern) ? matchesPattern(file, pattern) : matchesGlob(file, pattern));
     if (rules.length === 0) kept.push(file);
     else {
       excluded.push({ path: file, patterns: rules });

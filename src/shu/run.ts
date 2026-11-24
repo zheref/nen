@@ -915,6 +915,8 @@ function declaredStall(step: RenderedStep): ShuStallReport | null {
 export type ReportSink = (report: ShuReport) => void;
 
 export interface RunOptions {
+  /** Internal observer: read policy from the exact declaration and lane being executed. */
+  readonly onDeclaration?: (project: ProjectBlock, lane: string) => void;
   readonly verb: string;
   readonly lane: string | null;
   readonly dryRun: boolean;
@@ -1210,6 +1212,7 @@ export async function runVerb(
     verb: options.verb,
     platform: context.seams.platform,
   });
+  options.onDeclaration?.(project, rendered.lane);
   // TWO BLOCKS BEHIND ONE FLAG, AND THE VERB PICKS. `deploy` always resolves a
   // destination (the flag is required there, and `resolveTarget` is what
   // refuses its absence); `dev` and `run` resolve a DEVICE only when one was

@@ -3,6 +3,7 @@
 // touched files claims, and per-row `met` on top of them.
 
 import { describe, expect, it } from "vitest";
+import { assembleCoverage, renderCoverage } from "./report.js";
 import { counts, target } from "./shape.js";
 import { excludeTouched, expectedGrainOf, filterTouched, grainOf, touchedByPackage } from "./touched.js";
 
@@ -178,6 +179,11 @@ describe("expectedGrainOf -- the grain a run is expected to match at before a re
 
 
 describe("declared touched exclusions", () => {
+  it("AC-1 globstar cannot absorb a filename prefix and hide an unrelated changed source", () => {
+    const files = ["build/generated.ts", "build/deep/generated.ts", "build/not-generated.ts", "build/deep/not-generated.ts"];
+    expect(excludeTouched(files, ["build/**/generated.ts"]).files).toEqual(["build/not-generated.ts", "build/deep/not-generated.ts"]);
+  });
+
   it("uses exact paths, segment prefixes and the shared glob grammar without normalizing names", () => {
     const files = ["src/generated/a.ts", "src/generated/deep/b.ts", "src/generated-other/a.ts", "src/a.test.ts", "docs/a.md", "README.md", "Readme.md", " odd .ts"];
     const result = excludeTouched(files, ["src/generated", "src/**/*.test.ts", "=README.md", " odd .ts", "not-here/**", "src/generated/**"]);
@@ -185,4 +191,19 @@ describe("declared touched exclusions", () => {
     expect(result.exclusions.excluded[0]).toEqual({ path: "src/generated/a.ts", patterns: ["src/generated", "src/generated/**"] });
     expect(result.exclusions.unmatchedPatterns).toEqual(["not-here/**"]);
   });
+});
+
+
+it("renders excluded paths and patterns safely while retaining original JSON bytes", () => {
+  const path = "generated/line\nfile.ts";
+  const pattern = "missing\u202e/**";
+  const report = assembleCoverage({ lane: "app", stack: "test", total: null, targets: [], threshold: null,
+    report: null, exitCode: 0, ladder: null,
+    touched: { base: "main", files: [], matched: [], unmatched: [], artifacts: [], exclusions: {
+      declared: true, patterns: ["generated", pattern], excluded: [{ path, patterns: ["generated"] }], unmatchedPatterns: [pattern],
+    } } });
+  const lines = renderCoverage(report, "dry run", null);
+  expect(lines.every((line): boolean => !/[\n\u202e]/.test(line))).toBe(true);
+  expect(report.touched?.exclusions?.excluded[0]?.path).toBe(path);
+  expect(report.touched?.exclusions?.unmatchedPatterns).toEqual([pattern]);
 });

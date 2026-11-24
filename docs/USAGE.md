@@ -15688,7 +15688,7 @@ every pattern matching no changed file. No declaration removes nothing and
 prints that absence; `[]` is an explicitly empty set. A fully excluded change
 has an empty touched set, so it does not trigger exit 6. Report-wide totals and
 thresholds remain the coverage report's own. Malformed declarations fail before
-the tool runs. Exclusions are snapshotted before execution.
+the tool runs. Exclusions are snapshotted from the declaration and lane actually selected by the executor, before execution.
 
 **Where the report comes from — the verb's own `artifacts`.** nen parses the
 first path under `project.verbs.<lane>.coverage.artifacts` whose **format** it
@@ -15883,9 +15883,10 @@ The match depends on what a row **is**:
   every other format's row name is.
 
 `--json` gains a ninth key, `touched: { base, files, matched, unmatched,
-artifacts }` (`files` is everything git named; `matched` and `unmatched`
-partition it — their lengths always sum to `files.length`; `artifacts` is
-described just below), and each **row** gains its own
+artifacts, exclusions }` (`files` is the changed set after declared exclusions;
+`matched` and `unmatched` partition it — their lengths always sum to
+`files.length`; `exclusions` records removed paths and unmatched patterns;
+`artifacts` is described just below), and each **row** gains its own
 `met` when `--threshold` is also given — the aggregate `threshold.met` above
 still answers for the whole report; a row's `met` answers for that row alone,
 both compared on the **counts**, never the rounded percentage. **This still

@@ -22,6 +22,7 @@
 // touched, which is a git-diff-aware judgement no coverage report can answer.
 // A caller that wants a gate reads `met` and decides for itself.
 
+import { plainLine } from "../../cli/plain.js";
 import type { CoverageCounts, CoverageMeasure, CoverageTarget } from "./shape.js";
 
 /**
@@ -481,8 +482,8 @@ export function renderCoverage(
     if (t.exclusions !== undefined) {
       const e = t.exclusions;
       lines.push(`  exclusions: ${e.declared ? `${e.patterns.length} declared pattern(s), ${e.excluded.length} excluded file(s)` : "no exclusion set is declared"}`);
-      for (const entry of e.excluded) lines.push(`  excluded by declaration: ${entry.path} (${entry.patterns.join(", ")})`);
-      for (const pattern of e.unmatchedPatterns) lines.push(`  no changed file matched: ${pattern}`);
+      for (const entry of e.excluded) lines.push(`  excluded by declaration: ${plainLine(entry.path)} (${entry.patterns.map(plainLine).join(", ")})`);
+      for (const pattern of e.unmatchedPatterns) lines.push(`  no changed file matched: ${plainLine(pattern)}`);
     }
     for (const artifact of t.artifacts) {
       lines.push(`  from: ${describeArtifact(artifact)}`);

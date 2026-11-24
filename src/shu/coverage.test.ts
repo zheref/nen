@@ -29,6 +29,7 @@ import {
   SHU_COVERAGE_WORKSPACE,
   SHU_REPO,
 } from "../schema/fixtures/paths.js";
+import { makeTempDir } from "../testing/tempdir.js";
 import { shuCommand } from "./command.js";
 import { coverageAdvisories } from "./coverage-defaults.js";
 import { fileLocator, parseThreshold, relativiseName, repoRootSpellings } from "./coverage.js";
@@ -2120,7 +2121,7 @@ describe("--from-capture: containment and operational failures", () => {
 describe("NN#645 declared coverage exclusions", () => {
   const diff = (base: string): string => `git -c core.quotePath=false diff --name-only -z ${base}...HEAD`;
   async function excludedRun(exclusions: unknown, json = true, dryRun = false): Promise<Captured> {
-    const repo = mkdtempSync(join(tmpdir(), "nen-645-"));
+    const repo = makeTempDir("nen-645-");
     try {
       cpSync(SHU_COVERAGE_REPO, repo, { recursive: true });
       const path = join(repo, "nen", "contract.json");
@@ -2133,7 +2134,7 @@ describe("NN#645 declared coverage exclusions", () => {
     } finally { rmSync(repo, { recursive: true, force: true }); }
   }
 
-  it.each([null, "src/**", [4], [" "], ["=../secret"]])("rejects malformed declaration %j before the tool runs", async (value) => {
+  it.each([null, "src/**", [4], [" "], ["=../secret"], ["/src/**"], ["../src/**"], ["C:/src/**"], ["=C:/src"], ["src\\generated"], ["src/./**"], ["src//**"], ["src/line\nbreak"]])("rejects malformed declaration %j before the tool runs", async (value) => {
     const result = await excludedRun(value);
     expect(result.code).toBe(1);
     expect(result.err.join("\n")).toContain("coverage.exclusions");
@@ -2156,6 +2157,35 @@ describe("NN#645 declared coverage exclusions", () => {
     expect(result.code).toBe(0);
     expect(document(result).touched).toMatchObject({ files: ["packages/core/src/index.ts"], exclusions: { excluded: [{ path: "README.md", patterns: ["=README.md"] }] } });
     expect(result.seams.calls.some((call): boolean => call.command === "pnpm")).toBe(false);
+  });
+
+  it("keeps an unrelated source measured when a globstar suffix would otherwise overmatch", async () => {
+    const result = await excludedRun(["packages/**/ore/src/index.ts"]);
+    expect(result.code).toBe(0);
+    expect(document(result).targets.map((row): string => row.name)).toContain("packages/core/src/index.ts");
+    expect(document(result).touched).toMatchObject({ exclusions: { excluded: [], unmatchedPatterns: ["packages/**/ore/src/index.ts"] } });
+  });
+
+  it("binds exclusions to the actual lane when the declaration changes during base verification", async () => {
+    const repo = makeTempDir("nen-645-lane-");
+    cpSync(SHU_COVERAGE_REPO, repo, { recursive: true });
+    const path = join(repo, "nen", "contract.json");
+    const declaration = JSON.parse(readFileSync(path, "utf8")) as { project: { defaultLane: string; verbs: Record<string, { coverage: Record<string, unknown> }> } };
+    const web = declaration.project.verbs["web"]!.coverage;
+    web["exclusions"] = ["packages/core"];
+    declaration.project.verbs["core"] = { coverage: { ...web, exclusions: [], argv: ["--filter", "@placeholder/app", "test:coverage"] } };
+    writeFileSync(path, JSON.stringify(declaration));
+    const result = await capture(["coverage", "--touched", "--base", "main", "--json"], { repo, script: [
+      { match: baseCheck("main"), get result(): { code: number; stdout: string } {
+        declaration.project.defaultLane = "core";
+        writeFileSync(path, JSON.stringify(declaration));
+        return { code: 0, stdout: `${"c".repeat(40)}\n` };
+      } },
+      ok(CORE), { match: diff("main"), result: { code: 0, stdout: "packages/core/src/index.ts\0" } },
+    ] });
+    expect(result.code).toBe(0);
+    expect(document(result).lane).toBe("core");
+    expect(document(result).touched).toMatchObject({ matched: ["packages/core/src/index.ts"], exclusions: { patterns: [], excluded: [] } });
   });
 
   it("AC-1 removes declared paths from the touched set and names the exclusion", async () => {

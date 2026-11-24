@@ -893,14 +893,15 @@ export async function runCoverage(
   validateTouched(options);
   validateFromCapture(options);
   const ladder = readLadder(repoRoot, options, threshold);
-  // Snapshot before the declared tool runs; its output cannot change the set.
-  const project = options.touched ? openDeclaration(repoRoot).project : null;
-  const lane = options.lane ?? project?.defaultLane;
-  const exclusions = project !== null && lane != null
-    ? (project.verbs[lane]?.["coverage"]?.raw["exclusions"] as readonly string[] | undefined) ?? null
-    : null;
-  if (options.touched) verifyBase(context, repoRoot, options.base as string);
-  if (options.fromCapture === true) return fromCapture(context, repoRoot, options, threshold, ladder, exclusions);
+  // The runner supplies policy from the declaration it actually executes.
+  let exclusions: readonly string[] | null = null;
+  if (options.touched) {
+    // Fail malformed declarations before probing Git. This read validates only;
+    // policy is bound to the actual runner/capture plan below, never this read.
+    openDeclaration(repoRoot);
+    verifyBase(context, repoRoot, options.base as string);
+  }
+  if (options.fromCapture === true) return fromCapture(context, repoRoot, options, threshold, ladder);
   // A HOLDER RATHER THAN A `let`: the assignment happens inside a callback, and
   // a `let` narrowed to `null` at its declaration is a type error at every read
   // below -- the compiler does not follow a closure it did not call.
@@ -930,6 +931,9 @@ export async function runCoverage(
           target: null,
           run: false,
           sink,
+          onDeclaration: (project, lane): void => {
+            exclusions = (project.verbs[lane]?.["coverage"]?.raw["exclusions"] as readonly string[] | undefined) ?? null;
+          },
           effort: options.effort ?? null,
           ...options.liveness,
         }),
@@ -985,7 +989,6 @@ function fromCapture(
   options: CoverageOptions,
   threshold: number | null,
   ladder: CoverageLadderReport | null,
-  exclusions: readonly string[] | null,
 ): number {
   const { project } = openDeclaration(repoRoot);
   const plan = renderInvocation(project, {
@@ -993,6 +996,7 @@ function fromCapture(
     verb: "coverage",
     platform: context.seams.platform,
   });
+  const exclusions = (project.verbs[plan.lane]?.["coverage"]?.raw["exclusions"] as readonly string[] | undefined) ?? null;
   const cwd = insideRepo(repoRoot, plan.cwdRelative, `project.lanes.${plan.lane}.cwd`);
   // EVERY DECLARED ARTIFACT IS CONTAINED FIRST, reports or not (Copilot round
   // 2 on zheref/nen#369), exactly as ./run.ts holds them before a run: a
