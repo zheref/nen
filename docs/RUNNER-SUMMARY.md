@@ -10,3 +10,5 @@ summary, not successful registration: inspect `failed`. A missing directory,
 link, non-regular file or unstable read is exit 1, as is a malformed newest
 summary (no fallback). Invalid plan, host path or UTC ISO launch time is exit 2.
 Summary content is never echoed on refusal.
+
+Full CLI reference: [runner summary](USAGE.md#nen-runner-summary).

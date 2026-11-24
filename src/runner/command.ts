@@ -62,7 +62,7 @@ import { assembleInventory, fetchDownloads, fetchRunners, renderInventory } from
 import { checkNeighbours, renderNeighbours } from "./neighbours.js";
 import { computePlan, isDailyAccount, normalizeMachineCode, renderPlan, resolveConsumerCode, validatePlan, type RunnerPlan } from "./plan.js";
 import { renderPreflight, runPreflight } from "./preflight.js";
-import { launchTime, readSummary, renderSummary } from "./summary.js";
+import { launchTime, readSummary, readSummaryPlan, renderSummary } from "./summary.js";
 import { launchLine, renderScript, summaryGlob } from "./script.js";
 import { relabelPool, renderRelabel } from "./relabel.js";
 import { renderVerify, verifyRunners } from "./verify.js";
@@ -430,10 +430,7 @@ function summary(context: CommandContext): number {
   launchTime(after);
   const root = resolveRepoRoot({ repoFlag: context.repoFlag });
   const path = resolveAgainstRepo(root, requireValue(context.args, "plan", "Name the registration plan."));
-  let raw: unknown;
-  try { raw = JSON.parse(readFileSync(path, "utf8")); }
-  catch { throw new VerbUsageError(`--plan '${path}' could not be read as JSON.`); }
-  const report = readSummary(validatePlan(raw, `--plan '${path}'`), after, context.seams.platform);
+  const report = readSummary(readSummaryPlan(path, context.seams.platform), after, context.seams.platform);
   emit(context.io, context.json, report, renderSummary(report));
   return report.verdict === "read" || report.verdict === "none" ? 0 : 1;
 }
@@ -551,7 +548,7 @@ export function makeRunnerCommand(deps: RunnerDeps): Command {
       { verb: "runner *", code: 5, meaning: "gh could not be started, on a verb that calls gh" },
     ],
     subcommands: RUNNER_SUBCOMMANDS,
-    summary: "Self-hosted runners: inventory, plan, host script, verify, preflight workflow, enable, relabel.",
+    summary: "Self-hosted runners: inventory, plan, host script, summary, verify, preflight workflow, enable, relabel.",
     usage: USAGE,
     flags: { values: VALUE_FLAGS, booleans: BOOLEAN_FLAGS },
     run(context: CommandContext): number {

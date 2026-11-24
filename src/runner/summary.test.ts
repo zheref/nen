@@ -1,15 +1,16 @@
-import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, readSync, renameSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { makeTempDir } from "../testing/tempdir.js";
 import { runFamily } from "../index.js";
 import { ScriptedSeams } from "../seam/scripted.js";
 import { runnerCommand } from "./command.js";
+import { launchTime, readSummary, readSummaryPlan, renderSummary } from "./summary.js";
 import { planFor } from "./testkit.js";
 
 const LAUNCH = "2026-11-24T12:00:00.000Z";
 function fixture(): { root: string; dir: string; plan: string } {
-  const root = mkdtempSync(join(tmpdir(), "nen-runner-summary-"));
+  const root = makeTempDir("nen-runner-summary-");
   const projectDir = join(root, "nen-runners");
   const base = planFor(process.platform === "win32" ? "windows-x64" : "macos-arm64");
   const plan = join(root, "plan.json");
@@ -86,4 +87,47 @@ describe("runner summary", () => {
     const result = await run("missing", ["--run"]);
     expect(result.code).toBe(2); expect(result.err).toContain("belongs to runner relabel");
   });
+});
+
+it.skipIf(process.platform === "win32")("refuses a symlinked project directory", async () => {
+  const f = fixture(); summary(f.dir, "register-good.summary", 2);
+  const project = join(f.root, "nen-runners"), moved = join(f.root, "other");
+  renameSync(project, moved); symlinkSync(moved, project);
+  const result = await run(f.plan, ["--json"]);
+  expect(result.code).toBe(1); expect(JSON.parse(result.out).verdict).toBe("unreadable");
+});
+it("renders filenames as inert terminal text", () => {
+  const lines = renderSummary({ contract: "nen.runner.summary/v0.1", verdict: "read", after: LAUNCH, directory: "/tmp", path: "/tmp/register-\u001b[2K\n\u202e.summary", writtenAt: LAUNCH, registered: 1, skipped: 0, failed: 0, reason: null });
+  expect(lines.join("")).not.toMatch(/[\u001b\n\u202e]/);
+});
+it.each(["yesterday", "2026-02-30T12:00:00Z", "2026-11-24", "2026-11-24T12:00:00+01:00"])("rejects invalid UTC launch time %s", (value) => {
+  expect(() => launchTime(value)).toThrow(/--after/);
+});
+
+it("refuses a short read instead of accepting a valid prefix", () => {
+  const f = fixture(); const line = "jusshin: 1 registered, 0 skipped, 0 failed\n";
+  summary(f.dir, "register-short.summary", 2, line + "trailing garbage");
+  const plan = JSON.parse(readFileSync(f.plan, "utf8"));
+  expect(readSummary(plan, LAUNCH, process.platform, (fd, buffer) => {
+    readSync(fd, buffer, 0, buffer.length, 0); return Buffer.byteLength(line);
+  }).verdict).toBe("unreadable");
+});
+it("refuses an oversized plan before parsing", async () => {
+  const f = fixture(); writeFileSync(f.plan, " ".repeat(1024 * 1024 + 1));
+  const result = await run(f.plan); expect(result.code).toBe(2); expect(result.err).toContain("regular file at most");
+});
+it("refuses a directory as the plan", async () => {
+  const result = await run(fixture().dir); expect(result.code).toBe(2); expect(result.err).toContain("regular file");
+});
+
+it.each(["\\\\server\\share\\plan.json", "\\\\?\\C:\\plan.json"])("refuses a network or device plan before reading: %s", (path) => {
+  expect(() => readSummaryPlan(path, "win32")).toThrow(/local drive-qualified/);
+});
+it("refuses an oversized newest summary", async () => {
+  const f = fixture(); summary(f.dir, "register-big.summary", 2, "x".repeat(257));
+  const result = await run(f.plan, ["--json"]);
+  expect(result.code).toBe(1); expect(JSON.parse(result.out).verdict).toBe("malformed");
+});
+it("accepts an ISO timestamp without milliseconds", () => {
+  expect(launchTime("2026-11-24T12:00:00Z")).toBe(Date.parse(LAUNCH));
 });
