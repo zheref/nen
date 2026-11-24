@@ -1,5 +1,6 @@
 // src/phase/command.ts -- `nen phase begin|end|show`: the per-phase timing
-// ledger (zheref/nen#216).
+// ledger (zheref/nen#216), and `list`, every effort that has one
+// (zheref/nen#583, ./list.ts).
 //
 // WHY A LEDGER AND NOT A PRINTED NUMBER. `nen shu` already measures how long
 // every step took (../seam/exec.ts's `durationMs`) and prints it -- and the
@@ -39,12 +40,14 @@ import {
   type PhaseLedger,
   type PhaseStep,
 } from "./ledger.js";
+import { listPhaseLedgers, parseSinceMinutes, PHASE_LIST_CONTRACT, renderPhaseList } from "./list.js";
 export { PHASE_CONTRACT, PHASE_LEDGER_DIR, readLedger };
 export type { PhaseEntry, PhaseLedger, PhaseStep };
 
 const USAGE = `nen phase begin --effort <id> --phase <name> [--resume] [--surface <s>] [--model <alias>] [--dial <level>] [--note <text>]
 nen phase end   --effort <id> [--phase <name>] [--exit <code>] [--note <text>]
 nen phase show  --effort <id> [--repo <path>] [--json]
+nen phase list  [--repo <path>] [--since <minutes>] [--json]
 
 Every form reads and writes the ledger of --repo's repository (default: the
 current directory): '<git-common-dir>/${PHASE_LEDGER_DIR}/<effort>.json', the
@@ -97,7 +100,31 @@ An entry carries 'steps: []' from 'begin'. A 'nen shu <verb> --effort <id>'
 run (or one with NEN_EFFORT in its environment) appends every step it ran --
 {verb, argv, exitCode, durationMs, stalled} -- to the OPEN entry on that
 effort, and writes nothing when none is open. 'show' renders them indented
-under their phase.`;
+under their phase.
+
+'list' is READ-ONLY: one row per effort that has a ledger at any location
+'show' reads -- the durable home and every checkout's older
+'.nen/phases/' -- each effort ONCE. A row carries the effort id (decoded from
+the file name), the ledger's newest phase (the LAST entry of phases[], the
+order 'begin' appends in) with its startedAt, endedAt and exitCode, and the
+file's modification time; rows are newest modification first, ties by effort
+id. An effort with a copy in more than one place is one 'conflict' row naming
+every copy and no newest phase ('show' refuses it; nen does not choose). A
+ledger that cannot be read -- bad JSON, another or a newer contract, an
+effort the file name does not decode to, a link, an unreadable file -- is one
+'unreadable' row with its file name and reason; the rest still print, exit 0.
+No ledger directory is an empty list, exit 0. It moves nothing, writes
+nothing, takes no lock and creates no directory.
+
+  --since <minutes>  For 'list': only ledgers modified within that many
+                     minutes of this invocation's clock (a positive whole
+                     number; anything else is exit 2).
+
+--json shapes:
+  list: { contract: "${PHASE_LIST_CONTRACT}", repo, home, locations, since, now,
+          efforts: [ { effort, file, path, location, state, modifiedAt,
+                       phaseCount, newest: { phase, startedAt, endedAt,
+                       exitCode } | null, reason, copies } ] }`;
 
 function requireEffort(context: CommandContext): string {
   const effort = context.args.values["effort"];
@@ -109,10 +136,14 @@ export const phaseCommand: Command = {
   name: "phase",
   summary: "Record when a workflow phase began and ended, per effort.",
   usage: USAGE,
-  subcommands: ["begin", "end", "show"],
-  flags: { values: ["effort", "phase", "surface", "model", "dial", "exit", "note"], booleans: ["resume"] },
+  subcommands: ["begin", "end", "show", "list"],
+  flags: { values: ["effort", "phase", "surface", "model", "dial", "exit", "note", "since"], booleans: ["resume"] },
   run(context: CommandContext): number {
-    const sub = requireSubcommand("phase", context.args, ["begin", "end", "show"]);
+    const sub = requireSubcommand("phase", context.args, ["begin", "end", "show", "list"]);
+    // `list` (zheref/nen#583) takes no effort and reads only: dispatched before
+    // anything below resolves a single effort's ledger.
+    if (sub === "list") return runList(context);
+    if (context.args.values["since"] !== undefined) throw new VerbUsageError(`--since is read by 'phase list' only; 'phase ${sub}' does not read it.`);
     const effort = requireEffort(context);
     const root = resolveRepoRoot({ repoFlag: context.repoFlag });
     const home = resolveEffortHome(root, "phases", context.seams);
@@ -238,6 +269,25 @@ export const phaseCommand: Command = {
     }, { warn: context.io.err });
   },
 };
+
+/**
+ * `nen phase list` (zheref/nen#583): every flag refusal first, then the
+ * read-only listing. The home is resolved WITH the legacy scan, the same set
+ * of locations `show` reads; ./list.ts reads them and writes nothing.
+ */
+function runList(context: CommandContext): number {
+  for (const flag of ["effort", "phase", "surface", "model", "dial", "exit", "note"]) {
+    if (context.args.values[flag] !== undefined) throw new VerbUsageError(`--${flag} is not read by 'phase list'; it lists every effort.`);
+  }
+  if (context.args.booleans.has("resume")) throw new VerbUsageError("--resume is read by 'phase begin' only; 'phase list' does not read it.");
+  const since = parseSinceMinutes(context.args.values["since"]);
+  if (since !== null && typeof since === "object") throw new VerbUsageError(since.refusal);
+  const root = resolveRepoRoot({ repoFlag: context.repoFlag });
+  const home = resolveEffortHome(root, "phases", context.seams);
+  const report = listPhaseLedgers(root, home, context.seams.now(), since);
+  emit(context.io, context.json, report, renderPhaseList(report));
+  return 0;
+}
 
 /** The open-entry refusals `begin` and `end` make, as a usage error, before anything moves or is written. */
 function stateRefusal(sub: string, ledger: PhaseLedger, effort: string, named: string | null, resume: boolean): void {
