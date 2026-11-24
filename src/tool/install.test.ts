@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { makeTempDir } from "../testing/tempdir.js";
 import { join } from "node:path";
 import { tar, zip } from "./fixtures.js";
 import { ScriptedSeams } from "../seam/scripted.js";
@@ -11,7 +11,7 @@ import { archiveBinary } from "./archive.js";
 const roots:string[]=[];afterEach(()=>{for(const root of roots.splice(0))rmSync(root,{recursive:true,force:true});});
 
 function fixture(options:{manifest?:Buffer;archive?:Buffer;version?:string;assets?:Record<string,string>;downloadFailure?:boolean;platform?:"linux"|"win32"}={}): {root:string;path:string;run:()=>Promise<ToolInstallResult>;calls:string[];downloads:string[];seams:Seams;download:Download}{
-  const root=mkdtempSync(join(tmpdir(),"nen-tool-test-"));roots.push(root);const path=join(root,"scans.json");const archive=options.archive ?? tar([{name:"scanner"},{name:"LICENSE"}]);const asset=options.assets?.[`${options.platform ?? "linux"}-x64`] ?? "scanner_1.2.3_linux_x64.tar.gz";
+  const root=makeTempDir("nen-tool-test-");roots.push(root);const path=join(root,"scans.json");const archive=options.archive ?? tar([{name:"scanner"},{name:"LICENSE"}]);const asset=options.assets?.[`${options.platform ?? "linux"}-x64`] ?? "scanner_1.2.3_linux_x64.tar.gz";
   writeFileSync(path,JSON.stringify({secretScan:{tool:"scanner",version:"v1.2.3",assets:options.assets ?? {"linux-x64":asset},checksumsUrl:"https://downloads.example/checksums.txt",assetUrlTemplate:"https://downloads.example/<asset>"}}));
   const calls:string[]=[];const seams={...new ScriptedSeams([]),platform:options.platform ?? "linux" as const,env:{PATH:root},run:(exe:string,args:readonly string[]):CommandResult=>{calls.push(exe+" "+args.join(" "));return {code:0,stdout:options.version ?? "1.2.3\n",stderr:"",spawnFailed:false};}};
   const downloads:string[]=[];const download:Download=async url=>{downloads.push(url.href);if(options.downloadFailure)throw new Error("offline manifest");return url.pathname.endsWith("checksums.txt") ? options.manifest ?? Buffer.from(createHash("sha256").update(archive).digest("hex")+"  "+asset+"\n") : archive;};

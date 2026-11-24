@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, realpathSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync, writeFileSync, readFileSync, realpathSync } from "node:fs";
+import { makeTempDir } from "../testing/tempdir.js";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { runFamily } from "../index.js";
@@ -10,7 +10,7 @@ import type { Seams, CommandResult } from "../seam/exec.js";
 import { installTool, type Download } from "./install.js";
 import { tar } from "./fixtures.js";
 const roots:string[]=[];afterEach(()=>{vi.unstubAllGlobals();for(const root of roots.splice(0))rmSync(root,{recursive:true,force:true});});
-function fixture():{root:string;contract:string;archive:Buffer;download:Download;seams:Seams}{const root=mkdtempSync(join(tmpdir(),"nen-tool-command-"));roots.push(root);const contract=join(root,"scans.json");writeFileSync(contract,JSON.stringify({secretScan:{tool:"scanner",version:"v1.2.3",assets:{"linux-x64":"scanner.tar.gz"},checksumsUrl:"https://example.com/sums",assetUrlTemplate:"https://example.com/<asset>"}}));const archive=tar([{name:"scanner"}]);const download=async(url:URL):Promise<Buffer>=>url.pathname==="/sums"?Buffer.from(createHash("sha256").update(archive).digest("hex")+"  scanner.tar.gz\n"):archive;const seams={...new ScriptedSeams([]),platform:"linux" as const,env:{PATH:root},run:():CommandResult=>({code:0,stdout:"1.2.3",stderr:"",spawnFailed:false})};return{root,contract,archive,download,seams};}
+function fixture():{root:string;contract:string;archive:Buffer;download:Download;seams:Seams}{const root=makeTempDir("nen-tool-command-");roots.push(root);const contract=join(root,"scans.json");writeFileSync(contract,JSON.stringify({secretScan:{tool:"scanner",version:"v1.2.3",assets:{"linux-x64":"scanner.tar.gz"},checksumsUrl:"https://example.com/sums",assetUrlTemplate:"https://example.com/<asset>"}}));const archive=tar([{name:"scanner"}]);const download=async(url:URL):Promise<Buffer>=>url.pathname==="/sums"?Buffer.from(createHash("sha256").update(archive).digest("hex")+"  scanner.tar.gz\n"):archive;const seams={...new ScriptedSeams([]),platform:"linux" as const,env:{PATH:root},run:():CommandResult=>({code:0,stdout:"1.2.3",stderr:"",spawnFailed:false})};return{root,contract,archive,download,seams};}
 describe("public tool install",()=>{
   it("runs one command from the declaring contract and emits version",async()=>{const f=fixture();const out:string[]=[];const code=await runFamily({...toolCommand,run:c=>runTool(c,f.download,"x64")},["tool","install","--contract",f.contract,"--row","secretScan","--bin-dir",f.root],null,false,{out:line=>{out.push(line);},err:()=>{}},f.seams);expect(code).toBe(0);expect(out.join(" ")).toContain("v1.2.3");expect(readFileSync(join(f.root,"scanner"),"utf8")).toBe("verified executable");});
   it("cleanup failure retains the truthful installed outcome/path",async()=>{const f=fixture();const result=await installTool({contract:f.contract,row:"secretScan",binDir:f.root,seams:f.seams,arch:"x64",download:f.download,cleanup:()=>{throw new Error("cleanup denied");}});expect(result).toMatchObject({exit:0,verdict:"installed",path:join(realpathSync(f.root),"scanner"),cleanupWarning:expect.stringContaining("could not be removed")});expect(readFileSync(join(f.root,"scanner"),"utf8")).toBe("verified executable");});
