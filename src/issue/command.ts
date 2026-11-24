@@ -11,6 +11,7 @@
 // first. A dry run prints the exact call it would have made, so the thing the
 // caller approves is the thing that runs.
 
+import redactionDefaults from "./redaction-defaults.json";
 import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
 import { decomposeLabelName, loadLabelTaxonomy, type LabelTaxonomy } from "../schema/labels.js";
 import { commaList } from "../cli/comma.js";
@@ -362,7 +363,11 @@ function requireTarget(context: CommandContext): Target {
   );
 }
 
-const USAGE = `nen issue -- reconcile the backlog, then file into it.
+const USAGE = `file --title-file <path> reads the title instead of --title; supplying both refuses.
+Private-name checks default only to ~/${redactionDefaults.ignoreFile} when it exists;
+--private-names-ignore-file explicitly replaces it. No broader ignore discovery.
+
+nen issue -- reconcile the backlog, then file into it.
 
 usage:
   nen issue search --target <owner/name> --subject <text>

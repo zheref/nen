@@ -10,6 +10,7 @@ async function capture(
   script: readonly ScriptedCall[] = [],
   // `null` is a real case: the invocation that never typed --repo (zheref/nen#28).
   repoFlag: string | null = BANKAI_REPO,
+  json = false,
 ): Promise<{ code: number; out: string[]; err: string[] }> {
   const out: string[] = [];
   const err: string[] = [];
@@ -22,11 +23,27 @@ async function capture(
     },
   };
   const seams: Seams = new ScriptedSeams(script);
-  const code = await runFamily(tagCommand, argv, repoFlag, false, io, seams);
+  const code = await runFamily(tagCommand, argv, repoFlag, json, io, seams);
   return { code, out, err };
 }
 
 describe("nen tag cut -- CLI wiring", () => {
+  it.each([false, true])("reports an unverified remote name without a tag write (json=%s)", async (json) => {
+    const result = await capture(["tag", "cut", "--name", "v1.0.0", "--at", "abc"], [
+      { match: "git ls-remote --tags origin v1.0.0", result: { code: 128, stderr: "remote unavailable" } },
+    ], BANKAI_REPO, json);
+    expect(result.code).toBe(1);
+    if (json) {
+      expect(result.err).toEqual([]);
+      expect(JSON.parse(result.out.join("\n"))).toMatchObject({
+        ok: false, pushed: false, log: [], error: expect.stringContaining("remote unavailable"),
+      });
+    } else {
+      expect(result.out).toEqual([]);
+      expect(result.err.join("\n")).toContain("remote unavailable");
+    }
+  });
+
   it("cuts a local-only tag by default", async () => {
     const result = await capture(["tag", "cut", "--name", "v1.0.0", "--at", "abc"], [
       { match: "git ls-remote --tags origin v1.0.0", result: { stdout: "" } },

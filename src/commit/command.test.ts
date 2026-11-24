@@ -150,7 +150,7 @@ describe("NN#606: validate an existing message file", () => {
     expect((await capture(argv)).code).toBe(0);
   });
 
-  it.each(["--type", "--scope", "--subject", "--body", "--trailer", "--breaking"])("refuses mixed input %s", async (flag) => {
+  it.each(["--type", "--scope", "--subject", "--body", "--body-file", "--trailer", "--breaking"])("refuses mixed input %s", async (flag) => {
     const root = repoWithPolicy({});
     writeFileSync(join(root, "message.txt"), "fix: validate the message\n");
     const args = ["commit", "format", "--message-file", "message.txt", flag];
@@ -878,4 +878,15 @@ describe("nen commit format -- cannot end its message in a whitespace-only line,
       expect(result.err.join("\n"), JSON.stringify(argv)).toMatch(/nen: warning: line 5 is 126 characters: 'footer-max-line-length' NOT checked/);
     }
   });
+});
+
+it("formats a relative body file with the same wrapping/policy as --body and refuses mixed sources", async () => {
+  const root = repoWithPolicy({}); const body = "a long body ".repeat(20) + "\n\nsecond paragraph";
+  writeFileSync(join(root, "body.md"), body);
+  const args = ["commit", "format", "--type", "fix", "--subject", "read a body"];
+  const fromFile = await capture([...args, "--body-file", "body.md"], false, root);
+  const fromValue = await capture([...args, "--body", body], false, root);
+  expect(fromFile.code).toBe(0); expect(fromFile.out).toEqual(fromValue.out);
+  expect((await capture([...args, "--body", "x", "--body-file", "body.md"], false, root)).code).toBe(2);
+  expect((await capture([...args, "--body-file", "missing.md"], false, root)).code).toBe(2);
 });

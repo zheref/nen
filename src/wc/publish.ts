@@ -4,7 +4,9 @@
 // this).
 //
 // THE BRANCH NAME IS ALWAYS THE BRANCH'S OWN (zheref/nen#271): the refspec
-// is `refs/heads/<b>:refs/heads/<b>`, and nothing else. WHICH REMOTE it goes
+// is `refs/heads/<b>:refs/heads/<b>` for ordinary publication. The gated
+// caller pins the source to its proved commit object, retaining the same
+// branch destination. WHICH REMOTE it goes
 // to is decided in this order, and nowhere else:
 //
 //   1. NO UPSTREAM: `--remote <name>` when given (it must be one `git remote`
@@ -117,7 +119,7 @@ export const MIN_GIT_FOR_END_OF_OPTIONS = "2.24";
 /** KEY ORDER IS THE CONTRACT; ./command.test.ts pins it. */
 export interface PublishReport {
   readonly contract: string;
-  /** The local branch pushed: the source half of the refspec. */
+  /** The local branch whose same-name destination is published. */
   readonly branch: string;
   /** The remote pushed to, by the header's three rules: `--remote`/`origin` with no upstream; the upstream's own when it is kept; `--remote`, else `origin`, else the upstream's own when `--set-upstream` replaces it. */
   readonly remote: string;
@@ -157,6 +159,8 @@ export interface PublishOptions {
   readonly dryRun: boolean;
   /** `--remote <name>`: where a branch with NO upstream goes, and where `--set-upstream` takes one whose upstream it replaces; null means the header's defaults. */
   readonly remote?: string | null;
+  /** Internal gated route: publish only this proved commit under the checked branch's own name. */
+  readonly provedSource?: { readonly oid: string; readonly branch: string };
 }
 
 interface GitCall {
@@ -323,6 +327,11 @@ export function publish(seams: Seams, cwd: string, options: PublishOptions): Pub
     };
   }
   const branch = branchResult.stdout.trim();
+  const provedSource = options.provedSource;
+  if (provedSource !== undefined && (!/^[0-9a-f]{40}$/.test(provedSource.oid) || provedSource.branch !== branch || options.setUpstream)) {
+    return { kind: "refused", reason: "the gated source must be a full proved commit on the checked branch, without --set-upstream. Nothing was fetched or pushed." };
+  }
+  const source = provedSource?.oid ?? "HEAD";
   const named = normalizeBranchName(branch);
   if (isTrunk(branch, options.base)) {
     return {
@@ -447,16 +456,16 @@ export function publish(seams: Seams, cwd: string, options: PublishOptions): Pub
       }
     }
     if (moved !== null) {
-      const ancestor = runGit(seams, cwd, ["merge-base", "--is-ancestor", moved, "HEAD"]);
+      const ancestor = runGit(seams, cwd, ["merge-base", "--is-ancestor", moved, source]);
       if (ancestor.spawnFailed || ancestor.code > 1) {
-        throw new SquashStateError(`could not test whether '${moved}' is an ancestor of HEAD ('git merge-base --is-ancestor ${moved} HEAD' failed: ${ancestor.error}).`);
+        throw new SquashStateError(`could not test whether '${moved}' is an ancestor of ${source} ('git merge-base --is-ancestor ${moved} ${source}' failed: ${ancestor.error}).`);
       }
       needsForce = ancestor.code !== 0;
     }
     if (!upstreamGone) {
-      const count = runGit(seams, cwd, ["rev-list", "--count", `${upstreamBefore}..HEAD`]);
+      const count = runGit(seams, cwd, ["rev-list", "--count", `${upstreamBefore}..${source}`]);
       if (count.code !== 0 || !/^\d+$/.test(count.stdout.trim())) {
-        throw new SquashStateError(`could not count the commits ahead of '${upstreamBefore}' ('git rev-list --count ${upstreamBefore}..HEAD' failed: ${count.error}).`);
+        throw new SquashStateError(`could not count the commits ahead of '${upstreamBefore}' ('git rev-list --count ${upstreamBefore}..${source}' failed: ${count.error}).`);
       }
       ahead = Number(count.stdout.trim());
     }
@@ -482,9 +491,9 @@ export function publish(seams: Seams, cwd: string, options: PublishOptions): Pub
   // --dry-run it is the prediction, as `destination` is.
   const retargetedUpstream = replacing && !needsForce;
 
-  // THE REFSPEC IN FULL, behind `--`: `refs/heads/<b>:refs/heads/<b>` is a
-  // plain update of that one ref whatever the name looks like.
-  const argv = ["push", ...(options.setUpstream ? ["-u"] : []), remote, "--", `refs/heads/${branch}:refs/heads/${destination}`];
+  // THE REFSPEC IN FULL, behind `--`. Gated publication carries the proved
+  // object through to git rather than resolving the mutable branch again.
+  const argv = ["push", ...(options.setUpstream ? ["-u"] : []), remote, "--", `${provedSource?.oid ?? `refs/heads/${branch}`}:refs/heads/${destination}`];
   const report = (pushed: boolean): PublishReport => ({
     contract: PUBLISH_CONTRACT,
     branch,

@@ -1,3 +1,6 @@
+import { existsSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
+import redactionDefaults from "./redaction-defaults.json";
 // src/issue/privacyguard.ts -- the private-name guard as a VERB runs it: its
 // three flags, the ignore file, the stderr lines and the verdict
 // (zheref/nen#329, #363).
@@ -58,12 +61,15 @@ export const PRIVATE_NAME_FLAGS: Required<Pick<FlagSpec, "values" | "booleans">>
 /**
  * `--private-names-ignore-file <path>`, read BEFORE any `gh` call: absent or
  * unreadable when given is a usage error (exit 2), and with the flag omitted
- * nothing is read -- there is no default path. Resolved against --repo's root
+ * only the exact external owner ignore path is considered. Explicit paths resolve against --repo's root
  * like every other own-path flag (zheref/nen#100), and refused (exit 2) when
  * its real path lies inside the working tree holding that root.
  */
 export function readIgnoreFlag(context: CommandContext): IgnoreList | null {
-  const raw = context.args.values[PRIVATE_NAMES_IGNORE_FILE_FLAG];
+  const explicit = context.args.values[PRIVATE_NAMES_IGNORE_FILE_FLAG];
+  const home = context.seams.env["HOME"] ?? context.seams.env["USERPROFILE"];
+  const candidate = home && isAbsolute(home) ? join(home, redactionDefaults.ignoreFile) : undefined;
+  const raw = explicit ?? (candidate && existsSync(candidate) ? candidate : undefined);
   if (raw === undefined) {
     // `--allow-all-ignored` alone is judged against the OTHER list too
     // (zheref/nen#441): a declared named list can exempt every name on its

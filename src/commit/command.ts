@@ -40,7 +40,7 @@
 // a guard that fired without the repository having asked for it would be this
 // module deciding somebody's commit convention for them.
 
-import { assertRepoRoot } from "../repo/root.js";
+import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
 import { emit, requireRepoFlag, requireSubcommand, requireValue, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import { refuse } from "../cli/refusal.js";
 import { SchemaError } from "../schema/errors.js";
@@ -83,7 +83,7 @@ build-proof check that says whether this tree is the one a build proved.
 usage:
   nen commit format --repo <path> --message-file <path>
   nen commit format --type feat --subject "a short imperative subject"
-                    [--scope <scope>] [--breaking] [--body "paragraph one"]
+                    [--scope <scope>] [--breaking] [--body "paragraph one" | --body-file <path>]
                     [--trailer key=value,key2=value2] [--repo <path>]
   nen commit check  --repo <path> --require-proof <lane> [--json]
   nen commit write  --repo <path> --message-file <path> [--trailer <Key: value>]...
@@ -155,7 +155,7 @@ for reference only.
 'format --message-file <path>' validates the existing file without rewriting it,
 wrapping its body, reading the index, or committing. Relative paths resolve
 against --repo. It cannot be combined with message-building flags (--type,
---scope, --subject, --body, --trailer, --breaking). On success it emits the
+--scope, --subject, --body, --body-file, --trailer, --breaking). On success it emits the
 original message (or { message } with --json); shape refusals exit 2 and
 broken policy/configuration exits 1, using the same validators as 'write'.
 
@@ -299,13 +299,13 @@ function policyFailure(error: SchemaError, act: "shape a message" | "commit"): s
  * the instruction somebody gave.
  */
 const COMMIT_SUBCOMMAND_FLAGS: Readonly<Record<string, readonly string[]>> = {
-  format: ["message-file", "type", "scope", "subject", "body", "trailer", "breaking"],
+  format: ["message-file", "type", "scope", "subject", "body", "body-file", "trailer", "breaking"],
   check: ["require-proof"],
   write: ["message-file", "trailer", "require-proof", "dry-run"],
 };
 
 const COMMIT_FLAGS = {
-  values: ["type", "scope", "subject", "body", "require-proof", "message-file"],
+  values: ["type", "scope", "subject", "body", "body-file", "require-proof", "message-file"],
   lists: ["trailer"],
   booleans: ["breaking", "dry-run"],
 };
@@ -336,7 +336,7 @@ function commitlintFailure(error: CommitlintConfigError): string {
 }
 
 function runFormatFile(context: CommandContext): number {
-  const mixed = ["type", "scope", "subject", "body", "trailer", "breaking"].filter(
+  const mixed = ["type", "scope", "subject", "body", "body-file", "trailer", "breaking"].filter(
     (flag): boolean => context.args.values[flag] !== undefined || context.args.lists[flag] !== undefined || context.args.booleans.has(flag),
   );
   if (mixed.length > 0) throw new VerbUsageError(`--message-file cannot be combined with --${mixed.join(", --")}.`);
@@ -439,12 +439,15 @@ export const commitCommand: Command = {
     const subject = context.args.values["subject"];
     if (subject === undefined) throw new VerbUsageError("--subject is required.");
 
+    const bodyFile = context.args.values["body-file"];
+    if (bodyFile !== undefined && context.args.values["body"] !== undefined) throw new VerbUsageError("--body and --body-file conflict; supply one body source.");
+    const body = bodyFile === undefined ? context.args.values["body"] : readTextFile(bodyFile, resolveRepoRoot({ repoFlag: context.repoFlag }), "The commit body must be read before its message is formatted.");
     const input: CommitMessageInput = {
       type,
       scope: context.args.values["scope"] ?? null,
       breaking: context.args.booleans.has("breaking"),
       subject,
-      body: context.args.values["body"] === undefined ? [] : [context.args.values["body"]],
+      body: body === undefined ? [] : [body],
       trailers: parseTrailers(context.args.lists["trailer"]),
     };
 

@@ -147,3 +147,28 @@ describe("collateChangelog -- no Unreleased: anchored on the top dated section (
     expect(a).toEqual(b);
   });
 });
+
+it("coalesces repeated subsections under the target release level in fixed order", () => {
+  const output = collateIntoChangelog("# Changelog\n\n## v1.0.0 — 2026-01-01\n### Fixed\n- old\n", "v1.1.0", "new theme", [
+    { name: "1-a.md", content: "### Fixed\n- one\n### Added\n- added\n" },
+    { name: "2-b.md", content: "### Breaking / consumer notes\n- breaking\n### Fixed\n- two\n" },
+  ], { date: "2026-01-02" });
+  const section = output.split("## v1.0.0")[0]!;
+  expect(section).toContain("## v1.1.0 — 2026-01-02");
+  expect(section.match(/### Fixed/g)).toHaveLength(1);
+  expect(section.indexOf("### Added")).toBeLessThan(section.indexOf("### Fixed"));
+  expect(section.indexOf("### Fixed")).toBeLessThan(section.indexOf("### Breaking / consumer notes"));
+  expect(section).toContain("- one"); expect(section).toContain("- two");
+});
+
+it("keeps subsection examples inside longer and mixed fences verbatim", () => {
+  const content = "````markdown\n```\n### Added\n- example\n~~~\n### Fixed\n````\n### Added\n- real\n";
+  const result = collateIntoChangelog("## v1.0.0 — prior\n", "v1.1.0", "new", [{ name: "1.md", content }]);
+  expect(result).toContain("````markdown\n```\n### Added\n- example\n~~~\n### Fixed\n````");
+  expect(result).toContain("### Added\n- real");
+});
+
+it("retains meaningful indentation in grouped subsection bodies", () => {
+  const output = collateIntoChangelog("## v1.0.0 — prior\n", "v1.1.0", "new", [{ name: "1.md", content: "### Fixed\n    indented code\n" }]);
+  expect(output).toContain("### Fixed\n    indented code");
+});

@@ -63,12 +63,33 @@ export function sortFragments(fragments: readonly Fragment[]): Fragment[] {
  * which both match only the leading `### v<semver>`), but a port fidelity
  * deviation is a finding to report, never a silent "improvement".
  */
+/** Coalesce standard subsection headings in a fixed release-note order. */
+export function mergeFragmentSections(fragments: readonly Fragment[], level = 3): string {
+  const order = ["Added", "Changed", "Fixed", "Removed", "Deprecated", "Security", "Breaking / consumer notes"];
+  const groups = new Map<string, string[]>(); const prose: string[] = [];
+  for (const fragment of fragments) {
+    let group: string[] = prose; let fence: { char: string; size: number } | null = null;
+    for (const line of fragment.content.replace(/\r\n/g, "\n").replace(/\n+$/, "").split("\n")) {
+      const token = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+      const insideFence = fence !== null;
+      if (token) {
+        if (fence === null) fence = { char: token[1]![0]!, size: token[1]!.length };
+        else if (token[1]![0] === fence.char && token[1]!.length >= fence.size && token[2]!.trim() === "") fence = null;
+      }
+      const heading = !insideFence && !token ? /^### ([^#].*?)\s*$/.exec(line) : null;
+      if (heading) { const key = heading[1]!; if (!groups.has(key)) groups.set(key, []); group = groups.get(key)!; }
+      else group.push(line);
+    }
+  }
+  const trimBlankLines = (text: string): string => text.replace(/^(?:[ \t]*\n)+/, "").replace(/(?:\n[ \t]*)+$/, "");
+  const result = trimBlankLines(prose.join("\n"));
+  return [result, ...[...order.filter(key => groups.has(key)), ...[...groups.keys()].filter(key => !order.includes(key)).sort()].map(key => `${"#".repeat(level)} ${key}\n${trimBlankLines(groups.get(key)!.join("\n"))}`)].filter(Boolean).join("\n\n") + "\n";
+}
+
 export function renderDatedSection(version: string, theme: string, fragments: readonly Fragment[]): string {
   const bareVersion = version.startsWith("v") ? version.slice(1) : version;
   let out = `### v${bareVersion} — ${theme}\n`;
-  for (const fragment of fragments) {
-    out += fragment.content.endsWith("\n") ? fragment.content : `${fragment.content}\n`;
-  }
+  out += mergeFragmentSections(fragments, 4);
   return out;
 }
 
@@ -212,9 +233,7 @@ function renderInForm(
   const heading = `${hashes} ${vee}${bareVersion}${separator}${dated ? (options.date as string) : theme}`;
   const body: string[] = [heading, ""];
   if (dated) body.push(theme, "");
-  for (const fragment of sortFragments(fragments)) {
-    body.push(...fragment.content.replace(/\r\n/g, "\n").replace(/\n+$/, "").split("\n"));
-  }
+  body.push(...mergeFragmentSections(sortFragments(fragments), hashes.length + 1).trimEnd().split("\n"));
   body.push("");
   return { heading, lines: body.map((line): string => `${line}${eol}`) };
 }

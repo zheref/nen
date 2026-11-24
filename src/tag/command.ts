@@ -2,9 +2,21 @@
 
 import { assertRepoRoot } from "../repo/root.js";
 import { requireRepoFlag, requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
+import { runAnnounce } from "./announce.js";
 import { cutTag } from "./cut.js";
 
-const USAGE = `nen tag cut -- cut a tag pinned at a given SHA, getsuga §4.
+const USAGE = `nen tag announce --repo <path> [--json]
+  Read nen/workflow.json tags.identity.nameFrom, without Git/network writes.
+  Plain success prints the first two file lines (identity, archive SHA), CR
+  stripped; extra lines ignored. No tag-name/SHA validation or tag is made.
+  The path must be repo-relative without '..', regular and free of symlinks
+  in every component. Reads are bounded: workflow 1 MiB; first two identity
+  lines 64 KiB. Nonblocking descriptor validation refuses FIFOs/swapped files.
+  Exit 0 announced; 3 no tags/identity (including null); 1 declaration/read
+  fault; 2 wiring. JSON: nen.tag.announce/v0.1, status, identity, archiveSha,
+  nameFrom, error, exitCode; undeclared/invalid identity and archiveSha null.
+
+nen tag cut -- cut a tag pinned at a given SHA, getsuga §4.
 
 usage:
   nen tag cut --repo <path> --name <vX.Y.Z> --at <sha>
@@ -25,12 +37,13 @@ message when given, and defaults to the tag name otherwise.`;
 
 export const tagCommand: Command = {
   name: "tag",
-  subcommands: ["cut"],
-  summary: "Cut a tag pinned at an explicit SHA; never auto-pushed.",
+  subcommands: ["announce", "cut"],
+  summary: "Announce an archive identity, or cut a tag at an explicit SHA.",
   usage: USAGE,
   flags: { values: ["name", "at", "message", "trunk"], booleans: ["push"] },
   run(context: CommandContext): number {
-    requireSubcommand("tag", context.args, ["cut"]);
+    const subcommand = requireSubcommand("tag", context.args, ["announce", "cut"]);
+    if (subcommand === "announce") return runAnnounce(context);
     const name = context.args.values["name"];
     const at = context.args.values["at"];
     if (name === undefined || at === undefined) {

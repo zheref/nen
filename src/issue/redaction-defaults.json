@@ -1,0 +1,4 @@
+{
+  "$comment": "The maintainer-requested Hatsu owner ignore path. This external configuration path is data, never a repository-name or taxonomy inference.",
+  "ignoreFile": ".config/hatsu/redaction-ignore"
+}

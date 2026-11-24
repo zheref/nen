@@ -54,6 +54,9 @@ export interface Effort {
   /** Internal run-derived evidence. The caller-written effort parser never reads these fields. */
   readonly sixthStopHead?: string;
   readonly repairHold?: boolean;
+  readonly hantenSettled?: boolean;
+  readonly stackedBase?: string | null;
+  readonly prBase?: string | null;
 }
 
 export interface Caps {
@@ -134,6 +137,7 @@ export function occupancy(
   }
   if (!effort.prOpen) return { occupied: true, why: "authored locally, no PR yet" };
   if (effort.repairHold === true) return { occupied: true, why: "sixth-stop evidence unread or held for repair" };
+  if (effort.stacked === true && effort.hantenSettled === true && typeof effort.stackedBase === "string" && effort.stackedBase.trim() !== "" && effort.prBase === effort.stackedBase) return { occupied: false, why: "stacked PR open on its stacked base and Hanten settled -- local slot handed over" };
   if (rule === "stacked-open" && effort.stacked === true) {
     return {
       occupied: false,
@@ -226,6 +230,9 @@ export function parseEfforts(json: string): ParsedEfforts {
       prompted: record["prompted"] === true,
       merged: record["merged"] === true,
       stacked: record["stacked"] === true,
+      hantenSettled: record["hantenSettled"] === true,
+      stackedBase: typeof record["stackedBase"] === "string" ? record["stackedBase"] : null,
+      prBase: typeof record["prBase"] === "string" ? record["prBase"] : null,
     });
   });
   return { efforts, errors };

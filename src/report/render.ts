@@ -27,7 +27,7 @@ import { dirname, resolve } from "node:path";
 import { VerbUsageError } from "../cli/command.js";
 import { readJsonFile, readTextFile } from "../cli/inputs.js";
 import { realContainment } from "../repo/contain.js";
-import { parseTemplate, renderTemplate, TemplateError } from "./template.js";
+import { parseTemplate, renderTemplate, TemplateError, type OutputLanguage } from "./template.js";
 
 export const RENDER_CONTRACT = "nen.report.render/v0.1";
 
@@ -39,6 +39,7 @@ export interface RenderOptions {
   /** `--out`, exactly as the caller typed it. */
   readonly out: string;
   readonly dryRun: boolean;
+  readonly language?: OutputLanguage;
   /**
    * Keys merged INTO the data document before the fill -- `--variant`'s
    * `sections`/`sectionList` and `--graph`'s four graph keys (./command.ts
@@ -122,6 +123,7 @@ function resolveAgainst(root: string, value: string): string {
 
 export interface RenderResult {
   readonly report: RenderReport;
+  readonly content?: string;
   /** The lines the human rendering prints. */
   readonly lines: readonly string[];
 }
@@ -136,7 +138,7 @@ export interface RenderResult {
  * changes that.
  */
 export function renderReport(repoRoot: string, options: RenderOptions): RenderResult {
-  const absoluteOut = assertOutPath(repoRoot, options.out);
+  const absoluteOut = options.out === "-" ? null : assertOutPath(repoRoot, options.out);
   const templateText = readTextFile(
     options.template,
     repoRoot,
@@ -199,7 +201,7 @@ export function renderReport(repoRoot: string, options: RenderOptions): RenderRe
   try {
     const parsed = parseTemplate(templateText);
     tokens = parsed.tokens;
-    filled = renderTemplate(parsed, data);
+    filled = renderTemplate(parsed, data, options.language);
   } catch (error) {
     if (error instanceof TemplateError) {
       const listed =
@@ -212,7 +214,7 @@ export function renderReport(repoRoot: string, options: RenderOptions): RenderRe
     throw error;
   }
 
-  if (!options.dryRun) {
+  if (!options.dryRun && absoluteOut !== null) {
     mkdirSync(dirname(absoluteOut), { recursive: true });
     writeFileSync(absoluteOut, filled, "utf8");
   }
@@ -226,7 +228,7 @@ export function renderReport(repoRoot: string, options: RenderOptions): RenderRe
     variant: options.variant ?? null,
     injected,
   };
-  return { report, lines: renderLines(report, options) };
+  return { report, lines: renderLines(report, options), ...(absoluteOut === null && !options.dryRun ? { content: filled } : {}) };
 }
 
 function renderLines(report: RenderReport, options: RenderOptions): readonly string[] {
