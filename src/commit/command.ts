@@ -53,6 +53,7 @@ import { CommitlintConfigError, declaredSubjectCase, readSubjectCaseRule, subjec
 import { declaredBodyWidth, lineLengthFindings, readLineLengthRules, wrapFormatBody } from "./bodywidth.js";
 import { COMMIT_MESSAGE_PATH, write, WRITE_CONTRACT } from "./write.js";
 import { injectedMessage } from "./readback.js";
+import { COMPOSED_KEYS_ENV, strippedMessage, STRIPPED_EXIT, writtenExit } from "./strip.js";
 import {
   COMMIT_TYPES,
   formatCommitMessage,
@@ -242,12 +243,29 @@ applies. An added key nothing refuses
 is a 'note:' line, exit unchanged. A read-back git could not answer is exit
 1: the commit exists, the check did not happen.
 
+A HOOK-INJECTED KEY CAN BE STRIPPED, ONLY WHERE THE REPOSITORY OPTS IN
+(zheref/nen#594). Without it -- commits.stripInjected empty, the default -- a
+refused key a harness's own hook adds is a refusal with no sanctioned way
+around it (never --no-verify). With keys listed and the commit-msg hook
+regenerated ('nen scaffold init ... --force'), the child 'git commit' runs
+with ${COMPOSED_KEYS_ENV} set to the composed message's keys, and the
+hook removes a listed key from the trailer block when the message nen
+composed did not carry it, naming it in <git dir>/nen-stripped-trailers. This
+verb deletes a stale sidecar first, reads and deletes it after, and reports a
+key as stripped only when the read-back confirms the commit lacks it. The
+strip never removes a key the composed message carried, never admits a
+refused key, and never amends. A failed commit under a non-empty list says
+the hook may predate the list.
+
 Exits: 0 committed (and nothing refused was added); 1 a broken config, a
 refused proof, an empty index, a failed git; 2 the shape; 3 committed, and a
-hook injected a refused trailer. --json's contract is '${WRITE_CONTRACT}': {
-contract, sha (null on a dry run), subject, trailers: [{ key, value }] (READ
-BACK from the written commit; the composed message's on a dry run), injected:
-[key, ...] (null on a dry run -- not checked), dryRun }.`;
+hook injected a refused trailer; 4 committed, and the hook stripped a
+hook-injected key (3 wins over 4, 4 over 0). --json's contract is
+'${WRITE_CONTRACT}': { contract, sha (null on a dry run), subject, trailers:
+[{ key, value }] (READ BACK from the written commit; the composed message's
+on a dry run), injected: [key, ...] (null on a dry run -- not checked),
+dryRun, stripped: [key, ...] (null on a dry run, [] when nothing was
+stripped) }.`;
 
 /**
  * The exit-1 line for a nen/workflow.json that will not load, shared by
@@ -345,17 +363,26 @@ function runWrite(context: CommandContext): number {
   // this repository refuses -- ./readback.ts's three rules. Not 1 -- nothing failed to run,
   // and the commit exists -- and not 2 -- the invocation was right. The report
   // above still names the sha; the commit is left for the caller to drop.
+  // EXIT 4 (zheref/nen#594): written, and the repository's hook stripped a
+  // hook-injected key it opted into stripping. Said on stderr whatever the
+  // exit, because 3 wins over it and must not hide it.
+  const stripped = outcome.report.stripped ?? [];
+  if (stripped.length > 0 && outcome.report.sha !== null) {
+    context.io.err(`nen commit write: ${strippedMessage(outcome.report.sha, stripped)}`);
+  }
+  let injected = 0;
   if (outcome.findings.length > 0 && outcome.report.sha !== null && outcome.policy !== null && outcome.undo !== null) {
     context.io.err(`nen commit write: ${injectedMessage(outcome.report.sha, outcome.findings, outcome.policy, outcome.undo)}`);
-    return 3;
+    injected = outcome.findings.length;
   }
-  return 0;
+  return writtenExit(injected, stripped.length);
 }
 
 export const commitCommand: Command = {
   jsonRefusals: ["format"],
   exits: [
     { verb: "commit write", code: 3, meaning: "committed, and the read-back found a trailer the policy refuses; the commit is left in place" },
+    { verb: "commit write", code: STRIPPED_EXIT, meaning: "committed, and the commit-msg hook stripped a hook-injected key under commits.stripInjected; 3 wins over it" },
   ],
   name: "commit",
   subcommands: ["format", "check", "write"],

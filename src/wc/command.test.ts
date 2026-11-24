@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
 import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
+import { makeTempDir } from "../testing/tempdir.js";
 import type { Seams } from "../seam/exec.js";
 import { wcCommand } from "./command.js";
 import { foreignUpstreamRefusal, isTrunk, trackedBranchName, trunkDestinationRefusal } from "./publish.js";
@@ -288,6 +289,7 @@ describe("nen wc squash -- CLI wiring", () => {
       TWO_COMMITS,
       NO_UPSTREAM,
       ...BASE_CLEAR,
+      { match: "git rev-parse --git-dir", result: { stdout: ".git\n" } },
       { match: "git reset --soft base0000", result: { code: 0 } },
       { match: `git commit -F ${path}`, result: { code: 0 } },
       { match: "git rev-parse HEAD", result: { stdout: "newsha00\n" } },
@@ -310,6 +312,7 @@ describe("nen wc squash -- CLI wiring", () => {
       TWO_COMMITS,
       NO_UPSTREAM,
       ...BASE_CLEAR,
+      { match: "git rev-parse --git-dir", result: { stdout: ".git\n" } },
       { match: "git reset --soft base0000", result: { code: 0 } },
       { match: `git commit -F ${path}`, result: { code: 0 } },
       { match: "git rev-parse HEAD", result: { stdout: "newsha00\n" } },
@@ -327,7 +330,7 @@ describe("nen wc squash -- CLI wiring", () => {
     expect(parsed["base"]).toBe("main");
     expect(parsed["baseRefs"]).toEqual(["origin/main"]);
     expect(parsed["injected"]).toEqual([]);
-    expect(Object.keys(parsed)).toEqual(["contract", "onto", "mergeBase", "folded", "newSha", "dryRun", "base", "baseRefs", "injected"]);
+    expect(Object.keys(parsed)).toEqual(["contract", "onto", "mergeBase", "folded", "newSha", "dryRun", "base", "baseRefs", "injected", "stripped"]);
   });
 
   it("exit 3 when a hook injected a refused trailer into the fold: newSha reported, injected named, nothing undone (zheref/nen#273)", async () => {
@@ -342,6 +345,7 @@ describe("nen wc squash -- CLI wiring", () => {
       TWO_COMMITS,
       NO_UPSTREAM,
       ...BASE_CLEAR,
+      { match: "git rev-parse --git-dir", result: { stdout: ".git\n" } },
       { match: "git reset --soft base0000", result: { code: 0 } },
       { match: `git commit -F ${path}`, result: { code: 0 } },
       { match: "git rev-parse HEAD", result: { stdout: "newsha00\n" } },
@@ -353,10 +357,68 @@ describe("nen wc squash -- CLI wiring", () => {
     expect(result.err.join("\n")).toMatch(/^nen wc: the written commit newsha00 carries a trailer this repository refuses: 'Co-authored-by' \(added by a hook.*git reset --soft ORIG_HEAD/m);
   });
 
+  // zheref/nen#594: the fold under commits.stripInjected. The scripted `git
+  // commit` also writes the sidecar, as the generated hook does on a strip.
+  async function stripRun(sidecarText: string | null, written: string, failCommit = false): Promise<{ code: number; doc: Record<string, unknown> | null; err: string[]; seams: ScriptedSeams; repo: string }> {
+    const repo = makeTempDir("nen-wc-squash-strip-");
+    mkdirSync(join(repo, "nen"));
+    mkdirSync(join(repo, ".git"));
+    writeFileSync(join(repo, "nen", "workflow.json"), JSON.stringify({ commits: { allowedAttributionTrailers: ["Hatsu-Agent"], stripInjected: ["Co-authored-by"] } }));
+    const path = messageFile("feat: add a thing\n\nHatsu-Agent: kurapika\n");
+    const seams = new ScriptedSeams([
+      NAME_OK, CLEAN, MERGE_BASE, ANCESTOR_OK, TWO_COMMITS, NO_UPSTREAM, ...BASE_CLEAR,
+      { match: "git rev-parse --git-dir", result: { stdout: ".git\n" } },
+      { match: "git reset --soft base0000", result: { code: 0 } },
+      { match: `git commit -F ${path}`, result: failCommit ? { code: 1, stderr: "commit-msg: refused" } : { code: 0 } },
+      { match: "git rev-parse HEAD", result: { stdout: "newsha00\n" } },
+      ...readBackScript("Hatsu-Agent: kurapika\n", written),
+    ]);
+    const original = seams.run;
+    seams.run = (command, args, options): ReturnType<typeof original> => {
+      const result = original(command, args, options);
+      if (args[0] === "commit" && sidecarText !== null) writeFileSync(join(repo, ".git", "nen-stripped-trailers"), sidecarText);
+      return result;
+    };
+    const out: string[] = [];
+    const err: string[] = [];
+    const io: Io = { out: (line): void => void out.push(line), err: (line): void => void err.push(line) };
+    const code = await runFamily(wcCommand, ["wc", "squash", "--onto", "main", "--message-file", path], repo, true, io, seams);
+    return { code, doc: out.length === 0 ? null : (JSON.parse(out.join("\n")) as Record<string, unknown>), err, seams, repo };
+  }
+
+  it("exit 4 when the hook stripped a hook-injected key from the fold: stripped LAST in --json, named on stderr (zheref/nen#594)", async () => {
+    const result = await stripRun("Co-authored-by\n", "Hatsu-Agent: kurapika\n");
+    expect(result.code).toBe(4);
+    expect(result.doc?.["stripped"]).toEqual(["Co-authored-by"]);
+    expect(result.doc?.["injected"]).toEqual([]);
+    expect(Object.keys(result.doc ?? {}).at(-1)).toBe("stripped");
+    expect(result.err.join("\n")).toMatch(/^nen wc: the written commit newsha00 does not carry 'Co-authored-by'/m);
+    const commit = result.seams.calls.find((call): boolean => call.args[0] === "commit");
+    expect(commit?.env).toEqual({ NEN_COMPOSED_TRAILER_KEYS: "hatsu-agent" });
+    // The reset and the git-dir read carry no strip variable; only the commit does.
+    expect(result.seams.calls.find((call): boolean => call.args[0] === "reset")?.env).toBeNull();
+    const calls = result.seams.calls.map((call): string => call.args.join(" "));
+    expect(calls.indexOf("rev-parse --git-dir")).toBeLessThan(calls.indexOf("reset --soft base0000"));
+  });
+
+  it("3 wins over 4 on the fold: a key still on it is injected, never stripped (zheref/nen#594)", async () => {
+    const result = await stripRun("Co-authored-by\n", "Hatsu-Agent: kurapika\nCo-authored-by: Cursor <c@x>\n");
+    expect(result.code).toBe(3);
+    expect(result.doc?.["stripped"]).toEqual([]);
+    expect(result.doc?.["injected"]).toEqual(["Co-authored-by"]);
+  });
+
+  it("a fold whose commit fails under a non-empty list names the regeneration, and leaves no sidecar (zheref/nen#594)", async () => {
+    const result = await stripRun("Co-authored-by\n", "", true);
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/git reset --hard ORIG_HEAD.*lists commits\.stripInjected \('Co-authored-by'\).*nen scaffold init \.\.\. --force/);
+  });
+
   it("--json --dry-run reports injected: null -- nothing was written, nothing read back (hanten N7)", async () => {
     const result = await squashJsonRun(["--onto", "main", "--message-file", messageFile("feat: x\n"), "--dry-run"], [NAME_OK, CLEAN, MERGE_BASE, ANCESTOR_OK, TWO_COMMITS, NO_UPSTREAM, ...BASE_CLEAR]);
     expect(result.code).toBe(0);
     expect(result.doc?.["injected"]).toBeNull();
+    expect(result.doc?.["stripped"]).toBeNull();
     expect(result.seams.calls.some((call): boolean => call.args.includes("interpret-trailers") || call.args.includes("cat-file"))).toBe(false);
   });
 
@@ -368,6 +430,7 @@ describe("nen wc squash -- CLI wiring", () => {
     expect(result.code).toBe(0);
     expect(result.doc?.["newSha"]).toBeNull();
     expect(result.doc?.["injected"]).toBeNull();
+    expect(result.doc?.["stripped"]).toBeNull();
   });
 
   it("a read-back git cannot answer AFTER the fold is exit 1: the squash exists, the check was NOT performed (hanten N7)", async () => {
@@ -376,6 +439,7 @@ describe("nen wc squash -- CLI wiring", () => {
       NAME_OK, CLEAN, MERGE_BASE, ANCESTOR_OK, TWO_COMMITS, NO_UPSTREAM, ...BASE_CLEAR,
       { match: "git config --get trailer.separators", result: { code: 1 } },
       { match: "git interpret-trailers --parse --unfold --no-divider", result: { stdout: "" } },
+      { match: "git rev-parse --git-dir", result: { stdout: ".git\n" } },
       { match: "git reset --soft base0000", result: { code: 0 } },
       { match: `git commit -F ${path}`, result: { code: 0 } },
       { match: "git rev-parse HEAD", result: { stdout: "newsha00\n" } },

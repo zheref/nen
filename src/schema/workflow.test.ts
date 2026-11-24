@@ -347,6 +347,7 @@ describe("refusedTrailerKeys / trailerRefusal / trailerAdmitted", () => {
     runTrailer: string | null;
     subjectCase: null;
     bodyMaxLineLength: null;
+    stripInjected: readonly string[];
     raw: Readonly<Record<string, unknown>>;
   } => ({
     allowedAttributionTrailers,
@@ -354,6 +355,7 @@ describe("refusedTrailerKeys / trailerRefusal / trailerAdmitted", () => {
     runTrailer: null,
     subjectCase: null,
     bodyMaxLineLength: null,
+    stripInjected: [],
     raw: {},
   });
 
@@ -527,6 +529,52 @@ describe("commits.bodyMaxLineLength -- the body width, declared as data (zheref/
     const error = refusal({ commits: { bodyMaxLinelength: 100 } });
     expect(error.pointer).toBe("commits.bodyMaxLinelength");
     expect(error.message).toContain("'bodyMaxLineLength'");
+  });
+});
+
+describe("commits.stripInjected -- the opt-in strip list (zheref/nen#594)", () => {
+  it("is empty when absent, null, or the file itself is absent -- OFF by default", () => {
+    expect(loadWorkflow(tempRoot()).workflow.commits.stripInjected).toEqual([]);
+    expect(defaultWorkflow().commits.stripInjected).toEqual([]);
+    expect(loadWorkflow(repoWith({ commits: { allowedAttributionTrailers: ["X-Agent"] } })).workflow.commits.stripInjected).toEqual([]);
+    expect(loadWorkflow(repoWith({ commits: { stripInjected: null } })).workflow.commits.stripInjected).toEqual([]);
+  });
+
+  it("reads the listed keys in order, as written, beside the allow-list", () => {
+    const commits = loadWorkflow(
+      repoWith({ commits: { allowedAttributionTrailers: ["Hatsu-Agent"], stripInjected: ["Co-authored-by", "Made-with"] } }),
+    ).workflow.commits;
+    expect(commits.stripInjected).toEqual(["Co-authored-by", "Made-with"]);
+    expect(commits.allowedAttributionTrailers).toEqual(["Hatsu-Agent"]);
+  });
+
+  it("refuses a key the policy ADMITS, by pointer at the entry -- a key the policy admits is never stripped", () => {
+    const error = refusal({ commits: { allowedAttributionTrailers: ["Hatsu-Agent", "Co-Authored-By"], stripInjected: ["Made-with", "Co-Authored-By"] } });
+    expect(error.pointer).toBe("commits.stripInjected[1]");
+    expect(error.message).toContain("a key the policy admits is never stripped");
+    expect(error.message).toContain("commits.allowedAttributionTrailers");
+  });
+
+  it("compares CASE-INSENSITIVELY, as every trailer check does", () => {
+    const error = refusal({ commits: { allowedAttributionTrailers: ["Co-Authored-By"], stripInjected: ["co-authored-by"] } });
+    expect(error.pointer).toBe("commits.stripInjected[0]");
+    expect(error.message).toContain("'Co-Authored-By' is listed");
+  });
+
+  it.each([["Co-authored-by: x"], ["bad key"], ["-lead"], [""]])("refuses %j -- not a trailer key's shape -- by pointer", (value) => {
+    const error = refusal({ commits: { stripInjected: [value] } });
+    expect(error.pointer).toBe("commits.stripInjected[0]");
+  });
+
+  it("refuses a non-list and a non-string entry by pointer", () => {
+    expect(refusal({ commits: { stripInjected: "Co-authored-by" } }).pointer).toBe("commits.stripInjected");
+    expect(refusal({ commits: { stripInjected: [7] } }).pointer).toBe("commits.stripInjected[0]");
+  });
+
+  it("refuses a near-miss of the key rather than preserving it unread", () => {
+    const error = refusal({ commits: { stripinjected: ["Co-authored-by"] } });
+    expect(error.pointer).toBe("commits.stripinjected");
+    expect(error.message).toContain("'stripInjected'");
   });
 });
 

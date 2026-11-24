@@ -259,7 +259,14 @@ function findingReason(finding: InjectedFinding, policy: LoadedWorkflow): string
 /** The refusal line both verbs print for a non-empty `injected`: every key, why, where it came from, and the way back. */
 export function injectedMessage(sha: string, findings: readonly InjectedFinding[], policy: LoadedWorkflow, undo: string): string {
   const list = findings.map((finding): string => findingReason(finding, policy)).join(", ");
-  return `the written commit ${sha} carries ${findings.length === 1 ? "a trailer" : "trailers"} this repository refuses: ${list}. The commit is left in place -- nen never amends it. Drop it (${undo}), remove the key's source, and commit again; or admit the key under commits.allowedAttributionTrailers.`;
+  // A HOOK'S KEY HAS A SECOND REMEDY SINCE zheref/nen#594: where the source is
+  // a harness nobody can switch off, the repository may opt in to stripping
+  // it. Named only for a hook-added key -- a key the message carried is never
+  // strippable, so offering it there would be advice that cannot work.
+  const strip = findings.some((finding): boolean => finding.source === "hook")
+    ? " (or, where that source is a harness's own hook nobody can switch off, opt in to stripping it: list the key under commits.stripInjected and regenerate the commit-msg hook with 'nen scaffold init ... --force')"
+    : "";
+  return `the written commit ${sha} carries ${findings.length === 1 ? "a trailer" : "trailers"} this repository refuses: ${list}. The commit is left in place -- nen never amends it. Drop it (${undo}), remove the key's source${strip}, and commit again; or admit the key under commits.allowedAttributionTrailers.`;
 }
 
 /** The note for a key a hook added that nothing refuses -- said, never silent, and never a failure. */
