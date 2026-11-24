@@ -4,8 +4,10 @@
 //
 // THE SAME EVALUATOR AS `nen pr ready`. This verb owns no decision: it reads
 // the pull request's snapshot, the default-branch tip's `nen/gates.json` (the
-// one copy that decides; the base's and the checkout's only warn when they
-// differ) and hands both to ../pr/version_collision.ts's `readVersionCollision`
+// copy that decides; the base's and the checkout's only warn when they differ,
+// and add opt-in evidence when the default tip cannot decide -- with none, the
+// answer is not-applicable with a warning) and hands them, through the ONE
+// rule `resolveCollisionPolicy`, to ../pr/version_collision.ts's `readVersionCollision`
 // -- the function `nen pr ready` folds into its CON-32(a) row. A trusted CI
 // job that runs this verb and a readiness read of the same pull request at the
 // same moment therefore cannot disagree (the issue's SC-1).

@@ -2587,21 +2587,34 @@ is still green afterwards. The opt-in is one optional block in
 }
 ```
 
-- **The policy is the default branch's, and it fails closed.** The block is
-  read **only** from `nen/gates.json` at the pinned default-branch tip, the
-  copy `checks.excluded` is already intersected with. One rule decides:
-  - no file there (a clean 404), or a file without the block (or with it set
-    to `null`), is **no opt-in**. Nothing more is read and the report is
-    byte-identical;
-  - a file that could not be **read** (network, 5xx, forbidden, no default
-    tip named) is `unknown`, naming the read. So is a file this build cannot
-    **parse or validate**: malformed JSON, a refused `version_collision` block,
-    an unknown key, or a newer `version`. The refused pointer is named. This
-    holds whatever any other copy declares, including a repository that has
-    not opted in, whose default tip simply cannot be read;
-  - the copy at the pull request's base, in the checkout and under `--gates`
-    is **diagnostic only**. A difference from the default tip's block is a
-    `meta.warnings` line, and it never changes the status.
+- **The policy is the default branch's; an opted-in repository fails
+  closed.** The block is read from `nen/gates.json` at the pinned
+  default-branch tip, the copy `checks.excluded` is already intersected with.
+  One rule, shared by both verbs, decides:
+  - when that file is **readable and valid**, it decides **alone**: the block
+    is the opt-in, and a file without it (or with it set to `null`), or no file
+    there at all (a clean 404), is **no opt-in**. The copies at the pull
+    request's base, in the checkout and under `--gates` cannot opt in or out;
+    with the opt-in, a copy that differs is a `meta.warnings` line, and
+    [`pr version-collision`](#nen-pr-version-collision) warns either way;
+  - when that file **cannot decide** — it could not be **read** (network, 5xx,
+    forbidden, no default tip named), or this build cannot **parse or
+    validate** it (malformed JSON, a refused `version_collision` block, an
+    unknown key, a newer `version`) — the repository counts as opted in only
+    on **positive evidence**: the file's own raw JSON parses and carries a
+    non-null `version_collision` key (even if the block or another key is
+    refused), or a copy at the base, in the checkout or under `--gates`
+    declares the block (or, where that copy does not validate, carries the raw
+    key). With evidence the limb is `unknown`, naming what could not be read
+    or validated (the refused pointer included) and where the opt-in showed,
+    so `pr ready` is never ready and `pr version-collision` exits 1;
+  - with **no** such evidence the repository is **not opted in** for that
+    read. `pr ready` then behaves exactly as it did before the limb existed —
+    no limb, no `versionCollision` field, no added note or warning, no extra
+    read, the same exit code — and `pr version-collision` answers
+    `not-applicable` (exit 0) with a warning that the default tip's policy
+    could not be read and no copy shows the opt-in. A copy only ever **adds**
+    evidence: it never turns off a block the default tip declares.
 - **What it decides** — one evaluator, shared with
   [`pr version-collision`](#nen-pr-version-collision), statuses
   `not-applicable`, `clear`, `collision` and `unknown`:
@@ -2644,6 +2657,13 @@ is still green afterwards. The opt-in is one optional block in
   - **Known limit:** because fork rows count toward the 10 × 100 inventory
     cap, a repository with more than 1000 open pull requests, forks
     included, is `unknown`;
+  - **Known limit:** when the default tip's `nen/gates.json` cannot be read
+    (or parsed, or validated) and no copy read here shows the opt-in, the
+    repository is treated as **not opted in** for that read. So an opted-in
+    repository whose default tip cannot be read, checked by a caller holding
+    no opted-in copy (`pr ready --reviewers` reads no local file) while the
+    base is that same unreadable commit or lacks the block, is not gated on
+    that read; the next read that can see the opt-in gates it again;
   - a `collision` proven by the evidence that was read stays a `collision`
     even when other evidence is missing. The missing pieces stay in
     `missing` and are appended to the line as `; also not read: …`.
@@ -2663,12 +2683,16 @@ is still green afterwards. The opt-in is one optional block in
   <line>` under row 2, then the policy source and the read counts. `--json`
   adds `conjuncts[].versionCollision` on row 2 (`{ status, line,
   proposedVersion, collisions, missing }`) and `meta.versionCollision`, the
-  whole result. Without the opt-in, and with the default tip readable, both
-  are **absent**, nothing more is read and the report is byte-identical. A
-  default tip that cannot be read is `unknown`, and both are present.
+  whole result. Without the opt-in both are **absent**, nothing more is read
+  and the report is byte-identical — including when the default tip's file
+  cannot be read, parsed or validated and no copy shows the opt-in. In an
+  opted-in repository a default tip that cannot be read is `unknown`, and
+  both are present.
 - **Validated by pointer.** At the **default-branch tip**, a refused block is
-  not a usage error. The limb is `unknown`, `pr ready` is never ready,
-  `pr version-collision` exits 1, and `missing` names the pointer. In the
+  not a usage error. A refused block is itself a non-null `version_collision`
+  key, so the repository counts as opted in: the limb is `unknown`, `pr ready`
+  is never ready, `pr version-collision` exits 1, and `missing` names the
+  pointer. In the
   **local** copy that `pr ready` loads (the checkout's file or `--gates`), the
   same refusal is exit 2 before any read, like any other refused gates file.
   `pr version-collision` never refuses on its local copy, which is only
@@ -2778,11 +2802,13 @@ The trusted-CI read of one pull request's **live plugin-version collision**
 opt-in and the caps are in [`pr ready`'s
 section](#pr-ready-version-collision); this verb adds no decision of its own.
 It reads the pull request's snapshot and `nen/gates.json` at the default-branch
-tip, which decides, and at the base, which only warns. It reads the open
+tip, which decides, and at the base, which only warns — or, when the default
+tip cannot decide, adds evidence of the opt-in (with none, the answer is
+`not-applicable` with a warning). It reads the open
 pull request inventory with a GraphQL query paged by cursor, and the tips,
 merge bases, manifests and changed files with REST GETs. It also reads the
-checkout's copy under `--repo` (default the current directory), which only
-warns. Read-only: no label, comment or status. It needs `pull-requests:read`
+checkout's copy under `--repo` (default the current directory), which plays
+the same diagnostic part. Read-only: no label, comment or status. It needs `pull-requests:read`
 and `contents:read` and no new permission, and it never runs pull request
 content.
 

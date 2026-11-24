@@ -392,29 +392,13 @@ describe("nen watch until --pr -- the native compound predicate (zheref/nen#264)
     });
   }
   /** `deps()`, with the base answering `atBase` for nen/gates.json. */
-  /**
-   * `separateDefaultTip`: the default-branch tip is ANOTHER commit, readable
-   * and declaring no collision opt-in (zheref/nen#663) -- an unreadable
-   * default tip is an unknown limb of its own, and these cases are about the base.
-   */
-  function depsAtBase(snapshots: readonly Snapshot[], atBase: () => Promise<string | null>, separateDefaultTip = false): PrReadyDeps {
+  function depsAtBase(snapshots: readonly Snapshot[], atBase: () => Promise<string | null>): PrReadyDeps {
     const inner = deps(snapshots);
-    const tip = "d".repeat(40);
     return {
       ...inner,
       openSource: (env: string): ReturnType<PrReadyDeps["openSource"]> => {
         const opened = inner.openSource(env);
-        if (!opened.ok) return opened;
-        if (!separateDefaultTip) return { ok: true, source: { ...opened.source, fileAtRef: atBase } };
-        const plain = opened.source;
-        return {
-          ok: true,
-          source: {
-            ...plain,
-            pullRequestSnapshot: async (repo, n): Promise<PullRequestSnapshot> => ({ ...(await plain.pullRequestSnapshot(repo, n)), defaultBranchOid: tip }),
-            fileAtRef: async (_repo, _path, ref): Promise<string | null> => (ref === tip ? null : atBase()),
-          },
-        };
+        return opened.ok ? { ok: true, source: { ...opened.source, fileAtRef: atBase } } : opened;
       },
     };
   }
@@ -460,7 +444,7 @@ describe("nen watch until --pr -- the native compound predicate (zheref/nen#264)
     const failing = async (): Promise<string | null> => {
       throw new Error("HTTP 403");
     };
-    const result = await watch(argv, depsAtBase([COMMENTED, COMMENTED, COMMENTED], failing, true));
+    const result = await watch(argv, depsAtBase([COMMENTED, COMMENTED, COMMENTED], failing));
     expect(result.code).toBe(1);
     expect(result.out[0]).toMatch(/^\[1\] observation failed: ready was not judged on the pull request's base gate \(meta\.identities\.read: flags-unverified\) -- not a merge signal; the pull request's base \(zheref\/example@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:nen\/gates\.json\) could not be read/);
   });

@@ -411,8 +411,9 @@ export interface GateIdentities {
   /**
    * `version_collision` (zheref/nen#663), or `null` when the file declares
    * none. OPTIONAL in the type for the reason `roundQuorum` is. The copy that
-   * DECIDES is always the default-branch tip's (../pr/version_collision.ts);
-   * this one -- local, `--gates` or base -- is compared against it only.
+   * DECIDES is the default-branch tip's (../pr/version_collision.ts); this one
+   * -- local, `--gates` or base -- is compared against it, and only adds
+   * evidence of the opt-in when the default tip cannot decide.
    */
   readonly versionCollision?: VersionCollisionPolicy | null;
   reviewer(name: string): ReviewerIdentity | undefined;

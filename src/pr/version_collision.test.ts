@@ -18,6 +18,7 @@ import { SchemaError } from "../schema/errors.js";
 import type { PrStateSource } from "../github/pr_state.js";
 import {
   decideVersionCollision,
+  rawDeclaresOptIn,
   sameVersion,
   versionFromManifest,
   type VersionCollisionEvidence,
@@ -635,13 +636,18 @@ describe("AC-4: distinct proposals both pass; no opt-in, no change", () => {
     expect(cli.calls.some((key): boolean => key.startsWith("pulls:"))).toBe(false);
   });
 
-  it("a head that adds the opt-in to its own copy does not opt the repository in: a warning, never a limb", async () => {
+  it("a head that adds the opt-in to its own copy does not opt the repository in: readiness unchanged, the verb warns", async () => {
     const world = baseline();
     world.gatesAt = (): string => gatesText(NO_OPT_IN);
     const { code, report } = await ready(world, 42, {}, OPTED_GATES);
     expect(code).toBe(0);
     expect(report.meta.versionCollision).toBeUndefined();
-    expect(report.meta.warnings.join("\n")).toMatch(/--gates .* declares version_collision .* but the default-branch tip .* declares no version_collision; only the default tip's copy applies/);
+    // Not opted in: `pr ready` adds nothing, not even the difference warning.
+    expect(report.meta.warnings).toEqual([]);
+    const cli = await verb(world, 42);
+    expect(cli.code).toBe(0);
+    expect(cli.report.status).toBe("not-applicable");
+    expect(cli.report.warnings.join("\n")).toMatch(/the checkout's .* declares version_collision .* but the default-branch tip .* declares no version_collision; only the default tip's copy applies/);
   });
 
   describe("the schema, accepted and refused by pointer", () => {
@@ -864,7 +870,7 @@ describe("AC-5 / SC-1: unreadable, incomplete or moving evidence is unknown on b
     }, /tip of 'main' moved/);
   });
 
-  it("an unreadable default-tip policy is unknown, whatever the other copies say", async () => {
+  it("an unreadable default-tip policy, with a copy showing the opt-in, is unknown", async () => {
     const unreadable = (): CollisionWorld => {
       const world = baseline();
       world.gatesAt = (ref): string | null => {
@@ -912,17 +918,34 @@ describe("SC-1: one evaluator -- both surfaces agree on every fixture", () => {
     edit(world);
     return world;
   };
-  /** A baseline whose DEFAULT tip carries `text` as its nen/gates.json (or whose read throws). */
-  const defaultTipGates = (text: string | Error): (() => CollisionWorld) =>
+  /** The pull request's base, pinned at a commit of its own (the default tip stays MAIN). */
+  const BASE_COMMIT = sha("aa");
+  /**
+   * A baseline whose DEFAULT tip carries `text` as its nen/gates.json (or
+   * whose read throws). `base`, when given, pins the pull request's base at
+   * BASE_COMMIT carrying that text; otherwise the base IS the default tip.
+   */
+  const defaultTipGates = (text: string | Error, base?: string): (() => CollisionWorld) =>
     edited((world): void => {
+      if (base !== undefined) world.snapshot = { base: BASE_COMMIT, default: MAIN };
       world.gatesAt = (ref): string | null => {
+        if (ref === BASE_COMMIT && base !== undefined) return base;
         if (ref !== MAIN) return gatesText();
         if (text instanceof Error) throw text;
         return text;
       };
     });
-  /** [name, world, subject (-1: #42 with an unreadable inventory), the copies the caller holds, expected status]. */
-  const fixtures: readonly [string, () => CollisionWorld, number, "opted" | "plain", string][] = [
+  const UPSTREAM = new Error("HTTP 502: upstream");
+  const MALFORMED = "{ not json";
+  const plainText = gatesText(NO_OPT_IN);
+  const unknownTopKey = (block: unknown): string => JSON.stringify({ ...(JSON.parse(gatesText(block)) as object), future_gate: { on: true } });
+  /** The default tip's raw block is present, but the block does not validate here. */
+  const invalidBlock = gatesText({ ...OPT_IN, shipped_paths: [] });
+  /** The two surfaces read different LOCAL copies by design (--gates there, the checkout here): one name for both. */
+  const sameLocal = (text: string): string => text.replaceAll(`--gates ${OPTED_GATES}`, "<local copy>").replaceAll(`the checkout's ${join(ROOT, "nen", "gates.json")}`, "<local copy>");
+  type Expected = "clear" | "collision" | "not-applicable" | "unknown" | "absent" | "absent-undecided";
+  /** [name, world, subject (-1: #42 with an unreadable inventory), the LOCAL copy the caller holds, expected]. */
+  const fixtures: readonly [string, () => CollisionWorld, number, "opted" | "plain", Expected][] = [
     ["clear", baseline, 42, "opted", "clear"],
     ["base collision", edited((world): void => void (world.versions[MAIN] = "1.4.0")), 42, "opted", "collision"],
     ["unbumped collision", edited((world): void => void ((world.versions[SUBJECT_HEAD] = "1.3.0"), (world.versions[MAIN] = "1.3.5"))), 42, "opted", "collision"],
@@ -930,15 +953,29 @@ describe("SC-1: one evaluator -- both surfaces agree on every fixture", () => {
     ["peer collision, run from the peer", edited((world): void => void addPeer(world, 10, "1.4.0")), 10, "opted", "collision"],
     ["inherited peer", oneInheritingPeer, 42, "opted", "clear"],
     ["not shipped", edited((world): void => void (world.prs[0]!.files = ["README.md"])), 42, "opted", "not-applicable"],
-    ["not opted in", edited((world): void => void (world.gatesAt = (): string => gatesText(NO_OPT_IN))), 42, "plain", "absent"],
-    ["no gates file at the default tip (a clean 404)", edited((world): void => void (world.gatesAt = (ref): string | null => (ref === MAIN ? null : gatesText()))), 42, "opted", "absent"],
     ["unreadable inventory", baseline, -1, "opted", "unknown"],
-    // Review round 1, A: the default tip decides alone, and fails closed.
-    ["default tip: shipped_paths []", defaultTipGates(gatesText({ ...OPT_IN, shipped_paths: [] })), 42, "opted", "unknown"],
-    ["default tip: an unknown version_regex key", defaultTipGates(gatesText({ ...OPT_IN, version_regex: ".*" })), 42, "opted", "unknown"],
-    ["default tip: malformed JSON", defaultTipGates("{ not json"), 42, "opted", "unknown"],
-    ["default tip: a newer version", defaultTipGates(JSON.stringify({ ...(JSON.parse(gatesText()) as object), version: 2 })), 42, "opted", "unknown"],
-    ["default tip unreadable, NO other copy declaring", defaultTipGates(new Error("HTTP 502: upstream")), 42, "plain", "unknown"],
+    // 1. A readable, valid default tip decides ALONE: copies never opt in, never opt out.
+    ["not opted in", defaultTipGates(plainText), 42, "plain", "absent"],
+    ["not opted in, every copy declaring the block", defaultTipGates(plainText, gatesText()), 42, "opted", "absent"],
+    ["no gates file at the default tip (a clean 404)", edited((world): void => void (world.gatesAt = (ref): string | null => (ref === MAIN ? null : gatesText()))), 42, "opted", "absent"],
+    ["opted in, every copy WITHOUT the block", defaultTipGates(gatesText(), plainText), 42, "plain", "clear"],
+    // 2a. The default tip cannot decide, and its own raw JSON shows the opt-in.
+    ["2a: default tip: shipped_paths []", defaultTipGates(invalidBlock), 42, "plain", "unknown"],
+    ["2a: default tip: an unknown version_regex key in the block", defaultTipGates(gatesText({ ...OPT_IN, version_regex: ".*" })), 42, "plain", "unknown"],
+    ["2a: default tip: a newer version", defaultTipGates(JSON.stringify({ ...(JSON.parse(gatesText()) as object), version: 2 })), 42, "plain", "unknown"],
+    ["2a: default tip: an unknown top-level key beside the block", defaultTipGates(unknownTopKey(OPT_IN)), 42, "plain", "unknown"],
+    // 2b. The default tip cannot decide; ONE diagnostic copy shows the opt-in.
+    ["2b base: default tip unreadable, the base declares", defaultTipGates(UPSTREAM, gatesText()), 42, "plain", "unknown"],
+    ["2b base: default tip malformed, the base declares", defaultTipGates(MALFORMED, gatesText()), 42, "plain", "unknown"],
+    ["2b base raw: default tip unreadable, the base's block does not validate", defaultTipGates(UPSTREAM, invalidBlock), 42, "plain", "unknown"],
+    ["2b local: default tip unreadable, the checkout / --gates declares", defaultTipGates(UPSTREAM), 42, "opted", "unknown"],
+    ["2b local: default tip malformed, the checkout / --gates declares", defaultTipGates(MALFORMED), 42, "opted", "unknown"],
+    // The mirrors: the default tip cannot decide and NO copy shows the opt-in.
+    ["no evidence: default tip unreadable, base at the same commit", defaultTipGates(UPSTREAM), 42, "plain", "absent-undecided"],
+    ["no evidence: default tip unreadable, base readable without the block", defaultTipGates(UPSTREAM, plainText), 42, "plain", "absent-undecided"],
+    ["no evidence: default tip malformed", defaultTipGates(MALFORMED, plainText), 42, "plain", "absent-undecided"],
+    ["no evidence: default tip carries an unknown key and no block", defaultTipGates(unknownTopKey(NO_OPT_IN), plainText), 42, "plain", "absent-undecided"],
+    ["no evidence: default tip: a newer version, version_collision null", defaultTipGates(JSON.stringify({ ...(JSON.parse(gatesText(null)) as object), version: 2 }), plainText), 42, "plain", "absent-undecided"],
   ];
   it.each(fixtures)("%s", async (_name, make, which, copies, expected) => {
     // -1: the subject #42 with an unreadable inventory -- SC-1's "0 successful verdicts".
@@ -947,21 +984,57 @@ describe("SC-1: one evaluator -- both surfaces agree on every fixture", () => {
     const readiness = await ready(make(), subject, options, copies === "plain" ? PLAIN_GATES : OPTED_GATES);
     const cli = await verb(make(), subject, options, copies === "plain" ? PLAIN_ROOT : ROOT);
     const fromReady = readiness.report.meta.versionCollision;
-    if (expected === "absent") {
+    if (expected === "absent" || expected === "absent-undecided") {
+      // Not opted in: no limb anywhere, nothing added to readiness' report.
       expect(fromReady).toBeUndefined();
-      expect(cli.report.status).toBe("not-applicable");
       expect(JSON.stringify(readiness.report)).not.toContain("versionCollision");
+      expect(JSON.stringify(readiness.report)).not.toMatch(/version collision|zheref\/nen#663/i);
+      expect(readiness.calls.some((key): boolean => key.startsWith("pulls:") || key.startsWith("tip:") || key.startsWith("files:"))).toBe(false);
+      expect(cli.report.status).toBe("not-applicable");
+      expect(cli.code).toBe(0);
+      const undecided = cli.report.warnings.filter((line): boolean => line.includes("no copy of nen/gates.json read here declares version_collision"));
+      expect(undecided).toHaveLength(expected === "absent-undecided" ? 1 : 0);
+      if (expected === "absent-undecided") expect(undecided[0]).toMatch(/default-branch tip's nen\/gates\.json .*(could not be read|refused by this build).*treated as not opted in for this read/);
     } else {
       expect(fromReady?.status).toBe(expected);
       expect(cli.report.status).toBe(expected);
-      expect(outcomeOf(cli.report)).toEqual(outcomeOf(fromReady ?? cli.report));
+      const outcome = (result: VersionCollisionResult): unknown => JSON.parse(sameLocal(JSON.stringify(outcomeOf(result)))) as unknown;
+      expect(outcome(cli.report)).toEqual(outcome(fromReady ?? cli.report));
       expect(checksRow(readiness.report)?.versionCollision).toEqual(outcomeOf(fromReady ?? cli.report));
     }
     if (expected === "unknown" || expected === "collision") {
       expect(readiness.report.verdict).not.toBe("ready");
       expect(cli.code).toBe(1);
     }
+    if (expected === "unknown" && _name.startsWith("2")) {
+      // Names what could not be read or validated, and where the opt-in showed.
+      const missing = cli.report.missing.join("\n");
+      expect(missing).toMatch(/default-branch tip's nen\/gates\.json .*(could not be read|refused by this build)/);
+      expect(missing).toMatch(
+        _name.startsWith("2a") ? /that file's own JSON carries a non-null version_collision key/ : _name.startsWith("2b base") ? /the pull request's base \(.*\) declares version_collision/ : /the checkout's .* declares version_collision/,
+      );
+    }
     expect(cli.code === 0).toBe(readiness.report.verdict === "ready");
+  });
+
+  it("2b local raw (the verb): the checkout's copy does not validate but carries the key -- unknown, naming the checkout", async () => {
+    const root = makeTempDir("nen-663-raw-root-");
+    mkdirSync(join(root, "nen"), { recursive: true });
+    writeFileSync(join(root, "nen", "gates.json"), invalidBlock);
+    const cli = await verb(defaultTipGates(UPSTREAM)(), 42, {}, root);
+    expect(cli.code).toBe(1);
+    expect(cli.report.status).toBe("unknown");
+    expect(cli.report.missing.join("\n")).toContain(`could not be read (HTTP 502: upstream), and the checkout's ${join(root, "nen", "gates.json")} declares version_collision`);
+  });
+
+  it("raw evidence is a parsed JSON object whose root carries a non-null version_collision, nothing else", () => {
+    expect(rawDeclaresOptIn(invalidBlock)).toBe(true);
+    expect(rawDeclaresOptIn(JSON.stringify({ version_collision: false }))).toBe(true);
+    expect(rawDeclaresOptIn(JSON.stringify({ version_collision: null }))).toBe(false);
+    expect(rawDeclaresOptIn(plainText)).toBe(false);
+    expect(rawDeclaresOptIn(MALFORMED)).toBe(false);
+    expect(rawDeclaresOptIn(JSON.stringify([{ version_collision: OPT_IN }]))).toBe(false);
+    expect(rawDeclaresOptIn(JSON.stringify({ checks: { version_collision: OPT_IN } }))).toBe(false);
   });
 
   it("a refused default tip names the pointer it refused", async () => {
@@ -971,31 +1044,41 @@ describe("SC-1: one evaluator -- both surfaces agree on every fixture", () => {
     expect(unknownKey.report.missing.join("\n")).toMatch(/version_regex/);
   });
 
-  it("`pr ready --gates <a file without the block>` with the default tip unreadable is unknown, not ready", async () => {
+  it("`pr ready --gates <a file WITH the block>` with the default tip unreadable is unknown, naming --gates", async () => {
     const world = defaultTipGates(new Error("HTTP 403: Resource not accessible by integration"))();
-    const { code, report } = await ready(world, 42, {}, PLAIN_GATES);
+    const { code, report } = await ready(world, 42, {}, OPTED_GATES);
     expect(code).toBe(1);
     expect(checksRow(report)?.status).toBe("unevaluated");
     expect(report.meta.versionCollision?.status).toBe("unknown");
     expect(report.gateLine).toContain("could not be read (HTTP 403: Resource not accessible by integration)");
+    expect(report.gateLine).toContain(`--gates ${OPTED_GATES} declares version_collision`);
   });
 
-  it("a repository that has NOT opted in, whose default-tip read fails, is unknown too -- before #663 it could read ready", async () => {
-    // The base is readable at ANOTHER commit and supplies the identities; only
-    // the default tip's read fails. Before this change that read was a quiet
-    // exclusions note and the verdict could be `ready`; now the one copy that
-    // decides the opt-in could not be read, so the limb is unknown.
-    const world = baseline();
-    world.snapshot = { base: sha("aa"), default: MAIN };
-    world.gatesAt = (ref): string | null => {
-      if (ref === MAIN) throw new Error("HTTP 502: upstream");
-      return gatesText(NO_OPT_IN);
-    };
+  it("`pr ready --gates <a file without the block>` with the default tip unreadable and no copy declaring keeps the verdict it had: no limb", async () => {
+    const world = defaultTipGates(new Error("HTTP 403: Resource not accessible by integration"))();
     const { code, report } = await ready(world, 42, {}, PLAIN_GATES);
-    expect(code).toBe(1);
-    expect(report.meta.versionCollision?.missing).toEqual([
-      `the version_collision policy: the default-branch tip's nen/gates.json (${SLUG}@${MAIN}:nen/gates.json) could not be read (HTTP 502: upstream)`,
-    ]);
+    expect(code).toBe(0);
+    expect(report.verdict).toBe("ready");
+    expect(checksRow(report)?.versionCollision).toBeUndefined();
+    expect(report.meta.versionCollision).toBeUndefined();
+  });
+
+  it("a repository that has NOT opted in, whose default-tip read fails, reads exactly as before #663: no limb, no note, no warning of its own", async () => {
+    // The base is readable at ANOTHER commit, declares no opt-in and supplies
+    // the identities; only the default tip's read fails.
+    const world = defaultTipGates(UPSTREAM, plainText)();
+    const { code, report, calls } = await ready(world, 42, {}, PLAIN_GATES);
+    expect(code).toBe(0);
+    expect(report.meta.versionCollision).toBeUndefined();
+    expect(report.meta.notes.join("\n")).not.toMatch(/version.collision/i);
+    expect(report.meta.warnings).toEqual([]);
+    expect(calls).toEqual([`file:nen/gates.json@${BASE_COMMIT}`, `file:nen/gates.json@${MAIN}`, `file:nen/workflow.json@${BASE_COMMIT}`, `file:nen/workflow.json@${MAIN}`]);
+    const cli = await verb(defaultTipGates(UPSTREAM, plainText)(), 42, {}, PLAIN_ROOT, []);
+    expect(cli.code).toBe(0);
+    expect(cli.out[0]).toBe(`${SLUG}#42: version collision not-applicable: the default-branch tip's nen/gates.json could not be read or validated, and no copy declares version_collision`);
+    expect(cli.out).toContain(
+      `  warning: version collision: the default-branch tip's nen/gates.json (${SLUG}@${MAIN}:nen/gates.json) could not be read (HTTP 502: upstream), and no copy of nen/gates.json read here declares version_collision, so the repository is treated as not opted in for this read (zheref/nen#663).`,
+    );
   });
 
   it("--explain names the limb, its policy source and its read counts on both surfaces", async () => {

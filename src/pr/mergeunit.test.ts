@@ -358,15 +358,9 @@ describe("mergeUnit -- every gate evaluated, every verdict line quoted", () => {
   });
 
   it("refuses a 'ready' judged on the checkout's own gates file -- the base could not be read (zheref/nen#372, Feitan 3)", async () => {
-    // The BASE cannot be read; the default tip is another, readable commit
-    // declaring no collision opt-in (an unreadable default tip is an unknown
-    // collision limb of its own since zheref/nen#663).
-    const plain = readySource();
     const source: PrStateSource = {
-      ...plain,
-      pullRequestSnapshot: async (repo, n): Promise<PullRequestSnapshot> => ({ ...(await plain.pullRequestSnapshot(repo, n)), defaultBranchOid: "d".repeat(40) }),
-      fileAtRef: async (_repo, _path, ref): Promise<string | null> => {
-        if (ref === "d".repeat(40)) return null;
+      ...readySource(),
+      fileAtRef: async (): Promise<string | null> => {
         throw new Error("HTTP 403: Resource not accessible by integration");
       },
     };

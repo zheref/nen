@@ -53,8 +53,6 @@ function source(reads: RunnerReads, calls: string[] = [], checkName = WINDOWS_CH
       reviewRequests: [],
     },
     defaultBranch: "main",
-    // GitHub always names the default tip; the version-collision policy is read there (zheref/nen#663).
-    defaultBranchOid: "basebase",
     checkRollup: [
       { name: "ci / build", status: "COMPLETED", conclusion: "SUCCESS" },
       // N1: GitHub stamps a real `startedAt` on a check run still QUEUED with

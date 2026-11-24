@@ -38,8 +38,6 @@ function readySource(head: string = HEAD, approved = true): PrStateSource {
       reviewRequests: [],
     },
     defaultBranch: "main",
-    // GitHub always names the default tip; the version-collision policy is read there (zheref/nen#663).
-    defaultBranchOid: "ba5e".repeat(10),
     checkRollup: [{ name: "ci / build", status: "COMPLETED", conclusion: "SUCCESS" }],
     checkRollupPageInfo: { hasNextPage: false, endCursor: null },
     reviewRequests: [],

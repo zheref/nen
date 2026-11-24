@@ -17,9 +17,8 @@
 // `decideVersionCollision` is pure and turns the evidence into one of four
 // statuses. Neither surface decides anything of its own.
 //
-//   not-applicable  the default-branch tip's nen/gates.json declares no
-//                   `version_collision`, or the pull request changes no
-//                   shipped path;
+//   not-applicable  the repository has not opted in (see THE POLICY below),
+//                   or the pull request changes no shipped path;
 //   clear           the proposed version is on no target tip and proposed by
 //                   no other same-repository open pull request;
 //   collision       it is (AC-1, AC-2, AC-3), each conflict named;
@@ -27,13 +26,16 @@
 //                   moved during inspection (AC-5). Never clear, never ready.
 //
 // THE POLICY IS THE DEFAULT BRANCH'S (the issue's AS-2). It is read at the
-// pinned default-branch tip only; a copy at the pull request's base, in the
-// checkout or under `--gates` is compared with it and a difference WARNS --
-// the head can never opt itself out, and a base that has not merged the
-// opt-in yet cannot opt itself in. ONE RULE, FAILING CLOSED: a default tip
-// with no gates file (a clean 404) has not opted in; a default tip whose file
-// cannot be READ, or exists and cannot be PARSED or VALIDATED by this build,
-// is unknown whatever any other copy says. The other copies only ever warn.
+// pinned default-branch tip; when that file is readable and valid it decides
+// ALONE, and a copy at the pull request's base, in the checkout or under
+// `--gates` that differs only WARNS -- the head can never opt itself out. No
+// gates file there (a clean 404) is no opt-in. When the default tip CANNOT
+// decide (the read failed, or this build cannot parse or validate the file),
+// the repository counts as opted in only on POSITIVE evidence -- the default
+// tip's raw JSON carrying a non-null `version_collision`, or any copy
+// declaring it -- and is then UNKNOWN, never ready. With no evidence it is
+// read as not opted in, so a repository that never opted in keeps exactly
+// its old behaviour (`resolveCollisionPolicy`, the maintainer's ruling).
 //
 // NOTHING HERE EXECUTES PULL REQUEST CONTENT. A manifest is read as text and
 // parsed as JSON; the version is found by an RFC 6901 pointer, never by a
@@ -71,7 +73,7 @@ export type {
 
 /** What a caller gets: the result, and whether the repository opted in at all. */
 export interface VersionCollisionOutcome {
-  /** `false` -- the default tip was read and declares no opt-in: the limb is absent and the output stays as it was. */
+  /** `false` -- not opted in (`resolveCollisionPolicy`'s `undeclared`): the limb is absent and the output stays as it was. */
   readonly optedIn: boolean;
   readonly result: VersionCollisionResult;
 }
@@ -92,6 +94,13 @@ export const VERSION_COLLISION_LIMITS: VersionCollisionLimits = { maxPages: 10, 
 export interface PolicyCopy {
   readonly label: string;
   readonly policy: VersionCollisionPolicy | null | undefined;
+  /**
+   * POSITIVE evidence that the repository opted in: the copy's block parsed,
+   * or -- in a copy this build does not validate -- its raw JSON still carries
+   * a non-null `version_collision` key. Consulted only when the default tip
+   * cannot decide; a copy never turns the gate off.
+   */
+  readonly declaresOptIn: boolean;
 }
 
 /** One read of a `nen/gates.json` copy, named for every message about it. */
@@ -103,8 +112,31 @@ export interface GatesCopyRead {
 
 export type PolicyResolution =
   | { readonly kind: "declared"; readonly policy: VersionCollisionPolicy; readonly source: string; readonly warnings: readonly string[] }
-  | { readonly kind: "undeclared"; readonly source: string; readonly warnings: readonly string[] }
+  | {
+      readonly kind: "undeclared";
+      readonly source: string;
+      readonly warnings: readonly string[];
+      /**
+       * Set when the default tip could NOT decide and no copy shows the
+       * opt-in: why it was read as "not opted in". `nen pr version-collision`
+       * prints it as a warning; `nen pr ready` prints nothing at all, so its
+       * report stays exactly what it was before the limb existed.
+       */
+      readonly undecided?: string;
+    }
   | { readonly kind: "unknown"; readonly source: string; readonly missing: string; readonly warnings: readonly string[] };
+
+/** Raw opt-in evidence: `text` parses as JSON and its root carries a non-null `version_collision`. */
+export function rawDeclaresOptIn(text: string): boolean {
+  let value: unknown;
+  try {
+    value = JSON.parse(text) as unknown;
+  } catch {
+    return false;
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  return Object.hasOwn(value, "version_collision") && (value as Record<string, unknown>)["version_collision"] !== null;
+}
 
 /** `version_collision` out of one read of `nen/gates.json`: the block or `null`, or why it could not be had. */
 export function policyFromRead(
@@ -126,7 +158,9 @@ export function policyFromRead(
 /**
  * The DIAGNOSTIC copies, built one way for both surfaces (SC-1): the pull
  * request's base (unless it is the default tip itself) and the caller's own
- * file -- the checkout's, or `pr ready --gates`. Each only ever warns.
+ * file -- the checkout's, or `pr ready --gates`. With a default tip that
+ * decides, each only ever warns; with one that cannot, each can only ADD
+ * evidence of the opt-in (`declaresOptIn`).
  */
 export function collectPolicyCopies(
   defaultTip: { readonly where: string },
@@ -136,7 +170,10 @@ export function collectPolicyCopies(
   const copies: PolicyCopy[] = [];
   const copy = (label: string, where: string, read: BaseGatesRead): PolicyCopy => {
     const parsed = policyFromRead(where, read);
-    return { label, policy: parsed.kind === "read" ? parsed.policy : undefined };
+    const policy = parsed.kind === "read" ? parsed.policy : undefined;
+    const declaresOptIn =
+      (policy !== undefined && policy !== null) || (parsed.kind === "refused" && read.kind === "read" && rawDeclaresOptIn(read.text));
+    return { label, policy, declaresOptIn };
   };
   if (base !== undefined && base.where !== defaultTip.where) copies.push(copy(`the pull request's base (${base.where})`, base.where, base.read));
   if (local !== null) copies.push(copy(local.label, local.where, local.read));
@@ -165,31 +202,53 @@ function describePolicy(policy: VersionCollisionPolicy | null): string {
 }
 
 /**
- * Decide WHICH policy applies: the default-branch tip's, alone, failing
- * closed (zheref/nen#663 review round 1, A). No file there (a clean 404) is
- * no opt-in. A file that could not be read, or that this build cannot parse
- * or validate (malformed JSON, a refused `version_collision`, an unknown key,
- * a newer `version`), is UNKNOWN naming the read or the pointer -- whatever
- * any other copy declares. The copies only add a warning when they differ.
+ * Decide WHICH policy applies -- the ONE rule both surfaces call (the
+ * maintainer's ruling on zheref/nen#663):
+ *
+ *   1. The default-branch tip's file is readable and valid: it decides ALONE.
+ *      The block is the opt-in; no block, or no file at all (a clean 404), is
+ *      none. A copy that differs only warns.
+ *   2. The default tip cannot decide -- its read failed, or this build cannot
+ *      parse or validate the file (malformed JSON, a refused block, an unknown
+ *      key, a newer `version`). Then the repository counts as OPTED IN only on
+ *      POSITIVE evidence: (a) the default tip's own raw JSON carries a non-null
+ *      `version_collision`, or (b) a diagnostic copy declares it (the base's,
+ *      the checkout's, `--gates`). With evidence: UNKNOWN, naming what could
+ *      not be read and where the opt-in showed -- never ready. Without any:
+ *      NOT opted in for this read (`undecided` says why), so a repository
+ *      that never opted in keeps exactly the behaviour it had before.
+ *
+ * A copy can only ADD evidence: it never turns off a gate the default tip
+ * declares.
  */
 export function resolveCollisionPolicy(
   defaultTip: { readonly where: string; readonly read: BaseGatesRead },
   copies: readonly PolicyCopy[],
 ): PolicyResolution {
   const atDefault = policyFromRead(defaultTip.where, defaultTip.read);
-  if (atDefault.kind === "unread") {
+  if (atDefault.kind !== "read") {
+    const failure =
+      atDefault.kind === "unread"
+        ? `the default-branch tip's nen/gates.json (${defaultTip.where}) could not be read (${atDefault.message})`
+        : `the default-branch tip's nen/gates.json was refused by this build (${atDefault.message})`;
+    // The default tip's own raw key is the strongest evidence and names no
+    // copy (so both surfaces word it alike); otherwise every copy that shows it.
+    const evidence =
+      atDefault.kind === "refused" && defaultTip.read.kind === "read" && rawDeclaresOptIn(defaultTip.read.text)
+        ? ["that file's own JSON carries a non-null version_collision key"]
+        : copies.filter((copy): boolean => copy.declaresOptIn).map((copy): string => `${copy.label} declares version_collision`);
+    if (evidence.length === 0) {
+      return {
+        kind: "undeclared",
+        source: defaultTip.where,
+        warnings: [],
+        undecided: `version collision: ${failure}, and no copy of nen/gates.json read here declares version_collision, so the repository is treated as not opted in for this read (zheref/nen#663).`,
+      };
+    }
     return {
       kind: "unknown",
       source: defaultTip.where,
-      missing: `the version_collision policy: the default-branch tip's nen/gates.json (${defaultTip.where}) could not be read (${atDefault.message})`,
-      warnings: [],
-    };
-  }
-  if (atDefault.kind === "refused") {
-    return {
-      kind: "unknown",
-      source: defaultTip.where,
-      missing: `the version_collision policy: the default-branch tip's nen/gates.json was refused by this build (${atDefault.message})`,
+      missing: `the version_collision policy: ${failure}, and ${evidence.join(" and ")}`,
       warnings: [],
     };
   }
@@ -522,7 +581,12 @@ export async function readVersionCollision(
   });
 
   if (resolution.kind === "undeclared") {
-    return { optedIn: false, result: finish(decideVersionCollision(null, null), null, resolution.source) };
+    // The verb names why a default tip that could not decide was read as
+    // "not opted in"; `pr ready` never reaches here for that case.
+    if (resolution.undecided === undefined) return { optedIn: false, result: finish(decideVersionCollision(null, null), null, resolution.source) };
+    warnings.push(resolution.undecided);
+    const line = "not-applicable: the default-branch tip's nen/gates.json could not be read or validated, and no copy declares version_collision";
+    return { optedIn: false, result: finish({ ...decideVersionCollision(null, null), line }, null, resolution.source) };
   }
   if (resolution.kind === "unknown") {
     const missing = [resolution.missing];

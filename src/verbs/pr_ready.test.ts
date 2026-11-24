@@ -951,8 +951,7 @@ describe("prReady -- the checks-rollup distinction (zheref/nen#14, empty vs. unr
   function rawResponse(commits: unknown): unknown {
     return {
       repository: {
-        // A readable default tip (zheref/nen#663): the collision policy is read there.
-        defaultBranchRef: { name: "main", target: { oid: "d".repeat(40) } },
+        defaultBranchRef: { name: "main" },
         pullRequest: {
           number: 9,
           mergeable: "MERGEABLE",
@@ -2194,17 +2193,6 @@ describe("prReady -- declared checks.excluded (zheref/nen#249)", () => {
       "could not confirm the pull request's base declares no exclusion: the pull request's base could not be read (HTTP 403: Resource not accessible by integration) at zheref/example@basebase:nen/gates.json. No declared exclusion was applied; every check counts on CON-32(a).",
       "could not confirm the default-branch tip declares no exclusion: the default-branch tip could not be read (HTTP 403: Resource not accessible by integration) at zheref/example@basebase:nen/gates.json. No declared exclusion was applied; every check counts on CON-32(a).",
     ]);
-    // zheref/nen#663 (fail closed): the default tip's nen/gates.json -- the one
-    // copy that decides the collision opt-in -- could not be read, so row 2's
-    // limb is UNKNOWN, appended after the red check's own reason. Not a note.
-    const missing =
-      "the version_collision policy: the default-branch tip's nen/gates.json (zheref/example@basebase:nen/gates.json) could not be read (HTTP 403: Resource not accessible by integration)";
-    const row = json.report?.conjuncts.find((c): boolean => c.id === "checks-green");
-    expect(row?.status).toBe("failed");
-    expect(row?.reason).toBe(
-      `not-ready: required checks reported but are not all green (CON-32a) — failing: ${WINDOWS} — and the version collision could not be judged (zheref/nen#663): ${missing}`,
-    );
-    expect(row?.versionCollision).toEqual({ status: "unknown", line: `unknown: ${missing}`, proposedVersion: null, collisions: [], missing: [missing] });
     const plain = await run(failing, null, "plain");
     expect(plain.out.join("\n")).not.toMatch(/could not confirm|NOT honoured/);
     const explain = await run(failing, null, "explain");
@@ -2348,24 +2336,6 @@ describe("prReady -- every nen/gates.json input is read at the PR's base (zheref
     });
   }
   const declares = (value: Record<string, unknown>) => async (): Promise<string | null> => JSON.stringify(value);
-  /**
-   * The base cannot be READ, the default-branch tip (another commit) can and
-   * declares no collision opt-in. Since zheref/nen#663 an unreadable DEFAULT
-   * tip is an unknown limb on its own; these cases are about the base route.
-   */
-  function failingBase(logins: readonly string[]): PrStateSource {
-    const plain = source(logins, async (): Promise<string | null> => null);
-    return {
-      ...plain,
-      pullRequestSnapshot: async (repo, n): Promise<PullRequestSnapshot> => ({ ...(await plain.pullRequestSnapshot(repo, n)), defaultBranchOid: "defa017" }),
-      fileAtRef: async (_repo: PrRef, path: string, ref: string): Promise<string | null> => {
-        expect(path).toBe("nen/gates.json");
-        if (ref === "defa017") return null;
-        expect(ref).toBe("basebase");
-        throw new Error("HTTP 403: Resource not accessible by integration");
-      },
-    };
-  }
   const run = async (
     root: string,
     src: PrStateSource | null,
@@ -2425,7 +2395,10 @@ describe("prReady -- every nen/gates.json input is read at the PR's base (zheref
 
   it("a base read that FAILS falls back to the local file, and every output says so", async () => {
     const root = checkout(LOOSE_LOGIN);
-    const failing = (): PrStateSource => failingBase(["intruder"]);
+    const failing = (): PrStateSource =>
+      source(["intruder"], async (): Promise<string | null> => {
+        throw new Error("HTTP 403: Resource not accessible by integration");
+      });
     const json = await run(root, failing());
     expect(json.report?.verdict).toBe("ready");
     expect(json.report?.meta.identities).toEqual({
@@ -2726,13 +2699,16 @@ describe("prReady -- every nen/gates.json input is read at the PR's base (zheref
   });
 
   it("--reviewers with no gates file and a base that could not be READ: flags-unverified, warned, and --require-base-gates refuses it", async () => {
-    const failing = (): PrStateSource => failingBase(["rev"]);
+    const failing = (): PrStateSource =>
+      source(["rev"], async (): Promise<string | null> => {
+        throw new Error("HTTP 403");
+      });
     const { code, report } = await run(bare(), failing(), "json", { reviewers: "rev", approvers: "" });
     expect(code).toBe(0);
     expect(report?.verdict).toBe("ready");
     expect(report?.meta.identities).toEqual({ source: "flags", path: null, read: "flags-unverified" });
     expect(report?.meta.warnings).toEqual([
-      "the pull request's base (zheref/example@basebase:nen/gates.json) could not be read (HTTP 403: Resource not accessible by integration), so it is unknown whether it declares a gate --reviewers would only narrow: the identities are --reviewers' own, unverified; 'pr merge', 'watch until --until ready' and --require-base-gates refuse a verdict that rests on them.",
+      "the pull request's base (zheref/example@basebase:nen/gates.json) could not be read (HTTP 403), so it is unknown whether it declares a gate --reviewers would only narrow: the identities are --reviewers' own, unverified; 'pr merge', 'watch until --until ready' and --require-base-gates refuse a verdict that rests on them.",
     ]);
     const strict = await run(bare(), failing(), "json", { reviewers: "rev", approvers: "" }, ["require-base-gates"]);
     expect(strict.code).toBe(1);
@@ -2759,7 +2735,10 @@ describe("prReady -- every nen/gates.json input is read at the PR's base (zheref
     writeFileSync(join(elsewhere, "g.json"), JSON.stringify(LOOSE_LOGIN));
     const flag = await run(root, source(["intruder"], declares(STRICT)), "json", { gates: join(elsewhere, "g.json") }, ["require-base-gates"]);
     expect(flag.code).toBe(0);
-    const failing = (): PrStateSource => failingBase(["intruder"]);
+    const failing = (): PrStateSource =>
+      source(["intruder"], async (): Promise<string | null> => {
+        throw new Error("HTTP 403");
+      });
     // Without the flag the fallback ready still exits 0 -- the reason the flag exists.
     expect((await run(root, failing())).code).toBe(0);
     const strict = await run(root, failing(), "json", {}, ["require-base-gates"]);

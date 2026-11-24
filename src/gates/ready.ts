@@ -547,11 +547,11 @@ export interface Conjunct {
   readonly aiPolicyQuorum?: AiPolicyQuorum;
   /**
    * The live plugin-version collision limb (zheref/nen#663), on the
-   * `checks-green` row ONLY, present when the default-branch tip opts in or
-   * cannot be read or parsed (then `unknown`). ABSENT everywhere else:
-   * without the opt-in, and with the default tip readable, nothing more is
-   * read and the report is byte-identical; a default tip that cannot be read
-   * is unknown. Additive to v0.1.
+   * `checks-green` row ONLY, present only when the repository opted in: the
+   * default-branch tip declares it, or -- when that tip cannot be read,
+   * parsed or validated -- its raw JSON or another copy shows the opt-in
+   * (then `unknown`). ABSENT everywhere else: without the opt-in nothing more
+   * is read and the report is byte-identical. Additive to v0.1.
    */
   readonly versionCollision?: VersionCollisionLimb;
 }
@@ -793,9 +793,10 @@ export interface EvaluateOptions {
   /**
    * The live version-collision result (zheref/nen#663), read by
    * ../pr/version_collision.ts BEFORE this pure gate runs and folded into
-   * the CON-32(a) row as a limb. ABSENT when the default tip is readable and
-   * declares no opt-in: the row is then exactly what it was. A default tip
-   * that cannot be read or parsed arrives here as `unknown`.
+   * the CON-32(a) row as a limb. ABSENT when the repository has not opted
+   * in -- including a default tip that cannot decide with no evidence of
+   * the opt-in: the row is then exactly what it was. An opted-in repository
+   * whose default tip cannot be read or parsed arrives here as `unknown`.
    */
   readonly versionCollision?: VersionCollisionResult;
 }

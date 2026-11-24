@@ -130,7 +130,6 @@ import {
   readVersionCollision,
   renderVersionCollisionDetail,
   resolveCollisionPolicy,
-  type VersionCollisionOutcome,
   type VersionCollisionResult,
 } from "../pr/version_collision.js";
 
@@ -573,11 +572,13 @@ export interface ReadyMeta {
    * The live plugin-version collision limb's whole result (zheref/nen#663):
    * status, line, the policy source (always the default-branch tip's
    * `nen/gates.json`), the proposed version, every collision, every missing
-   * piece of evidence and the read counts. Without the opt-in, and with the
-   * default tip readable, it is ABSENT, nothing more is read and the report
-   * is byte-identical; a default tip that cannot be read (or parsed) is an
-   * `unknown` limb. The verdict reads it only through the `checks-green`
-   * row. Additive to v0.1.
+   * piece of evidence and the read counts. Without the opt-in it is ABSENT,
+   * nothing more is read and the report is byte-identical -- including when
+   * the default tip's file cannot be read, parsed or validated and no copy
+   * shows the opt-in. Only an opted-in repository (the default tip declares
+   * it, or, when the default tip cannot decide, its raw JSON or a copy
+   * does) gets an `unknown` limb for an unreadable default tip. The verdict
+   * reads it only through the `checks-green` row. Additive to v0.1.
    */
   readonly versionCollision?: VersionCollisionResult;
   readonly deliveryPr: boolean | null;
@@ -1992,12 +1993,15 @@ export async function readReady(
   // ── the live version-collision limb (zheref/nen#663) ─────────────────────
   //
   // The policy is the DEFAULT-BRANCH TIP's own nen/gates.json -- the copy
-  // already read above for the exclusions intersection. Without the opt-in,
-  // and with the default tip readable, nothing more is read and the report is
-  // byte-identical; a default tip that cannot be read or parsed is UNKNOWN
-  // (fail closed). The base's, the checkout's and a --gates copy only warn
-  // when they differ. Read FRESH on every call, so
-  // `watch until`, `pr merge` and `loop slots --from-run` get it unchanged.
+  // already read above for the exclusions intersection. Readable and valid,
+  // it decides alone; with the opt-in, the base's, the checkout's and a
+  // --gates copy warn when they differ. A default tip that cannot decide (unread, unparseable,
+  // invalid for this build) is UNKNOWN only on positive evidence of the
+  // opt-in -- its own raw JSON, or a copy, declaring version_collision --
+  // and otherwise NOT opted in. Not opted in, nothing more is read and the
+  // report is byte-identical to the one before the limb existed. Read FRESH
+  // on every call, so `watch until`, `pr merge` and `loop slots --from-run`
+  // get it unchanged.
   const collision = await versionCollisionOf(opened.source, ref, fetched.state, defaultRead, baseRead, resolved, input.values["gates"] !== undefined);
   const evaluation: ReadyEvaluation = evaluateReady(
     { ...applied.identities, excludedChecks: base.exclusions },
@@ -2046,7 +2050,7 @@ export async function readReady(
       excludedChecks: excludeCheckNames,
       declaredExclusions: evaluation.context.declaredExclusions,
       declaredExclusionsSource: base.origin,
-      notes: [...base.notes, ...collision.result.notes],
+      notes: collision.optedIn ? [...base.notes, ...collision.result.notes] : base.notes,
       ...(evaluation.context.roundCounts === undefined ? {} : { roundCounts: evaluation.context.roundCounts }),
       ...(collision.optedIn ? { versionCollision: collision.result } : {}),
       deliveryPr: evaluation.context.deliveryPr,
@@ -2058,7 +2062,7 @@ export async function readReady(
         ...fetched.warnings,
         ...base.warnings,
         ...evaluation.context.warnings,
-        ...collision.result.warnings,
+        ...(collision.optedIn ? collision.result.warnings : []),
       ],
       evaluatedAt: deps.now(),
       generator: { program: PROGRAM, version: VERSION, executable: deps.executable() },
@@ -2170,8 +2174,12 @@ export async function readBaseGates(source: PrStateSource, ref: PrRef, baseSha: 
 
 /**
  * The version-collision limb for one fetched state (zheref/nen#663): the
- * policy from the DEFAULT-BRANCH TIP's read, every other copy as a diagnostic,
- * then ../pr/version_collision.ts's one reader and evaluator.
+ * policy from the DEFAULT-BRANCH TIP's read, every other copy as diagnostic
+ * evidence, both through ../pr/version_collision.ts's ONE rule
+ * (`resolveCollisionPolicy`), then its one reader and evaluator. Not opted in
+ * -- including a default tip that could not decide with no copy showing the
+ * opt-in -- reads NOTHING more from GitHub and adds no limb, note or
+ * warning.
  */
 async function versionCollisionOf(
   source: PrStateSource,
@@ -2181,8 +2189,10 @@ async function versionCollisionOf(
   baseRead: BaseGatesAt | undefined,
   resolved: ResolvedIdentities,
   gatesFlag: boolean,
-): Promise<VersionCollisionOutcome> {
+): Promise<{ readonly optedIn: true; readonly result: VersionCollisionResult } | { readonly optedIn: false }> {
   const text = (key: string): string => (typeof state[key] === "string" ? state[key] : "");
+  // No default-tip read (identities came from --reviewers): the default tip
+  // cannot decide, and only a copy's positive evidence could opt in.
   const defaultTip = defaultRead ?? {
     where: `${ref.owner}/${ref.repo}@(unread default-branch tip):${BASE_GATES_PATH}`,
     read: { kind: "failed" as const, message: "it was not read" },
@@ -2195,12 +2205,18 @@ async function versionCollisionOf(
       ? readLocalGatesCopy(gatesFlag ? `--gates ${resolved.path}` : `the checkout's ${resolved.path}`, resolved.path)
       : null,
   );
-  return readVersionCollision(
+  const resolution = resolveCollisionPolicy({ where: defaultTip.where, read: defaultTip.read }, copies);
+  // Not opted in: exactly the report this verb gave before the limb existed
+  // -- no limb, note or warning. A copy that declares a block the default tip
+  // does not, and `undecided`, are `pr version-collision`'s warnings only.
+  if (resolution.kind === "undeclared") return { optedIn: false };
+  const outcome = await readVersionCollision(
     source,
     ref,
     { number: ref.number, headSha: text("head_sha"), baseRef: text("base_ref"), defaultBranch: text("default_branch") },
-    resolveCollisionPolicy({ where: defaultTip.where, read: defaultTip.read }, copies),
+    resolution,
   );
+  return { optedIn: true, result: outcome.result };
 }
 
 /** Both trusted reads' complete-declaration intersection, with combined provenance. */

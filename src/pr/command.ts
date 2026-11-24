@@ -389,7 +389,11 @@ version-collision:
   (zheref/nen#663), by the SAME evaluator 'pr ready' folds into its CON-32(a)
   row. Opt-in: nen/gates.json's version_collision block AT THE DEFAULT-BRANCH
   TIP decides (the base's and the checkout's copies only warn when they
-  differ). A pull request that changes a shipped path must propose a version
+  differ). If that file cannot be read, parsed or validated, the repository
+  is opted in only when its raw JSON or another copy shows version_collision
+  (then unknown, exit 1); otherwise not-applicable, exit 0, with a warning
+  that the policy could not be read and no copy shows the opt-in. A pull
+  request that changes a shipped path must propose a version
   no target tip holds and no other open same-repository pull request proposes
   (drafts included; a fork never blocks, and is named in a warning). Status
   not-applicable | clear | collision | unknown; unknown names every missing
