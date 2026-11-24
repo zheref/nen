@@ -7,10 +7,11 @@
 
 import { describe, expect, it } from "vitest";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { BANKAI_REPO } from "../schema/fixtures/paths.js";
-import { GATES_FILE, schemaPath } from "../schema/source.js";
+import { GATES_FILE, resolveSchemaFile, schemaPath } from "../schema/source.js";
 import { makeTempDir } from "../testing/tempdir.js";
+import { assertRepoRoot } from "../repo/root.js";
 import { prReady, readReady, type Io, type PrReadyDeps, type PrReadyInput, type ReadyReport } from "../verbs/pr_ready.js";
 import { prVersionCollision, VERSION_COLLISION_CONTRACT, type VersionCollisionReport } from "../verbs/pr_version_collision.js";
 import { parseGateIdentities, parseVersionCollision } from "../schema/gates.js";
@@ -941,8 +942,19 @@ describe("SC-1: one evaluator -- both surfaces agree on every fixture", () => {
   const unknownTopKey = (block: unknown): string => JSON.stringify({ ...(JSON.parse(gatesText(block)) as object), future_gate: { on: true } });
   /** The default tip's raw block is present, but the block does not validate here. */
   const invalidBlock = gatesText({ ...OPT_IN, shipped_paths: [] });
-  /** The two surfaces read different LOCAL copies by design (--gates there, the checkout here): one name for both. */
-  const sameLocal = (text: string): string => text.replaceAll(`--gates ${OPTED_GATES}`, "<local copy>").replaceAll(`the checkout's ${join(ROOT, "nen", "gates.json")}`, "<local copy>");
+  /**
+   * The two surfaces hold DIFFERENT local copies by design: `pr ready` reads
+   * `--gates <file>`, and the verb, which has no `--gates`, reads the checkout's
+   * nen/gates.json under `--repo`. Each label is built here by the very calls
+   * the product makes (pr ready resolves the flag; the verb asks
+   * `assertRepoRoot` and `resolveSchemaFile`), so it is the exact runtime string on every platform,
+   * backslashes included. The parity rows compare the evaluator's outcome with
+   * THAT label -- and only it -- replaced by one placeholder, on the decoded
+   * strings (never on JSON text, where a Windows path's `\` is doubled).
+   */
+  const READY_LOCAL = `--gates ${resolve(OPTED_GATES)}`;
+  const VERB_LOCAL = `the checkout's ${resolveSchemaFile(assertRepoRoot({ repoFlag: ROOT }), GATES_FILE).canonical.path}`;
+  const sameLocal = (text: string): string => text.replaceAll(READY_LOCAL, "<the caller's local copy>").replaceAll(VERB_LOCAL, "<the caller's local copy>");
   type Expected = "clear" | "collision" | "not-applicable" | "unknown" | "absent" | "absent-undecided";
   /** [name, world, subject (-1: #42 with an unreadable inventory), the LOCAL copy the caller holds, expected]. */
   const fixtures: readonly [string, () => CollisionWorld, number, "opted" | "plain", Expected][] = [
@@ -1000,7 +1012,8 @@ describe("SC-1: one evaluator -- both surfaces agree on every fixture", () => {
     } else {
       expect(fromReady?.status).toBe(expected);
       expect(cli.report.status).toBe(expected);
-      const outcome = (result: VersionCollisionResult): unknown => JSON.parse(sameLocal(JSON.stringify(outcomeOf(result)))) as unknown;
+      const outcome = (result: VersionCollisionResult): unknown =>
+        outcomeOf({ ...result, line: sameLocal(result.line), missing: result.missing.map(sameLocal) });
       expect(outcome(cli.report)).toEqual(outcome(fromReady ?? cli.report));
       expect(checksRow(readiness.report)?.versionCollision).toEqual(outcomeOf(fromReady ?? cli.report));
     }
@@ -1015,6 +1028,11 @@ describe("SC-1: one evaluator -- both surfaces agree on every fixture", () => {
       expect(missing).toMatch(
         _name.startsWith("2a") ? /that file's own JSON carries a non-null version_collision key/ : _name.startsWith("2b base") ? /the pull request's base \(.*\) declares version_collision/ : /the checkout's .* declares version_collision/,
       );
+      if (_name.startsWith("2b local")) {
+        // The label difference is intended: each surface names its OWN copy.
+        expect(missing).toContain(`${VERB_LOCAL} declares version_collision`);
+        expect(readiness.report.meta.versionCollision?.missing.join("\n")).toContain(`${READY_LOCAL} declares version_collision`);
+      }
     }
     expect(cli.code === 0).toBe(readiness.report.verdict === "ready");
   });
@@ -1026,7 +1044,7 @@ describe("SC-1: one evaluator -- both surfaces agree on every fixture", () => {
     const cli = await verb(defaultTipGates(UPSTREAM)(), 42, {}, root);
     expect(cli.code).toBe(1);
     expect(cli.report.status).toBe("unknown");
-    expect(cli.report.missing.join("\n")).toContain(`could not be read (HTTP 502: upstream), and the checkout's ${join(root, "nen", "gates.json")} declares version_collision`);
+    expect(cli.report.missing.join("\n")).toContain(`could not be read (HTTP 502: upstream), and the checkout's ${resolveSchemaFile(assertRepoRoot({ repoFlag: root }), GATES_FILE).canonical.path} declares version_collision`);
   });
 
   it("raw evidence is a parsed JSON object whose root carries a non-null version_collision, nothing else", () => {
@@ -1063,7 +1081,7 @@ describe("SC-1: one evaluator -- both surfaces agree on every fixture", () => {
     expect(checksRow(report)?.status).toBe("unevaluated");
     expect(report.meta.versionCollision?.status).toBe("unknown");
     expect(report.gateLine).toContain("could not be read (HTTP 403: Resource not accessible by integration)");
-    expect(report.gateLine).toContain(`--gates ${OPTED_GATES} declares version_collision`);
+    expect(report.gateLine).toContain(`${READY_LOCAL} declares version_collision`);
   });
 
   it("`pr ready --gates <a file without the block>` with the default tip unreadable and no copy declaring keeps the verdict it had: no limb", async () => {

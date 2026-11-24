@@ -13,7 +13,7 @@
 // repository is `acme/widget`.
 
 import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { prReady, type Io, type PrReadyDeps, type PrReadyInput } from "../pr_ready.js";
 import type { PrRef, PrStateSource } from "../../github/pr_state.js";
 import type { CheckRollupPage, PullRequestSnapshot, ReviewRequestsPage, ReviewThreadPage } from "../../github/graphql.js";
@@ -157,6 +157,17 @@ interface Places {
 
 let places: Places | null = null;
 
+/** `path` as the product may print it: resolved (as `--gates` is), JSON-escaped, raw, slash-separated; longest first. */
+function renderings(path: string): string[] {
+  const forms = new Set<string>();
+  for (const base of [resolve(path), path]) {
+    forms.add(JSON.stringify(base).slice(1, -1));
+    forms.add(base);
+    forms.add(base.replaceAll("\\", "/"));
+  }
+  return [...forms].sort((a, b): number => b.length - a.length);
+}
+
 function placesOnce(): Places {
   if (places === null) {
     const dir = makeTempDir("nen-663-golden-gates-");
@@ -178,9 +189,15 @@ function placesOnce(): Places {
  */
 export function normalise(text: string): string {
   const { gates, root } = placesOnce();
-  return text
-    .replaceAll(gates, "<GATES>")
-    .replaceAll(root, "<ROOT>")
+  let out = text;
+  // Each temp path in every rendering the product can print: JSON-escaped
+  // first (a Windows `\` is doubled inside --json), then as given, then with
+  // forward slashes -- the exact runtime strings, never a separator pattern.
+  // On POSIX all three renderings are one string.
+  for (const [path, mark] of [[gates, "<GATES>"], [root, "<ROOT>"]] as const) {
+    for (const form of renderings(path)) out = out.replaceAll(form, mark);
+  }
+  return out
     .replaceAll(`"version": "${VERSION}"`, `"version": "<VERSION>"`)
     .replaceAll(`This is nen ${VERSION}`, "This is nen <VERSION>")
     .replace(/, version_collision \(nen >= [0-9.]+\)/g, "");

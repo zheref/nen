@@ -21,7 +21,10 @@ describe("pr ready without the version-collision opt-in is byte-identical to ori
 
   it.each(Object.keys(SCENARIOS))("%s", async (name) => {
     for (const [file, text] of Object.entries(goldenFiles(name, await runScenario(name)))) {
-      expect(text, file).toBe(readFileSync(join(GOLDENS, file), "utf8"));
+      // The GOLDEN's line endings are read as LF: .gitattributes pins these
+      // files to LF, and this guards a checkout that ignored it (Git for
+      // Windows' autocrlf). The product's own output is compared untouched.
+      expect(text, file).toBe(readFileSync(join(GOLDENS, file), "utf8").replaceAll("\r\n", "\n"));
     }
   });
 });

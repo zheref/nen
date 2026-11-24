@@ -20,3 +20,8 @@
 # merely asking it nicely.
 * text=auto
 *.sh text eol=lf
+
+# The non-opted-in readiness goldens (zheref/nen#663) are compared BYTE for
+# byte with the verb's LF output, so they check out with LF on every platform;
+# src/verbs/pr_ready.golden.test.ts also reads them as LF, as a second guard.
+src/verbs/fixtures/non-opted-in-main/** text eol=lf
