@@ -14,6 +14,8 @@ import type { PrStateSource } from "../github/pr_state.js";
 import type { PullRequestSnapshot } from "../github/graphql.js";
 import { convergeComposite, type CompositeVerdict } from "./convergecomposite.js";
 import { ConvergeReadError } from "./converge.js";
+import { runFamily } from "../index.js";
+import { prCommand } from "./command.js";
 
 const HEAD = "c0ffee".padEnd(40, "0");
 const OTHER = "beef".padEnd(40, "1");
@@ -158,8 +160,6 @@ describe("pr converge --composite (zheref/nen#483 AC-1)", () => {
 
 describe("pr converge --composite: usage", () => {
   it("needs --require-head and --body-requirements; --body-requirements alone is refused", async () => {
-    const { runFamily } = await import("../index.js");
-    const { prCommand } = await import("./command.js");
     const run = async (extra: readonly string[]): Promise<{ code: number; err: string }> => {
       const err: string[] = [];
       const code = await runFamily(prCommand, ["pr", "converge", "--target", "zheref/example", "--pr", "5", ...extra], null, false, { out: (): void => undefined, err: (line): void => void err.push(line) }, new CriteriaTestSeams([]));
