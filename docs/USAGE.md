@@ -21062,6 +21062,20 @@ unchanged trace idempotently, and refuses malformed, conflicting or redirected
 state. An unresolved write returns exit 1 naming the trace; the original cycle
 remains usable. This never initializes a lost cycle.
 
+`nen review ledger record --branch <branch> --persona <id> --outcome delta
+--from-head <sha> --to-head <sha> [--pr <n>] --repo <checkout> [--json]`
+appends a bounded delta pass for a spent reviewer that already has a `ran`
+row ([#662](https://github.com/zheref/nen/issues/662)). It leaves `used` and
+`max` unchanged. Both heads must be distinct full 40-digit lowercase commit
+ids; among the deltas since the reviewer's last `ran` row, `--from-head` is
+the last delta's `toHead` when one exists and `--to-head` is no head those
+deltas already reviewed (a later `ran` resets that chain); a duplicate, a missing head or a head
+given with another outcome is refused at exit 2 before any write. `decide`
+and `record` report per-reviewer `deltas`, `skips` and `lastDeltaHead`, so a
+delta is neither a round nor a skip. A nen older than this change refuses a
+ledger holding a `delta` row; [`REVIEW-LEDGER.md`](REVIEW-LEDGER.md) has the
+full rules.
+
 ### Oversized durable ledger records
 
 `pr ledger post` keeps records that fit GitHub's comment limit unchanged. Larger
