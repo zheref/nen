@@ -49,7 +49,7 @@ import { SchemaError } from "../schema/errors.js";
 import { plainLine } from "../cli/plain.js";
 import { readHandbookManifest, portPair, checkedCanonFile } from "./manifest.js";
 import { resolveCanon, SCENARIO_TOKEN, SCENARIO_TOKEN_RULE } from "./resolve.js";
-import { CHECKOUT_CONTRACT, checkoutLines, resolveCanonCheckout, resolveCanonTag, type CheckoutFailureCode, type CheckoutResolution, type TagResolution } from "./checkout.js";
+import { CHECKOUT_CONTRACT, checkoutLines, resolveCanonCheckout, resolveCanonTag, verificationGitEnv, type CheckoutFailureCode, type CheckoutResolution, type TagResolution } from "./checkout.js";
 import { JsonSpanError, rewritePin, TargetChangedError, TEMP_PATTERN, writeFileAtomic, type PinEdit } from "./pin-write.js";
 import { checkedTarget, errnoOf, readChecked, WrittenButUnverifiedError } from "../edit/atomic.js";
 import {
@@ -1243,7 +1243,7 @@ function readMirrorInputs(context: CommandContext): MirrorInputs {
   const recordedKey = recordedRegistry === null ? undefined : pinKey(recordedRegistry.toolPins, source);
   const recordedCommit = recordedKey === undefined ? undefined : recordedRegistry?.toolPinCommits?.[recordedKey];
   if (rulesDirFlag !== null && recordedCommit !== undefined && recordedRegistry?.toolPins[recordedKey as string] === ref) {
-    const tag = context.seams.run("git", ["-C", rulesDir, "rev-parse", "--verify", `refs/tags/${ref}^{commit}`]);
+    const tag = context.seams.run("git", ["-C", rulesDir, "rev-parse", "--verify", `refs/tags/${ref}^{commit}`], { env: verificationGitEnv(context.seams.env) });
     const found = tag.stdout.trim();
     if (tag.code !== 0 || found.toLowerCase() !== recordedCommit.toLowerCase()) throw new VerbUsageError(`moved tag '${ref}' or unreadable tag: recorded ${recordedCommit}, found ${found || "(unreadable)"}`);
   }
@@ -1256,8 +1256,13 @@ function readMirrorInputs(context: CommandContext): MirrorInputs {
     if (canonRoot !== null) {
       const portsDir = resolve(canonRoot, context.args.values["ports-dir"] ?? "handbooks/ports");
       if (!containedOn(canonRoot, portsDir, context.seams.platform)) throw new VerbUsageError("--ports-dir leaves the canon root");
-      if (existsSync(portsDir)) {
-        const incoming = readdirSync(portsDir).filter((file) => file.endsWith(`--${scenario}.md`) && !file.startsWith(`${scenario}--`));
+      // lstat distinguishes a truly absent directory from a broken symlink.
+      // Reading a present but broken directory must refuse before writing mirrors.
+      let portsPresent = true;
+      try { lstatSync(portsDir); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") portsPresent = false; else throw error; }
+      if (portsPresent) {
+        const incoming = readdirSync(portsDir).filter((file) => file.endsWith(`--${scenario}.md`) && !file.startsWith(`${scenario}--`) && !excluded.has(file));
         for (const file of incoming) checkedCanonFile(canonRoot, join(context.args.values["ports-dir"] ?? "handbooks/ports", file));
         if (incoming.length > 0) {
           const ignored = new Set([...readdirSync(portsDir).filter((file) => !incoming.includes(file)), ...excluded]);
