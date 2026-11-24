@@ -29,6 +29,14 @@ export function readIssueCriteria(seams: Seams, target: Target, number: number, 
       if (!["OWNER", "MEMBER", "COLLABORATOR"].includes(node.authorAssociation ?? "") || typeof node.author?.login !== "string" || (node.editor !== null && node.editor?.login !== node.author.login)) {
         throw new Error(`untrusted marked criteria comment: ${comment.html_url}; require repository owner/member/collaborator and intact author/editor provenance`);
       }
+      // Association describes a relationship, not effective repository access.
+      // GitHub maps Maintain to write; Read and Triage must never control criteria.
+      const access = seams.run(GH, ["api", `repos/${target.slug}/collaborators/${encodeURIComponent(node.author.login)}/permission`]);
+      if (access.code !== 0) throw new Error("could not read marked criteria comment author's repository permission");
+      const permission = (JSON.parse(access.stdout) as { permission?: unknown } | null)?.permission;
+      if (permission !== "write" && permission !== "admin") {
+        throw new Error(`untrusted marked criteria comment: ${comment.html_url}; require effective repository write or admin permission`);
+      }
       marked.push({ body: comment.body, url: comment.html_url });
     }
     if (comments.length < 100) break;

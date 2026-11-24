@@ -371,6 +371,7 @@ describe("criteria comment integration (#610)", () => {
       { match: "gh api repos/o/n/issues/7", result: { stdout: JSON.stringify({ number: 7, title: "t", state: "open", labels: [], body: "- AC-1: ignored body" }) } },
       { match: "gh api repos/o/n/issues/7/comments?per_page=100&page=1", result: { stdout: JSON.stringify([{ body, html_url: url, node_id: "C9" }]) } },
       { match: "gh api graphql -f query=query($id:ID!){node(id:$id){... on IssueComment{body url authorAssociation author{login} editor{login}}}} -f id=C9", result: { stdout: JSON.stringify({ data: { node: { body, url, authorAssociation: "OWNER", author: { login: "owner" }, editor: null } } }) } },
+      { match: "gh api repos/o/n/collaborators/owner/permission", result: { stdout: JSON.stringify({ permission: "admin" }) } },
     ];
     const args = ["issue", "criteria", "--ref", "7", "--target", "o/n"];
     const text = await run(issueCommand, args, script);

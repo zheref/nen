@@ -7,9 +7,11 @@ const marked = { node_id: "C7", body: `${CRITERIA_MARKER}\n## Acceptance criteri
 
 const proof = (comment = marked, association = "OWNER", overrides: Record<string, unknown> = {}): ScriptedCall => ({ match: `gh api graphql -f query=query($id:ID!){node(id:$id){... on IssueComment{body url authorAssociation author{login} editor{login}}}} -f id=${comment.node_id}`, result: { stdout: JSON.stringify({ data: { node: { body: comment.body, url: comment.html_url, authorAssociation: association, author: { login: "maintainer" }, editor: null, ...overrides } } }) } });
 
+const access = (permission: unknown, role_name = "write"): ScriptedCall => ({ match: "gh api repos/o/n/collaborators/maintainer/permission", result: { stdout: JSON.stringify({ permission, role_name }) } });
+
 describe("marked criteria comments (#610)", () => {
   it("reads all pages and names the selected comment and ignored body", () => {
-    const seams = new ScriptedSeams([page(1, Array.from({ length: 100 }, () => ({ body: "ordinary discussion" }))), page(2, [marked]), proof()]);
+    const seams = new ScriptedSeams([page(1, Array.from({ length: 100 }, () => ({ body: "ordinary discussion" }))), page(2, [marked]), proof(), access("write")]);
     const report = readIssueCriteria(seams, target, 1, "- AC-1: body", null);
     expect(report.criteria.map((row) => row.id)).toEqual(["AC-2"]);
     expect(report.criteriaSource).toEqual({ kind: "comment", url: marked.html_url, ignored: ["https://github.com/o/n/issues/1"] });
@@ -22,6 +24,22 @@ describe("marked criteria comments (#610)", () => {
       expect(() => readIssueCriteria(new ScriptedSeams([page(1, [marked]), proof(marked, "OWNER", change)]), target, 1, "", null)).toThrow(/provenance|changed/);
     }
   });
+  it("requires effective write access even for members and collaborators", () => {
+    for (const association of ["OWNER", "MEMBER", "COLLABORATOR"]) {
+      for (const permission of ["read", "triage", "none", null, undefined]) {
+        expect(() => readIssueCriteria(new ScriptedSeams([page(1, [marked]), proof(marked, association), access(permission)]), target, 1, "", null)).toThrow(/require effective repository/);
+      }
+      for (const [permission, role] of [["write", "write"], ["write", "maintain"], ["admin", "admin"]]) {
+        const report = readIssueCriteria(new ScriptedSeams([page(1, [marked]), proof(marked, association), access(permission, role)]), target, 1, "", null);
+        expect(report.criteriaSource.kind).toBe("comment");
+      }
+    }
+  });
+  it("fails closed when permission cannot be read", () => {
+    for (const result of [{ code: 1, stderr: "denied" }, { stdout: "not json" }, { stdout: "null" }]) {
+      expect(() => readIssueCriteria(new ScriptedSeams([page(1, [marked]), proof(), { match: "gh api repos/o/n/collaborators/maintainer/permission", result }]), target, 1, "", null)).toThrow();
+    }
+  });
   it("preserves empty and body criteria in the absence of a marker", () => {
     for (const body of ["", "- AC-1: body"]) {
       const report = readIssueCriteria(new ScriptedSeams([page(1, [{ body: `discussion ${CRITERIA_MARKER}` }])]), target, 1, body, null);
@@ -30,7 +48,7 @@ describe("marked criteria comments (#610)", () => {
     }
   });
   it("refuses ambiguity and failed or malformed pages", () => {
-    expect(() => readIssueCriteria(new ScriptedSeams([page(1, [marked, { ...marked, html_url: "second" }]), proof(), proof({ ...marked, html_url: "second" })]), target, 1, "", null)).toThrow(/multiple active.*issuecomment-7.*second/);
+    expect(() => readIssueCriteria(new ScriptedSeams([page(1, [marked, { ...marked, html_url: "second" }]), proof(), access("write"), proof({ ...marked, html_url: "second" }), access("write")]), target, 1, "", null)).toThrow(/multiple active.*issuecomment-7.*second/);
     expect(() => readIssueCriteria(new ScriptedSeams([{ match: "gh api repos/o/n/issues/1/comments?per_page=100&page=1", result: { code: 1, stderr: "offline" } }]), target, 1, "", null)).toThrow(/offline/);
     expect(() => readIssueCriteria(new ScriptedSeams([{ match: "gh api repos/o/n/issues/1/comments?per_page=100&page=1", result: { stdout: "{}" } }]), target, 1, "", null)).toThrow(/expected an array/);
   });

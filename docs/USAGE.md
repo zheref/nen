@@ -21522,7 +21522,9 @@ criterion-shaped invalid IDs such as `AC-x`, `HA#1/AC-`, or lowercase `ac-1`
 are malformed and block. Criterion IDs are case sensitive.
 Catalogue-admitted priority annotations are retained when reading acceptance
 rows; catalogue-resolved withdrawn rows need no coverage row.
-A marked comment must be authored by a repository OWNER, MEMBER or COLLABORATOR.
+A marked comment must be authored by a repository OWNER, MEMBER or COLLABORATOR
+with effective repository write or admin permission. GitHub maps Maintain to write;
+Read and Triage access is refused. Permission lookup failures also refuse.
 Nen checks its GraphQL author/editor provenance and refuses a comment edited by
 someone other than its author, or one that changes between the two reads.
 An untrusted marker is an error, never an override or a silently ignored source.
