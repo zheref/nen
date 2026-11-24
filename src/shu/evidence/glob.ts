@@ -92,8 +92,7 @@ export function globToRegExp(pattern: string): RegExp {
     pieces.push(segmentSource(segment));
   }
   // Git filenames may contain line terminators. Dot-all lets globstars cross
-  // them, and the final lookahead requires the true end (JavaScript's `$`
-  // alone also accepts the position before a trailing line terminator).
+  // them. The final lookahead states the whole-path boundary explicitly.
   return new RegExp(`^${pieces.join("")}(?![\\s\\S])`, "s");
 }
 
