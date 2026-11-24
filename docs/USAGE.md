@@ -12679,7 +12679,7 @@ A declaration records its authority, for example:
 
 The caller owns the declaration's accuracy, scenario and units; the source string is reported verbatim, not fetched or authenticated. No declaration, or an absent exact metric, reports `no-ceiling`, never an absolute pass. An empty ceilings array is explicit absence. Equality is within the inclusive ceiling.
 
-**Output and exits:** human output includes the relative row and an absolute row naming the ceiling, unit and source. JSON keeps `metric`, `baseline`, `measured`, `regressionPct`, `severity`, and adds `percentageReason` (null unless refused) plus `absolute: {status, ceiling, unit, source}`. Status is `within`, `breached`, or `no-ceiling`; absent fields are null. Exit 1 for a relative high/critical verdict, an absolute breach, or an undefined percentage at zero baseline; exit 0 otherwise. Malformed input/declarations exit 2. A relative improvement cannot hide an absolute breach.
+**Output and exits:** human output includes the relative row and an absolute row naming the ceiling, unit and source. `--json`: top-level keys retain `metric`, `baseline`, `measured`, `regressionPct`, `severity`, and adds `percentageReason` (null unless refused) plus `absolute: {status, ceiling, unit, source}`. Status is `within`, `breached`, or `no-ceiling`; absent fields are null. Exit 1 for a relative high/critical verdict, an absolute breach, or an undefined percentage at zero baseline; exit 0 otherwise. Malformed input/declarations exit 2. A relative improvement cannot hide an absolute breach.
 
 ```bash
 nen quality perf-compare --metric cold_launch_ms --baseline 1200 --measured 1400
