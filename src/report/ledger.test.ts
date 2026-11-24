@@ -4,7 +4,8 @@ import { parseTarget } from "../github/target.js";
 import { viewArgv } from "../pr/fetch.js";
 import { listArgv } from "../pr/threads.js";
 import { commentsArgv, PR_LEDGER_CONTRACT, renderComment, type LedgerSlice } from "../pr/ledger.js";
-import { assembleObjects } from "./objects.js";
+import { reportCommand } from "./command.js";
+import { assembleObjects, parseObjects } from "./objects.js";
 import { parseDesk } from "./register.js";
 
 const target = parseTarget("owner/repo");
@@ -43,6 +44,14 @@ describe("NN#674: ledger evidence on report PR rows", () => {
   });
   it("AC-4: unreadable comments are not read, never none", async () => {
     expect((await row([], true)).ledger).toMatchObject({ state: "not-read", verdict: "could-not-read", reason: expect.stringContaining("comments forbidden") });
+  });
+  it("does not publish the absolute path of an offline source", async () => {
+    const offline = parseObjects([await row([comment])], "/private/confidential/work/objects.json");
+    expect(JSON.stringify(offline)).not.toContain("/private/confidential");
+    expect(offline[0]).toMatchObject({ ledger: { state: "not-read" } });
+  });
+  it("documents ledger evidence and all four states in CLI help", () => {
+    for (const word of ["ledgerLine", "ledger", "valid", "none", "refused", "not-read"]) expect(reportCommand.usage).toContain(word);
   });
   it.each(["ledger", "ledgerLine"])("AC-5: refuses a desk-written %s", (field) => {
     expect(() => parseDesk({ variant: "register", title: "test", scope: "owner/repo", gate: "G4", gates: [], rows: { "pr#7": { [field]: "valid" } } }, "desk.json")).toThrow(/desk does not write/);

@@ -225,7 +225,7 @@ export interface ObjectsOptions {
 
 function refuse(display: string, index: number, what: string): never {
   throw new VerbUsageError(
-    `'${display}': row ${index} ${what}. Every row is one of the two shapes 'nen report data' publishes under 'objects': a pull request ({ kind: "pr", number, title, url, state, labels[], head, mergeStateStatus, checks: { total, green, red, pending }, threads: { total, unresolved }, reviewRequests[], linked[], readiness: null | { verdict, reason, source: "check" | "computed" | "state" } -- "state" only on a MERGED or CLOSED row }) or an issue ({ kind: "issue", number, title, url, state, labels[], linked[], readiness: null }). A row nobody checked is a fact nobody checked, so the whole file is refused rather than one register row published with a hole in it.`,
+    `'${display}': row ${index} ${what}. Every row is one of the two shapes 'nen report data' publishes under 'objects': a pull request ({ kind: "pr", number, title, url, state, labels[], head, mergeStateStatus, checks: { total, green, red, pending }, threads: { total, unresolved }, reviewRequests[], linked[], readiness: null | { verdict, reason, source: "check" | "computed" | "state" } -- "state" only on a MERGED or CLOSED row }) or an issue ({ kind: "issue", number, title, url, state, labels[], linked[], readiness: null }). PR ledger evidence is set to not-read on this offline path; historical ledger input is not current proof. A row nobody checked is a fact nobody checked, so the whole file is refused rather than one register row published with a hole in it.`,
   );
 }
 
@@ -482,7 +482,7 @@ export function parseObjects(document: unknown, display: string): readonly Repor
       reviewRequests,
       linked: linked.numbers,
       readiness: retained.readiness,
-      ledger: unreadLedger(`ledger comments were not read from GitHub (${display})`),
+      ledger: unreadLedger("ledger comments were not read from GitHub (offline objects file)"),
       notes: [...readNotes(row, display, index), ...linked.notes, ...retained.notes],
     };
   });

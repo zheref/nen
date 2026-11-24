@@ -169,7 +169,7 @@ data      One document describing this branch against --base: the commits, the
                    architectureCaption? }. Every FACT is nen's: each row gains
                    notation (nen ref's <CODE>-<IS|PR>-#<N> from nen/repos.json,
                    else <owner>/<name>#<n> named in footerNote), verdict,
-                   labelsLine, checksLine, threadsLine, linkedLine and head;
+                   labelsLine, checksLine, threadsLine, ledgerLine, linkedLine and head;
                    the five tallies, footerCount, spendEfforts (from phases[]
                    and usage[]) and empty graph keys are added after
                    'objects'. A VERDICT IS QUOTED, NEVER WRITTEN: every row's
@@ -204,6 +204,15 @@ data      One document describing this branch against --base: the commits, the
   colour or '&#39;' is none, and a file's non-positive entry is left out with
   a note. Known limits: 'docs/USAGE.md#123' reads as #123, and
   'other/repo#591' as this repository's #591.
+
+  Each PR row has ledger { state, url, verdict, reason, line }, from the
+  same authority as 'nen pr ledger read', with the head branch as effort.
+  state is valid (ok), none (no matching comment), refused (foreign, edited,
+  duplicate, malformed or stale), or not-read (head/login/comments unread).
+  verdict and line preserve the read-back exactly; url is null when absent.
+  --objects-from always reports not-read because no live comment is read.
+  Register ledgerLine quotes line; desks cannot write ledger or ledgerLine.
+  No slice is posted or restored.
 
   'phases[]' rows end with countedMs and idleWaitMs, derived at read time:
   a 'readiness' phase untimed for over 60 minutes in all counts only
