@@ -119,4 +119,11 @@ describe("QA-13 absolute ceilings", () => {
     expect(result.report()).toMatchObject({ regressionPct: null, severity: "critical",
       percentageReason: expect.stringContaining("numeric range"), absolute: { status: "breached" } });
   });
+
+  it("keeps relative severity visible in human overflow output even within the ceiling", async () => {
+    const result = await compare("P1", "1e-308", "1000", declaration, false);
+    expect(result.code).toBe(1);
+    expect(result.out[0]).toContain("severity: critical");
+    expect(result.out[1]).toContain("absolute: within");
+  });
 });

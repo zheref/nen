@@ -123,7 +123,7 @@ function perfCompare(context: CommandContext): number {
     return exit;
   }
   context.io.out(result.regressionPct === null
-    ? `${plainLine(result.metric)}: percentage refused -- ${result.percentageReason}`
+    ? `${plainLine(result.metric)}: percentage refused -- ${result.percentageReason}${result.severity === null ? "" : `; severity: ${result.severity}`}`
     : `${plainLine(result.metric)}: ${result.regressionPct.toFixed(1)}% vs baseline -- ${result.severity}`);
   const absolute = result.absolute;
   context.io.out(absolute.status === "no-ceiling"
