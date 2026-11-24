@@ -240,7 +240,7 @@ describe("nen spec due", () => {
   });
 
   it("AC-4: a v* tag outside vMAJOR.MINOR.PATCH (calendar version, v1.2, floating v1, build metadata) leaves the member not read, never current", async () => {
-    for (const odd of ["v2026.01.15", "v1.2", "v1", "v1.2.3+build.5", "vnext"]) {
+    for (const odd of ["v2026.01.15", "v1.2", "v1", "v1.2.3+build.5", "vnext", "V1.2.3"]) {
       const repo = specRepo([{ name: "port", members: [{ code: "PW" }] }], capture("PW", RECORDED));
       const seams = new ScriptedSeams([tagsCall("acme/port-web", [[["v1.0.0", RECORDED], [odd, sha("9")]]])]);
       const run = await spec(["due"], repo, seams, true);

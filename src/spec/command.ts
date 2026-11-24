@@ -159,7 +159,7 @@ trace       <root>/traceability.md for one family: one row per FR and SC, one
             edit; --dry-run writes nothing.
 due         Per family of nen/repos.json families[] (or --family's one), each
             member's newest v<major>.<minor>.<patch> tag (gh api tags; a
-            prerelease or other v* tag is no release) against the commit
+            prerelease is no release; any other v* tag leaves the member not read) against the commit
             capture/<CODE>/inventory.json records, decided by gh api compare:
             due (the tag is ahead or diverged) · current · no-capture (no
             member has a capture) · not-decided (a member's tags, compare or

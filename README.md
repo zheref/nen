@@ -505,7 +505,7 @@ they compose into. The families group roughly as:
   acceptance criteria against the tests that name them, with a red-first
   checkpoint over a before and an after run)
 - **Repository scaffolding & canon** — `scaffold`, `canon`, `quality`, `commit`,
-  `spec` (`number`, `check`, `cite-check`, `index`: a Spec Kit spec repository, read),
+  `spec` (`number`, `check`, `cite-check`, `index`, `due`: a Spec Kit spec repository, read),
   `decisions` (`summary`: the decision matrix counted, so prose never carries
   the numbers); `canon lint` and `canon clause check` hold a canon's prose to a
   caller-owned rules contract and its clause ids unique, and `ref resolve`

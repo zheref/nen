@@ -13443,7 +13443,10 @@ case). That committed capture is the record this reads, not the local
 latest run. A release tag is `v` plus three whole numbers (`v1.10.0` sorts
 above `v1.9.0`); a prerelease (`v1.2.0-rc.1`) is no release; a member that
 carries any other `v*` tag (a calendar version, `v1.2`, a floating `v1`)
-cannot have its newest release ordered and is **not read**. **Newer is GitHub's answer, never a
+cannot have its newest release ordered and is **not read** until that tag is
+gone (a floating `v1` blocks a decision by design: nothing unread is ever
+called current). Only the newest release is compared, so a backport released
+on a maintenance branch below it is not seen. **Newer is GitHub's answer, never a
 date**: `gh api repos/{slug}/compare/{recorded}...{tag}` says `ahead` or
 `diverged` (due: the tag holds commits the capture never read, so a family
 whose releases are cut on a branch that never merges back stays due until it

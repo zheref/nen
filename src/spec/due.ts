@@ -21,9 +21,9 @@
 // a family to its latest run.
 //
 // NEWER IS GITHUB'S ANSWER, NEVER A DATE. The newest tag is the highest
-// `v<major>.<minor>.<patch>` by the comparator below (a prerelease or any other
-// `v*` spelling is no release, and a `v*` tag outside that grammar -- a calendar
-// version, `v1.2` -- leaves the member not read, since it cannot be ordered);
+// `v<major>.<minor>.<patch>` by the comparator below (a prerelease is no release;
+// a `v*` tag outside that grammar -- a calendar version, `v1.2`, a floating `v1`,
+// `V1.2.3` -- leaves the member not read, since it cannot be ordered);
 // whether it is newer than the recorded commit is
 // `repos/{slug}/compare/{recorded}...{tag}`'s status, so a tag cut on an older
 // commit after the capture is not mistaken for a release since it.
@@ -94,7 +94,7 @@ const PRERELEASE_TAG = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-[0-9A-Za-z.-]
  * member carrying one cannot be said to be current (zheref/nen#673 AC-4); other names are not release tags.
  */
 export function unorderedTags(tags: readonly Tag[]): string[] {
-  return tags.map((tag): string => tag.name).filter((name): boolean => name.startsWith("v") && !RELEASE_TAG.test(name) && !PRERELEASE_TAG.test(name));
+  return tags.map((tag): string => tag.name).filter((name): boolean => /^v/i.test(name) && !RELEASE_TAG.test(name) && !PRERELEASE_TAG.test(name));
 }
 
 /** The version a release tag names, or null for a prerelease, a non-semver `v*` or any other tag (the last two are `unorderedTags`' business). */
