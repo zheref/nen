@@ -45,7 +45,8 @@ ledger:
   pass: both heads full 40-hex commit ids and different, never a duplicate.
   Since the reviewer's last ran pass, --from-head is its last delta toHead
   when one exists and --to-head is no head those deltas already reviewed; a
-  later ran resets that chain. A delta spends nothing: used and max stay. decide's reviewers[] and record's report carry deltas, skips and
+  later ran resets that chain. A delta spends nothing: used and max stay.
+  decide's reviewers[] and record's report carry deltas, skips and
   lastDeltaHead, so a round (used), a skip and a delta never read alike.
   A nen without delta refuses a ledger holding a delta row as inconsistent.
   show reads the ledger; recover-first --confirmed-first-cycle opens a lost

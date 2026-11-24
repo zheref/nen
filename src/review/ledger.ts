@@ -37,7 +37,6 @@ function wellFormedDelta(entry: Record<string, unknown>): boolean {
   const from = entry["fromHead"], to = entry["toHead"];
   return typeof from === "string" && typeof to === "string" && DELTA_HEAD.test(from) && DELTA_HEAD.test(to) && from !== to;
 }
-/** Per-reviewer counts a caller reads instead of parsing rows: a delta is neither a round nor a skip. */
 /**
  * The deltas since the reviewer's last `ran` row: a later ordinary round
  * re-reads the whole change, so it resets the chain a delta must extend.
@@ -47,6 +46,7 @@ function chainSinceRound(row: Reviewer): Extract<Invocation, { outcome: "delta" 
   row.invocations.forEach((entry, index): void => { if (entry.outcome === "ran") round = index; });
   return row.invocations.slice(round + 1).filter((entry): entry is Extract<Invocation, { outcome: "delta" }> => entry.outcome === "delta");
 }
+/** Per-reviewer counts a caller reads instead of parsing rows: a delta is neither a round nor a skip. */
 export function passCounts(row: Reviewer): { deltas: number; skips: number; lastDeltaHead: string | null } {
   const deltas = row.invocations.filter((entry): boolean => entry.outcome === "delta");
   const last = chainSinceRound(row).at(-1);
