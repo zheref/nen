@@ -944,7 +944,7 @@ function agentFiles(options: GenerateOptions, relink: Relink): AgentOutput {
         if (end > rule.warnBytes) {
           const source = sources[index]!;
           throw new SurfaceMirrorError(
-            `${rule.file} is ${bytes} bytes, exceeding the ${rule.warnBytes}-byte read limit; section '${source.heading}' (${source.agent.relative}) occupies byte offsets [${start}, ${end}), first unread byte offset ${Math.max(start, rule.warnBytes)} (zero-based UTF-8). Split the source instructions before regenerating; no truncated mirror is written (${row.agentSource}).`,
+            `${rule.file} is ${bytes} bytes, exceeding the ${rule.warnBytes}-byte read limit; section '${source.heading}' (${source.agent.relative}) occupies byte offsets [${start}, ${end}), first unread byte offset ${rule.warnBytes} (zero-based UTF-8). Split the source instructions before regenerating; no truncated mirror is written (${row.agentSource}).`,
           );
         }
         start = end + 1; // the newline between sections

@@ -825,6 +825,8 @@ describe("the report's not-supported paths", () => {
     const padding = 32_768 - Buffer.byteLength(small, "utf8");
     const exact = { ...options, includes: [{ ...shared, text: `${"x".repeat(padding)}é` }] };
     expect(Buffer.byteLength(at(generateSurfaceMirror(exact), "AGENTS.md"), "utf8")).toBe(32_768);
+    expect(() => generateSurfaceMirror({ ...exact, includes: [...exact.includes, { ...shared, stem: "_next", relative: "_next.md" }] }))
+      .toThrow(/section '_next' \(_next\.md\) occupies byte offsets \[32769, \d+\), first unread byte offset 32768/);
     expect(() => generateSurfaceMirror({ ...exact, includes: [{ ...shared, text: `${"x".repeat(padding + 1)}é` }] }))
       .toThrow(/section '_shared' \(_shared\.md\).*32769\).*first unread byte offset 32768/);
   });
