@@ -1,7 +1,7 @@
+import { makeTempDir } from "../testing/tempdir.js";
 import { classifyCommand } from "../classify/command.js";
 import { describe, expect, it } from "vitest";
-import { cpSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, symlinkSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { cpSync, mkdirSync, readFileSync, writeFileSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { runFamily } from "../index.js";
 import { ScriptedSeams } from "../seam/scripted.js";
@@ -10,7 +10,7 @@ import { loadClassifyTaxonomy, taxonomyLabels } from "../classify/taxonomy.js";
 import { canonCommand } from "./command.js";
 
 function fixture(): string {
-  const root = mkdtempSync(join(tmpdir(), "nen-canon-check-")); mkdirSync(join(root, "nen"));
+  const root = makeTempDir("nen-canon-check-"); mkdirSync(join(root, "nen"));
   cpSync(REAL_REGISTRY, join(root, "registry.json")); cpSync(REAL_TAXONOMY, join(root, "taxonomy.json"));
   writeFileSync(join(root, "nen", "labels.json"), JSON.stringify({ labels: taxonomyLabels(loadClassifyTaxonomy(root, "taxonomy.json")).map(({ name, color, description }) => ({ name, color, description })) }));
   return root;
@@ -44,7 +44,7 @@ describe("canon check -- the three read-only contract verdicts", () => {
     expect((await run(root)).code).toBe(1);
     expect((await run(root, ["--write"])).code).toBe(2);
     expect((await run(root, ["--dry-run"])).code).toBe(2);
-    const missing = mkdtempSync(join(tmpdir(), "nen-canon-missing-")); expect((await run(missing)).code).toBe(2);
+    const missing = makeTempDir("nen-canon-missing-"); expect((await run(missing)).code).toBe(2);
   });
   it.skipIf(process.platform === "win32")("refuses symlinked inputs before parsing them", async () => {
     const root = fixture(); const other = join(root, "alias.json"); symlinkSync(join(root, "registry.json"), other);

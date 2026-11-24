@@ -1,5 +1,5 @@
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { makeTempDir } from "../testing/tempdir.js";
+import { mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 // src/shu/command.test.ts -- the family's surface: which verbs exist, which
 // flags each one reads, and what the help promises.
@@ -265,7 +265,7 @@ describe("nen shu evidence", () => {
 
 describe("explicit multi-lane test envelope", () => {
   function fixture(): string {
-    const root = mkdtempSync(join(tmpdir(), "nen-multi-test-")); mkdirSync(join(root, "nen"));
+    const root = makeTempDir("nen-multi-test-"); mkdirSync(join(root, "nen"));
     writeFileSync(join(root, "nen", "contract.json"), JSON.stringify({ project: { defaultLane: "one", lanes: { one: { stack: "bun-cli", cwd: "." }, two: { stack: "bun-cli", cwd: "." } }, verbs: { one: { test: { exe: "fixture-test", argv: ["one"] } }, two: { test: { exe: "fixture-test", argv: ["two"] } } } } })); return root;
   }
   it("runs every named lane and reports an actual failure without skipping later lanes", async () => {

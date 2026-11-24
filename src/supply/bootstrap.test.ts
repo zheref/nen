@@ -1,3 +1,4 @@
+import { makeTempDir } from "../testing/tempdir.js";
 import { createHash } from "node:crypto";
 // src/supply/bootstrap.test.ts -- covers BOTH halves of the supply contract:
 // the TypeScript wrapper, and the shell script's pure predicates.
@@ -844,7 +845,7 @@ describe("nen bootstrap --help -- the exit contract is published, not discovered
 });
 
 it("checks an explicit expected script digest before bash; mismatches and malformed digests execute nothing", () => {
-  const root = mkdtempSync(join(tmpdir(), "nen-script-digest-")); const script = join(root, "script.sh"); const marker = join(root, "executed");
+  const root = makeTempDir("nen-script-digest-"); const script = join(root, "script.sh"); const marker = join(root, "executed");
   const text = `#!/bin/bash\nprintf ran > '${marker.replace(/\\/g, "/")}'\nprintf /fixture/binary\n`;
   writeFileSync(script, text); const digest = createHash("sha256").update(text).digest("hex");
   for (const expected of ["0".repeat(64), "bad"]) { const result = runBootstrap({ ref: "v1", script, scriptSha256: expected }); expect(result.code).not.toBe(0); expect(existsSync(marker)).toBe(false); }

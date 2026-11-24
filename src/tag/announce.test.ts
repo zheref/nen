@@ -1,7 +1,7 @@
+import { makeTempDir } from "../testing/tempdir.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { closeSync, constants, fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, mkdirSync, openSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily } from "../index.js";
 import { ScriptedSeams } from "../seam/scripted.js";
@@ -15,7 +15,7 @@ vi.mock("node:fs", async (original) => {
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 function fixture(value: unknown = { tags: { identity: { nameFrom: "identity" } } }, text: string = "v1+build\nabc123\n"): string {
-  const root = mkdtempSync(join(tmpdir(), "nen-announce-")); roots.push(root);
+  const root = makeTempDir("nen-announce-"); roots.push(root);
   mkdirSync(join(root, "nen")); writeFileSync(join(root, "nen/workflow.json"), JSON.stringify(value));
   writeFileSync(join(root, "identity"), text); return root;
 }

@@ -1,6 +1,6 @@
+import { makeTempDir } from "../testing/tempdir.js";
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { runFamily } from "../index.js";
 import { defaultSeams } from "../seam/exec.js";
@@ -9,7 +9,7 @@ import { reportCommand } from "./command.js";
 const markdown = '<!-- sample:block desk -->\n<section id="desk">\n<!-- sample:ask -->\n- **A** · choose ⭐\n{{value}}';
 const html = '<section id="desk">{{value}}</section>';
 async function check(md = markdown, page = html, value = "hello", missing = false, blocks = ["desk"], dataVariant?: unknown): Promise<{ code: number; out: string }> {
-  const root = mkdtempSync(join(tmpdir(), "nen-report-check-"));
+  const root = makeTempDir("nen-report-check-");
   try {
     mkdirSync(join(root, "nen")); mkdirSync(join(root, "templates/report-examples"), { recursive: true });
     writeFileSync(join(root, "nen/workflow.json"), JSON.stringify({ reports: { sections: { example: { template: "report", blocks } } } }));

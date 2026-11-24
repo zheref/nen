@@ -1,8 +1,8 @@
+import { makeTempDir } from "../testing/tempdir.js";
 // All publications/removals in these tests use fresh disposable file remotes.
 import { afterEach, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runFamily } from "../index.js";
 import { defaultSeams, type Seams } from "../seam/exec.js";
@@ -17,7 +17,7 @@ function git(root: string, ...args: string[]): string {
   return result.stdout.trim();
 }
 function world(options: { message?: string; foreignIdentity?: boolean; redCheck?: boolean } = {}): { root: string; repo: string; remote: string; proved: string; published: string } {
-  const root = mkdtempSync(join(tmpdir(), "nen-gated-")); roots.push(root);
+  const root = makeTempDir("nen-gated-"); roots.push(root);
   const repo = join(root, "repo"); const remote = join(root, "remote.git"); git(root, "init", "--bare", remote); git(root, "init", "--initial-branch=main", repo);
   git(repo, "config", "user.name", "fixture"); git(repo, "config", "user.email", "fixture@example.invalid"); git(repo, "config", "commit.gpgsign", "false"); git(repo, "config", "core.hooksPath", "/dev/null");
   mkdirSync(join(repo, "nen")); writeFileSync(join(repo, ".gitignore"), ".nen/\n");
