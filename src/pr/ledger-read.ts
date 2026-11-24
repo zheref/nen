@@ -1,3 +1,4 @@
+import { effortIdProblem, effortIdRefusal } from "../ledger/effort.js";
 // One read authority for the CLI and report rows. No local ledger reads or writes.
 import type { Target } from "../github/target.js";
 import type { Seams } from "../seam/exec.js";
@@ -25,6 +26,8 @@ export function readLedgerSlice(seams: Seams, target: Target, pr: number, effort
     evidence: { state, url: typeof extra["url"] === "string" ? extra["url"] : null, verdict: "could-not-read", reason, line: `could-not-read: ${reason}` },
     report: { contract: PR_LEDGER_CONTRACT, verdict: "could-not-read", reason, ...extra },
   });
+  const problem = effortIdProblem(effort);
+  if (problem !== null) return refuse("not-read", effortIdRefusal(effort, problem));
   let head: string;
   let login: string;
   let allComments;
