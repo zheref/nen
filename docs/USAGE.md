@@ -9464,10 +9464,19 @@ still missing, the row appends why (`missing: #N -- #N not reconciled by the
 release-PR allowance: …`). A `--range` with a revision beginning with `-` is
 refused at exit 2 as there, and here before any tool runs, `gh` included.
 
+**Post-cut reading.** Add `--expect-tag-at <commit-sha>` after the tag is cut.
+Only the tag row changes: it passes when origin resolves that tag to the caller's
+expected cut commit, and fails naming absence, another commit, or unreadable
+remote evidence. Annotated tags are compared by their peeled object, not their
+tag-object hash. `--tag` is a literal name, never a `^{}` selector. A failed remote
+read remains a tooling failure, never an absent tag. Every other row keeps its
+meaning, and exit 0 still requires all six to pass. Without this flag, the
+original pre-cut behavior is unchanged. The verb only reads.
+
 **Usage**
 
 ```text
-nen release preflight --repo-slug <owner/name> --tag <vX.Y.Z> --range <vPrev>..<cut-point> --changelog <path> --owner-repo <owner/name> [--hold-var <name>] [--critical-issues <n,n>] [--live-chores-from <path>] [--fragment-dir <dir>] [--repo <path>] [--json]
+nen release preflight --repo-slug <owner/name> --tag <vX.Y.Z> --range <vPrev>..<cut-point> --changelog <path> --owner-repo <owner/name> [--hold-var <name>] [--critical-issues <n,n>] [--live-chores-from <path>] [--fragment-dir <dir>] [--expect-tag-at <commit-sha>] [--repo <path>] [--json]
 ```
 
 **Arguments**
@@ -9482,6 +9491,7 @@ nen release preflight --repo-slug <owner/name> --tag <vX.Y.Z> --range <vPrev>..<
 | `--hold-var <name>` | no | the gh variable to read | default `RELEASE_HOLD`; case-insensitive `true`/`1`/`yes` = held, `false`/`0`/`no`/unset = not held, any other non-empty value fails CLOSED as held |
 | `--critical-issues <n,n>` | bracketed, but **required to pass the row** | open critical-severity issue numbers, gathered by the caller | omitting it reports "not supplied -- not checked" and fails the row; pass `''` to assert none |
 | `--live-chores-from <path>` | bracketed, but **required to pass the row** | a JSON array of the CON-36 three-part test's inputs per chore | omitting it fails the row the same way; a file containing `[]` asserts none live |
+| `--expect-tag-at <commit-sha>` | no | post-cut: the literal tag must exist on origin at this full 40-character commit SHA | annotated tags use the peeled object; no tag or release mutation |
 | `--fragment-dir <dir>` | no | same default and empty/non-directory rules as `nen changelog completeness` | default `changelog.d` |
 | `--repo <path>` | no | the checkout whose `origin` the tag is checked against and whose history is reconciled; resolves relative `--changelog`/`--live-chores-from`/`--fragment-dir` | default cwd; those files are checked once `--repo` resolves (an empty `--fragment-dir` is refused either way) |
 | `--json` | no | machine-readable preflight table | — |

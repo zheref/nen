@@ -151,7 +151,7 @@ function resolveHoldState(result: CommandResult, holdVar: string): HoldState {
   return { kind: "held", value, recognizedTruthy: HOLD_TRUTHY.has(lowered) };
 }
 
-const USAGE = `nen release preflight --repo-slug <owner/name> --tag <vX.Y.Z> --range <vPrev>..<cut-point> --changelog <path> --owner-repo <owner/name> [--hold-var <name>] [--critical-issues <n,n>] [--live-chores-from <path>] [--fragment-dir <dir>] [--repo <path>] [--json]
+const USAGE = `nen release preflight --repo-slug <owner/name> --tag <vX.Y.Z> --range <vPrev>..<cut-point> --changelog <path> --owner-repo <owner/name> [--hold-var <name>] [--critical-issues <n,n>] [--live-chores-from <path>] [--fragment-dir <dir>] [--expect-tag-at <commit-sha>] [--repo <path>] [--json]
 nen release resolve-target --repo <path> --token <main|last-commit|checkout|hash|branch> [--trunk main]
 nen release self-check --repo <path> --pr-merge-sha <sha> --previous-tag <ref> --cut-point <ref>
 nen release unit-check --pr <n|owner/name#n|CODE#n> --repo <path> [--json]
@@ -163,6 +163,15 @@ preflight:
   unresolvable --repo, and each caller-named file that cannot be read (files
   are checked once --repo resolves) is named in ONE refusal at exit 2,
   before any tool runs (zheref/nen#309).
+
+  --expect-tag-at <commit-sha>
+                            Post-cut reading: require the tag on origin at this
+                            full 40-character commit SHA (the caller's cut
+                            commit). Annotated tags use the peeled object.
+                            Absent, mismatched or unreadable tag evidence fails.
+                            Every other row is unchanged. Omit for the original
+                            pre-cut requirement that the tag does not exist.
+                            Read-only: never cuts or changes a tag or release.
 
   REQUIRED -- refused at exit 2 when absent or empty:
   --repo-slug <owner/name>  The repository whose hold variable 'gh variable
@@ -278,6 +287,7 @@ export const releaseCommand: Command = {
   usage: USAGE,
   flags: {
     values: [
+      "expect-tag-at",
       "repo-slug",
       "tag",
       "range",
@@ -297,6 +307,9 @@ export const releaseCommand: Command = {
   },
   run(context: CommandContext): number {
     const subcommand = requireSubcommand("release", context.args, ["preflight", "resolve-target", "self-check", "unit-check"]);
+    if (subcommand !== "preflight" && context.args.values["expect-tag-at"] !== undefined) {
+      throw new VerbUsageError("--expect-tag-at is read only by release preflight");
+    }
     if (subcommand === "resolve-target") return resolveTarget(context);
     if (subcommand === "self-check") return selfCheck(context);
     if (subcommand === "unit-check") return unitCheck(context);
@@ -326,6 +339,14 @@ export const releaseCommand: Command = {
 
     const repoSlug = gather(() => requireValue(context.args, "repo-slug", "The owner/name whose hold variable 'gh variable get' reads; the tag is checked with 'git ls-remote --tags origin' in --repo's checkout."));
     const tag = gather(() => requireValue(context.args, "tag", "The tag being proposed for this cut."));
+    const expectedRaw = context.args.values["expect-tag-at"];
+    const expectedCommit = expectedRaw === undefined ? null : gather(() => {
+      if (!/^[0-9a-fA-F]{40}$/.test(expectedRaw)) throw new VerbUsageError("--expect-tag-at must be a full 40-character commit SHA");
+      return expectedRaw.toLowerCase();
+    });
+    if (expectedRaw !== undefined && tag !== undefined) gather(() => {
+      if (tag.includes("^")) throw new VerbUsageError("--tag must name a literal tag, not a peeled-ref selector, with --expect-tag-at");
+    });
     const range = gather(() => requireValue(context.args, "range", "The <vPrev>..<cut-point> range CON-33(c) reconciles."));
     // Refused HERE, with the other usage checks, as well as inside the shared
     // reconciliation: a --range git would read as an option is a usage error,
@@ -389,6 +410,7 @@ export const releaseCommand: Command = {
     // just above; this narrows the types and is unreachable.
     /* c8 ignore start */
     if (
+      expectedCommit === undefined ||
       repoSlug === undefined ||
       tag === undefined ||
       range === undefined ||
@@ -439,6 +461,7 @@ export const releaseCommand: Command = {
       missingChangelogPrs: reconciliation.missing,
       releasePrAllowance: reconciliation.releasePrAllowance,
       tagAlreadyExists,
+      ...(expectedCommit === null ? {} : { postCutTag: { expectedCommit, listing: tagsResult.stdout } }),
       tag,
     });
 
