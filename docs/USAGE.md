@@ -6131,9 +6131,9 @@ facts, never inferred from content.
 Answers "what does the open backlog of `owner/name` look like right now": it fetches open issues and
 open pull requests fresh over `gh api` — never from a cache — and assembles one row per effort, meaning
 an issue plus the PRs that reference it (via a closing keyword or a bare `#N` in the PR's title/body —
-`N` 1 to 9 digits from 1, ending the token, the `#` not after a word character, `&` or `;` unless glued to
-exactly one `owner/name` — the rule [`report data`](#nen-report-data)'s `linked[]` states in full, with its
-two known limits — so a hex colour such as `#000000`, an HTML entity such as `&#39;` or a URL fragment
+`N` 1 to 9 digits from 1, ending the token, the `#` not after an ASCII word character, `&` or `;` unless glued
+to exactly one `owner/name` — the rule [`report data`](#nen-report-data)'s `linked[]` states in full, with its
+three known limits — so a hex colour such as `#000000`, an HTML entity such as `&#39;` or a URL fragment
 references nothing),
 or a lone PR that references no open issue as its own row. It paginates past GitHub's 100-row
 per-page clamp rather than stopping at the first page, so `--limit` is a real total cap across as many
@@ -17687,19 +17687,22 @@ ready`](#nen-pr-ready) uses), `threads` (`total`/`unresolved`),
 `reviewRequests[]`, `linked[]` (the issue numbers it references), `readiness`
 and `notes[]`. **`linked[]` holds only real numbers** ([#639](https://github.com/zheref/nen/issues/639)):
 it is every `#<n>` in the title and body where `<n>` is **1 to 9 digits
-starting `1`–`9`** followed by no word character, and the `#` is either **not
-glued** — not preceded by a word character, `&` or `;` — or glued to exactly
-**one `owner/name`**: two `[A-Za-z0-9_.-]+` segments joined by one `/`, the
-first not itself preceded by `/`, a word character, `.` or `-`
+starting `1`–`9`** followed by no ASCII word character (`[A-Za-z0-9_]`), and
+the `#` is either **not glued** — not preceded by an ASCII word character, `&`
+or `;` — or glued to exactly **one `owner/name`**: two `[A-Za-z0-9_.-]+`
+segments joined by one `/`, the first not itself preceded by `/`, an ASCII word
+character, `.` or `-`
 (`acme/widget#591`, `acme/widget#591/AC-1`); less the pull request's **own**
 number. So a hex colour (`#000000`, `#123abc`), `#0`, an HTML entity
 (`&#39;`, double-escaped `&amp;#39;`), a 20-digit run, a URL fragment
 (`https://example.com/faq#2`) and a longer path (`/path/to/file#12`) are no
-reference, and `Closes #591` still is. **Two known limits**, by shape: a
+reference, and `Closes #591` still is. A `#` after a non-ASCII letter
+(`café#12`) is read, since the guard is ASCII. **Three known limits**: a
 relative two-segment path (`docs/USAGE.md#123`) cannot be told from
-`owner/name#123` and is read as `#123`; and `other/repo#591` is read as
+`owner/name#123` by shape and is read as `#123`; `other/repo#591` is read as
 **this** repository's `#591`, as it always was — the repository half is not
-compared. An issue row carries `kind`, `number`, `title`, `url`, `state`,
+compared; and a `#` straight after `;` is not read, so `Fixes #1;#2` reads `#1`
+only. The row's own number is left out of `linked[]` on both paths. An issue row carries `kind`, `number`, `title`, `url`, `state`,
 `labels[]`, `linked[]` (the pull requests that reference it), a `readiness`
 that is **always `null`** — CON-32 is a statement about a pull request — and
 `notes[]`.
@@ -17743,7 +17746,9 @@ the file. **One correction is made**: a `MERGED` or `CLOSED` row carrying a
 or by an older nen that asked the gate about a merged one — shows the state
 verdict instead, and its `notes[]` names the one it replaced: `readiness
 '<old verdict>' was read before this pull request was merged; the merged state
-is shown instead` (`closed` likewise). A file row's `linked[]` entry
+is shown instead` (`closed` likewise); one carrying no readiness at all shows
+the state verdict too, noted `no readiness was retained for this merged pull
+request; the merged state is shown`. A file row's `linked[]` entry
 that is not positive — a `0` a hex colour left in a register published before
 [#639](https://github.com/zheref/nen/issues/639) — is **left out, not
 refused**, so a retained file still loads, and the row's `notes[]` says

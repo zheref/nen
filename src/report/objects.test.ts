@@ -897,6 +897,14 @@ describe("the read seam's remaining refusals", () => {
     expect(renderObjects([pr as ReportObject]).join("\n")).not.toMatch(/#0\b/);
   });
 
+  it("leaves a row's own number out of its `linked`, silently, as the live path does", () => {
+    const [pr, issue] = parseObjects([{ ...PR_ROW, linked: [85, 87] }, { ...ISSUE_ROW, linked: [85, 87] }], "o.json") as ReportObject[];
+    expect(pr?.linked).toEqual([85]);
+    expect(pr?.notes).toEqual([]);
+    expect(issue?.linked).toEqual([87]);
+    expect(issue?.notes).toEqual([]);
+  });
+
   it("accepts `source: \"state\"` on a MERGED or CLOSED row and refuses it on an OPEN one", () => {
     const merged = { verdict: "merged", reason: "merged — not evaluated: CON-32 readiness is a statement about an open pull request", source: "state" };
     expect(parseObjects([{ ...PR_ROW, state: "MERGED", readiness: merged }], "o.json")[0]?.readiness).toEqual(merged);
@@ -934,6 +942,16 @@ describe("the read seam's remaining refusals", () => {
       source: "state",
     });
     expect(closed?.notes).toEqual(["readiness 'ready' was read before this pull request was closed; the closed state is shown instead"]);
+    // A retained row with NO readiness is settled too.
+    const [unreadMerged, unreadClosed] = parseObjects(
+      [{ ...PR_ROW, state: "MERGED", readiness: null }, { ...PR_ROW, number: 88, state: "CLOSED", readiness: null }],
+      "o.json",
+    ) as ReportObject[];
+    expect(unreadMerged?.readiness).toMatchObject({ verdict: "merged", source: "state" });
+    expect(unreadMerged?.notes).toEqual(["no readiness was retained for this merged pull request; the merged state is shown"]);
+    expect(unreadClosed?.readiness).toMatchObject({ verdict: "closed", source: "state" });
+    expect(unreadClosed?.notes).toEqual(["no readiness was retained for this closed pull request; the closed state is shown"]);
+    expect(parseObjects([{ ...PR_ROW, readiness: null }], "o.json")[0]?.readiness).toBeNull();
     // An OPEN row's verdict is the file's, untouched.
     expect(parseObjects([{ ...PR_ROW, readiness: stale }], "o.json")[0]?.readiness).toEqual(stale);
   });

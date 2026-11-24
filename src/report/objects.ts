@@ -274,11 +274,14 @@ function requireNumbers(row: Record<string, unknown>, key: string, display: stri
  */
 function readLinked(
   row: Record<string, unknown>,
+  own: number,
   display: string,
   index: number,
 ): { readonly numbers: number[]; readonly notes: string[] } {
   const all = requireNumbers(row, "linked", display, index);
-  const numbers = all.filter((number): boolean => number > 0);
+  // THE ROW'S OWN NUMBER IS LEFT OUT SILENTLY, as the live path leaves it out
+  // of what it reads: an object is not linked to itself.
+  const numbers = all.filter((number): boolean => number > 0 && number !== own);
   const notes = all
     .filter((number): boolean => number <= 0)
     .map((number): string => `linked[] carried ${number}, which numbers no issue or pull request; left out`);
@@ -369,7 +372,12 @@ function settleRetained(
   state: string,
 ): { readonly readiness: ObjectReadiness | null; readonly notes: readonly string[] } {
   const settled = stateReadiness(state);
-  if (readiness === null || settled === null || readiness.source === "state") return { readiness, notes: [] };
+  if (settled === null || readiness?.source === "state") return { readiness, notes: [] };
+  // A NULL IS SETTLED TOO: a row with no verdict would otherwise read "no
+  // readiness authority answered" about a pull request nothing need answer for.
+  if (readiness === null) {
+    return { readiness: settled, notes: [`no readiness was retained for this ${settled.verdict} pull request; the ${settled.verdict} state is shown`] };
+  }
   const old = readiness.reason !== "" ? readiness.reason : readiness.verdict;
   return {
     readiness: settled,
@@ -446,7 +454,7 @@ export function parseObjects(document: unknown, display: string): readonly Repor
           `is an issue carrying a 'readiness'. CON-32 is a statement about a pull request; an issue's readiness is always null`,
         );
       }
-      const linked = readLinked(row, display, index);
+      const linked = readLinked(row, common.number, display, index);
       return {
         kind: "issue",
         ...common,
@@ -460,7 +468,7 @@ export function parseObjects(document: unknown, display: string): readonly Repor
     const checks = requireCounts(row, "checks", ["total", "green", "red", "pending"], display, index) as unknown as ObjectChecks;
     const threads = requireCounts(row, "threads", ["total", "unresolved"], display, index) as unknown as ObjectThreads;
     const reviewRequests = requireStrings(row, "reviewRequests", display, index);
-    const linked = readLinked(row, display, index);
+    const linked = readLinked(row, common.number, display, index);
     const retained = settleRetained(readReadiness(row, common.state, display, index), common.state);
     return {
       kind: "pr",

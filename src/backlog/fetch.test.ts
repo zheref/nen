@@ -42,6 +42,12 @@ describe("referencedIssueNumbers", () => {
   it("keeps its two documented limits: a relative two-segment path and another repository", () => {
     expect([...referencedIssueNumbers("docs/USAGE.md#123")]).toEqual([123]);
     expect([...referencedIssueNumbers("other/repo#591")]).toEqual([591]);
+    // A third: a `#` straight after `;` is not read.
+    expect([...referencedIssueNumbers("Fixes #1;#2")]).toEqual([1]);
+  });
+
+  it("guards on ASCII word characters only: a '#' after a non-ASCII letter is read", () => {
+    expect([...referencedIssueNumbers("café#12 日本#13")]).toEqual([12, 13]);
   });
 
   it("stays linear on a 1M-character adversarial input", () => {
