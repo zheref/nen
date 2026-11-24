@@ -287,7 +287,7 @@ describe("nen spec due", () => {
     expect(run.code).toBe(1);
     const families = familiesOf(run.json());
     expect(families.map((family) => `${family.name} ${family.answer}`)).toEqual(["broken not-decided", "fine current"]);
-    expect(families[0]?.members[0]?.reason).toMatch(/could not be read \(ENOTDIR\)/);
+    expect(families[0]?.members[0]?.reason).toBe("capture/PW is not a directory, so capture/PW/inventory.json cannot be read");
   });
 
   it("matches a capture's origin to the registry's repository without case", async () => {

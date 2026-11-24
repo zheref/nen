@@ -32,7 +32,7 @@
 // and no recapture is started -- that stays the maintainer's own typed command.
 
 import { lstatSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { looksLikeOwnerSlug } from "../repo/root.js";
 import { GH, type Seams } from "../seam/exec.js";
 import type { ProductFamily, RepoRegistry } from "../schema/repos.js";
@@ -182,6 +182,10 @@ type CaptureRead = { readonly kind: "absent" } | { readonly kind: "read"; readon
 function readCapture(repo: string, file: string): CaptureRead {
   const absolute = join(repo, file);
   try {
+    // The same answer on every platform: where `capture/<CODE>` is a file, POSIX says ENOTDIR for the
+    // inventory path and Windows says ENOENT, so the directory itself is looked at first.
+    const folder = lstatSync(dirname(absolute), { throwIfNoEntry: false });
+    if (folder !== undefined && !folder.isDirectory()) return { kind: "unread", reason: `${dirname(file)} is not a directory, so ${file} cannot be read` };
     if (lstatSync(absolute, { throwIfNoEntry: false }) === undefined) return { kind: "absent" };
     assertInsideRepo(repo, absolute, file);
     const loaded = loadInventory(absolute);
