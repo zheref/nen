@@ -76,7 +76,7 @@ export interface VersionCollisionOutcome {
   readonly result: VersionCollisionResult;
 }
 
-/** The caps (zheref/nen#663 design): 10 inventory pages of 100, 3000 files per PR, 200 requests. */
+/** The caps (zheref/nen#663 design): 10 cursor pages of 100 open pull requests, 3000 files per PR, 200 requests. */
 export interface VersionCollisionLimits {
   readonly maxPages: number;
   readonly perPage: number;
@@ -367,6 +367,17 @@ export function decideVersionCollision(
     return { status: "unknown", line: `unknown: ${missing.join("; ")}`, proposedVersion: proposed, collisions: [], missing, warnings: [] };
   }
   const missing = [...evidence.missing];
+  // Every APPLICABLE comparison input must be there, whatever the reader
+  // recorded (round 2, N5): a null tip or merge base is evidence nobody read,
+  // never "nothing to compare". (A tip read WITHOUT a version file is
+  // different: that is evidence, and a named warning below.)
+  const stackedBase = evidence.subject.baseRef !== evidence.subject.defaultBranch;
+  const required: readonly [unknown, string][] = [
+    [evidence.baseTip, `the live tip of the base branch '${evidence.subject.baseRef}' and its version`],
+    [evidence.mergeBase, `the version at the pull request's merge base with '${evidence.subject.baseRef}'`],
+    ...(stackedBase ? [[evidence.defaultTip, `the live tip of the default branch '${evidence.subject.defaultBranch}' and its version`] as [unknown, string]] : []),
+  ];
+  for (const [input, name] of required) if (input === null) missing.push(`${name} (not in the evidence)`);
   const warnings: string[] = [];
   const collisions: VersionCollisionEntry[] = [];
   const clauses: string[] = [];
@@ -735,16 +746,21 @@ export async function readVersionCollision(
     }
   }
 
+  // CURSOR pagination (round 2, N1): each page continues AFTER the last row
+  // read, so a row closed or reopened between two page reads can never shift
+  // another out of the walk -- an offset (`page=N`) could skip a same-repo
+  // peer in BOTH passes while only fork rows churned.
   async function inventory(): Promise<InventoryRow[] | null> {
     const read = source.openPullRequestsPage;
     if (read === undefined) return null;
     const rows: InventoryRow[] = [];
+    let cursor: string | null = null;
     for (let page = 1; page <= limits.maxPages; page += 1) {
       const label = `the open pull request inventory (page ${page})`;
       if (!budget.allows(1, label)) return null;
       let data: unknown;
       try {
-        data = await read.call(source, repo, page);
+        data = await read.call(source, repo, cursor);
       } catch (error) {
         budget.reads += 1;
         missing.push(`${label} could not be read (${errorText(error)})`);
@@ -752,22 +768,31 @@ export async function readVersionCollision(
       }
       budget.reads += 1;
       counters.pages += 1;
-      if (!Array.isArray(data)) {
-        missing.push(`${label} was not a list`);
+      const connection = typeof data === "object" && data !== null ? (data as { nodes?: unknown; pageInfo?: unknown }) : null;
+      const info = typeof connection?.pageInfo === "object" && connection.pageInfo !== null
+        ? (connection.pageInfo as { hasNextPage?: unknown; endCursor?: unknown })
+        : null;
+      if (connection === null || !Array.isArray(connection.nodes) || info === null || typeof info.hasNextPage !== "boolean") {
+        missing.push(`${label} was not a pull request connection with nodes and pageInfo`);
         return null;
       }
-      for (const [index, entry] of data.entries()) {
-        const row = inventoryRow(entry, repo);
+      for (const [index, entry] of connection.nodes.entries()) {
+        const row = inventoryRow(entry);
         if (row === null) {
-          missing.push(`${label} entry ${index} carried no number, head SHA, base branch or head repository`);
+          missing.push(`${label} entry ${index} carried no number, head SHA, base branch, fork flag or (same-repository) head repository`);
           return null;
         }
         rows.push(row);
       }
-      if (data.length < limits.perPage) return rows;
+      if (!info.hasNextPage) return rows;
+      if (typeof info.endCursor !== "string" || info.endCursor === "") {
+        missing.push(`${label} answered hasNextPage with no endCursor`);
+        return null;
+      }
+      cursor = info.endCursor;
     }
     missing.push(
-      `the open pull request inventory is capped: all ${limits.maxPages} pages of ${limits.perPage} were full, so more open pull requests may exist`,
+      `the open pull request inventory is capped: all ${limits.maxPages} pages of ${limits.perPage} were read and GitHub still answered hasNextPage, so more open pull requests may exist`,
     );
     return null;
   }
@@ -788,30 +813,32 @@ function peerOf(row: InventoryRow): Omit<CollisionPeer, "touchesShipped" | "inhe
   return { number: row.number, headSha: row.headSha, baseRef: row.baseRef, draft: row.draft };
 }
 
-/** One REST `pulls` entry, or `null` when it lacks a field the comparison needs. */
-function inventoryRow(entry: unknown, repo: PrRef): InventoryRow | null {
+/** One GraphQL `pullRequests` node, or `null` when it lacks a field the comparison needs. */
+function inventoryRow(entry: unknown): InventoryRow | null {
   if (typeof entry !== "object" || entry === null) return null;
-  const record = entry as { number?: unknown; draft?: unknown; head?: unknown; base?: unknown };
-  const head = typeof record.head === "object" && record.head !== null ? (record.head as { sha?: unknown; repo?: unknown }) : null;
-  const base = typeof record.base === "object" && record.base !== null ? (record.base as { ref?: unknown; repo?: unknown }) : null;
+  const record = entry as {
+    number?: unknown;
+    isDraft?: unknown;
+    isCrossRepository?: unknown;
+    baseRefName?: unknown;
+    headRefOid?: unknown;
+    headRepository?: unknown;
+  };
   if (typeof record.number !== "number" || !Number.isSafeInteger(record.number) || record.number <= 0) return null;
-  if (head === null || typeof head.sha !== "string" || !SHA.test(head.sha)) return null;
-  if (base === null || typeof base.ref !== "string" || base.ref === "") return null;
-  // `repo` MISSING is a malformed entry -- read as a fork it would silently
-  // stop blocking. A deleted fork answers `repo: null`: never this repository.
-  if (!("repo" in head)) return null;
-  const fullName = typeof head.repo === "object" && head.repo !== null ? (head.repo as { full_name?: unknown }).full_name : null;
-  if (fullName !== null && typeof fullName !== "string") return null;
-  // Compared with the BASE repository's name in the same answer, so a renamed
-  // or transferred repository (reached through a redirect) is still itself.
-  const baseName = typeof base.repo === "object" && base.repo !== null ? (base.repo as { full_name?: unknown }).full_name : undefined;
-  const own = typeof baseName === "string" && baseName !== "" ? baseName : `${repo.owner}/${repo.repo}`;
+  if (typeof record.headRefOid !== "string" || !SHA.test(record.headRefOid)) return null;
+  if (typeof record.baseRefName !== "string" || record.baseRefName === "") return null;
+  // `isCrossRepository` IS the fork flag. Missing, it is malformed -- read as
+  // a fork it would silently stop blocking. A same-repository row with no
+  // head repository is malformed too; on a fork row it is a deleted fork.
+  if (typeof record.isCrossRepository !== "boolean") return null;
+  if (!("headRepository" in record)) return null;
+  if (!record.isCrossRepository && (typeof record.headRepository !== "object" || record.headRepository === null)) return null;
   return {
     number: record.number,
-    headSha: head.sha,
-    baseRef: base.ref,
-    sameRepo: typeof fullName === "string" && fullName.toLowerCase() === own.toLowerCase(),
-    draft: record.draft === true,
+    headSha: record.headRefOid,
+    baseRef: record.baseRefName,
+    sameRepo: !record.isCrossRepository,
+    draft: record.isDraft === true,
   };
 }
 

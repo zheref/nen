@@ -84,6 +84,9 @@ export interface WorldSource extends PrStateSource {
 export function worldSource(world: CollisionWorld, subject: number, options: ReadOptions = {}): WorldSource {
   const calls: string[] = [];
   const counts = new Map<string, number>();
+  // Creation ranks and the page each handed-out cursor leads to.
+  const ranks = new Map<number, number>();
+  const pageOf = new Map<string, number>();
   const serve = <T>(key: string, value: () => T): T => {
     calls.push(key);
     if (options.fail?.has(key) === true) throw new Error(`HTTP 502: scripted failure of ${key}`);
@@ -149,15 +152,35 @@ export function worldSource(world: CollisionWorld, subject: number, options: Rea
         if (found === undefined) throw new Error(`HTTP 404: no #${number}`);
         return found.files.map((filename): unknown => ({ filename, status: "modified" }));
       }),
-    openPullRequestsPage: async (_repo: PrRef, page: number): Promise<unknown> =>
-      serve(`pulls:${page}`, (): unknown =>
-        world.prs.slice((page - 1) * 100, page * 100).map((entry): unknown => ({
-          number: entry.number,
-          draft: entry.draft === true,
-          head: { sha: entry.head, ref: `feature/${entry.number}`, repo: { full_name: entry.fork === true ? `outsider/${NAME}` : SLUG } },
-          base: { ref: entry.base, repo: { full_name: SLUG } },
-        })),
-      ),
+    // CURSOR pages, as GitHub's GraphQL connection serves them: a cursor is a
+    // POSITION in creation order (a rank kept across closes and reopens),
+    // never an offset, so closing one row cannot shift another out.
+    openPullRequestsPage: async (_repo: PrRef, cursor: string | null): Promise<unknown> => {
+      for (const entry of world.prs) if (!ranks.has(entry.number)) ranks.set(entry.number, ranks.size);
+      const page = cursor === null ? 1 : (pageOf.get(cursor) ?? 0);
+      return serve(`pulls:${page}`, (): unknown => {
+        const after = cursor === null ? -1 : Number(cursor.slice(1));
+        const open = world.prs
+          .map((entry): [number, WorldPr] => [ranks.get(entry.number) ?? 0, entry])
+          .filter(([rank]): boolean => rank > after)
+          .sort((a, b): number => a[0] - b[0]);
+        const rows = open.slice(0, 100);
+        const last = rows.at(-1);
+        const endCursor = last === undefined ? null : `r${last[0]}`;
+        if (endCursor !== null) pageOf.set(endCursor, page + 1);
+        return {
+          pageInfo: { hasNextPage: open.length > 100, endCursor },
+          nodes: rows.map(([, entry]): unknown => ({
+            number: entry.number,
+            isDraft: entry.draft === true,
+            isCrossRepository: entry.fork === true,
+            baseRefName: entry.base,
+            headRefOid: entry.head,
+            headRepository: { nameWithOwner: entry.fork === true ? `outsider/${NAME}` : SLUG },
+          })),
+        };
+      });
+    },
     branchTip: async (_repo: PrRef, branch: string): Promise<string> =>
       serve(`tip:${branch}`, (): string => {
         const tip = world.branches[branch];

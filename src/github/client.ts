@@ -52,10 +52,12 @@
 import { Octokit } from "octokit";
 import {
   CHECK_ROLLUP_PAGE_QUERY,
+  digPath,
   normalizeCheckRollupPageResponse,
   normalizePullRequestResponse,
   normalizeReviewRequestsPageResponse,
   normalizeReviewThreadsResponse,
+  OPEN_PULL_REQUESTS_QUERY,
   PULL_REQUEST_QUERY,
   REVIEW_REQUESTS_PAGE_QUERY,
   REVIEW_THREADS_QUERY,
@@ -445,24 +447,21 @@ export class GitHubClient {
     });
   }
 
-  // ONE page of the repository's OPEN pull requests, oldest first, raw (REST
-  // `pulls?state=open&sort=created&direction=asc&per_page=100&page=N`) --
-  // the inventory the version-collision limb compares against
-  // (zheref/nen#663). Oldest first so a pull request opened mid-walk lands on
-  // a LATER page instead of shifting every page after it; the walk, its cap
-  // and what a short or unreadable page means are
-  // ../pr/version_collision.ts's. Needs `pull_requests:read`.
-  async openPullRequestsPage(repo: RepoRef, page: number): Promise<unknown> {
-    const response = await this.octokit.request("GET /repos/{owner}/{repo}/pulls", {
+  // ONE page of the repository's OPEN pull requests, oldest first, by CURSOR
+  // (GraphQL `pullRequests(states: OPEN, first: 100, after: $cursor,
+  // orderBy: CREATED_AT ASC)`; zheref/nen#663 round 2, N1) -- the connection
+  // `{ pageInfo, nodes }`, raw. A cursor names a position, so a row closed or
+  // reopened between page reads cannot shift another out of the walk the way
+  // an offset page can. The walk, its cap and what a malformed page means are
+  // ../pr/version_collision.ts's. A query, so a read; needs
+  // `pull_requests:read`.
+  async openPullRequestsPage(repo: RepoRef, cursor: string | null): Promise<unknown> {
+    const response: unknown = await this.octokit.graphql(OPEN_PULL_REQUESTS_QUERY, {
       owner: repo.owner,
-      repo: repo.repo,
-      state: "open",
-      sort: "created",
-      direction: "asc",
-      per_page: 100,
-      page,
+      name: repo.repo,
+      cursor,
     });
-    return response.data;
+    return digPath(response, "repository", "pullRequests");
   }
 
   // ONE branch's LIVE tip commit (REST `git/ref/heads/{branch}`), never a

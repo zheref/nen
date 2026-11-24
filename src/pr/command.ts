@@ -395,10 +395,11 @@ version-collision:
   not-applicable | clear | collision | unknown; unknown names every missing
   piece of evidence -- a failed, capped or over-budget read, or anything that
   moved between the two passes. Read-only. Exit 0 clear or not-applicable; 1
-  collision or unknown; 2 usage; 8 head-mismatch. --json: contract
-  'nen.pr.version-collision/v0.1' (status, line, judgedHead, base, default,
-  policySource, policy, proposedVersion, collisions[], missing[], inventory,
-  warnings, notes, generator).
+  collision or unknown; 2 usage; 8 head-mismatch. --json: { contract:
+  'nen.pr.version-collision/v0.1', status, line, judgedHead, base, default,
+  policySource, policy, proposedVersion, collisions[] (kind base | unbumped
+  | peer), missing[], inventory, warnings, notes, ref, repo, pr,
+  evaluatedAt, generator }.
   <ref> --target --pr --gh-repo   As for 'ready'.
   --token-env <VAR>           Environment variable holding the token (GH_TOKEN).
   --require-head <sha>        Judge ONLY this commit; otherwise exit 8.

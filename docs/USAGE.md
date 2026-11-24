@@ -1016,7 +1016,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | Family | Verb | Purpose | Reads | `--json` |
 |---|---|---|---|---|
 | [`pr`](#family-pr) | [`nen pr ready`](#nen-pr-ready) | CON-32 readiness verdict for one pull request | nen/gates.json + nen/repos.json (or --gates/--reviewers/--gh-repo), github (gh api graphql/rest) | yes |
-| [`pr`](#family-pr) | [`nen pr version-collision`](#nen-pr-version-collision) | the live plugin-version collision of one pull request (opt-in `version_collision`), by the same evaluator `pr ready` folds into CON-32(a) | nen/gates.json at the default-branch tip, github (REST: pulls, git refs, compare, contents, files) | yes |
+| [`pr`](#family-pr) | [`nen pr version-collision`](#nen-pr-version-collision) | the live plugin-version collision of one pull request (opt-in `version_collision`), by the same evaluator `pr ready` folds into CON-32(a) | nen/gates.json at the default-branch tip, github (GraphQL query: open pullRequests by cursor; REST GET: git refs, compare, contents, pulls/{n}/files) | yes |
 | [`pr`](#family-pr) | [`nen pr staleness`](#nen-pr-staleness) | stale + Ready merge-permission arithmetic over a verified-wake history | caller-supplied --wakes-from JSON file, no schema/git/gh | yes |
 | [`pr`](#family-pr) | [`nen pr body-check`](#nen-pr-body-check) | checks a PR body against caller-supplied requirement patterns, or, with no `--requirements-from`, against the headings of the repository's own PR template, each required present and filled (named as derived, with where it was read) | caller-supplied --body-from/--requirements-from files; else the PR template (`pull_request_template.md`/`.txt` at the root, `.github/` or `docs/`, or `PULL_REQUEST_TEMPLATE/*.md`/`.txt`) in the working tree, or at `--base <ref>` through git (`rev-parse`, `ls-tree`, `cat-file`) | yes |
 | [`pr`](#family-pr) | [`nen pr sections resolve`](#nen-pr-sections-resolve) | resolves a caller-owned section catalogue by kind, family and conditional facts | --catalogue JSON; optional workflow.json pr.sections overrides | yes |
@@ -2536,18 +2536,23 @@ is still green afterwards. The opt-in is one optional block in
     parsed reserves nothing (a note); a peer read that **fails** is `unknown`;
   - `unknown` on any failed, capped or over-budget read, or a transport
     without the read, each missing piece named. The caps are 10 inventory
-    pages of 100 (a full tenth page is `unknown`), 3000 files per pull request
-    (at the cap is `unknown`) and 200 requests per evaluation. The inventory is
-    listed oldest first, then listed again and both tips re-read after every
+    pages of 100 (GitHub still answering `hasNextPage` after the tenth is
+    `unknown`), 3000 files per pull request (at the cap is `unknown`) and 200
+    requests per evaluation. The inventory is one GraphQL **query** (never a
+    mutation), `pullRequests(states: OPEN, orderBy: CREATED_AT ASC)`, paged
+    by **cursor**. A cursor is a position, not an offset, so a pull request
+    closed or reopened between two page reads cannot shift another row out
+    of the walk. It is listed twice, and both tips are re-read after every
     other read; any difference in a **same-repository** `(number, head,
     base)` row or a tip is `unknown: moved during inspection`, naming what
-    moved. Nothing is retried. Fork rows are left out of that comparison, so a
-    fork opened, pushed or closed mid-evaluation changes nothing. The budget
+    moved. Nothing is retried. Fork rows (`isCrossRepository`) are never
+    compared for drift and never count as conflicts. They still occupy
+    inventory rows, so they count toward the 10 × 100 cap. The budget
     reserves a read's worst case first (a changed-file list is up to 30
     pages), so the message says the budget "would be exceeded" by a read,
     which may come before 200 requests were made;
-  - **Known limit:** fork rows still count toward the 10 × 100 inventory
-    cap, so a repository with more than 999 open pull requests, forks
+  - **Known limit:** because fork rows count toward the 10 × 100 inventory
+    cap, a repository with more than 1000 open pull requests, forks
     included, is `unknown`;
   - a `collision` proven by the evidence that was read stays a `collision`
     even when other evidence is missing. The missing pieces stay in
@@ -2683,7 +2688,9 @@ The trusted-CI read of one pull request's **live plugin-version collision**
 opt-in and the caps are in [`pr ready`'s
 section](#pr-ready-version-collision); this verb adds no decision of its own.
 It reads the pull request's snapshot and `nen/gates.json` at the default-branch
-tip, which decides, and at the base, which only warns. It also reads the
+tip, which decides, and at the base, which only warns. It reads the open
+pull request inventory with a GraphQL query paged by cursor, and the tips,
+merge bases, manifests and changed files with REST GETs. It also reads the
 checkout's copy under `--repo` (default the current directory), which only
 warns. Read-only: no label, comment or status. It needs `pull-requests:read`
 and `contents:read` and no new permission, and it never runs pull request

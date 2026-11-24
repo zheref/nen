@@ -191,6 +191,12 @@ describe("decideVersionCollision -- every row of the decision, in its stated ord
     ["an unparseable base tip", { baseTip: { sha: T, version: { kind: "unparseable", why: "not JSON" } } }, "unknown", "the version at the tip of 'main'"],
     ["an unread base tip", { baseTip: { sha: T, version: { kind: "unread", why: "tip X failed" } } }, "unknown", "unknown: tip X failed"],
     ["a base tip with no manifest", { baseTip: { sha: T, version: { kind: "absent" } } }, "clear", "clear: version 1.4.0"],
+    // Round 2, N5: an applicable input missing from the evidence is unknown on its own.
+    ["no base tip in the evidence", { baseTip: null }, "unknown", "the live tip of the base branch 'main' and its version (not in the evidence)"],
+    ["no merge base in the evidence", { mergeBase: null }, "unknown", "the version at the pull request's merge base with 'main' (not in the evidence)"],
+    ["no default tip on a stacked base", { subject: stacked, defaultTip: null }, "unknown", "the live tip of the default branch 'main' and its version (not in the evidence)"],
+    ["no default tip needed when the base IS the default", { defaultTip: null }, "clear", "clear: version 1.4.0"],
+    ["a missing input does not hide a proven collision", { mergeBase: null, peers: [peer] }, "collision", "; also not read: the version at the pull request's merge base"],
     ["clear", {}, "clear", "clear: version 1.4.0 is on no target tip"],
   ];
   it.each(rows)("%s", (_name, over, status, line) => {
@@ -419,43 +425,89 @@ describe("AC-2: independent proposals of one version refuse each other, every nu
     expect((await verb(world)).report.warnings.join("\n")).toContain("#31");
   });
 
-  it("same-repository is judged against the answer's own base repository, so a renamed repository's peers still block", async () => {
-    const world = baseline();
-    addPeer(world, 10, "1.4.0");
+  /** The testkit's source with every inventory node rewritten by `edit`. */
+  function rewritten(world: CollisionWorld, edit: (node: Record<string, unknown>) => Record<string, unknown>): PrStateSource {
     const source = worldSource(world, 42);
     const listed = source.openPullRequestsPage;
     if (listed === undefined) throw new Error("no inventory");
-    const renamed: PrStateSource = {
+    return {
       ...source,
-      openPullRequestsPage: async (repo, page): Promise<unknown> =>
-        ((await listed.call(source, repo, page)) as Record<string, Record<string, unknown>>[]).map((row) => ({
-          ...row,
-          head: { ...row["head"], repo: { full_name: "acme/widget-renamed" } },
-          base: { ...row["base"], repo: { full_name: "acme/widget-renamed" } },
-        })),
+      openPullRequestsPage: async (repo, cursor): Promise<unknown> => {
+        const page = (await listed.call(source, repo, cursor)) as { pageInfo: unknown; nodes: Record<string, unknown>[] };
+        return { ...page, nodes: page.nodes.map(edit) };
+      },
     };
+  }
+  async function readyOver(source: PrStateSource): Promise<{ code: number; report: ReadyReport }> {
     const { io, out } = capture();
-    expect(await prReady(readyInput(42), io, deps(renamed))).toBe(1);
-    expect((JSON.parse(out.join("\n")) as ReadyReport).meta.versionCollision?.collisions.map((entry): number | null => entry.pr)).toEqual([10]);
+    const code = await prReady(readyInput(42), io, deps(source));
+    return { code, report: JSON.parse(out.join("\n")) as ReadyReport };
+  }
+
+  it("`isCrossRepository` is the fork flag: a same-repository row under another repository name (a rename) still blocks", async () => {
+    const world = baseline();
+    addPeer(world, 10, "1.4.0");
+    const { code, report } = await readyOver(rewritten(world, (node) => ({ ...node, headRepository: { nameWithOwner: "acme/widget-renamed" } })));
+    expect(code).toBe(1);
+    expect(report.meta.versionCollision?.collisions.map((entry): number | null => entry.pr)).toEqual([10]);
   });
 
-  it("an inventory entry with no head repository is malformed -- unknown, never read as a fork", async () => {
+  it("a deleted fork (cross-repository, no head repository) is still a fork; a same-repository row without one is malformed", async () => {
+    const world = baseline();
+    addPeer(world, 31, "1.4.0", { fork: true });
+    const deleted = await readyOver(rewritten(world, (node) => (node["isCrossRepository"] === true ? { ...node, headRepository: null } : node)));
+    expect(deleted.code).toBe(0);
+    expect(deleted.report.meta.warnings.join("\n")).toContain("#31");
+    const malformed = await readyOver(rewritten(baseline(), (node) => ({ ...node, headRepository: null })));
+    expect(malformed.code).toBe(1);
+    expect(checksRow(malformed.report)?.missing).toMatch(/entry 0 carried no number, head SHA, base branch, fork flag or \(same-repository\) head repository/);
+  });
+
+  it("an inventory node with no fork flag is malformed -- unknown, never read as a fork", async () => {
     const world = baseline();
     addPeer(world, 10, "1.4.0");
-    const source = worldSource(world, 42);
-    const listed = source.openPullRequestsPage;
-    if (listed === undefined) throw new Error("no inventory");
-    const stripped: PrStateSource = {
-      ...source,
-      openPullRequestsPage: async (repo, page): Promise<unknown> =>
-        ((await listed.call(source, repo, page)) as Record<string, Record<string, unknown>>[]).map((row) => ({
-          ...row,
-          head: { sha: row["head"]?.["sha"] },
-        })),
+    const { code, report } = await readyOver(
+      rewritten(world, (node) => {
+        const copy = { ...node };
+        delete copy["isCrossRepository"];
+        return copy;
+      }),
+    );
+    expect(code).toBe(1);
+    expect(checksRow(report)?.missing).toMatch(/carried no number, head SHA, base branch, fork flag/);
+  });
+
+  it("round 2, N1: rows closed and reopened between page reads cannot hide a same-repository peer -- cursors, not offsets", async () => {
+    // 99 forks after the subject, then the same-repo peer #10 first on page 2.
+    // Fork #100 is closed after the first page-1 read, reopened after the
+    // page-2 read and closed again after the second pass's page-1 read: an
+    // offset walk never lists #10 in either pass, and fork churn is not drift.
+    const make = (): { world: CollisionWorld; options: ReadOptions } => {
+      const world = baseline();
+      for (let number = 100; number < 199; number += 1) {
+        world.prs.push({ number, head: sha(`${number.toString(16)}c`), base: "main", files: ["claude/x.md"], fork: true });
+      }
+      addPeer(world, 10, "1.4.0");
+      const fork100 = world.prs.find((entry): boolean => entry.number === 100);
+      if (fork100 === undefined) throw new Error("no #100");
+      const close = (): void => void world.prs.splice(world.prs.indexOf(fork100), 1);
+      const reopen = (): void => void world.prs.splice(1, 0, fork100);
+      const after = (key: string, n: number): void => {
+        if (key === "pulls:1" && n === 1) close();
+        if (key === "pulls:2" && n === 1) reopen();
+        if (key === "pulls:1" && n === 2) close();
+      };
+      return { world, options: { after } };
     };
-    const { io, out } = capture();
-    expect(await prReady(readyInput(42), io, deps(stripped))).toBe(1);
-    expect(checksRow(JSON.parse(out.join("\n")) as ReadyReport)?.missing).toMatch(/entry 0 carried no number, head SHA, base branch or head repository/);
+    const first = make();
+    const { code, report } = await ready(first.world, 42, first.options);
+    expect(code).toBe(1);
+    expect(report.meta.versionCollision?.status).toBe("collision");
+    expect(report.meta.versionCollision?.collisions.map((entry): number | null => entry.pr)).toEqual([10]);
+    const second = make();
+    const cli = await verb(second.world, 42, second.options);
+    expect(cli.code).toBe(1);
+    expect(cli.report.collisions.map((entry): number | null => entry.pr)).toEqual([10]);
   });
 
   it("a peer whose manifest cannot be parsed reserves nothing, with a note", async () => {
@@ -724,15 +776,15 @@ describe("AC-5 / SC-1: unreadable, incomplete or moving evidence is unknown on b
     },
   );
 
-  it("a full tenth inventory page is a capped inventory: unknown", async () => {
+  it("hasNextPage after the tenth page is a capped inventory: unknown (forks count toward the cap)", async () => {
     const crowded = (): CollisionWorld => {
       const world = baseline();
-      for (let number = 100; number < 1099; number += 1) {
+      for (let number = 100; number < 1100; number += 1) {
         world.prs.push({ number, head: sha(`${number.toString(16)}a`), base: "main", files: [], fork: true });
       }
       return world;
     };
-    await expectUnknownEverywhere(fixed(crowded), /inventory is capped: all 10 pages of 100 were full/);
+    await expectUnknownEverywhere(fixed(crowded), /inventory is capped: all 10 pages of 100 were read and GitHub still answered hasNextPage/);
   });
 
   it("a changed-file list at the 3000-file cap is unknown -- the subject's and a matching peer's", async () => {
@@ -958,6 +1010,18 @@ describe("SC-1: one evaluator -- both surfaces agree on every fixture", () => {
     expect(cli.code).toBe(0);
     expect(cli.out[0]).toBe(`${SLUG}#42: version collision clear: version 1.4.0 is on no target tip and proposed by no other open pull request`);
     expect(cli.out.join("\n")).toContain("version collision reads:");
+  });
+
+  it("the verb's --explain gives each collision kind its own line, naming version, branch and commit (round 2, N4)", async () => {
+    const tip = await verb(edited((world): void => void (world.versions[MAIN] = "1.4.0"))(), 42, {}, ROOT, ["explain"]);
+    expect(tip.out).toContain(`  collision (base): 1.4.0 is already at the tip of 'main' (${MAIN})`);
+    const unbumped = await verb(edited((world): void => void ((world.versions[SUBJECT_HEAD] = "1.3.0"), (world.versions[MAIN] = "1.3.5")))(), 42, {}, ROOT, ["explain"]);
+    expect(unbumped.out).toContain(`  collision (unbumped): the head keeps its merge base's 1.3.0, and 'main' moved on to 1.3.5 at ${MAIN} -- merged, it would ship under 1.3.5`);
+    expect(unbumped.out.join("\n")).not.toContain("proposed by #");
+    const peerWorld = baseline();
+    const peer = addPeer(peerWorld, 11, "1.4.0", { draft: true });
+    const onePeer = await verb(peerWorld, 42, {}, ROOT, ["explain"]);
+    expect(onePeer.out).toContain(`  collision (peer): 1.4.0 is also proposed by #11 (head ${peer.head}, base 'main', draft)`);
   });
 
   it("the verb: usage is exit 2, a head mismatch exit 8, no token unknown (exit 1)", async () => {

@@ -226,14 +226,15 @@ export interface PrStateSource {
   pullRequestFiles?(repo: PrRef, prNumber: number): Promise<unknown[]>;
   /**
    * The three reads of the version-collision limb (zheref/nen#663), all
-   * read-only: one page of OPEN pull requests oldest first (raw REST
-   * `pulls?state=open&sort=created&direction=asc&per_page=100&page=N`), one
+   * read-only: one CURSOR page of OPEN pull requests oldest first (the raw
+   * GraphQL `pullRequests` connection `{ pageInfo, nodes }`, `cursor` null for
+   * the first page -- a query, never a mutation), one
    * branch's LIVE tip SHA (`git/ref/heads/{branch}`), and the merge base of a
    * branch and a commit (`compare/{base}...{head}`). OPTIONAL: a source
    * without one cannot judge an opted-in repository, and the limb is then
    * UNKNOWN naming it -- never clear. See ../pr/version_collision.ts.
    */
-  openPullRequestsPage?(repo: PrRef, page: number): Promise<unknown>;
+  openPullRequestsPage?(repo: PrRef, cursor: string | null): Promise<unknown>;
   branchTip?(repo: PrRef, branch: string): Promise<string>;
   mergeBase?(repo: PrRef, base: string, head: string): Promise<string>;
 }

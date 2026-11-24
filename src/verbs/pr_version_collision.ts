@@ -32,6 +32,7 @@ import {
   resolveCollisionPolicy,
   VERSION_COLLISION_LIMITS,
   type GatesCopyRead,
+  type VersionCollisionEntry,
   type VersionCollisionLimits,
   type VersionCollisionResult,
 } from "../pr/version_collision.js";
@@ -211,6 +212,18 @@ function unreadResult(missing: string): VersionCollisionResult {
   };
 }
 
+/** One `--explain` line per collision, by kind -- each names its version, branch and commit. */
+export function explainCollision(entry: VersionCollisionEntry, proposed: string | null): string {
+  switch (entry.kind) {
+    case "base":
+      return `collision (base): ${entry.version} is already at the tip of '${entry.baseRef ?? "?"}' (${entry.head ?? "?"})`;
+    case "unbumped":
+      return `collision (unbumped): the head keeps its merge base's ${proposed ?? "?"}, and '${entry.baseRef ?? "?"}' moved on to ${entry.version} at ${entry.head ?? "?"} -- merged, it would ship under ${entry.version}`;
+    case "peer":
+      return `collision (peer): ${entry.version} is also proposed by #${entry.pr ?? "?"} (head ${entry.head ?? "?"}, base '${entry.baseRef ?? "?"}'${entry.draft === true ? ", draft" : ""})`;
+  }
+}
+
 function emit(io: Io, json: boolean, explain: boolean, report: VersionCollisionReport): number {
   if (json) {
     io.out(JSON.stringify(report, null, 2));
@@ -227,15 +240,7 @@ function emit(io: Io, json: boolean, explain: boolean, report: VersionCollisionR
     );
     if (explain) {
       for (const line of renderVersionCollisionDetail(report)) io.out(plainLine(`  ${line}`));
-      for (const entry of report.collisions) {
-        io.out(
-          plainLine(
-            entry.kind === "base"
-              ? `  collision: ${entry.version} at the tip of '${entry.baseRef ?? "?"}' (${entry.head ?? "?"})`
-              : `  collision: ${entry.version} proposed by #${entry.pr ?? "?"} (head ${entry.head ?? "?"}, base '${entry.baseRef ?? "?"}'${entry.draft === true ? ", draft" : ""})`,
-          ),
-        );
-      }
+      for (const entry of report.collisions) io.out(plainLine(`  ${explainCollision(entry, report.proposedVersion)}`));
       for (const missing of report.missing) io.out(plainLine(`  missing: ${missing}`));
       for (const note of report.notes) io.out(plainLine(`  note: ${note}`));
     }

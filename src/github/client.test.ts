@@ -456,14 +456,37 @@ describe("GitHubClient's version-collision reads (zheref/nen#663) -- read-only G
   const SHA_A = "a".repeat(40);
   const SHA_B = "b".repeat(40);
 
-  it("openPullRequestsPage GETs pulls?state=open&sort=created&direction=asc&per_page=100&page=N, one page, raw", async () => {
-    const { fetch: stub, calls } = recordingFetch(() => ({ body: [{ number: 3 }] }));
-    expect(await drive(clientWith(stub).openPullRequestsPage(REPO, 2))).toEqual([{ number: 3 }]);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.method).toBe("GET");
-    const url = new URL(calls[0]?.url ?? "");
-    expect(url.pathname).toBe("/repos/zheref/nen/pulls");
-    expect(Object.fromEntries(url.searchParams)).toEqual({ state: "open", sort: "created", direction: "asc", per_page: "100", page: "2" });
+  it("openPullRequestsPage is ONE GraphQL query (never a mutation), paged by cursor, answering the raw connection", async () => {
+    const page = (n: number, next: boolean): unknown => ({
+      data: {
+        repository: {
+          pullRequests: {
+            pageInfo: { hasNextPage: next, endCursor: next ? `cursor-${n}` : null },
+            nodes: [{ number: n, isDraft: false, isCrossRepository: false, baseRefName: "main", headRefOid: SHA_A, headRepository: { nameWithOwner: "zheref/nen" } }],
+          },
+        },
+      },
+    });
+    const { fetch: stub, calls } = recordingFetch((_call, index) => ({ body: page(index + 1, index === 0) }));
+    const client = clientWith(stub);
+    const first = (await drive(client.openPullRequestsPage(REPO, null))) as { pageInfo: { endCursor: string } };
+    expect(first.pageInfo).toEqual({ hasNextPage: true, endCursor: "cursor-1" });
+    const second = await drive(client.openPullRequestsPage(REPO, first.pageInfo.endCursor));
+    expect(second).toMatchObject({ pageInfo: { hasNextPage: false }, nodes: [{ number: 2 }] });
+    expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      expect(call.method).toBe("POST");
+      expect(call.url).toMatch(/\/graphql$/);
+      const query = String(call.body?.["query"]);
+      expect(query.trim()).toMatch(/^query\(/);
+      expect(query).not.toMatch(/mutation/i);
+      expect(query).toContain("pullRequests(states: OPEN, first: 100, after: $cursor, orderBy: {field: CREATED_AT, direction: ASC})");
+      expect(query).toContain("nodes { number isDraft isCrossRepository baseRefName headRefOid headRepository { nameWithOwner } }");
+    }
+    expect(calls.map((call) => call.body?.["variables"])).toEqual([
+      { owner: "zheref", name: "nen", cursor: null },
+      { owner: "zheref", name: "nen", cursor: "cursor-1" },
+    ]);
   });
 
   it("branchTip GETs git/ref/heads/<branch>, slashes kept, and answers the object's SHA", async () => {
