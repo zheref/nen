@@ -32,7 +32,8 @@
 // no file at all. `expectedGrainOf` is the grain a run is expected to match at
 // before any report has been read.
 
-import { thresholdMet } from "./report.js";
+import { thresholdMet, type CoverageExclusions } from "./report.js";
+import { matchesPattern } from "../../report/patterns.js";
 import type { CoverageTarget } from "./shape.js";
 
 export type CoverageGrain = "file" | "package";
@@ -212,4 +213,23 @@ export function filterTouchedGroups(
     matched: touchedFiles.filter((file): boolean => matchedFiles.has(file)),
     unmatched: touchedFiles.filter((file): boolean => !matchedFiles.has(file)),
   };
+}
+
+/** Apply the declared tool exclusions to Git's repo-relative paths before joining reports. */
+export function excludeTouched(files: readonly string[], patterns: readonly string[] | null): {
+  readonly files: readonly string[]; readonly exclusions: CoverageExclusions;
+} {
+  const kept: string[] = [];
+  const excluded: { path: string; patterns: readonly string[] }[] = [];
+  const matched = new Set<string>();
+  for (const file of files) {
+    const rules = (patterns ?? []).filter((pattern): boolean => matchesPattern(file, pattern));
+    if (rules.length === 0) kept.push(file);
+    else {
+      excluded.push({ path: file, patterns: rules });
+      for (const rule of rules) matched.add(rule);
+    }
+  }
+  return { files: kept, exclusions: { declared: patterns !== null, patterns: patterns ?? [], excluded,
+    unmatchedPatterns: (patterns ?? []).filter((pattern): boolean => !matched.has(pattern)) } };
 }

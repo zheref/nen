@@ -15673,6 +15673,23 @@ nen shu coverage [--repo <path>] [--lane <name>] [--threshold <0-100>] [--touche
 | `--from-capture` | only with `--touched` | Build the touched table from the reports already on disk and **run nothing**. | nen proves the capture this tree's from its provenance sidecar first; one it cannot prove is **exit 8**, nothing reused. Given without `--touched`, with `--dry-run`, or with `--effort`: **exit 2**. See [below](#coverage-from-capture). |
 | `--dry-run` | no | Print every step, run nothing — and **parse nothing**. | The report may well be on disk from a previous run; a dry run does not read it, because reporting yesterday's numbers for a command that did not execute is the most believable wrong answer this verb can give. `--touched` still computes the touched-file set under `--dry-run`: that read is `git diff`, not the declared tool, and previewing which files would be checked costs nothing. |
 
+**Declared tool exclusions.** A runnable coverage row may declare
+`"exclusions": ["src/generated", "**/*.test.ts", "=README.md"]` beside its
+`artifacts`. Paths are repository-relative, case-sensitive, and use Nen's
+shared path grammar: `=path` is exact, a plain path matches on segment
+boundaries, `*` stays within a segment, `**` crosses segments, and `?` matches
+one non-separator character. Nen reads no coverage tool configuration.
+
+On touched runs (including dry runs and proved captures), excluded paths leave
+`touched.files`, `matched`, `unmatched` and the target-row join. The appended
+`touched.exclusions` object carries `declared`, `patterns`, `excluded` (each
+`{path, patterns}`), and `unmatchedPatterns`. Text names every removed file and
+every pattern matching no changed file. No declaration removes nothing and
+prints that absence; `[]` is an explicitly empty set. A fully excluded change
+has an empty touched set, so it does not trigger exit 6. Report-wide totals and
+thresholds remain the coverage report's own. Malformed declarations fail before
+the tool runs. Exclusions are snapshotted before execution.
+
 **Where the report comes from — the verb's own `artifacts`.** nen parses the
 first path under `project.verbs.<lane>.coverage.artifacts` whose **format** it
 recognises, and it never searches a tree for one. Under `--touched` it parses

@@ -73,6 +73,7 @@ import {
   requireString,
   SchemaError,
 } from "./errors.js";
+import { exactPathProblem } from "../report/patterns.js";
 import { matchesGlob } from "../shu/evidence/glob.js";
 import { CAPTURE_DIRECTORY } from "../shu/coverage/capture.js";
 import { catastrophicShape } from "./pattern.js";
@@ -1610,6 +1611,23 @@ function refuseSelectionOverlap(path: string, verbs: Readonly<Record<string, Rea
   }
 }
 
+/** Validate the coverage tool's declared exclusions without reading its configuration. */
+function checkCoverageExclusions(path: string, pointer: string, verb: string, invocation: Invocation): void {
+  const value = invocation.raw["exclusions"];
+  if (value === undefined) return;
+  const field = `${pointer}.exclusions`;
+  if (verb !== "coverage" || invocation.kind === "unsupported") {
+    throw new SchemaError(path, field, "exclusions belongs only on a runnable coverage row");
+  }
+  for (const [index, entry] of requireArray(path, field, value).entries()) {
+    const pattern = requireString(path, `${field}[${index}]`, entry);
+    const problem = exactPathProblem(pattern);
+    if (pattern.trim() === "" || problem !== null) {
+      throw new SchemaError(path, `${field}[${index}]`, problem ?? "an exclusion pattern must not be empty");
+    }
+  }
+}
+
 function parseVerbs(
   path: string,
   value: unknown,
@@ -1630,6 +1648,7 @@ function parseVerbs(
       // `resume:pdf`; a closed verb list here would make this file nen's.
       refuseStallOnTests(path, `${pointer}.${verb}`, verb, invocation);
       parsed[verb] = withSelection(path, `${pointer}.${verb}`, verb, parseInvocation(path, `${pointer}.${verb}`, invocation));
+      checkCoverageExclusions(path, `${pointer}.${verb}`, verb, parsed[verb]);
     }
     // EMPTY IS REFUSED AT BOTH LEVELS, exactly as `project.lanes` refuses it,
     // and for the same reason: `$`-prefixed metadata is skipped above, so a map

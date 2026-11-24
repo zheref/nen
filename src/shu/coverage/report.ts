@@ -53,13 +53,9 @@ export interface CoverageSource {
 /**
  * `--touched --base <ref>`'s own account of what it did, or null without it.
  *
- * `files` IS EVERYTHING `git diff --name-only <base>...HEAD` NAMED, whether or
- * not a row matched it -- `matched` and `unmatched` partition that same list,
- * never a different one, so `matched.length + unmatched.length ===
- * files.length` always holds. A file this repository's coverage tool never
- * measures at all (a config file, a fixture, a doc) is `unmatched`, and that is
- * a finding rather than a bug: it is precisely the set a reviewer of a
- * `--touched` run would otherwise have to work out by hand.
+ * `files` is the changed set after declared coverage exclusions. `matched`
+ * and `unmatched` partition it; `exclusions` names each removed path and each
+ * declared pattern that matched nothing. Without a declaration nothing leaves.
  */
 export interface TouchedReport {
   readonly base: string;
@@ -73,6 +69,15 @@ export interface TouchedReport {
    * nothing: a dry run, or a run whose tool failed.
    */
   readonly artifacts: readonly TouchedArtifact[];
+  readonly exclusions?: CoverageExclusions;
+}
+
+/** The declaration's audit trail; empty and absent sets remain distinct. */
+export interface CoverageExclusions {
+  readonly declared: boolean;
+  readonly patterns: readonly string[];
+  readonly excluded: readonly { readonly path: string; readonly patterns: readonly string[] }[];
+  readonly unmatchedPatterns: readonly string[];
 }
 
 /**
@@ -473,6 +478,12 @@ export function renderCoverage(
         `base ${t.base}: ${t.files.length} file${t.files.length === 1 ? "" : "s"} (${t.matched.length} matched, ${t.unmatched.length} unmatched)${grainNote}`,
       ),
     );
+    if (t.exclusions !== undefined) {
+      const e = t.exclusions;
+      lines.push(`  exclusions: ${e.declared ? `${e.patterns.length} declared pattern(s), ${e.excluded.length} excluded file(s)` : "no exclusion set is declared"}`);
+      for (const entry of e.excluded) lines.push(`  excluded by declaration: ${entry.path} (${entry.patterns.join(", ")})`);
+      for (const pattern of e.unmatchedPatterns) lines.push(`  no changed file matched: ${pattern}`);
+    }
     for (const artifact of t.artifacts) {
       lines.push(`  from: ${describeArtifact(artifact)}`);
       for (const line of unresolvedLines(artifact)) lines.push(line);

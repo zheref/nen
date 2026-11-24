@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import { counts, target } from "./shape.js";
-import { expectedGrainOf, filterTouched, grainOf, touchedByPackage } from "./touched.js";
+import { excludeTouched, expectedGrainOf, filterTouched, grainOf, touchedByPackage } from "./touched.js";
 
 describe("grainOf", () => {
   it("is 'package' for cobertura and jacoco, 'file' for everything else", () => {
@@ -173,5 +173,16 @@ describe("expectedGrainOf -- the grain a run is expected to match at before a re
     expect(expectedGrainOf("lcov")).toBe("file");
     expect(expectedGrainOf("istanbul-summary")).toBe("file");
     expect(expectedGrainOf("xccov-report")).toBe("file");
+  });
+});
+
+
+describe("declared touched exclusions", () => {
+  it("uses exact paths, segment prefixes and the shared glob grammar without normalizing names", () => {
+    const files = ["src/generated/a.ts", "src/generated/deep/b.ts", "src/generated-other/a.ts", "src/a.test.ts", "docs/a.md", "README.md", "Readme.md", " odd .ts"];
+    const result = excludeTouched(files, ["src/generated", "src/**/*.test.ts", "=README.md", " odd .ts", "not-here/**", "src/generated/**"]);
+    expect(result.files).toEqual(["src/generated-other/a.ts", "docs/a.md", "Readme.md"]);
+    expect(result.exclusions.excluded[0]).toEqual({ path: "src/generated/a.ts", patterns: ["src/generated", "src/generated/**"] });
+    expect(result.exclusions.unmatchedPatterns).toEqual(["not-here/**"]);
   });
 });

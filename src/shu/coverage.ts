@@ -71,6 +71,7 @@ import { rebaseRows, resolveRoot, rootCandidates } from "./coverage/roots.js";
 import { joinSourceFiles } from "./coverage/files.js";
 import { bandRows } from "./coverage/ladder.js";
 import {
+  excludeTouched,
   expectedGrainOf,
   filterTouchedGroups,
   grainOf,
@@ -892,8 +893,14 @@ export async function runCoverage(
   validateTouched(options);
   validateFromCapture(options);
   const ladder = readLadder(repoRoot, options, threshold);
+  // Snapshot before the declared tool runs; its output cannot change the set.
+  const project = options.touched ? openDeclaration(repoRoot).project : null;
+  const lane = options.lane ?? project?.defaultLane;
+  const exclusions = project !== null && lane != null
+    ? (project.verbs[lane]?.["coverage"]?.raw["exclusions"] as readonly string[] | undefined) ?? null
+    : null;
   if (options.touched) verifyBase(context, repoRoot, options.base as string);
-  if (options.fromCapture === true) return fromCapture(context, repoRoot, options, threshold, ladder);
+  if (options.fromCapture === true) return fromCapture(context, repoRoot, options, threshold, ladder, exclusions);
   // A HOLDER RATHER THAN A `let`: the assignment happens inside a callback, and
   // a `let` narrowed to `null` at its declaration is a type error at every read
   // below -- the compiler does not follow a closure it did not call.
@@ -938,7 +945,7 @@ export async function runCoverage(
     // reader needs. So it is rendered, with a document carrying the refusal's
     // own code, and the refusal then goes on to ../shu/command.ts unchanged.
     if (error instanceof ShuRefusal && captured.report !== null) {
-      report(context, captured.report, renderReport(captured.report), repoRoot, options, threshold, ladder, error.code, null);
+      report(context, captured.report, renderReport(captured.report), repoRoot, options, threshold, ladder, error.code, null, exclusions);
     }
     throw error;
   }
@@ -946,7 +953,7 @@ export async function runCoverage(
   const run = captured.report;
   /* c8 ignore next 2 -- runVerb emits exactly once on every path that returns */
   if (run === null) return exitCode;
-  return report(context, run, renderReport(run), repoRoot, options, threshold, ladder, exitCode, null);
+  return report(context, run, renderReport(run), repoRoot, options, threshold, ladder, exitCode, null, exclusions);
 }
 
 /**
@@ -978,6 +985,7 @@ function fromCapture(
   options: CoverageOptions,
   threshold: number | null,
   ladder: CoverageLadderReport | null,
+  exclusions: readonly string[] | null,
 ): number {
   const { project } = openDeclaration(repoRoot);
   const plan = renderInvocation(project, {
@@ -1005,7 +1013,7 @@ function fromCapture(
     ),
   };
   const header = renderFromCapture(plan.lane, plan.stack, reports, sidecarPath(plan.lane));
-  return report(context, run, header, repoRoot, { ...options, dryRun: false }, threshold, ladder, 0, files);
+  return report(context, run, header, repoRoot, { ...options, dryRun: false }, threshold, ladder, 0, files, exclusions);
 }
 
 /**
@@ -1100,6 +1108,7 @@ function report(
   ladder: CoverageLadderReport | null,
   exitCode: number,
   files: readonly string[] | null,
+  exclusions: readonly string[] | null,
 ): number {
   // The executor's own rendering (or --from-capture's header), first: to
   // stdout as text, to stderr under --json so the one document on stdout
@@ -1109,7 +1118,7 @@ function report(
 
   const parsed = parseAfterRun(run, repoRoot, options, exitCode);
   const touched = options.touched
-    ? computeTouched(context, repoRoot, options.base as string, parsed, threshold, files)
+    ? computeTouched(context, repoRoot, options.base as string, parsed, threshold, files, exclusions)
     : null;
   // THE LADDER WAS DECIDED BEFORE THE RUN (see readLadder above): it is null
   // exactly when this invocation has none -- no --touched, or an explicit
@@ -1140,6 +1149,7 @@ function report(
             matched: touched.filter.matched,
             unmatched: touched.filter.unmatched,
             artifacts: parsed.artifacts,
+            exclusions: touched.exclusions,
           },
     ladder,
   });
@@ -1220,14 +1230,16 @@ function computeTouched(
   parsed: Parsed,
   threshold: number | null,
   known: readonly string[] | null,
-): { readonly files: readonly string[]; readonly filter: TouchedFilter; readonly grain: CoverageGrain | null } {
+  exclusions: readonly string[] | null,
+): { readonly exclusions: ReturnType<typeof excludeTouched>["exclusions"]; readonly files: readonly string[]; readonly filter: TouchedFilter; readonly grain: CoverageGrain | null } {
   // --from-capture has already read the touched set to judge the capture
   // against it; asking git twice could only produce a second answer.
-  const files = known ?? touchedFiles(context, repoRoot, base);
+  const selected = excludeTouched(known ?? touchedFiles(context, repoRoot, base), exclusions);
+  const files = selected.files;
   // EVERY DECLARED REPORT, EACH AT ITS OWN GRAIN (zheref/nen#236): `groups`
   // is one entry per report nen read, already rebased onto that report's
   // root, and empty on every path that parsed nothing.
-  return { files, filter: filterTouchedGroups(parsed.groups, files, threshold), grain: touchedGrain(parsed) };
+  return { ...selected, filter: filterTouchedGroups(parsed.groups, files, threshold), grain: touchedGrain(parsed) };
 }
 
 /**

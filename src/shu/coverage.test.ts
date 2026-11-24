@@ -15,7 +15,7 @@
 //   3. a dry run that parses the report sitting on disk from a previous run.
 
 import { describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, readFileSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Io } from "../index.js";
@@ -801,6 +801,7 @@ describe("--touched --base <ref>", () => {
       files: ["packages/core/src/index.ts", "README.md"],
       matched: ["packages/core/src/index.ts"],
       unmatched: ["README.md"],
+      exclusions: { declared: false, patterns: [], excluded: [], unmatchedPatterns: [] },
       // The committed fixture is the SINGLE-PACKAGE shape (zheref/nen#236
       // acceptance 6): artifact under `coverage/`, lane cwd `.`, so every
       // candidate root is the repository root and the rows are untouched.
@@ -912,6 +913,7 @@ describe("--touched --base <ref>", () => {
       matched: [],
       unmatched: ["a.ts"],
       artifacts: [],
+      exclusions: { declared: false, patterns: [], excluded: [], unmatchedPatterns: [] },
     });
     // NOTHING WAS PARSED, so a zero match here is not the unjoined refusal.
   });
@@ -2111,5 +2113,71 @@ describe("--from-capture: containment and operational failures", () => {
       rmSync(repo, { recursive: true, force: true });
       rmSync(outside, { recursive: true, force: true });
     }
+  });
+});
+
+
+describe("NN#645 declared coverage exclusions", () => {
+  const diff = (base: string): string => `git -c core.quotePath=false diff --name-only -z ${base}...HEAD`;
+  async function excludedRun(exclusions: unknown, json = true, dryRun = false): Promise<Captured> {
+    const repo = mkdtempSync(join(tmpdir(), "nen-645-"));
+    try {
+      cpSync(SHU_COVERAGE_REPO, repo, { recursive: true });
+      const path = join(repo, "nen", "contract.json");
+      const declaration = JSON.parse(readFileSync(path, "utf8")) as { project: { verbs: { web: { coverage: Record<string, unknown> } } } };
+      if (exclusions !== undefined) declaration.project.verbs.web.coverage["exclusions"] = exclusions;
+      writeFileSync(path, JSON.stringify(declaration));
+      return await capture(["coverage", "--touched", "--base", "main", ...(json ? ["--json"] : []), ...(dryRun ? ["--dry-run"] : [])], {
+        repo, script: [ok(WEB), { match: diff("main"), result: { code: 0, stdout: "packages/core/src/index.ts\0README.md\0" } }],
+      });
+    } finally { rmSync(repo, { recursive: true, force: true }); }
+  }
+
+  it.each([null, "src/**", [4], [" "], ["=../secret"]])("rejects malformed declaration %j before the tool runs", async (value) => {
+    const result = await excludedRun(value);
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toContain("coverage.exclusions");
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("keeps an explicitly empty declaration distinct from absence", async () => {
+    expect(document(await excludedRun([])).touched).toMatchObject({ exclusions: { declared: true, patterns: [], excluded: [], unmatchedPatterns: [] } });
+  });
+
+  it("an entirely declared-excluded change has no unjoined error and no target rows", async () => {
+    const result = await excludedRun(["**"]);
+    expect(result.code).toBe(0);
+    expect(document(result).touched).toMatchObject({ files: [], matched: [], unmatched: [] });
+    expect(document(result).targets).toEqual([]);
+  });
+
+  it("reports exclusions during a dry run without invoking the tool", async () => {
+    const result = await excludedRun(["=README.md"], true, true);
+    expect(result.code).toBe(0);
+    expect(document(result).touched).toMatchObject({ files: ["packages/core/src/index.ts"], exclusions: { excluded: [{ path: "README.md", patterns: ["=README.md"] }] } });
+    expect(result.seams.calls.some((call): boolean => call.command === "pnpm")).toBe(false);
+  });
+
+  it("AC-1 removes declared paths from the touched set and names the exclusion", async () => {
+    const result = await excludedRun(["=README.md"]);
+    expect(result.code).toBe(0);
+    expect(document(result).touched).toMatchObject({ files: ["packages/core/src/index.ts"], unmatched: [],
+      exclusions: { declared: true, patterns: ["=README.md"], excluded: [{ path: "README.md", patterns: ["=README.md"] }], unmatchedPatterns: [] } });
+    expect((await excludedRun(["=README.md"], false)).out.join("\n")).toContain("excluded by declaration: README.md");
+  });
+
+  it("AC-2 leaves undeclared exclusions untouched and reports the absence", async () => {
+    const result = await excludedRun(undefined);
+    expect(result.code).toBe(0);
+    expect(document(result).touched).toMatchObject({ files: ["packages/core/src/index.ts", "README.md"], unmatched: ["README.md"],
+      exclusions: { declared: false, patterns: [], excluded: [], unmatchedPatterns: [] } });
+    expect((await excludedRun(undefined, false)).out.join("\n")).toContain("no exclusion set is declared");
+  });
+
+  it("AC-3 reports each exclusion pattern that matches no changed file", async () => {
+    const result = await excludedRun(["generated/**", "=README.md"]);
+    expect(result.code).toBe(0);
+    expect(document(result).touched).toMatchObject({ exclusions: { unmatchedPatterns: ["generated/**"] } });
+    expect((await excludedRun(["generated/**"], false)).out.join("\n")).toContain("no changed file matched: generated/**");
   });
 });
