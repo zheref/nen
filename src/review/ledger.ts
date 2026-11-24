@@ -38,9 +38,18 @@ function wellFormedDelta(entry: Record<string, unknown>): boolean {
   return typeof from === "string" && typeof to === "string" && DELTA_HEAD.test(from) && DELTA_HEAD.test(to) && from !== to;
 }
 /** Per-reviewer counts a caller reads instead of parsing rows: a delta is neither a round nor a skip. */
+/**
+ * The deltas since the reviewer's last `ran` row: a later ordinary round
+ * re-reads the whole change, so it resets the chain a delta must extend.
+ */
+function chainSinceRound(row: Reviewer): Extract<Invocation, { outcome: "delta" }>[] {
+  let round = -1;
+  row.invocations.forEach((entry, index): void => { if (entry.outcome === "ran") round = index; });
+  return row.invocations.slice(round + 1).filter((entry): entry is Extract<Invocation, { outcome: "delta" }> => entry.outcome === "delta");
+}
 export function passCounts(row: Reviewer): { deltas: number; skips: number; lastDeltaHead: string | null } {
   const deltas = row.invocations.filter((entry): boolean => entry.outcome === "delta");
-  const last = deltas.at(-1);
+  const last = chainSinceRound(row).at(-1);
   return {
     deltas: deltas.length,
     skips: row.invocations.filter((entry): boolean => entry.outcome === "skipped-exhausted").length,
@@ -320,16 +329,19 @@ export interface CycleArgs { applicable?: string; persona?: string; outcome?: st
  */
 function checkDelta(persona: string, row: Reviewer, fromHead: string, toHead: string): void {
   for (const [flag, value] of [["--from-head", fromHead], ["--to-head", toHead]] as const) {
-    if (!DELTA_HEAD.test(value)) refuse(`${flag} ${JSON.stringify(value)} is not a full commit id: give all 40 lowercase hexadecimal digits.`);
+    if (!DELTA_HEAD.test(value)) refuse(`${flag} ${JSON.stringify(value)} is not a full commit id: give all 40 lowercase hexadecimal digits (resolve it with git rev-parse <sha>^{commit}).`);
   }
   if (fromHead === toHead) refuse(`--from-head and --to-head are both ${fromHead}; a delta reviews the diff between two different heads.`);
   if (!row.invocations.some((entry): boolean => entry.outcome === "ran")) refuse(`${persona} has no ran pass in this cycle; a delta re-reads that reviewer's own earlier review, so record ran first.`);
   if (row.used < row.max) refuse(`${persona} still has budget (${row.used}/${row.max}); a delta is only for a spent reviewer, so raise an ordinary round and record ran.`);
   const deltas = row.invocations.filter((entry): entry is Extract<Invocation, { outcome: "delta" }> => entry.outcome === "delta");
   if (deltas.some((entry): boolean => entry.fromHead === fromHead && entry.toHead === toHead)) refuse(`${persona} already has a delta from ${fromHead} to ${toHead}; nothing recorded twice.`);
-  const last = deltas.at(-1);
+  // The duplicate refusal reads the whole cycle; the chain and the covered
+  // heads read only the deltas since the reviewer's last ordinary round.
+  const chain = chainSinceRound(row);
+  const last = chain.at(-1);
   if (last !== undefined && last.toHead !== fromHead) refuse(`--from-head ${fromHead} is not ${persona}'s last reviewed head ${last.toHead}; a delta covers the diff since that reviewer's last head.`);
-  if (deltas.some((entry): boolean => entry.fromHead === toHead || entry.toHead === toHead)) refuse(`--to-head ${toHead} was already reviewed by ${persona} in this cycle; a delta is for a new head.`);
+  if (chain.some((entry): boolean => entry.fromHead === toHead || entry.toHead === toHead)) refuse(`--to-head ${toHead} was already reviewed by ${persona}'s deltas since its last ran pass; a delta is for a new head.`);
 }
 export function runCycle(options: CycleOptions, action: string, args: CycleArgs): Record<string, unknown> {
   const budgets = readBudgets(options.root);

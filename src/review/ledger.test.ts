@@ -378,7 +378,7 @@ describe("bounded delta passes (zheref/nen#662)", () => {
     ["a missing from-head", { outcome: "delta", toHead: B }, /--from-head is missing/],
     ["a head with ran", { outcome: "ran", fromHead: A }, /--from-head is only valid with --outcome delta, not ran/],
     ["a head with a skip", { outcome: "skipped-exhausted", toHead: B }, /--to-head is only valid with --outcome delta, not skipped-exhausted/],
-    ["an abbreviated head", { outcome: "delta", fromHead: "abc1234", toHead: B }, /--from-head "abc1234" is not a full commit id/],
+    ["an abbreviated head", { outcome: "delta", fromHead: "abc1234", toHead: B }, /--from-head "abc1234" is not a full commit id: give all 40 lowercase hexadecimal digits \(resolve it with git rev-parse <sha>\^\{commit\}\)\.$/],
     ["an uppercase head", { outcome: "delta", fromHead: A, toHead: "B".repeat(40) }, /--to-head "B{40}" is not a full commit id/],
     ["a ref name", { outcome: "delta", fromHead: "HEAD", toHead: B }, /--from-head "HEAD" is not a full commit id/],
     ["identical heads", { outcome: "delta", fromHead: A, toHead: A }, /both a{40}; a delta reviews the diff between two different heads/],
@@ -399,8 +399,25 @@ describe("bounded delta passes (zheref/nen#662)", () => {
     const o = spent(); act(o, "record", { persona: "nobunaga", outcome: "delta", fromHead: A, toHead: B }); const before = bytes(o);
     expect(() => act(o, "record", { persona: "nobunaga", outcome: "delta", fromHead: A, toHead: B })).toThrow(/already has a delta from a{40} to b{40}/);
     expect(() => act(o, "record", { persona: "nobunaga", outcome: "delta", fromHead: C, toHead: D })).toThrow(/--from-head c{40} is not nobunaga's last reviewed head b{40}/);
-    expect(() => act(o, "record", { persona: "nobunaga", outcome: "delta", fromHead: B, toHead: A })).toThrow(/--to-head a{40} was already reviewed by nobunaga in this cycle/);
+    expect(() => act(o, "record", { persona: "nobunaga", outcome: "delta", fromHead: B, toHead: A })).toThrow(/--to-head a{40} was already reviewed by nobunaga's deltas since its last ran pass/);
     expect(bytes(o)).toBe(before);
+  });
+  it("a later ran pass resets the chain: the next delta may start anywhere, lastDeltaHead clears, deltas keeps the total", () => {
+    const o = spent(); const E = "e".repeat(40);
+    act(o, "record", { persona: "nobunaga", outcome: "delta", fromHead: A, toHead: B }); act(o, "record", { persona: "nobunaga", outcome: "delta", fromHead: B, toHead: C });
+    const workflow = join(o.root, "nen", "workflow.json"); writeFileSync(workflow, readFileSync(workflow, "utf8").replace('"persona": "nobunaga", "tier": "deep", "budget": 2', '"persona": "nobunaga", "tier": "deep", "budget": 3'));
+    expect(act(o, "record", { persona: "nobunaga", outcome: "ran" })).toMatchObject({ used: 3, max: 3, deltas: 2, lastDeltaHead: null });
+    const row = (): Record<string, unknown> => (act(o, "decide", { applicable: "nobunaga" })["reviewers"] as Record<string, unknown>[]).find((r): boolean => r["persona"] === "nobunaga")!;
+    expect(row()).toMatchObject({ used: 3, deltas: 2, lastDeltaHead: null, action: "skip-exhausted" });
+    const before = bytes(o);
+    expect(() => act(o, "record", { persona: "nobunaga", outcome: "delta", fromHead: A, toHead: B })).toThrow(/already has a delta from a{40} to b{40}/);
+    expect(bytes(o)).toBe(before);
+    expect(act(o, "record", { persona: "nobunaga", outcome: "delta", fromHead: D, toHead: E })).toMatchObject({ used: 3, max: 3, deltas: 3, lastDeltaHead: E });
+    expect(act(o, "record", { persona: "nobunaga", outcome: "delta", fromHead: E, toHead: B })).toMatchObject({ deltas: 4, lastDeltaHead: B });
+    expect(() => act(o, "record", { persona: "nobunaga", outcome: "delta", fromHead: C, toHead: A })).toThrow(/is not nobunaga's last reviewed head b{40}/);
+    const doc = read(o).reviewers.nobunaga!;
+    expect(doc.invocations.map((e): unknown => e.outcome)).toEqual(["ran", "ran", "delta", "delta", "ran", "delta", "delta"]);
+    expect([doc.used, doc.max]).toEqual([3, 3]); expect(row()).toMatchObject({ used: 3, deltas: 4, lastDeltaHead: B });
   });
   it.each([
     { outcome: "delta" }, { outcome: "delta", fromHead: "a".repeat(40) }, { outcome: "delta", fromHead: "abc", toHead: "b".repeat(40) },

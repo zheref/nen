@@ -42,8 +42,12 @@ roster or fallback budgets. Declare the complete roster before migrating.
   full 40-digit lowercase hexadecimal commit id, equal heads, a reviewer with
   no `ran` row in this cycle, a reviewer that still has budget (raise an
   ordinary round instead), the same `fromHead`/`toHead` pair recorded again,
-  a `fromHead` other than the reviewer's last delta `toHead` when one exists,
-  and a `toHead` the reviewer's deltas already reviewed.
+  and, among the deltas since the reviewer's last `ran` row, a `fromHead`
+  other than the last delta's `toHead` when one exists, or a `toHead` those
+  deltas already reviewed. A later `ran` row resets that chain, so the next
+  delta may start from any head; the duplicate check reads the whole cycle.
+  `lastDeltaHead` is the `toHead` of the last delta since the last `ran` row,
+  `null` when there is none; `deltas` counts every delta in the cycle.
 - `show` returns the document with its absolute `path`. `show` and `decide`
   read without saving; missing reads leave no lock trace.
 - `recover-first --confirmed-first-cycle` explicitly audits a first-cycle

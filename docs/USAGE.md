@@ -21006,8 +21006,9 @@ remains usable. This never initializes a lost cycle.
 appends a bounded delta pass for a spent reviewer that already has a `ran`
 row ([#662](https://github.com/zheref/nen/issues/662)). It leaves `used` and
 `max` unchanged. Both heads must be distinct full 40-digit lowercase commit
-ids, `--from-head` the reviewer's last delta head when one exists and
-`--to-head` a head it has not reviewed; a duplicate, a missing head or a head
+ids; among the deltas since the reviewer's last `ran` row, `--from-head` is
+the last delta's `toHead` when one exists and `--to-head` is no head those
+deltas already reviewed (a later `ran` resets that chain); a duplicate, a missing head or a head
 given with another outcome is refused at exit 2 before any write. `decide`
 and `record` report per-reviewer `deltas`, `skips` and `lastDeltaHead`, so a
 delta is neither a round nor a skip. A nen older than this change refuses a
