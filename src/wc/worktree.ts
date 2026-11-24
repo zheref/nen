@@ -1238,7 +1238,19 @@ export function manageWorktree(
         const local = git.run(core, ["cat-file", "-e", `${tip}^{commit}`]);
         if (local.spawnFailed) throw new WorktreeStepError(local.error);
         tipKnown = local.code === 0;
-        report = { ...report, verificationPending: ["remote head must match the pin", ...(tipKnown ? [] : ["pinned commit is not local; destination and overwrite checks await fetch"])] };
+        if (tipKnown) {
+          // A treeless partial clone can hold the commit but not its root or
+          // nested trees. Prove every tree needed by preflights without fetching.
+          const trees = git.run(core, ["ls-tree", "-r", "--name-only", "--full-tree", "--end-of-options", tip]);
+          if (trees.spawnFailed) throw new WorktreeStepError(trees.error);
+          if (trees.code !== 0) {
+            if (!/not a tree object|unable to read tree|bad tree object/.test(trees.error)) {
+              throw new WorktreeStepError(`checking local PR trees failed: ${trees.error}`);
+            }
+            tipKnown = false;
+          }
+        }
+        report = { ...report, verificationPending: ["remote head must match the pin", ...(tipKnown ? [] : ["pinned commit or tree is not local; destination and overwrite checks await fetch"])] };
       }
     } else {
       if (!options.dryRun) fetchTip(git, core, options.base!);

@@ -8,7 +8,7 @@ exclusive. The caller checks that the PR is open and trusted; this verb reads
 no PR metadata. A mismatch names both commits and leaves the worktree untouched.
 
 `--dry-run` fetches and writes nothing. It prints the planned fetch and detached
-placement; remote-head verification remains pending, and when the commit is not
+placement; remote-head verification remains pending, and when the commit or a required tree is not
 local, destination/overwrite checks remain pending too. The displayed state is
 conditional on those checks passing on the real run.
 

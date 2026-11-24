@@ -509,7 +509,7 @@ worktree:
                     nothing; print the state and every planned action.
                     For a PR, print the fetch and detached placement plan.
                     Remote head verification stays pending. If the pinned
-                    commit is absent locally, tree/overwrite checks also
+                    commit or a required tree is absent, tree/overwrite checks also
                     stay pending; the printed state is conditional on them.
                     PR dry runs require Git >= 2.44 to disable lazy fetch.
                     All PR reads and placement disable replacement objects.

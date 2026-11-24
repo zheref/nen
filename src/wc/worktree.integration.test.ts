@@ -349,6 +349,25 @@ describe.skipIf(!HAVE_GIT)("NN#650 pinned PR worktrees", () => {
     expect(readFileSync(join(w.W, "README"), "utf8")).toBe("PR 650 change\n");
   });
 
+  it("AC-5 plans a locally held pin whose tree is missing without lazy fetching", async () => {
+    const w = world();
+    const head = publishPr(w);
+    mustGit(w.origin, ["config", "uploadpack.allowFilter", "true"]);
+    mustGit(w.C, ["config", "remote.origin.promisor", "true"]);
+    mustGit(w.C, ["config", "remote.origin.partialclonefilter", "tree:0"]);
+    mustGit(w.C, [...PINNED, "fetch", "--quiet", "--filter=tree:0", "origin", "refs/pull/650/head"]);
+    expect(git(w.C, ["--no-lazy-fetch", "cat-file", "-e", head]).code).toBe(0);
+    expect(git(w.C, ["--no-lazy-fetch", "cat-file", "-e", `${head}^{tree}`]).code).not.toBe(0);
+    const before = mustGit(w.C, ["count-objects", "-v"]);
+    const run = await wc([...prArgs(head), ...COPY, "--dry-run"], w.C);
+    expect(run.code, run.err).toBe(0);
+    expect(run.out).toContain("pending:");
+    expect(run.out).toContain("tree");
+    expect(run.out).toContain("detach");
+    expect(mustGit(w.C, ["count-objects", "-v"])).toBe(before);
+    expect(existsSync(w.W)).toBe(false);
+  });
+
   it("AC-5 never lazy-fetches an absent pin from a promisor remote", async () => {
     const w = world();
     const head = publishPr(w);
