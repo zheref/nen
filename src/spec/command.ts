@@ -1,6 +1,6 @@
 // src/spec/command.ts -- the `nen spec` family: number, check, cite-check,
 // index (the first slice), then inventory, diff, converge, coverage, parity,
-// tasks groups and trace (zheref/nen#493). The verbs Hatsu's capture skill
+// tasks groups and trace (zheref/nen#493), and due (zheref/nen#673). The verbs Hatsu's capture skill
 // (`dowsing-chain`, ruling HR-12) owes to nen: read-only, but for `index
 // --write`, `converge --write`, `trace --write` (each behind --dry-run) and
 // `inventory --out`.
@@ -24,7 +24,7 @@ import { checkSpec, CONSTITUTION_PATH, parseVocabulary, renderSpecCheck, SpecCon
 import { citeCheck, parseCheckouts, renderCiteCheck } from "./citecheck.js";
 import { computeNext, readBaseFolders, readPrFolders, renderSpecNumber, SPEC_NUMBER_CONTRACT, type SpecNumberReport } from "./number.js";
 import { renderSpecIndex, specIndex } from "./specindex.js";
-import { loadRepoRegistry, type RepoRegistry } from "../schema/repos.js";
+import { loadRepoRegistry, type ProductFamily, type RepoRegistry } from "../schema/repos.js";
 import { parseContract } from "../schema/contract.js";
 import { couldNotRead, GOVERNED_SCENARIOS, inventory, renderInventory, scenarioReader, type InventoryReport } from "./inventory.js";
 import { diffInventories, InventoryReadError, loadInventory, renderDiff, unreadableDiff, type SpecDiffReport } from "./diff.js";
@@ -34,9 +34,10 @@ import { readTree, TreeReadError } from "./tree.js";
 import { parity, readParityFolders, renderParity, unreadableParity, type ParityReport } from "./parity.js";
 import { renderTasks, taskGroups, unreadableTasks, type TasksReport } from "./tasks.js";
 import { renderTrace, specTrace, unreadableTrace } from "./trace.js";
+import { renderDue, specDue, unreadableDue, type SpecDueReport } from "./due.js";
 import { GIT, outputLines } from "../seam/exec.js";
 
-const SUBCOMMANDS = ["number", "check", "cite-check", "index", "inventory", "diff", "converge", "coverage", "parity", "tasks", "trace"] as const;
+const SUBCOMMANDS = ["number", "check", "cite-check", "index", "inventory", "diff", "converge", "coverage", "parity", "tasks", "trace", "due"] as const;
 type Subcommand = (typeof SUBCOMMANDS)[number];
 
 export const DEFAULT_SPEC_LAYOUT = "specs/{nnn}-{slug}";
@@ -53,6 +54,7 @@ nen spec coverage --issue-body <file> --pr-body <file> [--test-report <file>] [-
 nen spec parity --repo <spec> (--folder <dir> | --family <name>) [--layout <pattern>] [--target <owner/name>[,<owner/name>...]] [--json]
 nen spec tasks groups --repo <spec> --folder <dir> [--layout <pattern>] [--group <id>] [--json]
 nen spec trace --repo <spec> --family <name> [--layout <pattern>] [--write [--dry-run]] [--json]
+nen spec due --repo <spec> [--family <name>] [--json]
 
 Read-only verbs over a Spec Kit spec repository. Each
 reports and refuses; none decides. A layout is '<dir>/<final>' whose final
@@ -155,6 +157,15 @@ trace       <root>/traceability.md for one family: one row per FR and SC, one
             and open markers. Without --write: exit 0 only when current;
             --write regenerates an absent or stale file and refuses a hand
             edit; --dry-run writes nothing.
+due         Per family of nen/repos.json families[] (or --family's one), each
+            member's newest v<major>.<minor>.<patch> tag (gh api tags; a
+            prerelease or other v* tag is no release) against the commit
+            capture/<CODE>/inventory.json records, decided by gh api compare:
+            due (the tag is ahead or diverged) · current · no-capture (no
+            member has a capture) · not-decided (a member's tags, compare or
+            capture entry could not be read, or its origin is another repo).
+            Writes nothing, starts no recapture. Exit 0 only when every family
+            is current.
 
 --json shapes (key order as listed):
   number:     { contract: "nen.spec.number/v0.1", repo, target, layout, base, baseSource, baseSha, openPrs, taken, collisions, next, reason }
@@ -168,14 +179,15 @@ trace       <root>/traceability.md for one family: one row per FR and SC, one
               { contract: "nen.spec.coverage/v0.1", form: "delivery", verdict, issueBody, prBody, testReport, section, criteria, outside, counts, reason }
   parity:     { contract: "nen.spec.parity/v0.1", verdict, repo, scope, members, folders, rows, counts, live, reason }
   tasks:      { contract: "nen.spec.tasks/v0.1", verdict, repo, folder, spec, groups, order, reason }
-  trace:      { contract: "nen.spec.trace/v0.1", verdict, repo, family, members, path, rows, action, reason }`;
+  trace:      { contract: "nen.spec.trace/v0.1", verdict, repo, family, members, path, rows, action, reason }
+  due:        { contract: "nen.spec.due/v0.1", verdict, repo, families, counts, reason }`;
 
 const OWNED: Readonly<Record<string, readonly Subcommand[]>> = {
   layout: ["number", "index", "coverage", "parity", "trace", "tasks"],
   base: ["number"],
   target: ["number", "parity"],
   folder: ["check", "cite-check", "converge", "parity", "tasks"],
-  family: ["parity", "trace"],
+  family: ["parity", "trace", "due"],
   group: ["tasks"],
   vocabulary: ["check"],
   max: ["check"],
@@ -459,18 +471,29 @@ function runCoverage(context: CommandContext): number {
 
 const FAMILY_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
-/** The family's member codes from the spec repository's own registry; a usage refusal when it declares no such family. */
-function familyMembers(repo: string, family: string): string[] {
-  if (!FAMILY_NAME.test(family)) throw new VerbUsageError(`--family '${family}' is not a slug.`);
+/**
+ * The spec repository's own registry and its families -- every declared one, or
+ * only `family`. A usage refusal when `family` is not a slug or not declared;
+ * a plain Error (each verb's could-not-read) when the registry cannot be read.
+ */
+function declaredFamilies(repo: string, family: string | null): { registry: RepoRegistry; families: readonly ProductFamily[] } {
+  if (family !== null && !FAMILY_NAME.test(family)) throw new VerbUsageError(`--family '${family}' is not a slug.`);
   let registry: RepoRegistry;
   try {
     registry = loadRepoRegistry(repo);
   } catch (error) {
     throw new Error(`the spec repository's nen/repos.json could not be read: ${(error as Error).message}`);
   }
-  const found = (registry.families ?? []).find((entry): boolean => entry.name === family);
-  if (found === undefined) throw new VerbUsageError(`--family '${family}' is not declared in nen/repos.json families[] (declared: ${(registry.families ?? []).map((entry): string => entry.name).join(", ") || "none"}).`);
-  return found.members.map((member): string => member.code);
+  const declared = registry.families ?? [];
+  if (family === null) return { registry, families: declared };
+  const found = declared.find((entry): boolean => entry.name === family);
+  if (found === undefined) throw new VerbUsageError(`--family '${family}' is not declared in nen/repos.json families[] (declared: ${declared.map((entry): string => entry.name).join(", ") || "none"}).`);
+  return { registry, families: [found] };
+}
+
+/** The family's member codes from the spec repository's own registry; a usage refusal when it declares no such family. */
+function familyMembers(repo: string, family: string): string[] {
+  return declaredFamilies(repo, family).families.flatMap((found): string[] => found.members.map((member): string => member.code));
 }
 
 function runParity(context: CommandContext, repo: string): number {
@@ -570,9 +593,24 @@ function runTrace(context: CommandContext, repo: string): number {
   return report.verdict === "current" ? 0 : 1;
 }
 
+function runDue(context: CommandContext, repo: string): number {
+  const family = context.args.values["family"] ?? null;
+  let report: SpecDueReport;
+  try {
+    // An undeclared --family is a usage refusal; an unreadable registry is could-not-read with a report, as parity and trace read it.
+    const { registry, families } = declaredFamilies(repo, family);
+    report = specDue(context.seams, repo, registry, families);
+  } catch (error) {
+    if (error instanceof VerbUsageError) throw error;
+    report = unreadableDue(repo, (error as Error).message);
+  }
+  emit(context.io, context.json, report, renderDue(report));
+  return report.verdict === "current" ? 0 : 1;
+}
+
 export const specCommand: Command = {
   name: "spec",
-  summary: "Inventory, number, check, cite-check, diff, converge, cover, hold to parity, group, trace and index a product family's Spec Kit spec repository.",
+  summary: "Inventory, number, check, cite-check, diff, converge, cover, hold to parity, group, trace, index and report recaptures due for a product family's Spec Kit spec repository.",
   usage: USAGE,
   subcommands: [...SUBCOMMANDS],
   flags: {
@@ -608,6 +646,8 @@ export const specCommand: Command = {
         return runTasks(context, repo);
       case "trace":
         return runTrace(context, repo);
+      case "due":
+        return runDue(context, repo);
     }
     throw new VerbUsageError(`'spec ${subcommand}' is not dispatched here.`);
   },
