@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { makeTempDir } from "../testing/tempdir.js";
 import { runFamily } from "../index.js";
 import { ScriptedSeams } from "../seam/scripted.js";
 import { canonCommand } from "./command.js";
@@ -11,7 +11,7 @@ import { parseRepoRegistry } from "../schema/repos.js";
 import { rewritePin } from "./pin-write.js";
 const roots: string[] = [];
 afterAll(() => { for (const root of roots) rmSync(root, { recursive: true, force: true }); });
-const scratch = (): string => { const root = mkdtempSync(join(tmpdir(), "nen-canon-batch-")); roots.push(root); mkdirSync(join(root, ".git")); return root; };
+const scratch = (): string => { const root = makeTempDir("nen-canon-batch-"); roots.push(root); mkdirSync(join(root, ".git")); return root; };
 function put(root: string, file: string, text: string): void {
   const path = join(root, file);
   mkdirSync(join(path, ".."), { recursive: true });
