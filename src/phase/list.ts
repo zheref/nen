@@ -23,7 +23,8 @@
 // would trust a clock the ledger never promised was monotonic. After a
 // restore, the file's modification time is when it was restored.
 //
-// READ-ONLY, PROVABLY. `readdirSync`, `lstatSync` and `readFileSync` only --
+// READ-ONLY, PROVABLY. `readdirSync`, `lstatSync`, a read-only `openSync`,
+// `fstatSync` and `readSync` only --
 // the read-mode half of the layout, never `locateEffortLedger(..., "write")`,
 // no ledger lock (taking one creates `<ledger>.lock`), no directory created.
 // A non-regular file is reported, never read through (SEC-7, as `show`).
@@ -181,7 +182,10 @@ function lstatOrNull(path: string): Stats | null {
 export function openLedgerFile(path: string, cap = LEDGER_READ_CAP_BYTES): OpenedLedger | null {
   const nofollow = constants.O_NOFOLLOW as number | undefined;
   const nonblock = constants.O_NONBLOCK as number | undefined;
-  if (nofollow === undefined) {
+  // The lstat check runs first wherever the open cannot refuse a link itself:
+  // where O_NOFOLLOW is undefined, and on Windows whatever a runtime defines.
+  const lstatFirst = nofollow === undefined || process.platform === "win32";
+  if (lstatFirst) {
     let stats: Stats;
     try {
       stats = lstatSync(path);
@@ -193,7 +197,7 @@ export function openLedgerFile(path: string, cap = LEDGER_READ_CAP_BYTES): Opene
   }
   let fd: number;
   try {
-    fd = openSync(path, constants.O_RDONLY | (nofollow ?? 0) | (nonblock ?? 0));
+    fd = openSync(path, lstatFirst ? constants.O_RDONLY : constants.O_RDONLY | (nofollow ?? 0) | (nonblock ?? 0));
   } catch (error) {
     if (gone(error)) return null;
     const code = errno(error);

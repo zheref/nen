@@ -243,10 +243,14 @@ describe("nen phase list -- AC-3: an unreadable ledger is one row, never the who
     write("no-phases.json", JSON.stringify({ contract: PHASE_CONTRACT, effort: "no-phases", phases: {} }));
     write("bad-entry.json", JSON.stringify({ contract: PHASE_CONTRACT, effort: "bad-entry", phases: [{ phase: 3 }] }));
     write("HA%2f85.json", JSON.stringify({ contract: PHASE_CONTRACT, effort: "HA/85", phases: [] }));
-    symlinkSync(join(dir, "good.json"), join(dir, "link.json"));
+    // POSIX only, as the other link tests in this repository are: Windows needs a
+    // privilege to make a link, and its chmod cannot take read permission away.
+    const posix = process.platform !== "win32";
+    const lockable = posix && process.getuid?.() !== 0;
+    if (posix) symlinkSync(join(dir, "good.json"), join(dir, "link.json"));
     mkdirSync(join(dir, "dir.json"));
     write("locked.json", JSON.stringify({ contract: PHASE_CONTRACT, effort: "locked", phases: [] }));
-    chmodSync(join(dir, "locked.json"), 0o000);
+    if (lockable) chmodSync(join(dir, "locked.json"), 0o000);
     // Not ledgers at all: the lock and a temp file an atomic write leaves are not listed.
     write("good.json.lock", "");
     write("good.json.123.abc.tmp", "");
@@ -254,7 +258,7 @@ describe("nen phase list -- AC-3: an unreadable ledger is one row, never the who
     const reasons = Object.fromEntries(report.efforts.map((row) => [row.file, row.reason]));
     expect(report.efforts.find((row) => row.effort === "good")).toMatchObject({ state: "ok", reason: null });
     expect(report.efforts.filter((row) => row.state === "unreadable").map((row) => row.file).sort()).toEqual(
-      ["HA%2f85.json", "array.json", "bad-entry.json", "bad-json.json", "dir.json", "foreign.json", "link.json", "mismatch.json", "newer-major.json", "newer.json", "no-effort.json", "no-phases.json", ...(process.getuid?.() === 0 ? [] : ["locked.json"])].sort(),
+      ["HA%2f85.json", "array.json", "bad-entry.json", "bad-json.json", "dir.json", "foreign.json", ...(posix ? ["link.json"] : []), "mismatch.json", "newer-major.json", "newer.json", "no-effort.json", "no-phases.json", ...(lockable ? ["locked.json"] : [])].sort(),
     );
     expect(reasons["bad-json.json"]).toBe("not readable JSON");
     expect(reasons["array.json"]).toBe("not a JSON object");
@@ -266,12 +270,12 @@ describe("nen phase list -- AC-3: an unreadable ledger is one row, never the who
     expect(reasons["no-phases.json"]).toBe("'phases' is not an array");
     expect(reasons["bad-entry.json"]).toBe("its newest phase entry is not a phase entry");
     expect(reasons["HA%2f85.json"]).toBe("the file name is not an encoded effort id");
-    expect(reasons["link.json"]).toMatch(/^a symbolic link; .* not read$/);
+    if (posix) expect(reasons["link.json"]).toMatch(/^a symbolic link; .* not read$/);
     expect(reasons["dir.json"]).toMatch(/^not a regular file/);
-    if (process.getuid?.() !== 0) expect(reasons["locked.json"]).toBe("could not be read (EACCES)");
+    if (lockable) expect(reasons["locked.json"]).toBe("could not be read (EACCES)");
     expect(report.efforts.find((row) => row.file === "HA%2f85.json")?.effort).toBeNull();
     expect(report.efforts.some((row) => row.file.endsWith(".lock") || row.file.endsWith(".tmp"))).toBe(false);
-    chmodSync(join(dir, "locked.json"), 0o600);
+    if (lockable) chmodSync(join(dir, "locked.json"), 0o600);
   });
 
   it("an absent or empty ledger directory is an empty list, exit 0", async () => {
@@ -303,7 +307,7 @@ describe("nen phase list -- AC-4: every location `show` reads, each effort once"
     }
     const plain = await run(["phase", "list"], linked);
     expect(plain.out[0]).toBe("3 efforts with a phase ledger under <git-common-dir>/.nen/phases:");
-    expect(plain.out[3]).toMatch(/kokusen .* \(older worktree-local: .*linked\/\.nen\/phases\/old-linked\.json\)$/);
+    expect(plain.out[3]).toMatch(/kokusen .* \(older worktree-local: .*linked[\\/]\.nen[\\/]phases[\\/]old-linked\.json\)$/);
     // show reads the same older copy in place -- the same set of locations.
     expect((await run(["phase", "show", "--effort", "old-linked", "--json"], main)).code).toBe(0);
   });
@@ -333,7 +337,7 @@ describe("nen phase list -- AC-4: every location `show` reads, each effort once"
     expect((await run(["phase", "list"], main)).out[1]).toMatch(/dup .*CONFLICT   in 2 places: .* -- 'phase show' refuses it$/);
   });
 
-  it("a symlinked older .nen directory is reported as one unreadable row and never followed", async () => {
+  it.skipIf(process.platform === "win32")("a symlinked older .nen directory is reported as one unreadable row and never followed (POSIX only: a link needs a privilege on Windows)", async () => {
     const { main, linked } = repoWithWorktree();
     const elsewhere = plainDir();
     ledger(phasesOf(elsewhere), "planted", [], at(-MIN));
@@ -425,7 +429,8 @@ describe("nen phase list -- hanten round 1 (SEC-7 and the read path)", () => {
   it("caps the plain label width with an ellipsis; --json keeps the full name", async () => {
     const root = plainDir();
     const dir = phasesOf(root);
-    const long = `${"x".repeat(240)}%zz.json`;
+    // 120, not 240: the whole path must stay under Windows' 260-character limit.
+    const long = `${"x".repeat(120)}%zz.json`;
     ledger(dir, "short", [], at(-MIN));
     writeFileSync(join(dir, long), "{}");
     const report = await list(root);
