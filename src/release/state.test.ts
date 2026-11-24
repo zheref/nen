@@ -97,4 +97,15 @@ describe("release state (NN#652)", () => {
     const r=await capture([{stdout:response(release({releaseAssets:connection}))}]);expect(r.code).toBe(1);expect(r.seams.calls).toHaveLength(1);
   });
 
+  it("AC-2: a backwards clock cannot extend the read budget", async () => {
+    const page=(id:string,cursor:string):Record<string,unknown> => release({releaseAssets:{totalCount:3,nodes:[{...asset,id}],pageInfo:{hasNextPage:true,endCursor:cursor}}});
+    let tick=0;const now=():Date=>new Date([0,0,100,25000,25001,1000][tick++] ?? 1000);
+    const r=await capture([{stdout:response(page("A1","x"))},{stdout:response(page("A2","y"))}],[],now);
+    expect(r.code).toBe(1);expect(r.seams.calls).toHaveLength(2);expect(r.out).toContain("clock");
+  });
+  it("AC-2: evidence returned after the deadline cannot become success", async () => {
+    let tick=0;const now=():Date=>new Date([0,0,31000][tick++] ?? 31000);
+    const r=await capture([{stdout:response()}],[],now);expect(r.code).toBe(1);expect(r.out).toContain("deadline");
+  });
+
 });

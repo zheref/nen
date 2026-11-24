@@ -43,12 +43,20 @@ export function releaseState(context: CommandContext): number {
   const [owner, name] = repo.split("/");
   const assets: Asset[] = [], ids = new Set<string>(), cursors = new Set<string>();
   let cursor: string | null = null, snapshot: string | null = null;
-  const deadline = context.seams.now().getTime() + 30000;
+  let observedAt = context.seams.now().getTime();
+  const deadline = observedAt + 30000;
+  const budget = (): number => {
+    const now = context.seams.now().getTime(), remaining = deadline - now;
+    if (!Number.isFinite(remaining) || remaining <= 0 || now < observedAt) return 0;
+    observedAt = now;
+    return remaining;
+  };
   try {
     for (let page = 0; page < 1000; page++) {
-      const remaining = deadline - context.seams.now().getTime();
-      if (!Number.isFinite(remaining) || remaining <= 0 || remaining > 30000) return fail("read deadline expired or clock moved backwards");
+      const remaining = budget();
+      if (remaining === 0) return fail("read deadline expired or clock moved backwards");
       const result = context.seams.run(GH, ["api", "graphql", "--hostname", "github.com", "--input", "-"], { timeoutMs: remaining, stdin: JSON.stringify({query:QUERY,variables:{owner,name,tag,cursor}}) });
+      if (budget() === 0) return fail("read deadline expired or clock moved backwards");
       if (result.spawnFailed || result.code !== 0) return fail("GitHub query failed (credential, transport, timeout or tool failure); no release state established");
       const response = object(JSON.parse(result.stdout));
       if (response["errors"] !== undefined && (!Array.isArray(response["errors"]) || response["errors"].length !== 0)) return fail("GitHub returned query errors");
