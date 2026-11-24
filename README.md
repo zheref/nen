@@ -482,7 +482,7 @@ it stays pending and holds every pull request's checks with it.
 `nen --help` lists every command family (49); each
 family's own `--help` (`nen pr --help`, `nen board --help`, ...) documents
 its verbs and flags in full. [`docs/USAGE.md`](docs/USAGE.md) documents all
-180 verbs outside the binary — each one's purpose, arguments, exit codes and
+181 verbs outside the binary — each one's purpose, arguments, exit codes and
 `--json` shape — plus the conventions they share and the developer workflows
 they compose into. The families group roughly as:
 
@@ -534,7 +534,7 @@ they compose into. The families group roughly as:
   surface's own layout, the drift check that says whether the committed copy is
   still an image of it, and a host's first-party install of a plugin made,
   re-pointed and read back on each surface
-- **Self-hosted runners** — `runner` (`inventory`, `plan`, `script`, `verify`,
+- **Self-hosted runners** — `runner` (`inventory`, `plan`, `script`, `summary`, `verify`,
   `workflow`, `preflight`, `enable`, `relabel`): a repository's runner pools,
   declared in `nen/workflow.json`'s `runners` block, each carrying a label of
   its own (`pool-<id>`, which `relabel` adds to runners registered before it),

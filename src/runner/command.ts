@@ -62,12 +62,13 @@ import { assembleInventory, fetchDownloads, fetchRunners, renderInventory } from
 import { checkNeighbours, renderNeighbours } from "./neighbours.js";
 import { computePlan, isDailyAccount, normalizeMachineCode, renderPlan, resolveConsumerCode, validatePlan, type RunnerPlan } from "./plan.js";
 import { renderPreflight, runPreflight } from "./preflight.js";
+import { launchTime, readSummary, renderSummary } from "./summary.js";
 import { launchLine, renderScript, summaryGlob } from "./script.js";
 import { relabelPool, renderRelabel } from "./relabel.js";
 import { renderVerify, verifyRunners } from "./verify.js";
 import { differingLines, renderWorkflow, workflowValues } from "./workflow.js";
 
-export const RUNNER_SUBCOMMANDS = ["inventory", "plan", "script", "verify", "workflow", "preflight", "enable", "relabel"] as const;
+export const RUNNER_SUBCOMMANDS = ["inventory", "plan", "script", "summary", "verify", "workflow", "preflight", "enable", "relabel"] as const;
 type Subcommand = (typeof RUNNER_SUBCOMMANDS)[number];
 
 /** Each verb's own flags, on top of the globals (`--repo`, `--json`, `--help`). */
@@ -75,6 +76,7 @@ export const RUNNER_SUBCOMMAND_FLAGS: Readonly<Record<Subcommand, readonly strin
   inventory: ["target", "pool"],
   plan: ["target", "pool", "machine-code", "count", "root", "service-account", "consumer-code", "out"],
   script: ["plan", "out", "dry-run", "accept-daily-account"],
+  summary: ["plan", "after"],
   verify: ["target", "expect", "labels", "pool", "wait"],
   workflow: ["target", "pool", "template", "out", "force", "dry-run"],
   preflight: ["target", "workflow", "ref", "wait", "dry-run"],
@@ -99,6 +101,7 @@ const VALUE_FLAGS = [
   "workflow",
   "ref",
   "after-run",
+  "after",
   "value",
   "runner",
 ];
@@ -107,6 +110,7 @@ const BOOLEAN_FLAGS = ["dry-run", "force", "accept-daily-account", "run"];
 const USAGE = `nen runner inventory [--target <owner/name>] [--repo <path>] [--pool <id>] [--json]
 nen runner plan --pool <id> --machine-code <CODE> --count <n> [--target <owner/name>] [--repo <path>] [--root <dir>] [--service-account <name>] [--consumer-code <CODE>] [--out <file>] [--json]
 nen runner script --plan <plan.json> --out <file> [--repo <path>] [--accept-daily-account] [--dry-run] [--json]
+nen runner summary --plan <plan.json> --after <UTC-ISO-time> [--repo <path>] [--json]
 nen runner verify --expect <name>[,<name>...] [--target <owner/name>] [--repo <path>] [--pool <id>] [--labels <a,b,c>] [--wait <seconds>] [--json]
 nen runner workflow --pool <id> --template <path> [--target <owner/name>] [--repo <path>] [--out <path>] [--force] [--dry-run] [--json]
 nen runner preflight --target <owner/name> --workflow <basename> [--ref <branch>] [--wait <seconds>] [--dry-run] [--json]
@@ -162,6 +166,13 @@ script     Render the plan's host script: PowerShell 5.1 (Windows), bash
            without --accept-daily-account, and an --out under
            the plan's root: write it to %LOCALAPPDATA%\\nen\\jusshin\\ (Windows)
            or ~/.local/state/nen/jusshin/ (Linux, macOS).
+summary    Read the newest register-*.summary strictly after --after under the
+           plan’s project directory/_jusshin, by modification time (ties by path).
+           Local read only: never launches a script or reads a transcript.
+           Exit 0: read (even if failed > 0) or none; JSON distinguishes both
+           and keeps absent counts null. Exit 1: unreadable or malformed; never
+           falls back to an older valid file. --after is a UTC ISO timestamp.
+           Missing directory, links and non-regular summaries are unreadable.
 verify     Poll the runners list every 10s for up to --wait seconds (default
            0: once) until every --expect name is present, online and carries
            every --labels label, and with --pool every label of that pool --
@@ -414,6 +425,19 @@ function script(context: CommandContext, deps: RunnerDeps): number {
   return 0;
 }
 
+function summary(context: CommandContext): number {
+  const after = requireValue(context.args, "after", "Name the UTC ISO time recorded before launching the script.");
+  launchTime(after);
+  const root = resolveRepoRoot({ repoFlag: context.repoFlag });
+  const path = resolveAgainstRepo(root, requireValue(context.args, "plan", "Name the registration plan."));
+  let raw: unknown;
+  try { raw = JSON.parse(readFileSync(path, "utf8")); }
+  catch { throw new VerbUsageError(`--plan '${path}' could not be read as JSON.`); }
+  const report = readSummary(validatePlan(raw, `--plan '${path}'`), after, context.seams.platform);
+  emit(context.io, context.json, report, renderSummary(report));
+  return report.verdict === "read" || report.verdict === "none" ? 0 : 1;
+}
+
 function verify(context: CommandContext, deps: RunnerDeps): number {
   const expect = commaValues(requireValue(context.args, "expect", "It lists the runner names that must be online."));
   if (expect.length === 0) throw new VerbUsageError("--expect names no runner.");
@@ -541,6 +565,8 @@ export function makeRunnerCommand(deps: RunnerDeps): Command {
             return plan(context);
           case "script":
             return script(context, deps);
+          case "summary":
+            return summary(context);
           case "verify":
             return verify(context, deps);
           case "workflow":
