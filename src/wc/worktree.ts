@@ -177,6 +177,8 @@ export function foldName(name: string, platform: NodeJS.Platform): string {
 export type RefusalKind =
   | "not-a-checkout"
   | "base"
+  | "pr"
+  | "head-mismatch"
   | "name-alias"
   | "parent-symlink"
   | "symlink"
@@ -239,7 +241,10 @@ export interface WorktreeReport {
   readonly name: string;
   /** `<core>/.nen/worktrees/<name>`. */
   readonly path: string | null;
-  readonly base: string;
+  readonly base: string | null;
+  readonly pr?: number;
+  readonly pinnedHead?: string;
+  readonly verificationPending?: readonly string[];
   /** origin/<base>'s commit -- fetched, or as last fetched under --dry-run. */
   readonly tip: string | null;
   /** False under --dry-run: the tip was read as last fetched. */
@@ -268,7 +273,9 @@ export interface WorktreeReport {
 
 export interface WorktreeOptions {
   readonly name: string;
-  readonly base: string;
+  readonly base?: string;
+  readonly pr?: number;
+  readonly head?: string;
   readonly copyFromCore: readonly string[];
   readonly dryRun: boolean;
 }
@@ -325,12 +332,17 @@ interface GitCall {
 class Git {
   private readonly env: Record<string, string | undefined>;
 
-  constructor(private readonly seams: Seams) {
-    this.env = scrubbedGitEnv(seams.env);
+  constructor(private readonly seams: Seams, private readonly pinned = false, private readonly dryRun = false) {
+    this.env = { ...scrubbedGitEnv(seams.env), ...(pinned ? { GIT_NO_REPLACE_OBJECTS: "1" } : {}),
+      ...(pinned && dryRun ? { GIT_NO_LAZY_FETCH: "1", GIT_OPTIONAL_LOCKS: "0" } : {}) };
   }
 
   run(cwd: string, args: readonly string[]): GitCall {
-    const result = this.seams.run(GIT, [...args], { cwd, env: this.env });
+    const flags = this.pinned ? ["--no-replace-objects", ...(this.dryRun ? ["--no-lazy-fetch"] : [])] : [];
+    const result = this.seams.run(GIT, [...flags, ...args], { cwd, env: this.env });
+    if (this.pinned && this.dryRun && /unknown option:?\s*'?--no-lazy-fetch/.test(result.stderr)) {
+      throw new WorktreeStepError("PR --dry-run needs git >= 2.44 to disable lazy fetching; this git refused --no-lazy-fetch. Nothing was read or written.");
+    }
     const error = result.spawnFailed
       ? `git could not be started (${result.stderr.trim()}); put it on PATH`
       : outputLines(result.stderr).join(" ") || `exit ${result.code}`;
@@ -779,7 +791,8 @@ function emptyReport(options: WorktreeOptions): WorktreeReport {
     core: null,
     name: options.name,
     path: null,
-    base: options.base,
+    base: options.base ?? null,
+    ...(options.pr === undefined ? {} : { pr: options.pr, pinnedHead: options.head! }),
     tip: null,
     fetched: false,
     state: "refused",
@@ -911,7 +924,7 @@ function treeChildren(git: Git, core: string, tree: string): Array<{ readonly na
 function proveDestinationsAtTip(git: Git, core: string, tip: string, base: string, paths: readonly string[], platform: NodeJS.Platform): void {
   for (const path of paths) {
     const refusal = (text: string): WorktreeRefusal =>
-      new WorktreeRefusal("copy-destination", `--copy-from-core '${path}' ${text} at ${REMOTE}/${base} (${tip}); refused, and nothing was created, moved or copied.`);
+      new WorktreeRefusal("copy-destination", `--copy-from-core '${path}' ${text} at ${base} (${tip}); refused, and nothing was created, moved or copied.`);
     const segments = path.split("/");
     // EVERY folded match, not the first (Nobunaga R6): on a folding platform a
     // tip may hold 'Kro' AND 'kro', and either one can be the hazard.
@@ -978,6 +991,26 @@ function inTheWay(fs: WorktreeFs, worktree: string, path: string): boolean {
     if (!stat.isDirectory()) return true;
   }
   return false;
+}
+
+/** A unique scratch ref avoids races through the repository-wide FETCH_HEAD.
+ * It is removed before the state table runs, even when fetch or resolution fails. */
+function fetchPrTip(git: Git, core: string, source: string): string {
+  const scratch = `refs/nen/worktree-pr/${randomBytes(16).toString("hex")}`;
+  try {
+    const args = ["fetch", "--quiet", "--no-write-fetch-head", "--refmap=", "--no-tags", "--no-prune", "--no-prune-tags",
+      "--no-recurse-submodules", "--no-auto-gc", "--end-of-options", REMOTE, `${source}:${scratch}`];
+    const fetched = git.run(core, args);
+    if (fetched.spawnFailed) throw new WorktreeStepError(fetched.error);
+    if (fetched.code !== 0) {
+      const probe = git.run(core, ["ls-remote", "--exit-code", "--end-of-options", REMOTE, source]);
+      if (probe.code === 2 || (probe.code === 0 && !rawLines(probe.stdout).some((line): boolean => line.split("\t")[1] === source))) throw new WorktreeRefusal("pr", `${REMOTE} has no ${source}; nothing was created or moved.`);
+      throw new WorktreeStepError(`fetching ${REMOTE}/${source} failed: ${fetched.error}`);
+    }
+    return firstLine(git.must(core, ["rev-parse", "--verify", "--end-of-options", `${scratch}^{commit}`], `resolving fetched ${source}`));
+  } finally {
+    git.must(core, ["update-ref", "-d", scratch], "removing the PR fetch scratch ref");
+  }
 }
 
 /** The fetch, and on failure the one question that tells "no such branch" (exit 2) from "could not reach it" (exit 1). */
@@ -1094,7 +1127,7 @@ function copyInto(
   const tracked = trackedFolded(git, worktree, platform, "the worktree");
   for (const path of paths) {
     const refusal = (text: string): WorktreeRefusal =>
-      new WorktreeRefusal("copy-destination", `--copy-from-core '${path}' ${text}; refused. The worktree stands at ${REMOTE}/${base} (${tip}).`);
+      new WorktreeRefusal("copy-destination", `--copy-from-core '${path}' ${text}; refused. The worktree stands at ${base} (${tip}).`);
     const ancestor = ancestorProblem(fs, worktree, path);
     if (ancestor?.why === "symlink") throw refusal(`lies beneath '${ancestor.at}', a symlink in the worktree`);
     if (ancestor?.why === "not-a-directory") throw refusal(`lies beneath '${ancestor.at}', which is not a directory in the worktree`);
@@ -1105,7 +1138,7 @@ function copyInto(
     const hit = trackedHit(tracked, path, platform);
     if (hit !== null) throw refusal(`is tracked in the worktree${hit === path ? "" : ` (as '${hit}')`}`);
     if (!git.yesNo(worktree, ["check-ignore", "-q", "--", path], `checking whether '${path}' is gitignored in the worktree`)) {
-      throw refusal(`is not gitignored at ${REMOTE}/${base} -- a copy would dirty the worktree`);
+      throw refusal(`is not gitignored at ${base} -- a copy would dirty the worktree`);
     }
     const destinationDir = dirname(destination);
     try {
@@ -1161,7 +1194,7 @@ export function manageWorktree(
   options: WorktreeOptions,
   fs: WorktreeFs = nativeWorktreeFs,
 ): WorktreeOutcome {
-  const git = new Git(seams);
+  const git = new Git(seams, options.pr !== undefined, options.dryRun);
   const platform = seams.platform;
   let report = emptyReport(options);
   try {
@@ -1169,7 +1202,16 @@ export function manageWorktree(
     const parent = join(core, ".nen", "worktrees");
     const path = join(parent, options.name);
     report = { ...report, core, path };
-    proveBase(git, core, options.base);
+    const pr = options.pr;
+    if (pr !== undefined || options.head !== undefined) {
+      if (options.base !== undefined || pr === undefined || !Number.isSafeInteger(pr) || pr <= 0 || !/^[0-9a-f]{40}$/.test(options.head ?? "")) {
+        throw new WorktreeRefusal("pr", "Use --pr <positive integer> with --head <full lowercase SHA>, never with --base.");
+      }
+    } else {
+      proveBase(git, core, options.base ?? "");
+    }
+    const source = pr === undefined ? `refs/remotes/${REMOTE}/${options.base}` : `refs/pull/${pr}/head`;
+    const label = pr === undefined ? `${REMOTE}/${options.base}` : `${REMOTE}/${source}`;
     // THE COPY SOURCES, before anything moves, so a bad list costs nothing.
     proveSources(git, fs, core, options.copyFromCore, platform);
 
@@ -1182,16 +1224,47 @@ export function manageWorktree(
     if (remote.code !== 0) {
       throw new WorktreeRefusal("base", `no origin remote -- the tip is origin/<base>, and this checkout has no '${REMOTE}' ('git remote get-url ${REMOTE}' answered ${remote.error}).`);
     }
-    if (!options.dryRun) fetchTip(git, core, options.base);
-    const tipCall = git.run(core, ["rev-parse", "--verify", "--quiet", "--end-of-options", `refs/remotes/${REMOTE}/${options.base}^{commit}`]);
-    if (tipCall.spawnFailed) throw new WorktreeStepError(tipCall.error);
-    if (tipCall.code !== 0) {
-      throw new WorktreeRefusal("base", `${REMOTE}/${options.base} does not resolve${options.dryRun ? " (as last fetched; --dry-run fetches nothing)" : ""}.`);
+    let tip: string;
+    let tipKnown = true;
+    if (pr !== undefined) {
+      tip = options.head!;
+      if (!options.dryRun) {
+        const fetched = fetchPrTip(git, core, source);
+        report = { ...report, tip: fetched, fetched: true };
+        if (fetched !== tip) {
+          throw new WorktreeRefusal("head-mismatch", `PR #${pr} head moved: pinned ${tip}, fetched ${fetched}. Nothing was created, moved or copied.`);
+        }
+      } else {
+        const local = git.run(core, ["cat-file", "-e", `${tip}^{commit}`]);
+        if (local.spawnFailed) throw new WorktreeStepError(local.error);
+        tipKnown = local.code === 0;
+        if (tipKnown) {
+          // A treeless partial clone can hold the commit but not its root or
+          // nested trees. Traverse this commit's trees without fetching blobs or
+          // buffering pathnames; --quiet keeps this availability probe bounded.
+          const trees = git.run(core, ["rev-list", "--objects", "--filter=blob:none", "--missing=error", "--no-walk", "--quiet", tip]);
+          if (trees.spawnFailed) throw new WorktreeStepError(trees.error);
+          if (trees.code !== 0) {
+            if (!/not a tree object|unable to read tree|bad tree object/.test(trees.error)) {
+              throw new WorktreeStepError(`checking local PR trees failed: ${trees.error}`);
+            }
+            tipKnown = false;
+          }
+        }
+        report = { ...report, verificationPending: ["remote head must match the pin", ...(tipKnown ? [] : ["pinned commit or tree is not local; destination and overwrite checks await fetch"])] };
+      }
+    } else {
+      if (!options.dryRun) fetchTip(git, core, options.base!);
+      const tipCall = git.run(core, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${source}^{commit}`]);
+      if (tipCall.spawnFailed) throw new WorktreeStepError(tipCall.error);
+      if (tipCall.code !== 0) {
+        throw new WorktreeRefusal("base", `${label} does not resolve${options.dryRun ? " (as last fetched; --dry-run fetches nothing)" : ""}.`);
+      }
+      tip = firstLine(tipCall.stdout);
     }
-    const tip = firstLine(tipCall.stdout);
     report = { ...report, tip, fetched: !options.dryRun };
 
-    proveDestinationsAtTip(git, core, tip, options.base, options.copyFromCore, platform);
+    if (tipKnown) proveDestinationsAtTip(git, core, tip, label, options.copyFromCore, platform);
 
     // THE PATH'S PARENTS, by lstat: a symlinked .nen or .nen/worktrees is refused.
     for (const dir of [join(core, ".nen"), parent]) {
@@ -1259,7 +1332,7 @@ export function manageWorktree(
       if (headBefore === tip && !attached) {
         state = "reused";
       } else {
-        const overwritten = headBefore === tip ? [] : wouldOverwriteIgnored(git, fs, path, tip, platform);
+        const overwritten = headBefore === tip || !tipKnown ? [] : wouldOverwriteIgnored(git, fs, path, tip, platform);
         if (overwritten.length > 0) {
           throw new WorktreeRefusal("would-overwrite-ignored", `moving '${path}' to ${tip} would overwrite ignored, untracked files that the tip tracks -- git would do it silently. Refused; move or remove these yourself:`, overwritten);
         }
@@ -1316,7 +1389,7 @@ export function manageWorktree(
     let copies: CopyRow[] = [];
     try {
       if (options.copyFromCore.length > 0 && key === null) throw new WorktreeStepError("the copy key could not be created");
-      copies = copyInto(git, fs, core, path, gitDir, options.base, tip, options.copyFromCore, platform, key ?? Buffer.alloc(0), (copyPath, hmac): void => {
+      copies = copyInto(git, fs, core, path, gitDir, label, tip, options.copyFromCore, platform, key ?? Buffer.alloc(0), (copyPath, hmac): void => {
         recorded.set(foldName(copyPath, platform), { path: copyPath, hmac });
       });
     } finally {
@@ -1364,7 +1437,15 @@ export function renderLines(report: WorktreeReport): string[] {
   else if (report.coreIgnored === false) {
     lines.push(`core-ignore:     WARNING ${WORKTREES_DIR}/${report.name} is NOT gitignored in core -- core will show it as untracked; add .nen/ to the repository's .gitignore in its own change`);
   }
-  lines.push(`${REMOTE}/${report.base}:   ${report.tip ?? "(unresolved)"}${report.fetched ? "" : " (as last fetched; --dry-run fetches nothing)"}`);
+  if (report.pr !== undefined) {
+    lines.push(`PR #${report.pr}:       ${report.tip ?? report.pinnedHead}`);
+    if (report.dryRun) {
+      lines.push(`plan:            fetch origin refs/pull/${report.pr}/head, verify ${report.pinnedHead}, then place detached at that commit`);
+      for (const pending of report.verificationPending ?? []) lines.push(`pending:         ${pending}`);
+    }
+  } else {
+    lines.push(`${REMOTE}/${report.base}:   ${report.tip ?? "(unresolved)"}${report.fetched ? "" : " (as last fetched; --dry-run fetches nothing)"}`);
+  }
   if (report.reached !== null) {
     const words = report.dryRun ? WOULD[report.reached] : VERB[report.reached];
     lines.push(`worktree:        ${report.path ?? ""} (${words})`);

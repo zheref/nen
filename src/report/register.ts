@@ -588,6 +588,7 @@ export type RegisterRow = ReportObject & {
   readonly labelsLine: string;
   readonly checksLine: string;
   readonly threadsLine: string;
+  readonly ledgerLine: string;
   readonly linkedLine: string;
   readonly head: string;
   readonly notes: readonly string[];
@@ -646,6 +647,7 @@ function registerRow(
         ? `${object.checks.green}/${object.checks.total} green · ${object.checks.red} red · ${object.checks.pending} pending`
         : "",
     threadsLine: object.kind === "pr" ? `${object.threads.unresolved}/${object.threads.total} unresolved` : "",
+    ledgerLine: object.kind === "pr" ? object.ledger.line : "",
     linkedLine,
     head: object.kind === "pr" ? object.head : "",
     notes,
