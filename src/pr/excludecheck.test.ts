@@ -113,6 +113,8 @@ function matrixSource(windowsConclusion: "FAILURE" | "SUCCESS" | null): PrStateS
       reviewRequests: [],
     },
     defaultBranch: "main",
+    // GitHub always names the default tip; the version-collision policy is read there (zheref/nen#663).
+    defaultBranchOid: "basebase",
     checkRollup: [
       { name: "compile", status: "COMPLETED", conclusion: "SUCCESS" },
       { name: LINUX, status: "COMPLETED", conclusion: "SUCCESS" },

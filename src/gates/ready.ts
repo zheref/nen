@@ -375,7 +375,7 @@ import { producerOptInWarnings, untilText, type GateIdentities } from "../schema
 import { exactLoginPattern } from "../schema/pattern.js";
 import type { RollupEntry } from "../github/types.js";
 import type { RunPullRequest, WorkflowRunEvidence } from "./producer.js";
-import type { VersionCollisionLimb, VersionCollisionResult } from "../pr/version_collision.js";
+import type { VersionCollisionLimb, VersionCollisionResult } from "./version_collision_result.js";
 
 // ── tiny jq equivalents ──────────────────────────────────────────────────────
 //
@@ -547,9 +547,11 @@ export interface Conjunct {
   readonly aiPolicyQuorum?: AiPolicyQuorum;
   /**
    * The live plugin-version collision limb (zheref/nen#663), on the
-   * `checks-green` row ONLY and only when the repository opted in at its
-   * default-branch tip. ABSENT everywhere else, so a repository without
-   * `version_collision` gets a byte-identical report. Additive to v0.1.
+   * `checks-green` row ONLY, present when the default-branch tip opts in or
+   * cannot be read or parsed (then `unknown`). ABSENT everywhere else:
+   * without the opt-in, and with the default tip readable, nothing more is
+   * read and the report is byte-identical; a default tip that cannot be read
+   * is unknown. Additive to v0.1.
    */
   readonly versionCollision?: VersionCollisionLimb;
 }
@@ -791,8 +793,9 @@ export interface EvaluateOptions {
   /**
    * The live version-collision result (zheref/nen#663), read by
    * ../pr/version_collision.ts BEFORE this pure gate runs and folded into
-   * the CON-32(a) row as a limb. ABSENT when the repository has not opted in:
-   * the row is then exactly what it was.
+   * the CON-32(a) row as a limb. ABSENT when the default tip is readable and
+   * declares no opt-in: the row is then exactly what it was. A default tip
+   * that cannot be read or parsed arrives here as `unknown`.
    */
   readonly versionCollision?: VersionCollisionResult;
 }
@@ -1170,7 +1173,8 @@ function unreadable(error: ParseError): string {
  * cannot be computed says what it would have needed, never a blanket "the gate
  * did not get that far" -- the gate always gets that far now.
  */
-type RowResult =
+/** One row's outcome before it is laid into the table; exported for the fold's own tests. */
+export type RowResult =
   | {
       readonly status: "ready";
       readonly note: string | null;
@@ -1241,7 +1245,7 @@ function table(rows: Readonly<Record<ConjunctId, RowResult>>): readonly Conjunct
  * ready. On a row that already failed or is unknown, the limb's clause is
  * appended, so the row's own opening (the line a caller quotes) is unchanged.
  */
-function foldVersionCollision(row: RowResult, result: VersionCollisionResult | undefined): RowResult {
+export function foldVersionCollision(row: RowResult, result: VersionCollisionResult | undefined): RowResult {
   if (result === undefined) return row;
   const versionCollision: VersionCollisionLimb = {
     status: result.status,
@@ -1250,15 +1254,18 @@ function foldVersionCollision(row: RowResult, result: VersionCollisionResult | u
     collisions: result.collisions,
     missing: result.missing,
   };
+  // A green row's own note (an honoured exclusion, a skip admitted beside a
+  // SUCCESS) is carried into the text that replaces it, never dropped.
+  const carried = row.status === "ready" && row.note !== null ? ` — the checks themselves are green: ${row.note}` : "";
   if (result.status === "collision") {
     const clause = `version collision (CON-32a, zheref/nen#663): ${result.line}`;
-    if (row.status === "ready") return { status: "failed", reason: `not-ready: ${clause}`, versionCollision };
+    if (row.status === "ready") return { status: "failed", reason: `not-ready: ${clause}${carried}`, versionCollision };
     if (row.status === "failed") return { ...row, reason: `${row.reason} — and ${clause}`, versionCollision };
     return { status: "failed", reason: `not-ready: ${clause} — and the checks could not be judged: ${row.missing}`, versionCollision };
   }
   if (result.status === "unknown") {
     const clause = `the version collision could not be judged (zheref/nen#663): ${result.missing.join("; ")}`;
-    if (row.status === "ready") return { status: "unevaluated", missing: clause, versionCollision };
+    if (row.status === "ready") return { status: "unevaluated", missing: `${clause}${carried}`, versionCollision };
     if (row.status === "failed") return { ...row, reason: `${row.reason} — and ${clause}`, versionCollision };
     return { status: "unevaluated", missing: `${row.missing}; and ${clause}`, versionCollision };
   }

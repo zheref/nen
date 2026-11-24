@@ -2497,25 +2497,35 @@ is still green afterwards. The opt-in is one optional block in
 }
 ```
 
-- **The policy is the default branch's.** The block is read **only** from
-  `nen/gates.json` at the pinned default-branch tip, the copy `checks.excluded`
-  is already intersected with, so a repository that has not opted in costs no
-  extra read. The copy at the pull request's base, in the checkout and under
-  `--gates` is diagnostic: a difference is a `meta.warnings` line, and it never
-  decides. When the default tip's file cannot be read, the limb is `unknown`
-  if any other copy declares the block. Otherwise it is a `meta.notes` line
-  and not applicable.
+- **The policy is the default branch's, and it fails closed.** The block is
+  read **only** from `nen/gates.json` at the pinned default-branch tip, the
+  copy `checks.excluded` is already intersected with. One rule decides:
+  - no file there (a clean 404), or a file without the block (or with it set
+    to `null`), is **no opt-in**. Nothing more is read and the report is
+    byte-identical;
+  - a file that could not be **read** (network, 5xx, forbidden, no default
+    tip named) is `unknown`, naming the read. So is a file this build cannot
+    **parse or validate**: malformed JSON, a refused `version_collision` block,
+    an unknown key, or a newer `version`. The refused pointer is named. This
+    holds whatever any other copy declares, including a repository that has
+    not opted in, whose default tip simply cannot be read;
+  - the copy at the pull request's base, in the checkout and under `--gates`
+    is **diagnostic only**. A difference from the default tip's block is a
+    `meta.warnings` line, and it never changes the status.
 - **What it decides** — one evaluator, shared with
   [`pr version-collision`](#nen-pr-version-collision), statuses
   `not-applicable`, `clear`, `collision` and `unknown`:
   - not applicable when the block is absent or `null`, or the pull request
     changes no path matching `shipped_paths` (a rename's old path counts);
   - `unknown` when the version is missing or unparseable at the head;
-  - `collision` when the head's version equals the version at the **live**
-    tip of the base branch (a branch read now, not the snapshot's
-    `baseRefOid`), or, on a stacked base, at the live default-branch tip. It
-    is also a collision when the head leaves the version as its merge base had
-    it while the base tip has moved to another, already published, version;
+  - `collision` (`kind: "base"`) when the head's version equals the version
+    at the **live** tip of the base branch (a branch read now, not the
+    snapshot's `baseRefOid`), or, on a stacked base, at the live
+    default-branch tip. A tip with **no** version file publishes no version:
+    that is a named warning, and the rest is still compared;
+  - `collision` (`kind: "unbumped"`) when the head leaves the version as its
+    merge base had it while the base tip has moved to another, already
+    published, version. Merged, the file would keep that tip's version;
   - `collision` when another **open** pull request proposes the same version.
     A peer counts when its head is in this repository (drafts included), it
     changes a shipped path, and the version at its **own** merge base differs.
@@ -2529,8 +2539,19 @@ is still green afterwards. The opt-in is one optional block in
     pages of 100 (a full tenth page is `unknown`), 3000 files per pull request
     (at the cap is `unknown`) and 200 requests per evaluation. The inventory is
     listed oldest first, then listed again and both tips re-read after every
-    other read; any difference in a `(number, head, base)` row or a tip is
-    `unknown: moved during inspection`, naming what moved. Nothing is retried.
+    other read; any difference in a **same-repository** `(number, head,
+    base)` row or a tip is `unknown: moved during inspection`, naming what
+    moved. Nothing is retried. Fork rows are left out of that comparison, so a
+    fork opened, pushed or closed mid-evaluation changes nothing. The budget
+    reserves a read's worst case first (a changed-file list is up to 30
+    pages), so the message says the budget "would be exceeded" by a read,
+    which may come before 200 requests were made;
+  - **Known limit:** fork rows still count toward the 10 × 100 inventory
+    cap, so a repository with more than 999 open pull requests, forks
+    included, is `unknown`;
+  - a `collision` proven by the evidence that was read stays a `collision`
+    even when other evidence is missing. The missing pieces stay in
+    `missing` and are appended to the line as `; also not read: …`.
   - Versions compare as SemVer, ignoring build metadata, when both parse as
     SemVer, and as exact strings otherwise.
 - **Folded into row 2, never a seventh row.** `conjuncts` stays the six rows
@@ -2539,16 +2560,24 @@ is still green afterwards. The opt-in is one optional block in
   <v> …`. An `unknown` on otherwise green checks makes the row `unknown`
   (never ready), with the missing evidence in `missing`. On a row that already
   failed, the clause is appended after ` — and `, as the quorum's is on row 4.
+  When the limb turns a green row failed or unknown, the row's own note (an
+  honoured exclusion, say) follows as `— the checks themselves are green: …`.
   The read is fresh on every call, so `watch until --pr`, both `pr merge`
   forms and `loop slots --from-run` get it with no change of their own.
 - **`--explain` and `--json`.** `--explain` prints `└ version collision:
   <line>` under row 2, then the policy source and the read counts. `--json`
   adds `conjuncts[].versionCollision` on row 2 (`{ status, line,
   proposedVersion, collisions, missing }`) and `meta.versionCollision`, the
-  whole result. Both are **absent** when the repository has not opted in, so
-  its report is byte-identical and the limb makes no inventory call.
-- **Refused at load, by pointer** (exit 2, like any other refused gates
-  file): `version_collision` not an object; `version_file` not one
+  whole result. Without the opt-in, and with the default tip readable, both
+  are **absent**, nothing more is read and the report is byte-identical. A
+  default tip that cannot be read is `unknown`, and both are present.
+- **Validated by pointer.** At the **default-branch tip**, a refused block is
+  not a usage error. The limb is `unknown`, `pr ready` is never ready,
+  `pr version-collision` exits 1, and `missing` names the pointer. In the
+  **local** copy that `pr ready` loads (the checkout's file or `--gates`), the
+  same refusal is exit 2 before any read, like any other refused gates file.
+  `pr version-collision` never refuses on its local copy, which is only
+  diagnostic. The refusals are: `version_collision` not an object; `version_file` not one
   repository-relative path (empty, a glob character, a `.` or `..` segment,
   an empty segment, a backslash, a leading `/`, a control character);
   `version_pointer` not an RFC 6901 pointer (it must start with `/`, every
@@ -2556,7 +2585,8 @@ is still green afterwards. The opt-in is one optional block in
   pattern, because a regex over the head's text is a ReDoS surface.
   `shipped_paths` missing, empty, duplicated, or outside the
   [`shu evidence`](#nen-shu-evidence) glob grammar (`*`, `**` as a whole
-  segment, `?`; no `[`, `]`, `{`, `}`).
+  segment, `?`; no `[`, `]`, `{`, `}`), or carrying more than four `**`
+  segments.
 - **Known gap.** [`pr next-blocker`](#nen-pr-next-blocker) reads through `gh`
   and does **not** evaluate this limb, so it can name no blocker while
   `pr ready` is not ready on a collision. Quote `pr ready`.
@@ -2685,8 +2715,10 @@ policySource, policy, proposedVersion, collisions: [{ kind, version, pr, head,
 baseRef, draft }], missing, inventory: { pages, inspected, reads, budget },
 warnings, notes, ref, repo, pr, evaluatedAt, generator }`. `status` is
 `not-applicable`, `clear`, `collision` or `unknown`. `kind` is `base` (a target
-tip already carries the version; `pr` and `draft` are `null`) or `peer`
-(another open pull request proposes it). A `--require-head` mismatch prints
+tip already carries the version; `pr` and `draft` are `null`), `unbumped`
+(the head keeps its merge base's version while the base tip moved on to
+another, already published one; `version` is that tip's), or `peer` (another
+open pull request proposes it). A `--require-head` mismatch prints
 `pr ready`'s `nen.pr.ready.head-mismatch/v0.1` document.
 
 | Exit | Status | Meaning |

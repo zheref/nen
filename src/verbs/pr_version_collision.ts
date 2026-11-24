@@ -21,17 +21,17 @@
 import { assertRepoRoot } from "../repo/root.js";
 import { plainLine } from "../cli/plain.js";
 import { loadRepoRegistry } from "../schema/repos.js";
-import { parseGatesText, parseVersionCollision } from "../schema/gates.js";
-import { GATES_FILE, readSchemaFile, resolveSchemaFile } from "../schema/source.js";
+import { GATES_FILE, resolveSchemaFile } from "../schema/source.js";
 import { PROGRAM, VERSION } from "../version.js";
 import type { PullRequestSnapshot } from "../github/graphql.js";
 import {
+  collectPolicyCopies,
+  readLocalGatesCopy,
   readVersionCollision,
   renderVersionCollisionDetail,
   resolveCollisionPolicy,
-  policyFromRead,
   VERSION_COLLISION_LIMITS,
-  type PolicyCopy,
+  type GatesCopyRead,
   type VersionCollisionLimits,
   type VersionCollisionResult,
 } from "../pr/version_collision.js";
@@ -169,14 +169,7 @@ export async function readVersionCollisionVerb(
   const defaultSha = text(snapshot.defaultBranchOid);
   const baseSha = text(node.baseRefOid);
   const atDefault = await readBaseGates(source, ref, defaultSha, "default-branch tip");
-  const copies: PolicyCopy[] = [];
-  if (baseSha !== defaultSha) {
-    const atBase = await readBaseGates(source, ref, baseSha);
-    const parsed = policyFromRead(atBase.where, atBase.read);
-    copies.push({ label: `the pull request's base (${atBase.where})`, policy: parsed.kind === "read" ? parsed.policy : undefined });
-  }
-  const local = localCopy(input.repoFlag);
-  if (local !== null) copies.push(local);
+  const copies = collectPolicyCopies(atDefault, baseSha === defaultSha ? undefined : await readBaseGates(source, ref, baseSha), localCopy(input.repoFlag));
   const outcome = await readVersionCollision(
     source,
     ref,
@@ -188,21 +181,15 @@ export async function readVersionCollisionVerb(
 }
 
 /** The checkout's own `nen/gates.json`, as a diagnostic copy; `null` when there is none. */
-function localCopy(repoFlag: string | null): PolicyCopy | null {
+function localCopy(repoFlag: string | null): GatesCopyRead | null {
   let root: string;
   try {
     root = assertRepoRoot({ repoFlag });
   } catch {
     return null;
   }
-  if (!resolveSchemaFile(root, GATES_FILE).canonical.present) return null;
-  try {
-    const { path, text } = readSchemaFile(root, GATES_FILE);
-    return { label: `the checkout's ${path}`, policy: parseVersionCollision(path, parseGatesText(path, text)) };
-  } catch {
-    // Diagnostic only: a checkout this build refuses never decides, and never refuses the verb.
-    return { label: `the checkout's ${GATES_FILE}`, policy: undefined };
-  }
+  const file = resolveSchemaFile(root, GATES_FILE).canonical;
+  return file.present ? readLocalGatesCopy(`the checkout's ${file.path}`, file.path) : null;
 }
 
 /** An unknown before any evidence was read: one missing piece, nothing else known. */

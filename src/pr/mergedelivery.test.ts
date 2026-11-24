@@ -63,6 +63,8 @@ function readySource(head: string = HEAD): PrStateSource {
       reviewRequests: [],
     },
     defaultBranch: "main",
+    // GitHub always names the default tip; the version-collision policy is read there (zheref/nen#663).
+    defaultBranchOid: "d1".repeat(20),
     checkRollup: [{ name: "ci / build", status: "COMPLETED", conclusion: "SUCCESS" }],
     checkRollupPageInfo: { hasNextPage: false, endCursor: null },
     reviewRequests: [],
@@ -557,9 +559,6 @@ describe("mergeDelivery -- a non-main base, every gate reused", () => {
     const plain = readySource();
     const source: PrStateSource = {
       ...plain,
-      // This harness's snapshot names no default-branch tip, which alone is
-      // an unknown limb (the policy is the default tip's): give it one.
-      pullRequestSnapshot: async (repo, n): Promise<PullRequestSnapshot> => ({ ...(await plain.pullRequestSnapshot(repo, n)), defaultBranchOid: sha("d1") }),
       fileAtRef: async (_repo, path): Promise<string | null> =>
         path === "nen/gates.json" ? withOptIn(readFileSync(join(BANKAI_REPO, "nen", "gates.json"), "utf8")) : path === VERSION_FILE ? manifest("1.4.0") : null,
       pullRequestFiles: async (): Promise<unknown[]> => [{ filename: "claude/skills/x.md" }],
@@ -574,9 +573,13 @@ describe("mergeDelivery -- a non-main base, every gate reused", () => {
   });
 
   it("refuses a 'ready' judged on the checkout's own gates file (zheref/nen#372, Feitan 3)", async () => {
+    // The BASE cannot be read; the default tip (another commit) can, and
+    // declares no collision opt-in (zheref/nen#663: an unreadable default
+    // tip is an unknown limb of its own).
     const source: PrStateSource = {
       ...readySource(),
-      fileAtRef: async (): Promise<string | null> => {
+      fileAtRef: async (_repo, _path, ref): Promise<string | null> => {
+        if (ref === "d1".repeat(20)) return null;
         throw new Error("HTTP 403");
       },
     };

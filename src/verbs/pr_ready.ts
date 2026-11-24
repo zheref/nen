@@ -125,11 +125,11 @@ import {
   type WaitingCheckDiagnosis,
 } from "../pr/runner_stall.js";
 import {
-  policyFromRead,
+  collectPolicyCopies,
+  readLocalGatesCopy,
   readVersionCollision,
   renderVersionCollisionDetail,
   resolveCollisionPolicy,
-  type PolicyCopy,
   type VersionCollisionOutcome,
   type VersionCollisionResult,
 } from "../pr/version_collision.js";
@@ -573,9 +573,11 @@ export interface ReadyMeta {
    * The live plugin-version collision limb's whole result (zheref/nen#663):
    * status, line, the policy source (always the default-branch tip's
    * `nen/gates.json`), the proposed version, every collision, every missing
-   * piece of evidence and the read counts. ABSENT when the repository has not
-   * opted in, so such a report is byte-identical. The verdict reads it only
-   * through the `checks-green` row. Additive to v0.1.
+   * piece of evidence and the read counts. Without the opt-in, and with the
+   * default tip readable, it is ABSENT, nothing more is read and the report
+   * is byte-identical; a default tip that cannot be read (or parsed) is an
+   * `unknown` limb. The verdict reads it only through the `checks-green`
+   * row. Additive to v0.1.
    */
   readonly versionCollision?: VersionCollisionResult;
   readonly deliveryPr: boolean | null;
@@ -1990,9 +1992,11 @@ export async function readReady(
   // ── the live version-collision limb (zheref/nen#663) ─────────────────────
   //
   // The policy is the DEFAULT-BRANCH TIP's own nen/gates.json -- the copy
-  // already read above for the exclusions intersection, so a repository that
-  // has not opted in costs no read at all. The base's, the checkout's and a
-  // --gates copy only warn when they differ. Read FRESH on every call, so
+  // already read above for the exclusions intersection. Without the opt-in,
+  // and with the default tip readable, nothing more is read and the report is
+  // byte-identical; a default tip that cannot be read or parsed is UNKNOWN
+  // (fail closed). The base's, the checkout's and a --gates copy only warn
+  // when they differ. Read FRESH on every call, so
   // `watch until`, `pr merge` and `loop slots --from-run` get it unchanged.
   const collision = await versionCollisionOf(opened.source, ref, fetched.state, defaultRead, baseRead, resolved, input.values["gates"] !== undefined);
   const evaluation: ReadyEvaluation = evaluateReady(
@@ -2183,17 +2187,14 @@ async function versionCollisionOf(
     where: `${ref.owner}/${ref.repo}@(unread default-branch tip):${BASE_GATES_PATH}`,
     read: { kind: "failed" as const, message: "it was not read" },
   };
-  const copies: PolicyCopy[] = [];
-  if (baseRead !== undefined && baseRead !== defaultRead) {
-    const atBase = policyFromRead(baseRead.where, baseRead.read);
-    copies.push({ label: `the pull request's base (${baseRead.where})`, policy: atBase.kind === "read" ? atBase.policy : undefined });
-  }
-  if (resolved.source === "schema") {
-    copies.push({
-      label: gatesFlag ? `--gates ${resolved.path ?? "?"}` : `the checkout's ${resolved.path ?? BASE_GATES_PATH}`,
-      policy: resolved.identities.versionCollision ?? null,
-    });
-  }
+  // The diagnostic copies, built by the ONE function the verb also calls.
+  const copies = collectPolicyCopies(
+    defaultTip,
+    baseRead,
+    resolved.source === "schema" && resolved.path !== null
+      ? readLocalGatesCopy(gatesFlag ? `--gates ${resolved.path}` : `the checkout's ${resolved.path}`, resolved.path)
+      : null,
+  );
   return readVersionCollision(
     source,
     ref,

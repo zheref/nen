@@ -1645,6 +1645,9 @@ export function parseVersionCollision(path: string, rootValue: unknown): Version
   return readVersionCollision(path, root["version_collision"]);
 }
 
+/** The most `**` segments one `shipped_paths` glob may carry (Feitan, zheref/nen#663 round 1). */
+export const MAX_GLOBSTARS = 4;
+
 // Any C0 control, DEL or C1 control: never part of a path or a pointer a
 // reader can see, and a terminal would act on it.
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f-\u009f]/;
@@ -1664,7 +1667,8 @@ const CONTROL_CHARACTER = /[\u0000-\u001f\u007f-\u009f]/;
  *   * `shipped_paths` is a non-empty list of unique globs in
  *     ../shu/evidence/glob.ts's grammar (`*`, `**` as a whole segment, `?`).
  *     A bracket or a brace reads like a class or an expansion that grammar
- *     does not have, so it is refused rather than matched literally.
+ *     does not have, so it is refused rather than matched literally; more
+ *     than MAX_GLOBSTARS `**` segments is refused as a backtracking bound.
  */
 function readVersionCollision(path: string, raw: unknown): VersionCollisionPolicy | null {
   if (raw === undefined || raw === null) return null;
@@ -1682,7 +1686,11 @@ function readVersionCollision(path: string, raw: unknown): VersionCollisionPolic
     if (glob && /[[\]{}]/.test(stated)) {
       refuse("carries '[', ']', '{' or '}'. The glob grammar is '*', '**' (a whole segment) and '?', so a class or a brace expansion would be matched literally -- not what it reads as.");
     }
-    for (const segment of stated.split("/")) {
+    const segments = stated.split("/");
+    if (glob && segments.filter((segment): boolean => segment === "**").length > MAX_GLOBSTARS) {
+      refuse(`has more than ${MAX_GLOBSTARS} '**' segments; each one multiplies the matcher's backtracking over every changed path, and no shipped tree needs more.`);
+    }
+    for (const segment of segments) {
       if (segment === "") refuse("has an empty segment (a doubled or trailing '/').");
       if (segment === ".." || segment === ".") refuse(`has a '${segment}' segment, which would name a path outside what it spells.`);
       if (glob && segment !== "**" && segment.includes("**")) refuse("uses '**' inside a segment; '**' is a whole segment ('a/**/b'), and inside one it would mean '*'.");

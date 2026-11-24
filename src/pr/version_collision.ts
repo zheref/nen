@@ -30,9 +30,10 @@
 // pinned default-branch tip only; a copy at the pull request's base, in the
 // checkout or under `--gates` is compared with it and a difference WARNS --
 // the head can never opt itself out, and a base that has not merged the
-// opt-in yet cannot opt itself in. When the default tip cannot be read, the
-// limb is unknown if any other copy declares the block, and not applicable
-// with a note otherwise.
+// opt-in yet cannot opt itself in. ONE RULE, FAILING CLOSED: a default tip
+// with no gates file (a clean 404) has not opted in; a default tip whose file
+// cannot be READ, or exists and cannot be PARSED or VALIDATED by this build,
+// is unknown whatever any other copy says. The other copies only ever warn.
 //
 // NOTHING HERE EXECUTES PULL REQUEST CONTENT. A manifest is read as text and
 // parsed as JSON; the version is found by an RFC 6901 pointer, never by a
@@ -40,6 +41,7 @@
 // an outsider could otherwise grief a repository by opening a pull request
 // that claims the next number. It is named in a warning instead.
 
+import { readFileSync } from "node:fs";
 import type { PrRef, PrStateSource } from "../github/pr_state.js";
 import type { BaseGatesRead } from "../gates/base_exclusions.js";
 import {
@@ -49,59 +51,27 @@ import {
   type VersionCollisionPolicy,
 } from "../schema/gates.js";
 import { matchesAnyGlob } from "../shu/evidence/glob.js";
+import type {
+  VersionCollisionEntry,
+  VersionCollisionResult,
+  VersionCollisionStatus,
+} from "../gates/version_collision_result.js";
 
 export type { VersionCollisionPolicy } from "../schema/gates.js";
 
-export type VersionCollisionStatus = "not-applicable" | "clear" | "collision" | "unknown";
-
-/** One conflict: a target tip that already carries the version, or a peer proposing it. */
-export interface VersionCollisionEntry {
-  readonly kind: "base" | "peer";
-  readonly version: string;
-  /** The peer's number; `null` for a tip. */
-  readonly pr: number | null;
-  /** The tip's commit, or the peer's head. */
-  readonly head: string | null;
-  /** The tip's branch, or the peer's base branch. */
-  readonly baseRef: string | null;
-  /** The peer's draft flag; `null` for a tip. */
-  readonly draft: boolean | null;
-}
-
-/** The evaluator's whole answer -- `meta.versionCollision` and the verb's document both carry it. */
-export interface VersionCollisionResult {
-  readonly status: VersionCollisionStatus;
-  /** The one line to quote. */
-  readonly line: string;
-  readonly judgedHead: string | null;
-  readonly base: { readonly ref: string; readonly sha: string | null };
-  readonly default: { readonly ref: string; readonly sha: string | null };
-  /** `<owner>/<repo>@<sha>:nen/gates.json` -- always the default-branch tip's. */
-  readonly policySource: string | null;
-  readonly policy: VersionCollisionPolicy | null;
-  readonly proposedVersion: string | null;
-  readonly collisions: readonly VersionCollisionEntry[];
-  /** Every piece of evidence that could not be read, by name. Empty unless `unknown`. */
-  readonly missing: readonly string[];
-  readonly inventory: {
-    /** Inventory pages read (both passes). */
-    readonly pages: number;
-    /** Open pull requests inspected, the subject excluded. */
-    readonly inspected: number;
-    /** Requests this evaluation made. */
-    readonly reads: number;
-    readonly budget: number;
-  };
-  readonly warnings: readonly string[];
-  readonly notes: readonly string[];
-}
-
-/** The part of the result `nen pr ready` carries on its CON-32(a) row. */
-export type VersionCollisionLimb = Pick<VersionCollisionResult, "status" | "line" | "proposedVersion" | "collisions" | "missing">;
+// The result TYPES live in ../gates/version_collision_result.ts so the pure
+// gate (../gates/ready.ts) reads them without importing from src/pr: the
+// layering runs src/pr -> src/gates, never back (Chrollo F2).
+export type {
+  VersionCollisionEntry,
+  VersionCollisionLimb,
+  VersionCollisionResult,
+  VersionCollisionStatus,
+} from "../gates/version_collision_result.js";
 
 /** What a caller gets: the result, and whether the repository opted in at all. */
 export interface VersionCollisionOutcome {
-  /** `false` -- not declared at the default tip, and no other copy declares it: output stays as it was. */
+  /** `false` -- the default tip was read and declares no opt-in: the limb is absent and the output stays as it was. */
   readonly optedIn: boolean;
   readonly result: VersionCollisionResult;
 }
@@ -124,22 +94,62 @@ export interface PolicyCopy {
   readonly policy: VersionCollisionPolicy | null | undefined;
 }
 
+/** One read of a `nen/gates.json` copy, named for every message about it. */
+export interface GatesCopyRead {
+  readonly label: string;
+  readonly where: string;
+  readonly read: BaseGatesRead;
+}
+
 export type PolicyResolution =
   | { readonly kind: "declared"; readonly policy: VersionCollisionPolicy; readonly source: string; readonly warnings: readonly string[] }
-  | { readonly kind: "undeclared"; readonly source: string | null; readonly warnings: readonly string[]; readonly notes: readonly string[] }
+  | { readonly kind: "undeclared"; readonly source: string; readonly warnings: readonly string[] }
   | { readonly kind: "unknown"; readonly source: string; readonly missing: string; readonly warnings: readonly string[] };
 
-/** `version_collision` out of one read of `nen/gates.json`: the block, `null`, or why it could not be had. */
+/** `version_collision` out of one read of `nen/gates.json`: the block or `null`, or why it could not be had. */
 export function policyFromRead(
   where: string,
   read: BaseGatesRead,
-): { readonly kind: "read"; readonly policy: VersionCollisionPolicy | null } | { readonly kind: "failed"; readonly message: string } {
+):
+  | { readonly kind: "read"; readonly policy: VersionCollisionPolicy | null }
+  | { readonly kind: "unread"; readonly message: string }
+  | { readonly kind: "refused"; readonly message: string } {
   if (read.kind === "absent") return { kind: "read", policy: null };
-  if (read.kind === "failed") return { kind: "failed", message: read.message };
+  if (read.kind === "failed") return { kind: "unread", message: read.message };
   try {
     return { kind: "read", policy: parseVersionCollision(where, parseGatesText(where, read.text)) };
   } catch (error) {
-    return { kind: "failed", message: error instanceof Error ? error.message : String(error) };
+    return { kind: "refused", message: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * The DIAGNOSTIC copies, built one way for both surfaces (SC-1): the pull
+ * request's base (unless it is the default tip itself) and the caller's own
+ * file -- the checkout's, or `pr ready --gates`. Each only ever warns.
+ */
+export function collectPolicyCopies(
+  defaultTip: { readonly where: string },
+  base: { readonly where: string; readonly read: BaseGatesRead } | undefined,
+  local: GatesCopyRead | null,
+): PolicyCopy[] {
+  const copies: PolicyCopy[] = [];
+  const copy = (label: string, where: string, read: BaseGatesRead): PolicyCopy => {
+    const parsed = policyFromRead(where, read);
+    return { label, policy: parsed.kind === "read" ? parsed.policy : undefined };
+  };
+  if (base !== undefined && base.where !== defaultTip.where) copies.push(copy(`the pull request's base (${base.where})`, base.where, base.read));
+  if (local !== null) copies.push(copy(local.label, local.where, local.read));
+  return copies;
+}
+
+/** A local file as a diagnostic copy's read: its text, `absent`, or why it could not be read. */
+export function readLocalGatesCopy(label: string, path: string): GatesCopyRead {
+  try {
+    return { label, where: path, read: { kind: "read", text: readFileSync(path, "utf8") } };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return { label, where: path, read: code === "ENOENT" ? { kind: "absent" } : { kind: "failed", message: String(code ?? error) } };
   }
 }
 
@@ -155,33 +165,32 @@ function describePolicy(policy: VersionCollisionPolicy | null): string {
 }
 
 /**
- * Decide WHICH policy applies: the default-branch tip's, and nothing else.
- * Every other copy only warns when it differs. With the default tip
- * unreadable, a copy that declares the block makes the limb unknown (the
- * repository may have opted in), and none declaring it is a note.
+ * Decide WHICH policy applies: the default-branch tip's, alone, failing
+ * closed (zheref/nen#663 review round 1, A). No file there (a clean 404) is
+ * no opt-in. A file that could not be read, or that this build cannot parse
+ * or validate (malformed JSON, a refused `version_collision`, an unknown key,
+ * a newer `version`), is UNKNOWN naming the read or the pointer -- whatever
+ * any other copy declares. The copies only add a warning when they differ.
  */
 export function resolveCollisionPolicy(
   defaultTip: { readonly where: string; readonly read: BaseGatesRead },
   copies: readonly PolicyCopy[],
 ): PolicyResolution {
   const atDefault = policyFromRead(defaultTip.where, defaultTip.read);
-  if (atDefault.kind === "failed") {
-    const declaring = copies.filter((copy): boolean => copy.policy !== null && copy.policy !== undefined).map((copy): string => copy.label);
-    if (declaring.length > 0) {
-      return {
-        kind: "unknown",
-        source: defaultTip.where,
-        missing: `the version_collision policy: the default-branch tip's nen/gates.json (${defaultTip.where}) could not be read (${atDefault.message}), and ${declaring.join(" and ")} declares version_collision -- only the default tip's copy decides`,
-        warnings: [],
-      };
-    }
+  if (atDefault.kind === "unread") {
     return {
-      kind: "undeclared",
-      source: null,
+      kind: "unknown",
+      source: defaultTip.where,
+      missing: `the version_collision policy: the default-branch tip's nen/gates.json (${defaultTip.where}) could not be read (${atDefault.message})`,
       warnings: [],
-      notes: [
-        `version collision not applicable: the default-branch tip's nen/gates.json (${defaultTip.where}) could not be read (${atDefault.message}), and no other copy declares version_collision`,
-      ],
+    };
+  }
+  if (atDefault.kind === "refused") {
+    return {
+      kind: "unknown",
+      source: defaultTip.where,
+      missing: `the version_collision policy: the default-branch tip's nen/gates.json was refused by this build (${atDefault.message})`,
+      warnings: [],
     };
   }
   const warnings = copies
@@ -191,7 +200,7 @@ export function resolveCollisionPolicy(
         `version collision: ${copy.label} declares ${describePolicy(copy.policy ?? null)}, but the default-branch tip (${defaultTip.where}) declares ${describePolicy(atDefault.policy)}; only the default tip's copy applies (zheref/nen#663).`,
     );
   return atDefault.policy === null
-    ? { kind: "undeclared", source: defaultTip.where, warnings, notes: [] }
+    ? { kind: "undeclared", source: defaultTip.where, warnings }
     : { kind: "declared", policy: atDefault.policy, source: defaultTip.where, warnings };
 }
 
@@ -305,6 +314,8 @@ export interface VersionCollisionDecision {
   readonly proposedVersion: string | null;
   readonly collisions: readonly VersionCollisionEntry[];
   readonly missing: readonly string[];
+  /** What the evidence showed that changes nothing but must be seen: a tip that publishes no version. */
+  readonly warnings: readonly string[];
 }
 
 function short(sha: string): string {
@@ -328,13 +339,13 @@ export function decideVersionCollision(
   policy: VersionCollisionPolicy | null,
   evidence: VersionCollisionEvidence | null,
 ): VersionCollisionDecision {
-  const none = { proposedVersion: null, collisions: [], missing: [] };
+  const none = { proposedVersion: null, collisions: [], missing: [], warnings: [] };
   if (policy === null || evidence === null) {
     return { status: "not-applicable", line: "not-applicable: the default-branch tip's nen/gates.json declares no version_collision", ...none };
   }
   if (evidence.subjectFiles === null) {
     const missing = evidence.missing.length > 0 ? evidence.missing : ["the pull request's changed files"];
-    return { status: "unknown", line: `unknown: ${missing.join("; ")}`, proposedVersion: null, collisions: [], missing };
+    return { status: "unknown", line: `unknown: ${missing.join("; ")}`, proposedVersion: null, collisions: [], missing, warnings: [] };
   }
   if (!evidence.subjectFiles.some((file): boolean => matchesAnyGlob(file, policy.shippedPaths))) {
     return { status: "not-applicable", line: `not-applicable: the pull request changes no shipped path (${policy.shippedPaths.join(", ")})`, ...none };
@@ -348,20 +359,25 @@ export function decideVersionCollision(
           ? `the head ${short(evidence.subject.headSha)} carries no ${policy.versionFile}, so it proposes no version`
           : `the version at the head ${short(evidence.subject.headSha)} could not be parsed: ${policy.versionFile} ${head.why}`;
     const missing = [why, ...evidence.missing.filter((entry): boolean => entry !== why)];
-    return { status: "unknown", line: `unknown: ${missing.join("; ")}`, proposedVersion: null, collisions: [], missing };
+    return { status: "unknown", line: `unknown: ${missing.join("; ")}`, proposedVersion: null, collisions: [], missing, warnings: [] };
   }
   const proposed = head.version;
   if (evidence.moved.length > 0) {
     const missing = [`moved during inspection: ${evidence.moved.join("; ")}`, ...evidence.missing];
-    return { status: "unknown", line: `unknown: ${missing.join("; ")}`, proposedVersion: proposed, collisions: [], missing };
+    return { status: "unknown", line: `unknown: ${missing.join("; ")}`, proposedVersion: proposed, collisions: [], missing, warnings: [] };
   }
   const missing = [...evidence.missing];
+  const warnings: string[] = [];
   const collisions: VersionCollisionEntry[] = [];
   const clauses: string[] = [];
   const tipVersion = (tip: { readonly sha: string; readonly version: VersionRead } | null, branch: string): string | null => {
     if (tip === null) return null;
     if (tip.version.kind === "value") return tip.version.version;
-    if (tip.version.kind === "unparseable") {
+    // A tip with NO version file publishes no version: nothing there to
+    // collide with -- said, never silent -- and the rest is still compared.
+    if (tip.version.kind === "absent") {
+      warnings.push(`version collision: the tip of '${branch}' (${short(tip.sha)}) carries no ${policy.versionFile}, so it publishes no version to collide with`);
+    } else if (tip.version.kind === "unparseable") {
       missing.push(`the version at the tip of '${branch}' (${short(tip.sha)}) could not be parsed: ${policy.versionFile} ${tip.version.why}`);
     } else if (tip.version.kind === "unread" && !missing.includes(tip.version.why)) {
       missing.push(tip.version.why);
@@ -392,7 +408,7 @@ export function decideVersionCollision(
     baseVersion !== null &&
     !sameVersion(proposed, baseVersion)
   ) {
-    collisions.push({ kind: "base", version: baseVersion, pr: null, head: evidence.baseTip.sha, baseRef: evidence.subject.baseRef, draft: null });
+    collisions.push({ kind: "unbumped", version: baseVersion, pr: null, head: evidence.baseTip.sha, baseRef: evidence.subject.baseRef, draft: null });
     clauses.push(
       `is unchanged from the pull request's merge base, so merged it would ship under '${evidence.subject.baseRef}''s ${baseVersion} (${short(evidence.baseTip.sha)}), already published`,
     );
@@ -409,10 +425,13 @@ export function decideVersionCollision(
     );
   }
   if (collisions.length > 0) {
-    return { status: "collision", line: `collision: version ${proposed} ${clauses.join("; and ")}`, proposedVersion: proposed, collisions, missing };
+    // A collision proven by the evidence that WAS read stays a collision; what
+    // was not read rides on the line too, never on the JSON alone.
+    const unread = missing.length === 0 ? "" : `; also not read: ${missing.join("; ")}`;
+    return { status: "collision", line: `collision: version ${proposed} ${clauses.join("; and ")}${unread}`, proposedVersion: proposed, collisions, missing, warnings };
   }
   if (missing.length > 0) {
-    return { status: "unknown", line: `unknown: ${missing.join("; ")}`, proposedVersion: proposed, collisions: [], missing };
+    return { status: "unknown", line: `unknown: ${missing.join("; ")}`, proposedVersion: proposed, collisions: [], missing, warnings };
   }
   return {
     status: "clear",
@@ -420,6 +439,7 @@ export function decideVersionCollision(
     proposedVersion: proposed,
     collisions: [],
     missing: [],
+    warnings,
   };
 }
 
@@ -486,19 +506,18 @@ export async function readVersionCollision(
     collisions: status.collisions,
     missing: status.missing,
     inventory: { pages: counters.pages, inspected: counters.inspected, reads: budget.reads, budget: budget.limit },
-    warnings,
+    warnings: [...warnings, ...status.warnings],
     notes,
   });
 
   if (resolution.kind === "undeclared") {
-    notes.push(...resolution.notes);
     return { optedIn: false, result: finish(decideVersionCollision(null, null), null, resolution.source) };
   }
   if (resolution.kind === "unknown") {
     const missing = [resolution.missing];
     return {
       optedIn: true,
-      result: finish({ status: "unknown", line: `unknown: ${missing.join("; ")}`, proposedVersion: null, collisions: [], missing }, null, resolution.source),
+      result: finish({ status: "unknown", line: `unknown: ${missing.join("; ")}`, proposedVersion: null, collisions: [], missing, warnings: [] }, null, resolution.source),
     };
   }
   const policy = resolution.policy;
@@ -512,7 +531,7 @@ export async function readVersionCollision(
             ...evidence,
             missing: [
               ...evidence.missing,
-              `the request budget (${budget.limit} requests) was exhausted before ${budget.exhaustedAt} was read`,
+              `the request budget (${budget.limit} requests) would be exceeded by reading ${budget.exhaustedAt}, so it was not read`,
             ],
           };
     return { optedIn: true, result: finish(decideVersionCollision(policy, withBudget), policy, resolution.source) };
@@ -669,7 +688,7 @@ export async function readVersionCollision(
     const read = source.fileAtRef;
     if (read === undefined) return { kind: "unread", why: `${label}: this transport cannot read files at a commit (no fileAtRef)` };
     // A 404 costs two requests (the contents read, then the commit check).
-    if (!budget.allows(2, label)) return { kind: "unread", why: `${label} was not read (request budget exhausted)` };
+    if (!budget.allows(2, label)) return { kind: "unread", why: `${label} was not read (the request budget would be exceeded)` };
     let text: string | null;
     try {
       text = await read.call(source, repo, policy.versionFile, sha);
@@ -796,10 +815,15 @@ function inventoryRow(entry: unknown, repo: PrRef): InventoryRow | null {
   };
 }
 
-/** Every (number, head, base) difference between the two inventory passes. */
+/** Every (number, head, base) difference between the two inventory passes, same-repository rows only. */
 function inventoryDrift(first: readonly InventoryRow[], second: readonly InventoryRow[]): string[] {
-  const before = new Map(first.map((row): [number, InventoryRow] => [row.number, row]));
-  const after = new Map(second.map((row): [number, InventoryRow] => [row.number, row]));
+  // SAME-REPOSITORY rows only (Feitan, round 1): a fork never blocks, so a
+  // fork opened, pushed or closed mid-evaluation must not turn the result
+  // unknown either -- that would be the griefing the fork rule closes.
+  const own = (rows: readonly InventoryRow[]): Map<number, InventoryRow> =>
+    new Map(rows.filter((row): boolean => row.sameRepo).map((row): [number, InventoryRow] => [row.number, row]));
+  const before = own(first);
+  const after = own(second);
   const drift: string[] = [];
   for (const [number, row] of before) {
     const now = after.get(number);

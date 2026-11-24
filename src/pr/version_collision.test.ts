@@ -16,7 +16,18 @@ import { prVersionCollision, VERSION_COLLISION_CONTRACT, type VersionCollisionRe
 import { parseGateIdentities, parseVersionCollision } from "../schema/gates.js";
 import { SchemaError } from "../schema/errors.js";
 import type { PrStateSource } from "../github/pr_state.js";
-import { decideVersionCollision, sameVersion, versionFromManifest, type VersionCollisionResult } from "./version_collision.js";
+import {
+  decideVersionCollision,
+  sameVersion,
+  versionFromManifest,
+  type VersionCollisionEvidence,
+  type VersionCollisionResult,
+} from "./version_collision.js";
+import { foldVersionCollision, type RowResult } from "../gates/ready.js";
+import { createWatchCommand } from "../watch/command.js";
+import { runFamily } from "../index.js";
+import { ScriptedSeams } from "../seam/scripted.js";
+import { runReadyGate } from "./mergeunit.js";
 import {
   addPeer,
   baseline as kitBaseline,
@@ -139,6 +150,122 @@ describe("the version read and the comparison (zheref/nen#663)", () => {
   });
 });
 
+// ── the decision table and the fold, cell by cell (review round 1, D) ──────
+
+describe("decideVersionCollision -- every row of the decision, in its stated order", () => {
+  const policy = { versionFile: VERSION_FILE, versionPointer: "/version", shippedPaths: ["claude/**"] };
+  const T = sha("1b");
+  const D = sha("2d");
+  const value = (version: string): { kind: "value"; version: string } => ({ kind: "value", version });
+  const evidence = (over: Partial<VersionCollisionEvidence> = {}): VersionCollisionEvidence => ({
+    subject: { number: 42, headSha: SUBJECT_HEAD, baseRef: "main", defaultBranch: "main" },
+    missing: [],
+    moved: [],
+    subjectFiles: ["claude/a.md"],
+    head: value("1.4.0"),
+    baseTip: { sha: T, version: value("1.3.0") },
+    defaultTip: null,
+    mergeBase: value("1.3.0"),
+    peers: [],
+    ...over,
+  });
+  const peer = { number: 10, headSha: sha("ae"), baseRef: "main", draft: false, touchesShipped: true, inherited: false };
+  const stacked = { number: 42, headSha: SUBJECT_HEAD, baseRef: "feature/p", defaultBranch: "main" };
+  const rows: readonly [string, Partial<VersionCollisionEvidence> | null, string, RegExp | string][] = [
+    ["no policy", null, "not-applicable", "declares no version_collision"],
+    ["the subject's files unread", { subjectFiles: null, missing: ["files X"] }, "unknown", "unknown: files X"],
+    ["no shipped path changed", { subjectFiles: ["docs/a.md"] }, "not-applicable", "changes no shipped path (claude/**)"],
+    ["no head version read", { head: null }, "unknown", "at the head was not read"],
+    ["the head read failed", { head: { kind: "unread", why: "head X failed" } }, "unknown", "unknown: head X failed"],
+    ["the head has no manifest", { head: { kind: "absent" } }, "unknown", "carries no .claude-plugin/plugin.json"],
+    ["the head's manifest is unparseable", { head: { kind: "unparseable", why: "not JSON" } }, "unknown", "could not be parsed"],
+    ["drift beats a collision", { baseTip: { sha: T, version: value("1.4.0") }, moved: ["#10 moved"] }, "unknown", "unknown: moved during inspection: #10 moved"],
+    ["the base tip carries it", { baseTip: { sha: T, version: value("1.4.0+b") } }, "collision", "is already at the tip of 'main'"],
+    ["the default tip carries it (stacked)", { subject: stacked, defaultTip: { sha: D, version: value("1.4.0") } }, "collision", "is already at the tip of the default branch 'main'"],
+    ["unbumped while the base moved on", { head: value("1.3.0"), baseTip: { sha: T, version: value("1.3.5") } }, "collision", "is unchanged from the pull request's merge base"],
+    ["a counted peer", { peers: [peer] }, "collision", "is also proposed by open pull request #10"],
+    ["an inherited peer", { peers: [{ ...peer, inherited: true }] }, "clear", "clear: version 1.4.0"],
+    ["a peer touching nothing shipped", { peers: [{ ...peer, touchesShipped: false }] }, "clear", "clear: version 1.4.0"],
+    ["a collision with missing evidence stays a collision", { peers: [peer], missing: ["#11's files"] }, "collision", "; also not read: #11's files"],
+    ["missing evidence alone", { missing: ["#11's files"] }, "unknown", "unknown: #11's files"],
+    ["an unparseable base tip", { baseTip: { sha: T, version: { kind: "unparseable", why: "not JSON" } } }, "unknown", "the version at the tip of 'main'"],
+    ["an unread base tip", { baseTip: { sha: T, version: { kind: "unread", why: "tip X failed" } } }, "unknown", "unknown: tip X failed"],
+    ["a base tip with no manifest", { baseTip: { sha: T, version: { kind: "absent" } } }, "clear", "clear: version 1.4.0"],
+    ["clear", {}, "clear", "clear: version 1.4.0 is on no target tip"],
+  ];
+  it.each(rows)("%s", (_name, over, status, line) => {
+    const decision = decideVersionCollision(over === null ? null : policy, over === null ? null : evidence(over));
+    expect(decision.status).toBe(status);
+    expect(decision.line).toContain(line);
+  });
+  it("a collision keeps its missing list, and a tip with no manifest is a named warning", () => {
+    const decided = decideVersionCollision(policy, evidence({ peers: [peer], missing: ["#11's files"] }));
+    expect(decided.missing).toEqual(["#11's files"]);
+    expect(decided.collisions.map((entry): string => entry.kind)).toEqual(["peer"]);
+    const absent = decideVersionCollision(policy, evidence({ baseTip: { sha: T, version: { kind: "absent" } } }));
+    expect(absent.warnings).toEqual([`version collision: the tip of 'main' (${T.slice(0, 7)}) carries no ${VERSION_FILE}, so it publishes no version to collide with`]);
+  });
+});
+
+describe("foldVersionCollision -- 4 statuses x every CON-32(a) row state", () => {
+  const result = (status: VersionCollisionResult["status"]): VersionCollisionResult => ({
+    status,
+    line: `${status}: L`,
+    judgedHead: SUBJECT_HEAD,
+    base: { ref: "main", sha: MAIN },
+    default: { ref: "main", sha: MAIN },
+    policySource: "s",
+    policy: null,
+    proposedVersion: "1.4.0",
+    collisions: [],
+    missing: status === "unknown" ? ["M"] : [],
+    inventory: { pages: 0, inspected: 0, reads: 0, budget: 200 },
+    warnings: [],
+    notes: [],
+  });
+  const states: readonly [string, RowResult][] = [
+    ["ready", { status: "ready", note: null }],
+    ["ready with a note", { status: "ready", note: "excluded by declaration: X" }],
+    ["failed", { status: "failed", reason: "not-ready: red" }],
+    ["failed: no checks reported", { status: "failed", reason: "not-ready: NO checks reported at head (CON-32a)" }],
+    ["unevaluated", { status: "unevaluated", missing: "readiness undetermined: P" }],
+  ];
+  const collision = "version collision (CON-32a, zheref/nen#663): collision: L";
+  const unknown = "the version collision could not be judged (zheref/nen#663): M";
+  const expected: Readonly<Record<string, Readonly<Record<string, unknown>>>> = {
+    "not-applicable": {},
+    clear: {},
+    collision: {
+      ready: { status: "failed", reason: `not-ready: ${collision}` },
+      "ready with a note": { status: "failed", reason: `not-ready: ${collision} — the checks themselves are green: excluded by declaration: X` },
+      failed: { status: "failed", reason: `not-ready: red — and ${collision}` },
+      "failed: no checks reported": { status: "failed", reason: `not-ready: NO checks reported at head (CON-32a) — and ${collision}` },
+      unevaluated: { status: "failed", reason: `not-ready: ${collision} — and the checks could not be judged: readiness undetermined: P` },
+    },
+    unknown: {
+      ready: { status: "unevaluated", missing: unknown },
+      "ready with a note": { status: "unevaluated", missing: `${unknown} — the checks themselves are green: excluded by declaration: X` },
+      failed: { status: "failed", reason: `not-ready: red — and ${unknown}` },
+      "failed: no checks reported": { status: "failed", reason: `not-ready: NO checks reported at head (CON-32a) — and ${unknown}` },
+      unevaluated: { status: "unevaluated", missing: `readiness undetermined: P; and ${unknown}` },
+    },
+  };
+  for (const status of ["not-applicable", "clear", "collision", "unknown"] as const) {
+    it.each(states)(`${status} on a %s row`, (state, row) => {
+      const folded = foldVersionCollision(row, result(status));
+      const cell = expected[status]?.[state];
+      expect(folded).toEqual({
+        ...(cell ?? row),
+        versionCollision: { status, line: `${status}: L`, proposedVersion: "1.4.0", collisions: [], missing: status === "unknown" ? ["M"] : [] },
+      });
+    });
+  }
+  it("no limb (not opted in) returns the row untouched", () => {
+    const row: RowResult = { status: "ready", note: null };
+    expect(foldVersionCollision(row, undefined)).toBe(row);
+  });
+});
+
 // ── AC-1 ────────────────────────────────────────────────────────────────────
 
 describe("AC-1: a head carrying its target tip's version is refused, naming the version", () => {
@@ -186,7 +313,33 @@ describe("AC-1: a head carrying its target tip's version is refused, naming the 
     world.versions[MAIN] = "1.3.5";
     const { report } = await ready(world);
     expect(report.gateLine).toContain("is unchanged from the pull request's merge base, so merged it would ship under 'main''s 1.3.5");
-    expect(checksRow(report)?.versionCollision?.collisions[0]).toMatchObject({ kind: "base", version: "1.3.5" });
+    // Its own kind, so a consumer tells it from an AC-1 tip hit (`base`).
+    expect(checksRow(report)?.versionCollision?.collisions).toEqual([
+      { kind: "unbumped", version: "1.3.5", pr: null, head: MAIN, baseRef: "main", draft: null },
+    ]);
+    expect((await verb(world)).report.collisions.map((entry): string => entry.kind)).toEqual(["unbumped"]);
+  });
+
+  it("a tip with NO version file publishes no version: a named warning, and the other evidence is still compared", async () => {
+    const world = baseline();
+    world.versions[MAIN] = null;
+    const clear = await ready(world);
+    expect(clear.code).toBe(0);
+    expect(checksRow(clear.report)?.versionCollision?.status).toBe("clear");
+    const warning = `version collision: the tip of 'main' (${MAIN.slice(0, 7)}) carries no ${VERSION_FILE}, so it publishes no version to collide with`;
+    expect(clear.report.meta.warnings).toContain(warning);
+    expect((await verb(world)).report.warnings).toContain(warning);
+    // Symmetric on a stacked base: the default tip has no file, the base tip still collides.
+    const stacked = baseline();
+    const parent = sha("5d");
+    stacked.branches["feature/parent"] = parent;
+    stacked.versions[parent] = "1.4.0";
+    stacked.versions[MAIN] = null;
+    stacked.prs[0]!.base = "feature/parent";
+    stacked.mergeBases[`feature/parent...${SUBJECT_HEAD}`] = MAIN_OLD;
+    const hit = await ready(stacked);
+    expect(hit.report.meta.warnings.join("\n")).toContain(`the tip of 'main' (${MAIN.slice(0, 7)}) carries no`);
+    expect(hit.report.meta.versionCollision?.collisions).toEqual([{ kind: "base", version: "1.4.0", pr: null, head: parent, baseRef: "feature/parent", draft: null }]);
   });
 
   it("a pull request changing no shipped path is not applicable: ready, exit 0, and no inventory read", async () => {
@@ -341,9 +494,6 @@ describe("AC-3: a base that later takes the proposed version turns a green head 
   });
 
   it("through `watch until --pr --until ready`: the collision holds the watch, the bump releases it", async () => {
-    const { createWatchCommand } = await import("../watch/command.js");
-    const { runFamily } = await import("../index.js");
-    const { ScriptedSeams } = await import("../seam/scripted.js");
     const world = baseline();
     world.versions[MAIN] = "1.4.0";
     const readyDeps: PrReadyDeps = { ...deps(null), openSource: () => ({ ok: true, source: worldSource(world, 42) }) };
@@ -366,8 +516,6 @@ describe("AC-3: a base that later takes the proposed version turns a green head 
   });
 
   it("through `pr merge`'s in-process readiness gate (shared by --release-unit and --delivery): refused, naming the collision", async () => {
-    const { runReadyGate } = await import("./mergeunit.js");
-    const { ScriptedSeams } = await import("../seam/scripted.js");
     const world = baseline();
     const options = { target: { owner: "acme", repo: "widget", slug: SLUG }, prNumber: 42, repoFlag: ROOT, ghRepoFlag: SLUG, seams: new ScriptedSeams([]) };
     const green = await runReadyGate({ ...options, deps: deps(worldSource(world, 42)) } as Parameters<typeof runReadyGate>[0]);
@@ -457,6 +605,8 @@ describe("AC-4: distinct proposals both pass; no opt-in, no change", () => {
       expect(parseGateIdentities("g.json", root(OPT_IN)).versionCollision?.versionPointer).toBe("/version");
       expect("versionCollision" in parseGateIdentities("g.json", root(NO_OPT_IN))).toBe(false);
       expect(parseVersionCollision("g.json", root({ ...OPT_IN, version_pointer: "/a~1b/~0c/0", shipped_paths: ["src/**/*.ts", "x?.md"] }))).not.toBeNull();
+      // Four '**' segments is the bound, accepted; a fifth is refused below.
+      expect(parseVersionCollision("g.json", root({ ...OPT_IN, shipped_paths: ["**/a/**/b/**/c/**"] }))).not.toBeNull();
     });
     it.each([
       ["version_collision", "a string"],
@@ -478,6 +628,7 @@ describe("AC-4: distinct proposals both pass; no opt-in, no change", () => {
       ["version_collision.shipped_paths[0]", { shipped_paths: ["claude/[ab]"] }],
       ["version_collision.shipped_paths[0]", { shipped_paths: ["claude/a**"] }],
       ["version_collision.shipped_paths[0]", { shipped_paths: ["../claude/**"] }],
+      ["version_collision.shipped_paths[0]", { shipped_paths: ["**/a/**/b/**/c/**/d/**"] }],
     ])("refuses %s: %j", (pointer, override) => {
       const block = typeof override === "string" ? override : { ...OPT_IN, ...override };
       let caught: unknown;
@@ -605,7 +756,7 @@ describe("AC-5 / SC-1: unreadable, incomplete or moving evidence is unknown on b
       for (let number = 100; number < 160; number += 1) addPeer(world, number, "1.4.0", { mergeBaseVersion: "1.4.0" });
       return world;
     };
-    await expectUnknownEverywhere(fixed(busy), /request budget \(200 requests\) was exhausted/);
+    await expectUnknownEverywhere(fixed(busy), /request budget \(200 requests\) would be exceeded by reading/);
   });
 
   const moves: readonly [string, (world: CollisionWorld) => ReadOptions][] = [
@@ -623,6 +774,32 @@ describe("AC-5 / SC-1: unreadable, incomplete or moving evidence is unknown on b
     }, /moved during inspection/);
   });
 
+  it("FORK churn between the two passes is not drift; same-repository churn still is", async () => {
+    const withFork = (): CollisionWorld => {
+      const world = oneInheritingPeer();
+      addPeer(world, 31, "1.4.0", { fork: true });
+      return world;
+    };
+    const forkChurn: readonly ((world: CollisionWorld) => void)[] = [
+      (world): void => void (world.prs.find((entry): boolean => entry.number === 31)!.head = sha("3a")),
+      (world): void => void world.prs.splice(world.prs.findIndex((entry): boolean => entry.number === 31), 1),
+      (world): void => void world.prs.push({ number: 88, head: sha("88"), base: "main", files: ["claude/x.md"], fork: true }),
+    ];
+    for (const churn of forkChurn) {
+      const world = withFork();
+      const options: ReadOptions = { after: (key, n): void => void (key === "pulls:1" && n === 1 && churn(world)) };
+      const { code, report } = await ready(world, 42, options);
+      expect(code).toBe(0);
+      expect(checksRow(report)?.versionCollision?.status).toBe("clear");
+      const again = withFork();
+      expect((await verb(again, 42, { after: (key, n): void => void (key === "pulls:1" && n === 1 && churn(again)) })).code).toBe(0);
+    }
+    await expectUnknownEverywhere((): { world: CollisionWorld; options: ReadOptions } => {
+      const world = withFork();
+      return { world, options: { after: (key, n): void => void (key === "pulls:1" && n === 1 && (world.prs[1]!.head = sha("9a"))) } };
+    }, /moved during inspection: #10's head moved/);
+  });
+
   it("the default tip moving under a stacked base is unknown too", async () => {
     await expectUnknownEverywhere((): { world: CollisionWorld; options: ReadOptions } => {
       const world = baseline();
@@ -635,7 +812,7 @@ describe("AC-5 / SC-1: unreadable, incomplete or moving evidence is unknown on b
     }, /tip of 'main' moved/);
   });
 
-  it("an unreadable default-tip policy is unknown when another copy declares it", async () => {
+  it("an unreadable default-tip policy is unknown, whatever the other copies say", async () => {
     const unreadable = (): CollisionWorld => {
       const world = baseline();
       world.gatesAt = (ref): string | null => {
@@ -644,7 +821,7 @@ describe("AC-5 / SC-1: unreadable, incomplete or moving evidence is unknown on b
       };
       return world;
     };
-    await expectUnknownEverywhere(fixed(unreadable), /default-branch tip's nen\/gates\.json .* could not be read .* declares version_collision/);
+    await expectUnknownEverywhere(fixed(unreadable), /default-branch tip's nen\/gates\.json \(acme\/widget@1b1b1b1:?.*could not be read \(HTTP 403/);
   });
 
   it("a head with no usable version is unknown", async () => {
@@ -683,36 +860,90 @@ describe("SC-1: one evaluator -- both surfaces agree on every fixture", () => {
     edit(world);
     return world;
   };
-  const fixtures: readonly [string, () => CollisionWorld, number][] = [
-    ["clear", baseline, 42],
-    ["base collision", edited((world): void => void (world.versions[MAIN] = "1.4.0")), 42],
-    ["peer collision", edited((world): void => void addPeer(world, 10, "1.4.0")), 42],
-    ["peer collision, run from the peer", edited((world): void => void addPeer(world, 10, "1.4.0")), 10],
-    ["inherited peer", oneInheritingPeer, 42],
-    ["not shipped", edited((world): void => void (world.prs[0]!.files = ["README.md"])), 42],
-    ["not opted in", edited((world): void => void (world.gatesAt = (): string => gatesText(NO_OPT_IN))), 42],
-    ["unreadable inventory", baseline, -1],
+  /** A baseline whose DEFAULT tip carries `text` as its nen/gates.json (or whose read throws). */
+  const defaultTipGates = (text: string | Error): (() => CollisionWorld) =>
+    edited((world): void => {
+      world.gatesAt = (ref): string | null => {
+        if (ref !== MAIN) return gatesText();
+        if (text instanceof Error) throw text;
+        return text;
+      };
+    });
+  /** [name, world, subject (-1: #42 with an unreadable inventory), the copies the caller holds, expected status]. */
+  const fixtures: readonly [string, () => CollisionWorld, number, "opted" | "plain", string][] = [
+    ["clear", baseline, 42, "opted", "clear"],
+    ["base collision", edited((world): void => void (world.versions[MAIN] = "1.4.0")), 42, "opted", "collision"],
+    ["unbumped collision", edited((world): void => void ((world.versions[SUBJECT_HEAD] = "1.3.0"), (world.versions[MAIN] = "1.3.5"))), 42, "opted", "collision"],
+    ["peer collision", edited((world): void => void addPeer(world, 10, "1.4.0")), 42, "opted", "collision"],
+    ["peer collision, run from the peer", edited((world): void => void addPeer(world, 10, "1.4.0")), 10, "opted", "collision"],
+    ["inherited peer", oneInheritingPeer, 42, "opted", "clear"],
+    ["not shipped", edited((world): void => void (world.prs[0]!.files = ["README.md"])), 42, "opted", "not-applicable"],
+    ["not opted in", edited((world): void => void (world.gatesAt = (): string => gatesText(NO_OPT_IN))), 42, "plain", "absent"],
+    ["no gates file at the default tip (a clean 404)", edited((world): void => void (world.gatesAt = (ref): string | null => (ref === MAIN ? null : gatesText()))), 42, "opted", "absent"],
+    ["unreadable inventory", baseline, -1, "opted", "unknown"],
+    // Review round 1, A: the default tip decides alone, and fails closed.
+    ["default tip: shipped_paths []", defaultTipGates(gatesText({ ...OPT_IN, shipped_paths: [] })), 42, "opted", "unknown"],
+    ["default tip: an unknown version_regex key", defaultTipGates(gatesText({ ...OPT_IN, version_regex: ".*" })), 42, "opted", "unknown"],
+    ["default tip: malformed JSON", defaultTipGates("{ not json"), 42, "opted", "unknown"],
+    ["default tip: a newer version", defaultTipGates(JSON.stringify({ ...(JSON.parse(gatesText()) as object), version: 2 })), 42, "opted", "unknown"],
+    ["default tip unreadable, NO other copy declaring", defaultTipGates(new Error("HTTP 502: upstream")), 42, "plain", "unknown"],
   ];
-  it.each(fixtures)("%s", async (_name, make, which) => {
-    const world = make();
+  it.each(fixtures)("%s", async (_name, make, which, copies, expected) => {
     // -1: the subject #42 with an unreadable inventory -- SC-1's "0 successful verdicts".
     const subject = which === -1 ? 42 : which;
     const options: ReadOptions = which === -1 ? { fail: new Set(["pulls:1"]) } : {};
-    const readiness = await ready(world, subject, options);
-    const cli = await verb(world, subject, options);
-    if (which === -1) {
-      expect(readiness.report.verdict).not.toBe("ready");
-      expect(cli.code).toBe(1);
-    }
+    const readiness = await ready(make(), subject, options, copies === "plain" ? PLAIN_GATES : OPTED_GATES);
+    const cli = await verb(make(), subject, options, copies === "plain" ? PLAIN_ROOT : ROOT);
     const fromReady = readiness.report.meta.versionCollision;
-    if (fromReady === undefined) {
+    if (expected === "absent") {
+      expect(fromReady).toBeUndefined();
       expect(cli.report.status).toBe("not-applicable");
       expect(JSON.stringify(readiness.report)).not.toContain("versionCollision");
     } else {
-      expect(outcomeOf(cli.report)).toEqual(outcomeOf(fromReady));
-      expect(checksRow(readiness.report)?.versionCollision).toEqual(outcomeOf(fromReady));
+      expect(fromReady?.status).toBe(expected);
+      expect(cli.report.status).toBe(expected);
+      expect(outcomeOf(cli.report)).toEqual(outcomeOf(fromReady ?? cli.report));
+      expect(checksRow(readiness.report)?.versionCollision).toEqual(outcomeOf(fromReady ?? cli.report));
+    }
+    if (expected === "unknown" || expected === "collision") {
+      expect(readiness.report.verdict).not.toBe("ready");
+      expect(cli.code).toBe(1);
     }
     expect(cli.code === 0).toBe(readiness.report.verdict === "ready");
+  });
+
+  it("a refused default tip names the pointer it refused", async () => {
+    const cli = await verb(defaultTipGates(gatesText({ ...OPT_IN, shipped_paths: [] }))());
+    expect(cli.report.missing.join("\n")).toMatch(/refused by this build .*at version_collision\.shipped_paths, is empty/);
+    const unknownKey = await verb(defaultTipGates(gatesText({ ...OPT_IN, version_regex: ".*" }))());
+    expect(unknownKey.report.missing.join("\n")).toMatch(/version_regex/);
+  });
+
+  it("`pr ready --gates <a file without the block>` with the default tip unreadable is unknown, not ready", async () => {
+    const world = defaultTipGates(new Error("HTTP 403: Resource not accessible by integration"))();
+    const { code, report } = await ready(world, 42, {}, PLAIN_GATES);
+    expect(code).toBe(1);
+    expect(checksRow(report)?.status).toBe("unevaluated");
+    expect(report.meta.versionCollision?.status).toBe("unknown");
+    expect(report.gateLine).toContain("could not be read (HTTP 403: Resource not accessible by integration)");
+  });
+
+  it("a repository that has NOT opted in, whose default-tip read fails, is unknown too -- before #663 it could read ready", async () => {
+    // The base is readable at ANOTHER commit and supplies the identities; only
+    // the default tip's read fails. Before this change that read was a quiet
+    // exclusions note and the verdict could be `ready`; now the one copy that
+    // decides the opt-in could not be read, so the limb is unknown.
+    const world = baseline();
+    world.snapshot = { base: sha("aa"), default: MAIN };
+    world.gatesAt = (ref): string | null => {
+      if (ref === MAIN) throw new Error("HTTP 502: upstream");
+      return gatesText(NO_OPT_IN);
+    };
+    const { code, report } = await ready(world, 42, {}, PLAIN_GATES);
+    expect(code).toBe(1);
+    expect(report.meta.versionCollision?.missing).toEqual([
+      `the version_collision policy: the default-branch tip's nen/gates.json (${SLUG}@${MAIN}:nen/gates.json) could not be read (HTTP 502: upstream)`,
+    ]);
   });
 
   it("--explain names the limb, its policy source and its read counts on both surfaces", async () => {
