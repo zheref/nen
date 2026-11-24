@@ -19,8 +19,33 @@ export interface Reviewer {
   used: number;
   max: number;
   budgetSource?: string;
-  invocations: { outcome: "ran" | "skipped-exhausted"; at?: string; [key: string]: unknown }[];
+  invocations: Invocation[];
   [key: string]: unknown;
+}
+/**
+ * One recorded pass. `ran` spends a round and `skipped-exhausted` records a
+ * budget skip; `delta` is hanten § 2b's bounded re-read of a spent reviewer's
+ * own earlier review on a new head (zheref/nen#662). It names both heads and
+ * spends nothing, so `used` still counts `ran` rows and nothing else.
+ */
+export type Invocation =
+  | { outcome: "ran" | "skipped-exhausted"; at?: string; [key: string]: unknown }
+  | { outcome: "delta"; at?: string; fromHead: string; toHead: string; [key: string]: unknown };
+/** A full commit id: forty lowercase hexadecimal digits, never an abbreviation or a ref name. */
+export const DELTA_HEAD = /^[0-9a-f]{40}$/;
+function wellFormedDelta(entry: Record<string, unknown>): boolean {
+  const from = entry["fromHead"], to = entry["toHead"];
+  return typeof from === "string" && typeof to === "string" && DELTA_HEAD.test(from) && DELTA_HEAD.test(to) && from !== to;
+}
+/** Per-reviewer counts a caller reads instead of parsing rows: a delta is neither a round nor a skip. */
+export function passCounts(row: Reviewer): { deltas: number; skips: number; lastDeltaHead: string | null } {
+  const deltas = row.invocations.filter((entry): boolean => entry.outcome === "delta");
+  const last = deltas.at(-1);
+  return {
+    deltas: deltas.length,
+    skips: row.invocations.filter((entry): boolean => entry.outcome === "skipped-exhausted").length,
+    lastDeltaHead: last === undefined ? null : String(last["toHead"]),
+  };
 }
 export interface Cycle {
   contract: typeof CYCLE_CONTRACT;
@@ -171,7 +196,11 @@ export function readCycle(options: CycleOptions, budgets: Budgets): Cycle {
   for (const [persona, row] of Object.entries(doc.reviewers)) {
     if (!object(row) || !integer(row.used) || !Array.isArray(row.invocations) || !integer(row.max)) refuse(`${path} has no valid ${persona} review history; restore it without resetting used counts.`);
     const outcomes = row.invocations.map((entry): unknown => object(entry) ? entry["outcome"] : undefined);
-    if (outcomes.some((outcome): boolean => outcome !== "ran" && outcome !== "skipped-exhausted") || outcomes.filter((outcome): boolean => outcome === "ran").length !== row.used) refuse(`${path} has inconsistent ${persona} used count and invocation history; restore the original ledger.`);
+    if (outcomes.some((outcome): boolean => outcome !== "ran" && outcome !== "skipped-exhausted" && outcome !== "delta") || outcomes.filter((outcome): boolean => outcome === "ran").length !== row.used) refuse(`${path} has inconsistent ${persona} used count and invocation history; restore the original ledger.`);
+    // A delta row is accepted only in the shape record writes; a malformed one
+    // is inconsistent history to restore, never repaired or skipped here.
+    const malformed = row.invocations.findIndex((entry): boolean => (entry as Record<string, unknown>)["outcome"] === "delta" && !wellFormedDelta(entry as Record<string, unknown>));
+    if (malformed !== -1) refuse(`${path} has inconsistent ${persona} invocation history: delta row ${malformed} needs distinct full 40-hex fromHead and toHead; restore the original ledger.`);
   }
   for (const [persona, budget] of Object.entries(budgets)) {
     if (!Object.hasOwn(doc.reviewers, persona)) {
@@ -283,7 +312,26 @@ export function ensureCycle(options: CycleOptions): { code: number; report: Reco
     return { code: 0, report: { ensure: "opened", reason: "no trace of an earlier ledger was found", path, ...(cycleTraceDir(options) === null ? { note: "no git common dir was readable here, so no durable trace exists for a later ensure" } : {}) } };
   });
 }
-export function runCycle(options: CycleOptions, action: string, args: { applicable?: string; persona?: string; outcome?: string; confirmed?: boolean }): Record<string, unknown> {
+export interface CycleArgs { applicable?: string; persona?: string; outcome?: string; fromHead?: string; toHead?: string; confirmed?: boolean }
+/**
+ * Validate a `delta` record against the reviewer's own history (hanten § 2b:
+ * "a spent reviewer meeting a new head gets one bounded delta pass: the diff
+ * since its last head, both named"). Every refusal runs before any write.
+ */
+function checkDelta(persona: string, row: Reviewer, fromHead: string, toHead: string): void {
+  for (const [flag, value] of [["--from-head", fromHead], ["--to-head", toHead]] as const) {
+    if (!DELTA_HEAD.test(value)) refuse(`${flag} ${JSON.stringify(value)} is not a full commit id: give all 40 lowercase hexadecimal digits.`);
+  }
+  if (fromHead === toHead) refuse(`--from-head and --to-head are both ${fromHead}; a delta reviews the diff between two different heads.`);
+  if (!row.invocations.some((entry): boolean => entry.outcome === "ran")) refuse(`${persona} has no ran pass in this cycle; a delta re-reads that reviewer's own earlier review, so record ran first.`);
+  if (row.used < row.max) refuse(`${persona} still has budget (${row.used}/${row.max}); a delta is only for a spent reviewer, so raise an ordinary round and record ran.`);
+  const deltas = row.invocations.filter((entry): entry is Extract<Invocation, { outcome: "delta" }> => entry.outcome === "delta");
+  if (deltas.some((entry): boolean => entry.fromHead === fromHead && entry.toHead === toHead)) refuse(`${persona} already has a delta from ${fromHead} to ${toHead}; nothing recorded twice.`);
+  const last = deltas.at(-1);
+  if (last !== undefined && last.toHead !== fromHead) refuse(`--from-head ${fromHead} is not ${persona}'s last reviewed head ${last.toHead}; a delta covers the diff since that reviewer's last head.`);
+  if (deltas.some((entry): boolean => entry.fromHead === toHead || entry.toHead === toHead)) refuse(`--to-head ${toHead} was already reviewed by ${persona} in this cycle; a delta is for a new head.`);
+}
+export function runCycle(options: CycleOptions, action: string, args: CycleArgs): Record<string, unknown> {
   const budgets = readBudgets(options.root);
   const path = cyclePath(options.root, options.branch, options.pr);
   if (["show", "record", "decide"].includes(action) && !present(path)) readCycle(options, budgets); // missing reads leave no lock trace
@@ -296,19 +344,27 @@ export function runCycle(options: CycleOptions, action: string, args: { applicab
       for (const persona of applicable) if (!Object.hasOwn(budgets, persona)) refuse(undeclared(persona, budgets));
       const reviewers = Object.entries(budgets).map(([persona, budget]): Record<string, unknown> => {
         const used = doc.reviewers[persona]!.used;
-        return { persona, applicable: applicable.includes(persona), used, max: budget.max, remaining: Math.max(0, budget.max - used), action: !applicable.includes(persona) ? "not-applicable" : used >= budget.max ? "skip-exhausted" : "raise" };
+        return { persona, applicable: applicable.includes(persona), used, max: budget.max, remaining: Math.max(0, budget.max - used), ...passCounts(doc.reviewers[persona]!), action: !applicable.includes(persona) ? "not-applicable" : used >= budget.max ? "skip-exhausted" : "raise" };
       });
       return { contract: CYCLE_CONTRACT, branch: doc.branch, pr: doc.pr, path, reviewers, raise: reviewers.filter((row): boolean => row["action"] === "raise").map((row): unknown => row["persona"]), skippedExhausted: reviewers.filter((row): boolean => row["action"] === "skip-exhausted").map((row): unknown => row["persona"]) };
     }
     const persona = args.persona!.toLowerCase();
     if (!Object.hasOwn(budgets, persona)) refuse(undeclared(persona, budgets));
     const row = doc.reviewers[persona]!;
-    if (args.outcome !== "ran" && args.outcome !== "skipped-exhausted") refuse("--outcome is ran or skipped-exhausted.");
-    if (args.outcome === "ran" && row.used >= row.max) refuse(`${persona} is exhausted (${row.used}/${row.max}); record skipped-exhausted, do not raise.`);
-    if (args.outcome === "skipped-exhausted" && row.used < row.max) refuse(`${persona} still has budget (${row.used}/${row.max}); skipped-exhausted is only for used >= max.`);
-    if (args.outcome === "ran") row.used += 1;
-    row.invocations.push({ at: options.seams.now().toISOString(), outcome: args.outcome });
+    if (args.outcome !== "ran" && args.outcome !== "skipped-exhausted" && args.outcome !== "delta") refuse("--outcome is ran, skipped-exhausted or delta.");
+    const outcome = args.outcome;
+    if (outcome === "delta") {
+      if (args.fromHead === undefined || args.toHead === undefined) refuse(`--outcome delta needs both --from-head <sha> and --to-head <sha>${args.fromHead === undefined && args.toHead === undefined ? "" : `; --${args.fromHead === undefined ? "from" : "to"}-head is missing`}.`);
+      checkDelta(persona, row, args.fromHead, args.toHead);
+    } else if (args.fromHead !== undefined || args.toHead !== undefined) {
+      refuse(`--${args.fromHead !== undefined ? "from" : "to"}-head is only valid with --outcome delta, not ${outcome}.`);
+    }
+    if (outcome === "ran" && row.used >= row.max) refuse(`${persona} is exhausted (${row.used}/${row.max}); record skipped-exhausted, or delta for a bounded re-read of a new head, do not raise.`);
+    if (outcome === "skipped-exhausted" && row.used < row.max) refuse(`${persona} still has budget (${row.used}/${row.max}); skipped-exhausted is only for used >= max.`);
+    if (outcome === "ran") row.used += 1;
+    const at = options.seams.now().toISOString();
+    row.invocations.push(outcome === "delta" ? { at, outcome, fromHead: args.fromHead!, toHead: args.toHead! } : { at, outcome });
     saveCycle(options, doc);
-    return { path, persona, outcome: args.outcome, used: row.used, max: row.max };
+    return { path, persona, outcome, used: row.used, max: row.max, ...passCounts(row), ...(outcome === "delta" ? { fromHead: args.fromHead, toHead: args.toHead } : {}) };
   });
 }

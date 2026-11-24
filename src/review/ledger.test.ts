@@ -332,6 +332,99 @@ describe("command contract and recovery authority", () => {
   });
 });
 
+const A = "a".repeat(40), B = "b".repeat(40), C = "c".repeat(40), D = "d".repeat(40);
+/** The exhausted-budget fixture of zheref/nen#662: this repository's own roster, nobunaga spent at 2/2. */
+function spent(): CycleOptions {
+  const o = fixture(); copyFileSync(join(process.cwd(), "nen", "workflow.json"), join(o.root, "nen", "workflow.json")); act(o, "init");
+  act(o, "record", { persona: "nobunaga", outcome: "ran" }); act(o, "record", { persona: "nobunaga", outcome: "ran" });
+  return o;
+}
+describe("bounded delta passes (zheref/nen#662)", () => {
+  it("records one delta on an exhausted budget: exactly one new invocation, used and max unchanged", () => {
+    const o = spent(); const before = read(o).reviewers.nobunaga!;
+    expect(before).toMatchObject({ used: 2, max: 2 });
+    const result = act(o, "record", { persona: "nobunaga", outcome: "delta", fromHead: A, toHead: B });
+    expect(result).toMatchObject({ outcome: "delta", used: 2, max: 2, deltas: 1, skips: 0, lastDeltaHead: B, fromHead: A, toHead: B });
+    const after = read(o).reviewers.nobunaga!;
+    expect(after.invocations).toHaveLength(before.invocations.length + 1);
+    expect(after.invocations.slice(0, -1)).toEqual(before.invocations);
+    expect(after.invocations.at(-1)).toEqual({ at: expect.any(String), outcome: "delta", fromHead: A, toHead: B });
+    expect([after.used, after.max]).toEqual([2, 2]);
+    act(o, "record", { persona: "nobunaga", outcome: "delta", fromHead: B, toHead: C });
+    expect(read(o).reviewers.nobunaga).toMatchObject({ used: 2, max: 2 });
+  });
+  it("decide distinguishes rounds, skips and deltas per reviewer, and a delta never restores a raise", () => {
+    const o = spent(); act(o, "record", { persona: "nobunaga", outcome: "skipped-exhausted" });
+    act(o, "record", { persona: "nobunaga", outcome: "delta", fromHead: A, toHead: B });
+    const plan = act(o, "decide", { applicable: "nobunaga,chrollo" });
+    const rows = plan["reviewers"] as Record<string, unknown>[];
+    expect(rows.find((row): boolean => row["persona"] === "nobunaga")).toMatchObject({ used: 2, max: 2, remaining: 0, deltas: 1, skips: 1, lastDeltaHead: B, action: "skip-exhausted" });
+    expect(rows.find((row): boolean => row["persona"] === "chrollo")).toMatchObject({ used: 0, deltas: 0, skips: 0, lastDeltaHead: null, action: "raise" });
+    expect(plan["skippedExhausted"]).toEqual(["nobunaga"]); expect(plan["raise"]).toEqual(["chrollo"]);
+  });
+  it("loads a legacy ran/skipped-exhausted ledger unchanged in meaning, inventing no delta", () => {
+    const o = fixture(); act(o, "init"); act(o, "record", { persona: "beta", outcome: "ran" }); act(o, "record", { persona: "beta", outcome: "skipped-exhausted" });
+    const legacy = JSON.parse(bytes(o)) as Cycle; write(o, legacy); const before = bytes(o);
+    const doc = read(o);
+    expect(doc.reviewers).toEqual(legacy.reviewers);
+    expect(act(o, "show")["reviewers"]).toEqual(legacy.reviewers);
+    const beta = (act(o, "decide", { applicable: "beta" })["reviewers"] as Record<string, unknown>[]).find((row): boolean => row["persona"] === "beta");
+    expect(beta).toMatchObject({ used: 1, max: 1, deltas: 0, skips: 1, lastDeltaHead: null, action: "skip-exhausted" });
+    expect(bytes(o)).toBe(before);
+  });
+  it.each([
+    ["no heads", { outcome: "delta" }, /needs both --from-head <sha> and --to-head <sha>\.$/],
+    ["a missing to-head", { outcome: "delta", fromHead: A }, /--to-head is missing/],
+    ["a missing from-head", { outcome: "delta", toHead: B }, /--from-head is missing/],
+    ["a head with ran", { outcome: "ran", fromHead: A }, /--from-head is only valid with --outcome delta, not ran/],
+    ["a head with a skip", { outcome: "skipped-exhausted", toHead: B }, /--to-head is only valid with --outcome delta, not skipped-exhausted/],
+    ["an abbreviated head", { outcome: "delta", fromHead: "abc1234", toHead: B }, /--from-head "abc1234" is not a full commit id/],
+    ["an uppercase head", { outcome: "delta", fromHead: A, toHead: "B".repeat(40) }, /--to-head "B{40}" is not a full commit id/],
+    ["a ref name", { outcome: "delta", fromHead: "HEAD", toHead: B }, /--from-head "HEAD" is not a full commit id/],
+    ["identical heads", { outcome: "delta", fromHead: A, toHead: A }, /both a{40}; a delta reviews the diff between two different heads/],
+  ] as const)("refuses %s before any write", (_name, args, message): void => {
+    const o = spent(); const before = bytes(o);
+    expect(() => act(o, "record", { persona: "nobunaga", ...args })).toThrow(message); expect(bytes(o)).toBe(before);
+  });
+  it("refuses a delta for a reviewer with no ran pass or with budget left, before any write", () => {
+    const o = spent(); const before = bytes(o);
+    expect(() => act(o, "record", { persona: "chrollo", outcome: "delta", fromHead: A, toHead: B })).toThrow(/chrollo has no ran pass in this cycle/);
+    const fresh = fixture({ alpha: 2 }); act(fresh, "init"); act(fresh, "record", { persona: "alpha", outcome: "ran" }); const held = bytes(fresh);
+    expect(() => act(fresh, "record", { persona: "alpha", outcome: "delta", fromHead: A, toHead: B })).toThrow(/alpha still has budget \(1\/2\); a delta is only for a spent reviewer/);
+    const zero = fixture({ idle: 0 }); act(zero, "init"); const none = bytes(zero);
+    expect(() => act(zero, "record", { persona: "idle", outcome: "delta", fromHead: A, toHead: B })).toThrow(/idle has no ran pass/);
+    expect([bytes(o), bytes(fresh), bytes(zero)]).toEqual([before, held, none]);
+  });
+  it("refuses a duplicate, a broken chain and an already-reviewed head before any write", () => {
+    const o = spent(); act(o, "record", { persona: "nobunaga", outcome: "delta", fromHead: A, toHead: B }); const before = bytes(o);
+    expect(() => act(o, "record", { persona: "nobunaga", outcome: "delta", fromHead: A, toHead: B })).toThrow(/already has a delta from a{40} to b{40}/);
+    expect(() => act(o, "record", { persona: "nobunaga", outcome: "delta", fromHead: C, toHead: D })).toThrow(/--from-head c{40} is not nobunaga's last reviewed head b{40}/);
+    expect(() => act(o, "record", { persona: "nobunaga", outcome: "delta", fromHead: B, toHead: A })).toThrow(/--to-head a{40} was already reviewed by nobunaga in this cycle/);
+    expect(bytes(o)).toBe(before);
+  });
+  it.each([
+    { outcome: "delta" }, { outcome: "delta", fromHead: "a".repeat(40) }, { outcome: "delta", fromHead: "abc", toHead: "b".repeat(40) },
+    { outcome: "delta", fromHead: "a".repeat(40), toHead: "a".repeat(40) }, { outcome: "delta", fromHead: 1, toHead: "b".repeat(40) },
+  ])("refuses a malformed stored delta row %# as inconsistent history, never repairing it", (row): void => {
+    const o = spent(); const doc = JSON.parse(bytes(o)) as Cycle; doc.reviewers.nobunaga!.invocations.push(row as never); write(o, doc); const before = bytes(o);
+    expect(() => read(o)).toThrow(/inconsistent nobunaga invocation history: delta row 2/);
+    expect(() => act(o, "show")).toThrow(/inconsistent/); expect(bytes(o)).toBe(before);
+  });
+  it("a stored delta row never counts as a round: used must still equal the ran rows", () => {
+    const o = spent(); act(o, "record", { persona: "nobunaga", outcome: "delta", fromHead: A, toHead: B });
+    const doc = JSON.parse(bytes(o)) as Cycle; doc.reviewers.nobunaga!.used = 3; write(o, doc);
+    expect(() => read(o)).toThrow(/inconsistent nobunaga used count/);
+  });
+  it("records a delta through the CLI and refuses heads on another verb or outcome at exit 2", async (): Promise<void> => {
+    const o = spent(); const ok = await cli(o, ["record", "--branch", o.branch, "--persona", "nobunaga", "--outcome", "delta", "--from-head", A, "--to-head", B]);
+    expect(ok.code).toBe(0); expect(JSON.parse(ok.out)).toMatchObject({ outcome: "delta", used: 2, max: 2, deltas: 1 });
+    const before = bytes(o);
+    for (const args of [["record", "--branch", o.branch, "--persona", "nobunaga", "--outcome", "delta", "--from-head", A, "--to-head", B], ["show", "--branch", o.branch, "--from-head", A], ["decide", "--branch", o.branch, "--to-head", B]]) expect((await cli(o, args)).code).toBe(2);
+    expect(bytes(o)).toBe(before);
+    expect((await cli(o, ["decide", "--branch", o.branch, "--applicable", "nobunaga"], false)).out).toContain("nobunaga: 2/2 skip-exhausted (1 delta)");
+  });
+});
+
 // Separate Bun processes exercise the shipped TS modules. Bun is this lane's
 // declared runtime; no undeclared minimum Node version is needed.
 function child(o: CycleOptions, action: string, args: object = {}): Promise<string> {
@@ -349,6 +442,17 @@ describe("cross-process concurrency", () => {
   it("concurrent records preserve both spent passes", async (): Promise<void> => {
     const o = fixture(); act(o, "init"); await Promise.all([child(o, "record", { persona: "beta", outcome: "ran" }), child(o, "record", { persona: "gamma", outcome: "ran" })]);
     expect(read(o).reviewers.beta!.used).toBe(1); expect(read(o).reviewers.gamma!.used).toBe(1);
+  }, 15000);
+  it("concurrent delta records keep a valid history: two personas both land, one duplicate is refused (zheref/nen#662)", async (): Promise<void> => {
+    const o = fixture({ beta: 1, gamma: 1 }); act(o, "init"); act(o, "record", { persona: "beta", outcome: "ran" }); act(o, "record", { persona: "gamma", outcome: "ran" });
+    const delta = { outcome: "delta", fromHead: A, toHead: B };
+    await Promise.all([child(o, "record", { persona: "beta", ...delta }), child(o, "record", { persona: "gamma", ...delta })]);
+    const settled = await Promise.allSettled([child(o, "record", { persona: "beta", fromHead: B, toHead: C, outcome: "delta" }), child(o, "record", { persona: "beta", fromHead: B, toHead: C, outcome: "delta" })]);
+    expect(settled.map((s): string => s.status).sort()).toEqual(["fulfilled", "rejected"]);
+    const doc = read(o);
+    expect(doc.reviewers.beta!.invocations.map((e): unknown => e["toHead"] ?? e.outcome)).toEqual(["ran", B, C]);
+    expect(doc.reviewers.gamma!.invocations.map((e): unknown => e["toHead"] ?? e.outcome)).toEqual(["ran", B]);
+    expect([doc.reviewers.beta!.used, doc.reviewers.gamma!.used]).toEqual([1, 1]);
   }, 15000);
   it("fresh ensures open exactly once and stale locks never mint a budget", async (): Promise<void> => {
     const o = fixture(); const results = await Promise.all([child(o, "ensure"), child(o, "ensure")]);
