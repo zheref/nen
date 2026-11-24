@@ -11,7 +11,11 @@
       "p3": "priority: p3 (backlog)"
     }
   },
-  "branch": { "template": "{model}/{persona}/{descriptor}", "base": "main" },
+  "branch": {
+    "$comment": "A pull request is a delivery PR only when its head ref starts with an entry of nen/gates.json delivery.head_ref_prefixes (case-sensitive), its author matches delivery.author_pattern and its base is the default branch; see docs/USAGE.md#delivery-pr-identity. nen never infers that list from {model}; 'nen schema check' warns about a branch head it does not cover (zheref/nen#657).",
+    "template": "{model}/{persona}/{descriptor}",
+    "base": "main"
+  },
   "iteration": { "checks": ["build", "lint"], "lane": "nen" },
   "tests": { "required": ["test"], "extra": [] },
   "coverage": { "minimum": 80, "recommended": 85, "ideal": 90, "scope": "touched" },

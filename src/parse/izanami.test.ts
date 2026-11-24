@@ -353,6 +353,10 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     expect(classifyCommand("nen spec index --repo . --write --dry-run").classification).toBe("read-only");
     // zheref/nen#673: the due-check is read-only, so an unattended weekly task may run it.
     expect(classifyCommand("nen spec due --repo . --family port --json").classification).toBe("read-only");
+    // zheref/nen#583: the phase-ledger listing reads only, so the Hatsu desk may run it unattended; begin/end still write.
+    expect(classifyCommand("nen phase list --repo . --since 30 --json").classification).toBe("read-only");
+    expect(classifyCommand("nen phase show --effort HA/85").classification).toBe("read-only");
+    expect(classifyCommand("nen phase begin --effort HA/85 --phase breath").classification).toBe("mutating");
     // The canon prose verbs (SDD piece N9): four reads.
     expect(classifyCommand("nen canon lint --root . --rules contracts/prose.lint.json --baseline b.json --base origin/main --json").classification).toBe("read-only");
     expect(classifyCommand("nen canon clause check --file docs/ROSTER.md --prefix HR --base origin/main:docs/ROSTER.md --leaves 'claude/**/*.md'").classification).toBe("read-only");
