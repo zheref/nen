@@ -1177,6 +1177,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       begin: MUT("writes an entry to the .nen/phases/<effort>.json ledger -- a local write, but a write"),
       end: MUT("closes an entry in the .nen/phases/<effort>.json ledger -- a local write, but a write"),
       show: RO("prints the ledger; reads one file"),
+      list: RO("lists every effort's ledger under the common dir and each checkout's older .nen/phases/ (git rev-parse, git worktree list); writes, moves and locks nothing"),
     },
   },
   parse: { subcommands: { "*": RO("parses a grammar; never executes what it classified") } },

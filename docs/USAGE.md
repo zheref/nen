@@ -12,7 +12,7 @@ repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
 what each version changed: 49 command
-families, 178 verbs, every flag checked against that binary.
+families, 179 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -258,7 +258,7 @@ including every refusal reason. The raw NUL-delimited stream
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **109 shapes** and **113 ids** (`nen.runner.plan`
+binary carries**, writing or reading — **110 shapes** and **114 ids** (`nen.runner.plan`
 and `nen.wc.worktree.copies` each have two versions, `nen.stop.mark` three, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -304,7 +304,7 @@ file formats).
 - **`direct`** — `nen.direct.answer/v0.1` · `nen.direct.matrix/v0.1` · `nen.direct.registry/v0.1` · `nen.direct.resolve/v0.1`
 - **`issue`** — `nen.issue.body-check/v0.1` · `nen.issue.criteria/v0.1` · `nen.issue.edit-body/v0.3` · `nen.issue.questions/v0.1` · `nen.issue.questions.batch/v0.1` · `nen.issue.reconcile/v0.1`
 - **`loop`** — `nen.loop.iterate/v0.1`
-- **`phase`** — `nen.phase.ledger/v0.1`
+- **`phase`** — `nen.phase.ledger/v0.1` · `nen.phase.list/v0.1`
 - **`pr`** — `nen.pr.converge/v0.1` · `nen.pr.edit-body/v0.1` · `nen.pr.edit-title/v0.1` · `nen.pr.ledger/v0.1` · `nen.pr.mark-ready/v0.1` · `nen.pr.merge-delivery/v0.1` · `nen.pr.merge-unit/v0.1` · `nen.pr.open/v0.1` · `nen.pr.sections/v0.1` · `nen.pr.ready.head-mismatch/v0.1` · `nen.pr.ready/v0.1` · `nen.pr.threads-settle/v0.1` · `nen.pr.threads/v0.1`
 - **`prose-lint`** — `nen.prose-lint/v0.1` (the `$schema` a [`canon lint`](#nen-canon-lint) rules contract may carry)
 - **`ref`** — `nen.ref.resolve/v0.1`
@@ -1006,7 +1006,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 178 verbs, grouped as the README groups them. **Reads** is what a
+All 179 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -1057,6 +1057,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`loop`](#family-loop) | [`nen loop slots`](#nen-loop-slots) | counts how many CI and local concurrency slots are free, from a caller-supplied efforts file or -- `--from-run` -- one built from a run's manifest and live reads (PR state, `pr ready`, explicit durable prompt receipts), and explicit caps, a local slot freeing by --repo's declared `idle.localSlotFrees` (under an idle profile) or `monitor.localSlotFrees` | local file (--efforts), or the run manifest, github (gh pr view, pr ready's reads) and git (worktree list) with the stop markers it names; nen/workflow.json under --repo | yes |
 | [`loop`](#family-loop) | [`nen loop iterate`](#nen-loop-iterate) | claims one iteration of an izanagi loop against its own `up to <N>` cap, refusing the claim past it | `<git-common-dir>/.nen/loop/<id>.json` and `<id>.opened` (reads and writes under a lock; `.nen/loop/` under --repo only outside a git repository) | yes |
 | [`phase`](#family-phase) | [`nen phase`](#nen-phase) | records when a workflow phase began and ended for one effort, with the elapsed milliseconds and exit code, in a per-effort ledger | `<git-common-dir>/.nen/phases/<effort>.json` (under --repo outside git; reads and writes); git rev-parse/worktree list to find it, no gh | yes |
+| [`phase`](#family-phase) | [`nen phase list`](#nen-phase-list) | every effort with a phase ledger, one row each: the decoded effort id, the ledger's newest phase (startedAt, endedAt, exitCode) and its modification time, newest first; `--since <minutes>` windows it; an unreadable ledger or a copy in two homes is one marked row; writes, moves and locks nothing | `<git-common-dir>/.nen/phases/` and every checkout's older `.nen/phases/` (read only); git rev-parse/worktree list to find them, no gh | yes |
 | [`session`](#family-session) | [`nen session`](#nen-session) | records caller-reported session identity and effort dial per effort, and shows the ledger | `<git-common-dir>/.nen/sessions/<effort>.json` (under --repo outside git); git rev-parse/worktree list to find it, no gh or harness reads | yes |
 | [`usage`](#family-usage) | [`nen usage`](#nen-usage) | records what a surface and model spent on an effort -- token counts, minutes, the source of the numbers, or `notReported` -- in a per-effort ledger, and shows the ledger with totals per surface and model | `<git-common-dir>/.nen/usage/<effort>.json` (under --repo outside git; reads and writes); git rev-parse/worktree list to find it, no gh | yes |
 | [`warmup`](#family-warmup) | [`nen warmup`](#nen-warmup) | warms a REGISTRY: detects stale/unpinned consumer versions, plus an optional handbook-question sweep. Reads only. Not [`nen shu warmup`](#nen-shu-warmup), which warms a working copy | nen/repos.json, optional local files | yes |
@@ -6720,7 +6721,7 @@ answered them. It only reports — it never edits the registry, and "not checked
 
 ### `nen phase`
 
-`nen phase begin|end|show` -- the per-phase timing ledger (v0.11.0, zheref/nen#216). `nen shu` already
+`nen phase begin|end|show|list` -- the per-phase timing ledger (v0.11.0, zheref/nen#216; `list` reads only, zheref/nen#583). `nen shu` already
 measures how long every step took and prints it; nothing recorded when a workflow PHASE began or ended, so
 "what is slow" was inference. This family writes that fact once, on every surface, to
 `<git-common-dir>/.nen/phases/<effort>.json` (since #509; `<--repo>/.nen/phases/` outside git; see
@@ -6731,7 +6732,10 @@ measures how long every step took and prints it; nothing recorded when a workflo
 nen phase begin --effort <id> --phase <name> [--resume] [--surface <s>] [--model <alias>] [--dial <level>] [--note <text>]
 nen phase end   --effort <id> [--phase <name>] [--exit <code>] [--note <text>]
 nen phase show  --effort <id> [--json]
+nen phase list  [--repo <path>] [--since <minutes>] [--json]
 ```
+
+`list` is read-only and documented in its own section, [`nen phase list`](#nen-phase-list).
 
 `begin` opens an entry stamped with this invocation's clock; `end` closes the most recent OPEN entry -- the
 one named by `--phase`, or the last opened -- and records `durationMs` (`endedAt - startedAt` on the seam's
@@ -6774,6 +6778,87 @@ effort: HA/85 (2 phase entries)
   rasengan            open  2026-01-01T00:00:08.000Z
     build        1200ms e0  pnpm turbo run build
 ```
+
+### `nen phase list`
+
+Every effort that has a phase ledger, one row each (zheref/nen#583) -- the listing a reader of other
+sessions' efforts (the Hatsu desk) used to assemble itself from `<git-common-dir>/.nen/phases/*.json`,
+decoding each file name by hand and missing the older location `show` still reads.
+
+```
+nen phase list [--repo <path>] [--since <minutes>] [--json]
+```
+
+**Where it looks** — exactly where [`nen phase show`](#nen-phase) looks: the durable home
+(`<git-common-dir>/.nen/phases/`, or `<--repo>/.nen/phases/` outside git) and every checkout's older
+worktree-local `.nen/phases/` that `git worktree list` names. Each effort is listed **once**. An effort
+with a ledger in more than one of those places is one `conflict` row naming every copy, with no newest
+phase: `show` refuses that effort at exit 1 because nen will not choose which copy is the effort's
+record, and `list` does not choose either. A copy only at the older location is an `ok` row whose
+`location` is `worktree` (plain output appends `(older worktree-local: <path>)`); the next `begin` or
+`end` moves it, `list` never does.
+
+**A row** — the effort id **decoded** from the file name (the inverse of the one encoder,
+`encodeURIComponent` over the effort-id grammar: `HA%2F85.json` is `HA/85`, `HA-IS-%2312.json` is
+`HA-IS-#12`; a name the encoder could never have written -- a lower-case or needless escape, a stray
+`%` -- is no effort id), the ledger's **newest phase** with its `startedAt`, `endedAt` and `exitCode`,
+and the file's **modification time**. The newest phase is the **last entry of `phases[]`**: `begin`
+adds an entry by appending; `end`, `--resume` and a `shu` step append edit an entry in place and never
+reorder; and [`nen pr ledger read --restore`](#nen-pr-ledger) writes a whole `phases[]` back in its
+original order, so the last entry is still the newest -- but the file's modification time is then
+when it was **restored**, not when that phase ran. It is not re-sorted by `startedAt`, a clock the
+ledger never promised was monotonic. Rows are sorted **newest modification first, ties by effort id**.
+
+**`--since <minutes>`** keeps only ledgers whose modification time is at most that many minutes before
+this invocation's clock (the `now` seam; the edge is kept). A ledger whose modification time is in
+the **future** of that clock is kept, and a row whose modification time could not be read
+(`modifiedAt: null`) is **always kept**: neither can be proven outside the window. A positive whole
+number; `0`, a negative, a fraction or anything else is exit 2. A conflict row is windowed by its
+newest copy.
+
+**Unreadable is a row, never the run.** Bad JSON, a document that is not an object, another
+contract, a **newer** `nen.phase.ledger` contract (named, with the one this build reads), a ledger
+whose `effort` is not the id its file name decodes to (or carries none), a `phases` that is not an
+array, a newest entry that is not a phase entry, a file name that is not an encoded id, a symbolic
+link or other non-regular file (never read through, SEC-7), a file larger than 8 MiB
+(`larger than 8388608 bytes; not read`), a file that cannot be read: each is one
+row with `state: "unreadable"`, its file name and a short `reason`, and every other row still
+prints. A ledger directory that is a link (or resolves outside the common directory) is one
+unreadable row too, and is never followed. No ledger directory, or an empty one, is an empty list.
+`<ledger>.lock` and an atomic write's `.tmp` file are not ledgers and are not listed, and a file that
+is **gone** between the listing and the open (a concurrent `begin` or `end` moving an older copy into
+the common dir) is no row at all. Every string a ledger carries is printed through the same
+control-character strip as every other file-derived string in plain output; `--json` carries it
+escaped and unchanged. Plain output cuts a label longer than 48 characters with `…`; `--json` keeps
+the full name.
+
+**Reads only.** `readdir`, `lstat` and one `open` per ledger (`O_NOFOLLOW | O_NONBLOCK` where the
+platform defines them, then `fstat` on the descriptor; on Windows the `lstat` check comes first): the read-mode half of the layout, never the write-mode
+locate that migrates an older copy, no ledger lock (taking one creates `<ledger>.lock`), and no
+directory created. It spawns `git rev-parse --git-common-dir` and `git worktree list` only.
+
+**`--json`** — contract `nen.phase.list/v0.1`, keys in this order:
+`{ contract, repo, home, locations: [ { dir, location } ], since, now, efforts: [ … ] }`, each
+`efforts[]` element `{ effort, file, path, location, state, modifiedAt, phaseCount, newest: { phase,
+startedAt, endedAt, exitCode } | null, reason, copies: [ { path, location, modifiedAt } ] }`.
+`location` is `common-dir`, `repo` (outside git) or `worktree` (an older checkout-local copy), and
+`multiple` on a conflict; `state` is `ok`, `unreadable` or `conflict`; `effort` is null only when the
+file name is not an encoded id (or a whole location could not be listed); `newest` is null on an
+empty ledger, an unreadable one and a conflict; `reason` is null when `ok`.
+
+**Exit codes** — `0` whenever the listing ran, unreadable and conflict rows included, and on an empty
+list; `2` on a usage error (`--since` not a positive whole number, or a flag only `begin`/`end`/`show`
+read: `--effort`, `--phase`, `--surface`, `--model`, `--dial`, `--exit`, `--note`, `--resume`), or
+when git cannot be run or refuses for a reason other than "not a git repository".
+
+```
+$ nen phase list
+3 efforts with a phase ledger under <git-common-dir>/.nen/phases:
+  HA/85   2026-03-01T11:55:00.000Z  rasengan  started 2026-03-01T10:02:00.000Z  open
+  x       2026-03-01T11:51:00.000Z  breath  started 2026-03-01T09:00:00.000Z  ended 2026-03-01T09:00:05.000Z exit 0
+  broken  2026-03-01T11:30:00.000Z  UNREADABLE broken.json: not readable JSON
+```
+(exit 0; the shape of `src/phase/list.test.ts`'s plain-output case)
 
 
 <a id="family-session"></a>
