@@ -126,16 +126,69 @@ export type PolicyResolution =
     }
   | { readonly kind: "unknown"; readonly source: string; readonly missing: string; readonly warnings: readonly string[] };
 
-/** Raw opt-in evidence: `text` parses as JSON and its root carries a non-null `version_collision`. */
+/** The name each root-level `version_collision` occurrence is renamed to, numbered, before parsing. */
+const RAW_OCCURRENCE = "\u0000version_collision#";
+
+/**
+ * `text` with EVERY root-level `version_collision` key renamed to a distinct
+ * `RAW_OCCURRENCE<n>`, so `JSON.parse` keeps each repeat instead of only the
+ * last. A string-aware scan in the manner of ../schema/gates.ts's
+ * `findDuplicateKeys`: only a key token directly in the root object counts.
+ */
+function numberRootOptInKeys(text: string): string {
+  const stack: { readonly object: boolean; expectKey: boolean }[] = [];
+  let out = "";
+  let copied = 0;
+  let occurrence = 0;
+  let i = 0;
+  while (i < text.length) {
+    const char = text[i];
+    if (char === '"') {
+      let j = i + 1;
+      while (j < text.length && text[j] !== '"') j += text[j] === "\\" ? 2 : 1;
+      const top = stack[stack.length - 1];
+      if (top !== undefined && top.object && top.expectKey) {
+        top.expectKey = false;
+        let key: unknown;
+        try {
+          key = JSON.parse(text.slice(i, j + 1)) as unknown;
+        } catch {
+          return text;
+        }
+        if (stack.length === 1 && key === "version_collision") {
+          out += `${text.slice(copied, i)}${JSON.stringify(`${RAW_OCCURRENCE}${occurrence++}`)}`;
+          copied = j + 1;
+        }
+      }
+      i = j + 1;
+      continue;
+    }
+    if (char === "{") stack.push({ object: true, expectKey: true });
+    else if (char === "[") stack.push({ object: false, expectKey: false });
+    else if (char === "}" || char === "]") stack.pop();
+    else if (char === ",") {
+      const top = stack[stack.length - 1];
+      if (top !== undefined && top.object) top.expectKey = true;
+    }
+    i += 1;
+  }
+  return out + text.slice(copied);
+}
+
+/**
+ * Raw opt-in evidence: `text` (a leading UTF-8 BOM dropped) parses as JSON,
+ * and ANY root-level `version_collision` occurrence -- a repeated key
+ * included, whichever comes last -- carries a non-null value.
+ */
 export function rawDeclaresOptIn(text: string): boolean {
   let value: unknown;
   try {
-    value = JSON.parse(text) as unknown;
+    value = JSON.parse(numberRootOptInKeys(text.startsWith("\uFEFF") ? text.slice(1) : text)) as unknown;
   } catch {
     return false;
   }
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  return Object.hasOwn(value, "version_collision") && (value as Record<string, unknown>)["version_collision"] !== null;
+  return Object.entries(value).some(([key, entry]): boolean => key.startsWith(RAW_OCCURRENCE) && entry !== null);
 }
 
 /** `version_collision` out of one read of `nen/gates.json`: the block or `null`, or why it could not be had. */

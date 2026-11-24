@@ -2663,7 +2663,13 @@ is still green afterwards. The opt-in is one optional block in
     repository whose default tip cannot be read, checked by a caller holding
     no opted-in copy (`pr ready --reviewers` reads no local file) while the
     base is that same unreadable commit or lacks the block, is not gated on
-    that read; the next read that can see the opt-in gates it again;
+    that read. Two consequences:
+    - under pull-request CI the `--repo` checkout copy is the pull request
+      head's **own** content, so while the default tip cannot be read, the
+      pull request's author decides whether that copy shows the opt-in;
+    - only a **transient** failure clears on the next read. A failure that
+      persists (for example a token without contents read) keeps the
+      repository treated as not opted in until it is fixed;
   - a `collision` proven by the evidence that was read stays a `collision`
     even when other evidence is missing. The missing pieces stay in
     `missing` and are appended to the line as `; also not read: …`.

@@ -562,7 +562,8 @@ describe("mergeDelivery -- a non-main base, every gate reused", () => {
       fileAtRef: async (_repo, path): Promise<string | null> =>
         path === "nen/gates.json" ? withOptIn(readFileSync(join(BANKAI_REPO, "nen", "gates.json"), "utf8")) : path === VERSION_FILE ? manifest("1.4.0") : null,
       pullRequestFiles: async (): Promise<unknown[]> => [{ filename: "claude/skills/x.md" }],
-      openPullRequestsPage: async (): Promise<unknown> => [],
+      // The cursor-paged connection the reader walks: one empty page, the subject not listed.
+      openPullRequestsPage: async (): Promise<unknown> => ({ nodes: [], pageInfo: { hasNextPage: false, endCursor: null } }),
       branchTip: async (_repo, branch): Promise<string> => sha(branch === "main" ? "d1" : "e2"),
       mergeBase: async (): Promise<string> => sha("0a"),
     };
@@ -570,6 +571,8 @@ describe("mergeDelivery -- a non-main base, every gate reused", () => {
     expect(outcome.report.ready).toBe(false);
     expect(outcome.report.ok).toBe(false);
     expect(outcome.lines.join("\n")).toContain("pr ready: not-ready: version collision (CON-32a, zheref/nen#663): collision: version 1.4.0 is already at the tip of");
+    // A complete view: the collision stands on its own, with nothing left unread.
+    expect(outcome.lines.join("\n")).not.toContain("also not read");
   });
 
   it("refuses a 'ready' judged on the checkout's own gates file (zheref/nen#372, Feitan 3)", async () => {

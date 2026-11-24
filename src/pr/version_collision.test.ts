@@ -964,6 +964,8 @@ describe("SC-1: one evaluator -- both surfaces agree on every fixture", () => {
     ["2a: default tip: an unknown version_regex key in the block", defaultTipGates(gatesText({ ...OPT_IN, version_regex: ".*" })), 42, "plain", "unknown"],
     ["2a: default tip: a newer version", defaultTipGates(JSON.stringify({ ...(JSON.parse(gatesText()) as object), version: 2 })), 42, "plain", "unknown"],
     ["2a: default tip: an unknown top-level key beside the block", defaultTipGates(unknownTopKey(OPT_IN)), 42, "plain", "unknown"],
+    ["2a: default tip: version_collision repeated, the last null", defaultTipGates(`${gatesText().trimEnd().slice(0, -1)}, "version_collision": null}`), 42, "plain", "unknown"],
+    ["2a: default tip: a BOM-prefixed file with the block", defaultTipGates(`\uFEFF${gatesText()}`), 42, "plain", "unknown"],
     // 2b. The default tip cannot decide; ONE diagnostic copy shows the opt-in.
     ["2b base: default tip unreadable, the base declares", defaultTipGates(UPSTREAM, gatesText()), 42, "plain", "unknown"],
     ["2b base: default tip malformed, the base declares", defaultTipGates(MALFORMED, gatesText()), 42, "plain", "unknown"],
@@ -1035,6 +1037,16 @@ describe("SC-1: one evaluator -- both surfaces agree on every fixture", () => {
     expect(rawDeclaresOptIn(MALFORMED)).toBe(false);
     expect(rawDeclaresOptIn(JSON.stringify([{ version_collision: OPT_IN }]))).toBe(false);
     expect(rawDeclaresOptIn(JSON.stringify({ checks: { version_collision: OPT_IN } }))).toBe(false);
+    // A repeated root key: either order is evidence; all-null repeats are not.
+    const block = JSON.stringify(OPT_IN);
+    expect(rawDeclaresOptIn(`{"version": 1, "version_collision": ${block}, "version_collision": null}`)).toBe(true);
+    expect(rawDeclaresOptIn(`{"version": 1, "version_collision": null, "version_collision": ${block}}`)).toBe(true);
+    expect(rawDeclaresOptIn('{"version_collision": null, "version_collision": null}')).toBe(false);
+    // A nested repeat, or the name as a value, is not a root key.
+    expect(rawDeclaresOptIn('{"checks": {"version_collision": 1, "version_collision": 2}, "note": "version_collision"}')).toBe(false);
+    // A leading UTF-8 BOM is dropped before parsing.
+    expect(rawDeclaresOptIn(`\uFEFF${invalidBlock}`)).toBe(true);
+    expect(rawDeclaresOptIn(`\uFEFF${plainText}`)).toBe(false);
   });
 
   it("a refused default tip names the pointer it refused", async () => {
