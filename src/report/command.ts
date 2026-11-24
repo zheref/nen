@@ -17,6 +17,7 @@ import { refuseExtraPositionals } from "../cli/command.js";
 // applied, no readiness is computed, nothing is published. The exit codes say
 // only whether the reading and the filling worked.
 
+import { plainLine } from "../cli/plain.js";
 import { basename } from "node:path";
 import {
   emit,
@@ -878,9 +879,10 @@ export const reportCommand: Command = {
     if (subcommand === "desk") {
       refuseExtraPositionals(context.args, 2);
       const row = context.args.values["row"];
+      if (row !== undefined && plainLine(row) !== row) throw new VerbUsageError("--row must not contain terminal control or invisible characters");
       const document = deskStarter(row);
       parseDesk(document, "report desk starter");
-      context.io.out(JSON.stringify(document, null, 2));
+      emit(context.io, true, document, []);
       return 0;
     }
     if (subcommand === "data") return runData(context);

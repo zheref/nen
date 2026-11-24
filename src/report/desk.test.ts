@@ -82,3 +82,36 @@ describe("complete desk refusal (#638 AC-3)", () => {
     expect(message).not.toMatch(/TypeError/);
   });
 });
+
+it("reports every repeated letter group, effort index and malformed reference together (#638 AC-3)", () => {
+  const document = desk();
+  const option = document.gates[0]!.asks[0]!.options[0]!;
+  Object.assign(document.gates[0]!.asks[0]!, {pr: "bad reference", options: [option, {...option, star: false}, {...option, letter: "B", star: false}, {...option, letter: "B", star: false}]});
+  Object.assign(document, {efforts: [false, "", 3]});
+  let message = "";
+  try { parseDesk(document, "bad.json"); } catch (error) { message = String(error); }
+  for (const part of ["options[1].letter", "options[3].letter", "efforts[0]", "efforts[1]", "efforts[2]", "'pr'"])
+    expect(message, part).toContain(part);
+});
+
+it("refuses control-bearing row references before stdout", async () => {
+  for (const character of ["\u009b", "\u202e", "\u200b"])
+    expect((await capture(["desk", "--row", `owner/re${character}po#1`])).code).toBe(2);
+});
+it("withholds rejected string values and avoids errors inferred from invalid containers", () => {
+  const document = desk();
+  const marker = "private-example-value";
+  Object.assign(document.gates[0]!, {asks: 3});
+  Object.assign(document, {title: false, generatedAtLocal: 3});
+  let message = "";
+  try { parseDesk(document, "bad.json"); } catch (error) { message = String(error); }
+  expect(message).toContain("not a list");
+  expect(message).not.toContain("no asks and no 'cleared'");
+  const other = desk();
+  Object.assign(other.gates[0]!.asks[0]!, {kind: marker, rank: marker, options: [null, false], objects: [{label: "x", url: marker}]});
+  try { parseDesk(other, "bad.json"); } catch (error) { message = String(error); }
+  expect(message).not.toContain(marker);
+  expect(message).not.toContain("letters two options");
+  expect(message).toContain("options[0]");
+  expect(message).toContain("options[1]");
+});

@@ -134,7 +134,7 @@ function kindOf(value: unknown): string {
   if (value === null) return "null";
   if (value === undefined) return "nothing";
   if (Array.isArray(value)) return "a list";
-  if (typeof value === "string") return `'${value}'`;
+  if (typeof value === "string") return "a string";
   return `a ${typeof value}`;
 }
 
@@ -174,7 +174,7 @@ export function parseDesk(document: unknown, display: string): Desk {
       refuseDesk(
         display,
         where,
-        `has a 'url' of '${value}', which does not start with https://, http://, mailto:, # or / -- escaping makes a 'javascript:' href harmless as text and harmless as nothing else`,
+        "has a 'url' which does not start with https://, http://, mailto:, # or / -- escaping makes a 'javascript:' href harmless as text and harmless as nothing else",
       );
     }
     return value;
@@ -218,7 +218,7 @@ export function parseDesk(document: unknown, display: string): Desk {
       refuseDesk(display, where, `has 'star' of ${kindOf(star)}; it is true on the recommended option and absent or false elsewhere`);
     }
     const letter = str(entry, "letter", display, where, true);
-    if (letter.trim() === "") refuseDesk(display, where, "has an empty 'letter'");
+    if (typeof entry["letter"] === "string" && letter.trim() === "") refuseDesk(display, where, "has an empty 'letter'");
     return {
       letter,
       label: str(entry, "label", display, where, true),
@@ -235,31 +235,34 @@ export function parseDesk(document: unknown, display: string): Desk {
     }
     allowKeys(entry, ["kind", "rank", "title", "why", "pr", "options", "objects"], display, where);
     const kind = str(entry, "kind", display, where, true);
-    if (!ASK_KINDS.includes(kind)) {
-      refuseDesk(display, where, `has 'kind' of '${kind}'; an ask opens ${ASK_KINDS.join(", ")}`);
+    if (typeof entry["kind"] === "string" && !ASK_KINDS.includes(kind)) {
+      refuseDesk(display, where, `has an invalid 'kind'; an ask opens ${ASK_KINDS.join(", ")}`);
     }
     const rank = entry["rank"];
     if (typeof rank !== "number" || !Number.isInteger(rank) || rank <= 0) {
       refuseDesk(display, where, `has 'rank' of ${kindOf(rank)}, not a positive whole number (1 unblocks the most)`);
     }
     const pr = entry["pr"];
-    if (
-      pr !== undefined &&
-      pr !== null &&
-      !(typeof pr === "number" && Number.isInteger(pr) && pr > 0) &&
-      !(typeof pr === "string" && pr.trim() !== "")
-    ) {
-      refuseDesk(display, where, `has 'pr' of ${kindOf(pr)}, not a pull-request reference (a number, notation, or owner/name#<n>)`);
+    if (pr !== undefined && pr !== null) {
+      const reference = typeof pr === "string" || typeof pr === "number" ? parseReference(pr) : null;
+      if (reference === null || (reference.form !== "slug" && reference.kind === "issue")) {
+        refuseDesk(display, where, "has an invalid 'pr', not a pull-request reference (a number, notation, or owner/name#<n>)");
+      }
     }
     const options = list(entry, "options", display, where, true).map((option, index): DeskOption =>
       parseOption(option, display, `${where}.options[${index}]`),
     );
-    const letters = options.map((option): string => option.letter);
-    const duplicate = letters.find((letter, index): boolean => letters.indexOf(letter) !== index);
-    if (duplicate !== undefined) refuseDesk(display, where, `letters two options '${duplicate}'; the picker cannot ask that`);
-    const stars = options.filter((option): boolean => option.star).length;
-    if (stars !== 1) {
-      refuseDesk(display, where, `stars ${stars} options; an ask recommends exactly one, the same one the surface's picker stars`);
+    const seenLetters = new Set<string>();
+    const optionsRaw = Array.isArray(entry["options"]) ? entry["options"] : [];
+    for (const [index, option] of options.entries()) {
+      const raw = optionsRaw[index];
+      if (!isRecord(raw) || typeof raw["letter"] !== "string" || raw["letter"].trim() === "") continue;
+      if (seenLetters.has(option.letter)) refuseDesk(display, `${where}.options[${index}].letter`, "repeats an earlier option's letter; the picker cannot ask that");
+      seenLetters.add(option.letter);
+    }
+    if (Array.isArray(entry["options"]) && entry["options"].every((option) => isRecord(option) && (option["star"] === undefined || typeof option["star"] === "boolean"))) {
+      const stars = options.filter((option): boolean => option.star).length;
+      if (stars !== 1) refuseDesk(display, where, `stars ${stars} options; an ask recommends exactly one, the same one the surface's picker stars`);
     }
     const objects = list(entry, "objects", display, where, false).map((object, index): { label: string; url: string } => {
       const at = `${where}.objects[${index}]`;
@@ -268,7 +271,9 @@ export function parseDesk(document: unknown, display: string): Desk {
         return { label: "", url: "" };
       }
       allowKeys(object, ["label", "url"], display, at);
-      return { label: str(object, "label", display, at, true), url: url(str(object, "url", display, at, true), display, at) };
+      const label = str(object, "label", display, at, true);
+      const link = str(object, "url", display, at, true);
+      return { label, url: typeof object["url"] === "string" ? url(link, display, at) : "" };
     });
     return {
       kind,
@@ -288,14 +293,14 @@ export function parseDesk(document: unknown, display: string): Desk {
     }
     allowKeys(entry, ["gate", "label", "cleared", "asks"], display, where);
     const gate = str(entry, "gate", display, where, true);
-    if (gate.trim() === "") refuseDesk(display, where, "has an empty 'gate'");
+    if (typeof entry["gate"] === "string" && gate.trim() === "") refuseDesk(display, where, "has an empty 'gate'");
     const asks = list(entry, "asks", display, where, true).map((ask, index): DeskAsk =>
       parseAsk(ask, display, `${where}.asks[${index}]`),
     );
     const cleared = str(entry, "cleared", display, where, false);
     // A GATE WITH NOTHING OWED IS RENDERED CLEARED, NEVER OMITTED -- and a
     // cleared gate with nothing to say about why reads as a gate nobody checked.
-    if (asks.length === 0 && cleared.trim() === "") {
+    if (Array.isArray(entry["asks"]) && (entry["cleared"] === undefined || typeof entry["cleared"] === "string") && asks.length === 0 && cleared.trim() === "") {
       refuseDesk(display, where, "has no asks and no 'cleared' line; a gate with nothing owed is shown cleared, with the line that says so");
     }
     if (asks.length > 0 && cleared !== "") {
@@ -344,7 +349,7 @@ export function parseDesk(document: unknown, display: string): Desk {
     "the document",
   );
   const variant = str(document, "variant", display, "the document", true);
-  if (variant.trim() === "") refuseDesk(display, "the document", "has an empty 'variant'; it names the reports.sections variant this register renders as");
+  if (typeof document["variant"] === "string" && variant.trim() === "") refuseDesk(display, "the document", "has an empty 'variant'; it names the reports.sections variant this register renders as");
   const generatedAtLocal = document["generatedAtLocal"];
   if (generatedAtLocal !== undefined && typeof generatedAtLocal !== "string") {
     refuseDesk(display, "the document", `has 'generatedAtLocal' of ${kindOf(generatedAtLocal)}, not a string`);
@@ -361,10 +366,15 @@ export function parseDesk(document: unknown, display: string): Desk {
   const effortsRaw = document["efforts"];
   let efforts: string[] | null = null;
   if (effortsRaw !== undefined) {
-    if (!Array.isArray(effortsRaw) || effortsRaw.some((entry): boolean => typeof entry !== "string" || entry === "")) {
+    if (!Array.isArray(effortsRaw)) {
       refuseDesk(display, "'efforts'", "is not a list of effort names");
+      efforts = [];
+    } else {
+      for (const [index, effort] of effortsRaw.entries()) {
+        if (typeof effort !== "string" || effort === "") refuseDesk(display, `efforts[${index}]`, "is not a non-empty effort name string");
+      }
+      efforts = [...new Set(effortsRaw.filter((entry): entry is string => typeof entry === "string"))];
     }
-    efforts = Array.isArray(effortsRaw) ? [...new Set(effortsRaw.filter((entry): entry is string => typeof entry === "string"))] : [];
   }
   const notesRaw = document["spendNotes"];
   const spendNotes = new Map<string, string>();
