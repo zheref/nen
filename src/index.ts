@@ -213,12 +213,17 @@ outside the known set is, including another tool's own data, which belongs
 under a '$' key.
 
 The nen/gates.json#delivery.head_ref_prefixes row (zheref/nen#657) holds the
-declared delivery prefixes against nen/workflow.json's branch.template: every
-first-segment fill (each models surface and alias for '{model}', or a literal
-segment) must start with a declared prefix. An uncovered fill is a warn naming
-it and the fix, never a FAIL; another first-segment token, no models surface,
-a label-only delivery block or an absent file reads 'not checked' or
-'label-only' and says why.
+declared delivery prefixes against nen/workflow.json's branch.template: the
+fixed head of every branch it cuts (the template with '{model}' replaced by
+each models surface name and tier alias -- a tier keyed 'note' is prose, not
+an alias -- up to the first other token) must start with a declared prefix. A
+prefix no head needs is allowed. Each is a warn, never a FAIL: an uncovered
+head (naming it and the fix); a template starting with another token, an
+empty segment, or '{model}' with no models surface ('not checked', with why);
+and full coverage while a reviewer declares delivery_holistic_pass (naming
+it). A label-only delivery block reads 'label-only', an absent file 'not
+checked', and a gates.json or workflow.json that did not load 'not read --
+see that row'.
 
 Exit: 0 every required file loaded; 1 one did not; 2 nen/gates.json carries a
 key this build does not read.

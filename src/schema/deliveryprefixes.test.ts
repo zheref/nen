@@ -1,13 +1,14 @@
 // Tests for the nen/gates.json#delivery.head_ref_prefixes drift row
-// (zheref/nen#657, AC-3): the declared delivery prefixes against the branch
-// template's first-segment fills.
+// (zheref/nen#657, AC-3): the declared delivery prefixes against the fixed
+// heads of the branches the template cuts, and the holistic-pass hazard of a
+// list that covers every one of them (hanten round 1, Chrollo 1).
 
 import { describe, expect, it } from "vitest";
 import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { makeTempDir } from "../testing/tempdir.js";
 import { BANKAI_REPO } from "./fixtures/paths.js";
-import { branchFirstSegmentFills, checkTaxonomy, deliveryPrefixDrift, type SchemaCheck } from "./taxonomy.js";
+import { branchTemplateHeads, checkTaxonomy, deliveryPrefixDrift, type SchemaCheck } from "./taxonomy.js";
 import { parseModels } from "./workflow.js";
 
 const ROW = "nen/gates.json#delivery.head_ref_prefixes";
@@ -25,19 +26,28 @@ const delivery = (headRefPrefixes: string[], labels: string[] = []): { headRefPr
   labels,
 });
 
-describe("branchFirstSegmentFills", () => {
-  it("reads every surface and alias for a {model} first segment, skipping rule, roles, note and $ keys, repeats collapsed", () => {
-    expect(branchFirstSegmentFills("{model}/{persona}/{descriptor}", MODELS)).toEqual({
-      segment: "{model}",
-      fills: ["claude", "fable", "opus", "codex", "astra", "cursor", "composer"],
+const reasonOf = (verdict: ReturnType<typeof deliveryPrefixDrift>): string => (verdict.kind === "not-judged" ? verdict.reason : "");
+
+describe("branchTemplateHeads", () => {
+  it("renders one head per {model} fill -- every surface and alias, skipping rule, roles, a tier keyed note and $ keys, repeats collapsed", () => {
+    expect(branchTemplateHeads("{model}/{persona}/{descriptor}", MODELS)).toEqual({
+      heads: ["claude/", "fable/", "opus/", "codex/", "astra/", "cursor/", "composer/"],
+      reason: null,
     });
   });
 
-  it("reads a literal first segment as its own single fill, and another token as unfixable", () => {
-    expect(branchFirstSegmentFills("delivery/{descriptor}", MODELS)).toEqual({ segment: "delivery", fills: ["delivery"] });
-    expect(branchFirstSegmentFills("{persona}/{descriptor}", MODELS)).toEqual({ segment: "{persona}", fills: null });
-    expect(branchFirstSegmentFills("{descriptor}", MODELS)).toEqual({ segment: "{descriptor}", fills: null });
-    expect(branchFirstSegmentFills("x-{model}/{descriptor}", MODELS).fills).toBeNull();
+  it("a literal first segment is its own head, and a mixed one is cut at the first token", () => {
+    expect(branchTemplateHeads("delivery/{descriptor}", MODELS).heads).toEqual(["delivery/"]);
+    expect(branchTemplateHeads("delivery-{descriptor}", MODELS).heads).toEqual(["delivery-"]);
+    expect(branchTemplateHeads("x-{model}/{descriptor}", MODELS).heads).toContain("x-claude/");
+    expect(branchTemplateHeads("{model}-bot/{descriptor}", MODELS).heads).toContain("opus-bot/");
+  });
+
+  it("a leading non-model token, a {model} with no surface, or an empty first segment has no head, with the reason", () => {
+    expect(branchTemplateHeads("{persona}/{descriptor}", MODELS).reason).toMatch(/starts with '\{persona\}', a token whose value no declaration fixes/);
+    expect(branchTemplateHeads("{descriptor}", MODELS).reason).toMatch(/starts with '\{descriptor\}'/);
+    expect(branchTemplateHeads("{model}/{descriptor}", parseModels("t", undefined)).reason).toMatch(/models block declares no surface/);
+    expect(branchTemplateHeads("/{descriptor}", MODELS).reason).toMatch(/starts with an empty segment/);
   });
 });
 
@@ -45,59 +55,78 @@ describe("deliveryPrefixDrift", () => {
   const template = { template: "{model}/{persona}/{descriptor}" };
   const all = ["claude/", "fable/", "opus/", "codex/", "astra/", "cursor/", "composer/"];
 
-  it("covered: every fill starts with a declared prefix", () => {
-    expect(deliveryPrefixDrift(template, MODELS, delivery(all))).toMatchObject({ kind: "covered", fills: all.map((p) => p.slice(0, -1)) });
+  it("covered: every head starts with a declared prefix", () => {
+    expect(deliveryPrefixDrift(template, MODELS, delivery(all))).toEqual({ kind: "covered", heads: all, extra: [] });
   });
 
-  it("a shorter prefix covers a longer fill; the comparison is case-sensitive", () => {
+  it("a shorter prefix covers a longer head; the comparison is case-sensitive", () => {
     expect(deliveryPrefixDrift(template, MODELS, delivery(["c", "fable/", "opus/", "astra/"])).kind).toBe("covered");
     const upper = deliveryPrefixDrift(template, MODELS, delivery([...all.filter((p) => p !== "opus/"), "Opus/"]));
-    expect(upper).toMatchObject({ kind: "uncovered", uncovered: ["opus"] });
+    expect(upper).toMatchObject({ kind: "uncovered", uncovered: ["opus/"] });
   });
 
-  it("uncovered: names every fill no prefix covers -- the pre-#657 'codex/'-only list", () => {
+  it("uncovered: names every head no prefix covers -- the pre-#657 'codex/'-only list", () => {
     expect(deliveryPrefixDrift(template, MODELS, delivery(["codex/"]))).toMatchObject({
       kind: "uncovered",
-      uncovered: ["claude", "fable", "opus", "astra", "cursor", "composer"],
+      uncovered: ["claude/", "fable/", "opus/", "astra/", "cursor/", "composer/"],
     });
   });
 
-  it("a prefix longer than the fill does not cover it", () => {
-    expect(deliveryPrefixDrift({ template: "delivery/{descriptor}" }, MODELS, delivery(["delivery/x/"]))).toMatchObject({
+  it("a prefix longer than the head does not cover it (it matches only some branches)", () => {
+    expect(deliveryPrefixDrift({ template: "delivery-{descriptor}" }, MODELS, delivery(["delivery-x"]))).toMatchObject({
       kind: "uncovered",
-      uncovered: ["delivery"],
+      uncovered: ["delivery-"],
     });
+    expect(deliveryPrefixDrift({ template: "delivery-{descriptor}" }, MODELS, delivery(["delivery-"])).kind).toBe("covered");
   });
 
   it("literal first segment: covered when literal + '/' is covered", () => {
     expect(deliveryPrefixDrift({ template: "delivery/{descriptor}" }, MODELS, delivery(["delivery/"])).kind).toBe("covered");
     expect(deliveryPrefixDrift({ template: "delivery/{descriptor}" }, MODELS, delivery(["codex/"]))).toMatchObject({
       kind: "uncovered",
-      uncovered: ["delivery"],
+      uncovered: ["delivery/"],
     });
   });
 
-  it("another token, or a {model} template with no surface, is not checked and says why", () => {
-    const persona = deliveryPrefixDrift({ template: "{persona}/{descriptor}" }, MODELS, delivery(["codex/"]));
-    expect(persona.kind).toBe("not-checked");
-    expect(persona.kind === "not-checked" ? persona.reason : "").toMatch(/starts with '\{persona\}', a token no declared list fixes/);
-    const empty = deliveryPrefixDrift(template, parseModels("t", undefined), delivery(["codex/"]));
-    expect(empty.kind === "not-checked" ? empty.reason : "").toMatch(/models block declares no surface/);
+  it("a prefix that covers no head is allowed and listed as extra, never drift", () => {
+    expect(deliveryPrefixDrift(template, MODELS, delivery([...all, "integration/"]))).toEqual({ kind: "covered", heads: all, extra: ["integration/"] });
+  });
+
+  it("another leading token, or a {model} template with no surface, is not judged and says why", () => {
+    expect(reasonOf(deliveryPrefixDrift({ template: "{persona}/{descriptor}" }, MODELS, delivery(["codex/"])))).toMatch(/starts with '\{persona\}'/);
+    expect(reasonOf(deliveryPrefixDrift(template, parseModels("t", undefined), delivery(["codex/"])))).toMatch(/models block declares no surface/);
   });
 
   it("label-only: no prefix declared, so prefixes are not checked", () => {
     expect(deliveryPrefixDrift(template, MODELS, delivery([], ["ship"]))).toEqual({ kind: "label-only", labels: ["ship"] });
   });
+
+  it("holistic reviewer + full coverage is the holistic-wide hazard; partial coverage or label-only is not", () => {
+    expect(deliveryPrefixDrift(template, MODELS, delivery(all), ["sasuke"])).toEqual({ kind: "holistic-wide", heads: all, reviewers: ["sasuke"] });
+    expect(deliveryPrefixDrift(template, MODELS, delivery(["codex/"]), ["sasuke"]).kind).toBe("uncovered");
+    expect(deliveryPrefixDrift(template, MODELS, delivery([], ["ship"]), ["sasuke"]).kind).toBe("label-only");
+  });
 });
 
 describe("checkTaxonomy -- the nen/gates.json#delivery.head_ref_prefixes row", () => {
-  const gatesWith = (deliveryBlock: unknown): unknown => ({
-    ...(JSON.parse(readFileSync(join(BANKAI_REPO, "nen", "gates.json"), "utf8")) as Record<string, unknown>),
+  const BANKAI_GATES = JSON.parse(readFileSync(join(BANKAI_REPO, "nen", "gates.json"), "utf8")) as Record<string, unknown> & {
+    reviewers: Record<string, unknown>[];
+  };
+  /** The bankai fixture's gates with this delivery block; holistic-pass flags kept only when asked. */
+  const gatesWith = (deliveryBlock: unknown, holistic = false): unknown => ({
+    ...BANKAI_GATES,
+    reviewers: BANKAI_GATES.reviewers.map((reviewer) => {
+      if (holistic) return reviewer;
+      const rest = { ...reviewer };
+      delete rest["delivery_holistic_pass"];
+      return rest;
+    }),
     delivery: deliveryBlock,
   });
-  const withPrefixes = (prefixes: string[], labels: string[] = []): unknown =>
-    gatesWith({ author_pattern: { pattern: "^me$", ignoreCase: false }, head_ref_prefixes: prefixes, labels });
+  const withPrefixes = (prefixes: string[], labels: string[] = [], holistic = false): unknown =>
+    gatesWith({ author_pattern: { pattern: "^me$", ignoreCase: false }, head_ref_prefixes: prefixes, labels }, holistic);
   const WORKFLOW = { branch: { template: "{model}/{persona}/{descriptor}" }, models: { claude: { frontier: "fable" }, codex: { deep: "sol" } } };
+  const FULL = ["claude/", "fable/", "codex/", "sol/"];
 
   function rowOf(files: { gates?: unknown; workflow?: unknown }): { row: SchemaCheck | undefined; ok: boolean; files: string[] } {
     const root = makeTempDir("nen-delivery-prefixes-");
@@ -115,26 +144,42 @@ describe("checkTaxonomy -- the nen/gates.json#delivery.head_ref_prefixes row", (
     }
   }
 
-  it("AC-1 regression: nen's own committed nen/gates.json and nen/workflow.json read ok, every fill covered", () => {
+  it("AC-1 regression: nen's own committed nen/gates.json and nen/workflow.json read ok, every head covered", () => {
     const row = checkTaxonomy({ repoFlag: process.cwd() }).checks.find((c): boolean => c.file === ROW);
     expect(row?.ok).toBe(true);
     expect(row?.required).toBe(false);
-    expect(row?.detail).toMatch(/^\d+ first-segment fills of nen\/workflow\.json branch\.template covered \(/);
-    for (const fill of ["claude", "fable", "opus", "codex", "astra", "cursor"]) expect(row?.detail).toContain(`'${fill}'`);
+    expect(row?.detail).toMatch(/^\d+ branch heads of nen\/workflow\.json branch\.template covered \(/);
+    for (const head of ["claude/", "fable/", "opus/", "codex/", "astra/", "cursor/"]) expect(row?.detail).toContain(`'${head}'`);
   });
 
   it("sits immediately under the deploy.defaultTarget row", () => {
-    const { files } = rowOf({ gates: withPrefixes(["claude/", "fable/", "codex/", "sol/"]), workflow: WORKFLOW });
+    const { files } = rowOf({ gates: withPrefixes(FULL), workflow: WORKFLOW });
     expect(files.indexOf(ROW)).toBe(files.indexOf("nen/workflow.json#deploy.defaultTarget") + 1);
   });
 
-  it("covered: an ok row", () => {
-    const { row, ok } = rowOf({ gates: withPrefixes(["claude/", "fable/", "codex/", "sol/"]), workflow: WORKFLOW });
+  it("covered with no holistic reviewer: an ok row, extra prefixes listed as allowed", () => {
+    const { row, ok } = rowOf({ gates: withPrefixes([...FULL, "integration/"]), workflow: WORKFLOW });
     expect(row).toMatchObject({ ok: true, required: false });
+    expect(row?.detail).toBe(
+      "4 branch heads of nen/workflow.json branch.template covered ('claude/', 'fable/', 'codex/', 'sol/'); also declared, covering no template head (allowed, not drift): 'integration/'",
+    );
     expect(ok).toBe(true);
   });
 
-  it("uncovered: a warn row naming both files, every uncovered prefix and the fix -- the report's exit is unchanged", () => {
+  it("holistic reviewer + full coverage: a warn naming the reviewers and the fix, exit unchanged", () => {
+    const { row, ok } = rowOf({ gates: withPrefixes(FULL, [], true), workflow: WORKFLOW });
+    expect(row).toMatchObject({ ok: false, required: false });
+    expect(ok).toBe(true);
+    expect(row?.detail).toMatch(/^every branch nen\/workflow\.json branch\.template cuts \('claude\/', 'fable\/', 'codex\/', 'sol\/'\) starts with a nen\/gates\.json delivery\.head_ref_prefixes entry, and 'sasuke', 'tenma' declare delivery_holistic_pass: true/);
+    expect(row?.detail).toMatch(/Narrow delivery\.head_ref_prefixes to the branches that are deliveries, or drop delivery_holistic_pass from the reviewer$/);
+  });
+
+  it("holistic reviewer + partial coverage or label-only: no holistic warn", () => {
+    expect(rowOf({ gates: withPrefixes(["codex/"], [], true), workflow: WORKFLOW }).row?.detail).toMatch(/^drift: /);
+    expect(rowOf({ gates: withPrefixes([], ["ship"], true), workflow: WORKFLOW }).row).toMatchObject({ ok: true, detail: "label-only, prefixes not checked (delivery.labels: 'ship')" });
+  });
+
+  it("uncovered: a warn row naming both files, every uncovered head and the fix -- the report's exit is unchanged", () => {
     const { row, ok } = rowOf({ gates: withPrefixes(["codex/"]), workflow: WORKFLOW });
     expect(row).toMatchObject({ ok: false, required: false });
     expect(ok).toBe(true);
@@ -143,17 +188,18 @@ describe("checkTaxonomy -- the nen/gates.json#delivery.head_ref_prefixes row", (
     );
   });
 
-  it("literal first segment, covered and uncovered", () => {
-    const literal = { branch: { template: "delivery/{descriptor}" } };
-    expect(rowOf({ gates: withPrefixes(["delivery/"]), workflow: literal }).row?.ok).toBe(true);
-    const drift = rowOf({ gates: withPrefixes(["codex/"]), workflow: literal }).row;
+  it("literal and mixed first segments, covered and uncovered", () => {
+    expect(rowOf({ gates: withPrefixes(["delivery/"]), workflow: { branch: { template: "delivery/{descriptor}" } } }).row?.ok).toBe(true);
+    const drift = rowOf({ gates: withPrefixes(["codex/"]), workflow: { branch: { template: "delivery/{descriptor}" } } }).row;
     expect(drift?.ok).toBe(false);
     expect(drift?.detail).toContain("cuts branches starting 'delivery/'");
+    expect(rowOf({ gates: withPrefixes(["delivery-"]), workflow: { branch: { template: "delivery-{descriptor}" } } }).row?.ok).toBe(true);
   });
 
-  it("a non-model token first segment is not checked, and says why", () => {
-    const { row } = rowOf({ gates: withPrefixes(["codex/"]), workflow: { branch: { template: "{persona}/{descriptor}" } } });
-    expect(row?.ok).toBe(true);
+  it("a leading non-model token is a warn that says why, never a pass", () => {
+    const { row, ok } = rowOf({ gates: withPrefixes(["codex/"]), workflow: { branch: { template: "{persona}/{descriptor}" } } });
+    expect(row).toMatchObject({ ok: false, required: false });
+    expect(ok).toBe(true);
     expect(row?.detail).toMatch(/^not checked -- nen\/workflow\.json branch\.template '\{persona\}\/\{descriptor\}' starts with '\{persona\}'/);
   });
 
@@ -162,7 +208,7 @@ describe("checkTaxonomy -- the nen/gates.json#delivery.head_ref_prefixes row", (
     expect(row).toMatchObject({ ok: true, detail: "label-only, prefixes not checked (delivery.labels: 'ship')" });
   });
 
-  it("absent workflow.json or absent gates.json: not checked, never a silent pass", () => {
+  it("absent workflow.json or absent gates.json: not checked, said so", () => {
     expect(rowOf({ gates: withPrefixes(["codex/"]) }).row?.detail).toMatch(/^not checked -- no nen\/workflow\.json/);
     expect(rowOf({ workflow: WORKFLOW }).row?.detail).toMatch(/^not checked -- nen\/gates\.json is absent/);
   });
@@ -182,6 +228,6 @@ describe("checkTaxonomy -- the nen/gates.json#delivery.head_ref_prefixes row", (
     const seed = seeds.seeds.find((s) => s.file === "nen/gates.json")?.document;
     const { row } = rowOf({ gates: seed, workflow: template.document });
     expect(row).toMatchObject({ ok: true });
-    expect(row?.detail).toMatch(/fills of nen\/workflow\.json branch\.template covered/);
+    expect(row?.detail).toMatch(/branch heads of nen\/workflow\.json branch\.template covered/);
   });
 });

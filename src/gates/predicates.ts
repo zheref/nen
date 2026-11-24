@@ -2265,6 +2265,12 @@ export function cancelledLatestReport(
 // match is anchored so `roy-bankai-evil` is refused. A repository that writes
 // an unanchored author pattern re-opens that hole. The predicate cannot decide
 // this for the file without re-hard-coding the name it is being handed.
+//
+// A REPOSITORY MAY DECLARE ITS OWN AGENT BRANCHES AS DELIVERY BRANCHES
+// (zheref/nen#657: nen lists every `{model}` fill). The prefix conjunct then
+// filters nothing, so author and base carry the identity alone, and
+// `nen schema check`'s delivery.head_ref_prefixes row warns when such a list
+// meets a `delivery_holistic_pass` reviewer.
 
 export interface DeliveryEvidence {
   /** `""` when the fetch could not establish it. Never widens the gate. */

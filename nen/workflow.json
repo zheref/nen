@@ -12,7 +12,7 @@
     }
   },
   "branch": {
-    "$comment": "A branch is a CON-40 delivery branch only when its first segment is listed in nen/gates.json delivery.head_ref_prefixes and the PR's author matches delivery.author_pattern and its base is the default branch (zheref/nen#657); 'nen schema check' warns about a {model} fill that list does not cover.",
+    "$comment": "A pull request is a delivery PR only when its head ref starts with an entry of nen/gates.json delivery.head_ref_prefixes (case-sensitive), its author matches delivery.author_pattern and its base is the default branch; see docs/USAGE.md#delivery-pr-identity. nen never infers that list from {model}; 'nen schema check' warns about a branch head it does not cover (zheref/nen#657).",
     "template": "{model}/{persona}/{descriptor}",
     "base": "main"
   },
