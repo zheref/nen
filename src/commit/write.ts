@@ -240,7 +240,7 @@ export function validateMessageText(
       readLineLengthRules(root, null);
     } else {
       reasons.push(...attributionRefusalMessages(loaded, parsed.value.input.trailers.map((trailer): string => trailer.key)));
-      const found = subjectCaseFindings(root, message.split("\n")[0] ?? "", declaredSubjectCase(loaded));
+      const found = subjectCaseFindings(root, message.split(/\r?\n/)[0] ?? "", declaredSubjectCase(loaded));
       for (const warning of found.warnings) options.warn(warning);
       for (const note of found.notes) options.note(note);
       reasons.push(...found.refusals);

@@ -342,7 +342,7 @@ function runFormatFile(context: CommandContext): number {
   if (mixed.length > 0) throw new VerbUsageError(`--message-file cannot be combined with --${mixed.join(", --")}.`);
   const root = assertRepoRoot({ repoFlag: context.repoFlag });
   const path = requireValue(context.args, "message-file", "The existing message to validate.");
-  const message = readTextFile(path, root, "The message is validated without rewriting it or reading the index.");
+  const message = readTextFile(path, root, "The message is validated without rewriting it or reading the index.", true);
   const result = validateMessageText(root, message, {
     warn: (warning): void => context.io.err(`nen: warning: ${warning}`),
     note: (note): void => context.io.err(`nen: note: ${note}`),

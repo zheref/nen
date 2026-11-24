@@ -125,6 +125,20 @@ describe("NN#606: validate an existing message file", () => {
     expect(fromFile.out).toEqual(fromFlags.out);
   });
 
+  it("AC-2: checks a CRLF file's subject without changing its line endings", async () => {
+    const root = repoWithPolicy({ subjectCase: [2, "always", "lower-case"] });
+    writeFileSync(join(root, "message.txt"), "fix: Capitalized\r\n");
+    const result = await capture(["commit", "format", "--message-file", "message.txt"], false, root);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("subject-case");
+    const valid = "fix: lowercase\r\n";
+    writeFileSync(join(root, "message.txt"), valid);
+    const accepted = await capture(["commit", "format", "--message-file", "message.txt"], true, root);
+    expect(accepted.code).toBe(0);
+    expect(JSON.parse(accepted.out.join("\n"))).toEqual({ message: valid });
+    expect(readFileSync(join(root, "message.txt"), "utf8")).toBe(valid);
+  });
+
   it("AC-3: executes the invocation published in the command help", async () => {
     const root = repoWithPolicy({});
     writeFileSync(join(root, "message.txt"), "fix: validate the message\n");
