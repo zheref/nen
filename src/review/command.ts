@@ -26,11 +26,11 @@ import { assertRepoRoot } from "../repo/root.js";
 import { assertBase } from "../report/data.js";
 import { loadWorkflow, WORKFLOW_FILE } from "../schema/workflow.js";
 import { assembleScopes, readChangedPaths, renderScopes } from "./scopes.js";
-import { CYCLE_CONTRACT, CYCLE_MARKER_DIRECTORY, ensureCycle, runCycle } from "./ledger.js";
+import { CYCLE_CONTRACT, CYCLE_MARKER_DIRECTORY, ensureCycle, repairCycleMarker, runCycle } from "./ledger.js";
 import { plainLine } from "../cli/plain.js";
 
 const USAGE = `nen review scopes --base <ref> [--repo <path>] [--json]
-nen review ledger init|ensure|decide|record|show|recover-first --branch <name> [--repo <path>] [--pr <n>] [--json]
+nen review ledger init|ensure|decide|record|show|recover-first|repair-marker --branch <name> [--repo <path>] [--pr <n>] [--json]
 
 ledger:
   Own the review-cycle ledger under .nen/hanten/<branch-slug>[-pr<N>].cycle.json,
@@ -40,6 +40,15 @@ ledger:
   init opens a new key; ensure opens only when no earlier trace survives;
   decide --applicable <csv> reports raise/skip-exhausted/not-applicable;
   record --persona <id> --outcome ran|skipped-exhausted appends a pass;
+  record --persona <id> --outcome delta --from-head <sha> --to-head <sha>
+  appends hanten's bounded delta pass for a SPENT reviewer that has a ran
+  pass: both heads full 40-hex commit ids and different, never a duplicate.
+  Since the reviewer's last ran pass, --from-head is its last delta toHead
+  when one exists and --to-head is no head those deltas already reviewed; a
+  later ran resets that chain. A delta spends nothing: used and max stay.
+  decide's reviewers[] and record's report carry deltas, skips and
+  lastDeltaHead, so a round (used), a skip and a delta never read alike.
+  A nen without delta refuses a ledger holding a delta row as inconsistent.
   show reads the ledger; recover-first --confirmed-first-cycle opens a lost
   key ONLY after the maintainer confirms that no review ran under it.
   --pr <n> selects a separate effort key; --base <trunk> is only for ensure.
@@ -55,8 +64,9 @@ ledger:
   Ledger exit codes and messages:
     0 opened/present, or the requested ledger operation succeeded.
     1 filesystem failure or lock timeout; nothing is reported as successful.
-    2 invalid arguments, missing/malformed history, exhausted budget, second
-      init, or absent/malformed review.scopes; restore, never reset counts.
+    2 invalid arguments, missing/malformed history, exhausted budget, a
+      refused delta, second init, or absent/malformed review.scopes; nothing
+      is written; restore, never reset counts.
     3 ensure refused: the trunk, HEAD, refs/* or an empty branch.
     4 ensure lost: earlier ledger traces survive; recover the original.
   Human output is concise; --json carries the full operation document.
@@ -93,11 +103,11 @@ const SUBCOMMANDS: readonly string[] = ["scopes", "ledger"];
 
 function runLedger(context: CommandContext): number {
   const action = context.args.positionals[2];
-  const known = ["init", "ensure", "decide", "record", "show", "recover-first"];
+  const known = ["init", "ensure", "decide", "record", "show", "recover-first", "repair-marker"];
   if (action === undefined || !known.includes(action)) throw new VerbUsageError(`review ledger needs one of: ${known.join(", ")}.`);
   refuseExtraPositionals(context.args, 3);
   const values = context.args.values;
-  const allowed = new Set(["repo", "branch", "pr", ...(action === "ensure" ? ["base"] : []), ...(action === "decide" ? ["applicable"] : []), ...(action === "record" ? ["persona", "outcome"] : [])]);
+  const allowed = new Set(["repo", "branch", "pr", ...(action === "ensure" ? ["base"] : []), ...(action === "decide" ? ["applicable"] : []), ...(action === "record" ? ["persona", "outcome", "from-head", "to-head"] : [])]);
   for (const flag of Object.keys(values)) if (!allowed.has(flag)) throw new VerbUsageError(`--${flag} is not valid with review ledger ${action}.`);
   const confirmed = context.args.booleans.has("confirmed-first-cycle");
   if (confirmed && action !== "recover-first") throw new VerbUsageError("--confirmed-first-cycle is only valid with recover-first.");
@@ -109,13 +119,13 @@ function runLedger(context: CommandContext): number {
   if (rawPr !== undefined && (!/^\d+$/.test(rawPr) || !Number.isSafeInteger(Number(rawPr)) || Number(rawPr) <= 0)) throw new VerbUsageError("--pr must be a positive PR number.");
   if (action === "record") {
     requireValue(context.args, "persona", "It names the declared reviewer.");
-    requireValue(context.args, "outcome", "Use ran or skipped-exhausted.");
+    requireValue(context.args, "outcome", "Use ran, skipped-exhausted or delta.");
   }
   const root = assertRepoRoot({ repoFlag: context.repoFlag });
   const options = { root, branch, pr: rawPr === undefined ? undefined : Number(rawPr), base: values["base"], seams: context.seams, warn: context.io.err };
-  const result = action === "ensure" ? ensureCycle(options) : { code: 0, report: runCycle(options, action, { applicable: values["applicable"], persona: values["persona"], outcome: values["outcome"], confirmed }) };
+  const result = action === "repair-marker" ? repairCycleMarker(options) : action === "ensure" ? ensureCycle(options) : { code: 0, report: runCycle(options, action, { applicable: values["applicable"], persona: values["persona"], outcome: values["outcome"], fromHead: values["from-head"], toHead: values["to-head"], confirmed }) };
   const report = result.report;
-  emit(context.io, context.json, report, [plainLine(`review ledger ${String(report["ensure"] ?? action)}: ${String(report["path"])}`), ...(report["reason"] === undefined ? [] : [plainLine(String(report["reason"]))]), ...(Array.isArray(report["reviewers"]) ? report["reviewers"].map((row): string => plainLine(`${row.persona}: ${row.used}/${row.max} ${row.action}`)) : [])]);
+  emit(context.io, context.json, report, [plainLine(`review ledger ${String(report["ensure"] ?? action)}: ${String(report["path"])}`), ...(report["reason"] === undefined ? [] : [plainLine(String(report["reason"]))]), ...(Array.isArray(report["reviewers"]) ? report["reviewers"].map((row): string => plainLine(`${row.persona}: ${row.used}/${row.max} ${row.action}${row.deltas > 0 ? ` (${row.deltas} delta${row.deltas === 1 ? "" : "s"})` : ""}`)) : [])]);
   return result.code;
 }
 
@@ -173,12 +183,12 @@ export const reviewCommand: Command = {
   subcommands: SUBCOMMANDS,
   summary: "Classify review scopes and own per-effort reviewer budget ledgers.",
   usage: USAGE,
-  flags: { values: ["base", "branch", "pr", "applicable", "persona", "outcome"], booleans: ["confirmed-first-cycle"] },
+  flags: { values: ["base", "branch", "pr", "applicable", "persona", "outcome", "from-head", "to-head"], booleans: ["confirmed-first-cycle"] },
   run(context: CommandContext): number {
     const sub = requireSubcommand("review", context.args, SUBCOMMANDS);
     if (sub === "ledger") return runLedger(context);
     refuseExtraPositionals(context.args, 2);
-    for (const flag of ["branch", "pr", "applicable", "persona", "outcome"]) if (context.args.values[flag] !== undefined) throw new VerbUsageError(`--${flag} is only valid with review ledger.`);
+    for (const flag of ["branch", "pr", "applicable", "persona", "outcome", "from-head", "to-head"]) if (context.args.values[flag] !== undefined) throw new VerbUsageError(`--${flag} is only valid with review ledger.`);
     if (context.args.booleans.has("confirmed-first-cycle")) throw new VerbUsageError("--confirmed-first-cycle is only valid with review ledger recover-first.");
     return runScopes(context);
   },

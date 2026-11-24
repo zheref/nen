@@ -24,6 +24,7 @@
 // a caller round-trips on (../release/preflight.ts, ../pr/bodycheck.ts).
 
 import { escapeRegExp, readLines, stripComments, validFenceOpening, type ReadLine } from "../pr/template.js";
+import { wrongCatalogueKind } from "./cataloguekind.js";
 
 /** The `--json` contract of `nen issue body-check`. */
 export const ISSUE_BODY_CHECK_CONTRACT = "nen.issue.body-check/v0.1";
@@ -488,6 +489,10 @@ export function parseCatalogue(raw: unknown): IssueSectionsCatalogue {
   }
   const contract = raw["contract"];
   if (contract !== undefined && typeof contract !== "string") throw new IssueShapeError("'contract', when given, is a string.");
+  // A PR-sections catalogue is named as that before any field is read: its
+  // first misfit ('title' as a kind map) reads like schema drift (zheref/nen#607).
+  const wrongKind = wrongCatalogueKind(raw, "issue-sections");
+  if (wrongKind !== null) throw new IssueShapeError(wrongKind);
   if (isRecord(raw["sections"])) return parseSectionsV1(raw, typeof contract === "string" ? contract : null);
   const rawSections = raw["sections"];
   if (!Array.isArray(rawSections) || rawSections.length === 0) {

@@ -1,0 +1,30 @@
+{
+  "contract": "nen.phase.ledger/v0.1",
+  "effort": "fixture/kp-12-sample",
+  "phases": [
+    {
+      "phase": "pr",
+      "startedAt": "2026-10-31T13:11:37.432Z",
+      "endedAt": "2026-10-31T13:13:50.051Z",
+      "durationMs": 132619,
+      "exitCode": 0,
+      "surface": null,
+      "model": null,
+      "note": null,
+      "steps": [],
+      "dial": null
+    },
+    {
+      "phase": "readiness",
+      "startedAt": "2026-10-31T13:13:50.051Z",
+      "endedAt": "2026-11-05T03:25:56.750Z",
+      "durationMs": 396726699,
+      "exitCode": 0,
+      "surface": null,
+      "model": null,
+      "note": null,
+      "steps": [],
+      "dial": null
+    }
+  ]
+}

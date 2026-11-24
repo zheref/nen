@@ -23,6 +23,7 @@ import { runFamily, type Io } from "../index.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import { matchesPattern, parseTiers, tierOf, type TierTable } from "./data.js";
 import { reportCommand } from "./command.js";
+import { makeTempDir } from "../testing/tempdir.js";
 
 const FIELD = "\u001f";
 const LOG_FORMAT = `%H${FIELD}%s${FIELD}%an${FIELD}%aI`;
@@ -376,9 +377,30 @@ describe("the phase ledgers carry note and steps (zheref/nen#227)", () => {
     );
     const captured = await capture(["report", "data", "--repo", root, "--base", "main", "--json"], script({ log: LOG }));
     const phases = documentFrom(captured)["phases"] as Record<string, unknown>[];
-    expect(Object.keys(phases[0] ?? {})).toEqual(["effort", "phase", "startedAt", "endedAt", "durationMs", "exitCode", "surface", "model", "note", "steps", "dial"]);
-    expect(phases[0]).toMatchObject({ effort: "e", note: "kept", steps: [] });
+    expect(Object.keys(phases[0] ?? {})).toEqual(["effort", "phase", "startedAt", "endedAt", "durationMs", "exitCode", "surface", "model", "note", "steps", "dial", "countedMs", "idleWaitMs"]);
+    expect(phases[0]).toMatchObject({ effort: "e", note: "kept", steps: [], countedMs: null, idleWaitMs: null });
     expect(phases[1]?.["steps"]).toEqual([{ verb: "build", argv: "placeholder-tool go", exitCode: 0, durationMs: 1000, stalled: false }]);
+    expect(phases[1]).toMatchObject({ durationMs: 9000, countedMs: 9000, idleWaitMs: 0 });
+  });
+});
+
+describe("a readiness phase left open across days (zheref/nen#639)", () => {
+  it("keeps durationMs verbatim and derives countedMs 0 and the idle wait, writing nothing", async () => {
+    const root = makeTempDir("nen-report-idle-");
+    mkdirSync(join(root, ".nen", "phases"), { recursive: true });
+    const ledger = readFileSync(join(process.cwd(), "src", "report", "fixtures", "idle-readiness-ledger.json"), "utf8");
+    const path = join(root, ".nen", "phases", "fixture%2Fkp-12-sample.json");
+    writeFileSync(path, ledger);
+    const captured = await capture(["report", "data", "--repo", root, "--base", "main", "--json"], script({ log: LOG }));
+    expect(captured.code, captured.err.join("\n")).toBe(0);
+    const phases = documentFrom(captured)["phases"] as Record<string, unknown>[];
+    expect(phases.map((phase): unknown => [phase["phase"], phase["durationMs"], phase["countedMs"], phase["idleWaitMs"]])).toEqual([
+      ["pr", 132619, 132619, 0],
+      ["readiness", 396726699, 0, 396726699],
+    ]);
+    expect(phases[1]?.["effort"]).toBe("fixture/kp-12-sample");
+    // Read time only: the ledger on disk is byte for byte what was written.
+    expect(readFileSync(path, "utf8")).toBe(ledger);
   });
 });
 

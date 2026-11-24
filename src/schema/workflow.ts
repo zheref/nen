@@ -144,6 +144,16 @@ export const ATTRIBUTION_TRAILERS: readonly string[] = [
   "Signed-off-by",
 ];
 
+/**
+ * The READ-BACK's second rule (../commit/readback.ts, hanten N1): a key ending
+ * in `-by` or `-with`, any case, that `commits.allowedAttributionTrailers`
+ * does not admit is refused when a hook added it -- a harness's stamp is not
+ * always on the enumeration above (`Made-with: Cursor`). Here, rather than in
+ * that module, because `commits.stripInjected` (zheref/nen#594) is validated
+ * against the same rule: ONE pattern, read by both.
+ */
+export const ATTRIBUTION_SHAPED_KEY = /-(by|with)$/i;
+
 // ── the blocks ──────────────────────────────────────────────────────────────
 
 export interface BranchPolicy {
@@ -471,6 +481,26 @@ export interface CommitsPolicy {
    * assumed.
    */
   readonly bodyMaxLineLength: number | null;
+  /**
+   * Trailer keys the generated commit-msg hook may REMOVE from a message's
+   * trailer block when a hook inside a nen-started `git commit` added them
+   * (zheref/nen#594) -- Cursor's cloud agents append `Co-authored-by:` in a
+   * `prepare-commit-msg` nobody can switch off. Empty by default: OPT-IN per
+   * repository, and with nothing listed every byte of the hook is as before.
+   *
+   * IT NEVER ADMITS A KEY. A listed key is still refused; the strip only
+   * removes it, only inside a commit `nen commit write` or `nen wc squash`
+   * started (the hook is gated on `NEN_COMPOSED_TRAILER_KEYS`), only when the
+   * message nen composed did not itself carry it, and every removal is
+   * reported and moves the verb's exit code to 4. So every entry must be a key
+   * this policy REFUSES -- one `refusedTrailerKeys` returns for this block (the
+   * list the hook bakes in), or one the read-back refuses by its -by/-with
+   * shape (`ATTRIBUTION_SHAPED_KEY`) -- and anything else is refused here at
+   * load: a key nothing refuses is never stripped (there is no refusal to
+   * remedy), and a key the policy ADMITS is two answers for one key, exactly
+   * like a key on both allow and forbid lists.
+   */
+  readonly stripInjected: readonly string[];
   readonly raw: Readonly<Record<string, unknown>>;
 }
 
@@ -722,7 +752,7 @@ export function defaultWorkflow(): Workflow {
       raw: empty,
     },
     notifications: { rungs: DEFAULT_RUNGS, sound: DEFAULT_SOUND, turn: DEFAULT_TURN, raw: empty },
-    commits: { allowedAttributionTrailers: [], forbiddenTrailers: [], runTrailer: null, subjectCase: null, bodyMaxLineLength: null, raw: empty },
+    commits: { allowedAttributionTrailers: [], forbiddenTrailers: [], runTrailer: null, subjectCase: null, bodyMaxLineLength: null, stripInjected: [], raw: empty },
     monitor: { maxCycles: DEFAULT_MAX_CYCLES, pollSeconds: DEFAULT_POLL_SECONDS, localSlotFrees: DEFAULT_LOCAL_SLOT_RULE, localSlotFreesDeclared: false, raw: empty },
     models: { rule: null, surfaces: emptyRecord(), roles: emptyRecord(), raw: empty },
     review: { scopes: emptyRecord<ReviewScope>(), excludedPersonas: [], raw: empty },
@@ -785,6 +815,7 @@ const COMMITS_KEYS: readonly string[] = [
   "runTrailer",
   "subjectCase",
   "bodyMaxLineLength",
+  "stripInjected",
 ];
 const MONITOR_KEYS: readonly string[] = ["maxCycles", "pollSeconds", "localSlotFrees"];
 const IDLE_KEYS: readonly string[] = ["decisions", "terminal", "budget", "localSlotFrees"];
@@ -2151,7 +2182,7 @@ function parseSubjectCase(path: string, value: unknown): DeclaredSubjectCase | n
 }
 
 function parseCommits(path: string, value: unknown): CommitsPolicy {
-  const raw = block(path, "commits", value, COMMITS_KEYS, "A commits policy's five keys are");
+  const raw = block(path, "commits", value, COMMITS_KEYS, "A commits policy's six keys are");
   const read = (key: string): readonly string[] =>
     stringsOr(path, `commits.${key}`, raw[key], []).map((entry, index): string =>
       requireTrailerKey(path, `commits.${key}[${index}]`, entry),
@@ -2185,7 +2216,7 @@ function parseCommits(path: string, value: unknown): CommitsPolicy {
   // every commit unconditionally. Caught here, at load, by pointer, rather
   // than as a hook nobody can ever get past.
   if (runTrailer !== null) {
-    const refused = refusedTrailerKeys({ allowedAttributionTrailers, forbiddenTrailers, runTrailer: null, subjectCase: null, bodyMaxLineLength: null, raw: {} }).find(
+    const refused = refusedTrailerKeys({ allowedAttributionTrailers, forbiddenTrailers, runTrailer: null, subjectCase: null, bodyMaxLineLength: null, stripInjected: [], raw: {} }).find(
       (key): boolean => key.toLowerCase() === runTrailer.toLowerCase(),
     );
     if (refused !== undefined) {
@@ -2196,12 +2227,44 @@ function parseCommits(path: string, value: unknown): CommitsPolicy {
       );
     }
   }
+  // EVERY STRIP KEY MUST BE A KEY THIS POLICY REFUSES (zheref/nen#594). The
+  // strip is a remedy for a refusal, so a key nothing refuses has nothing to be
+  // a remedy for, and stripping it would be nen silently editing a commit the
+  // repository never objected to. "Refuses" is read from the TWO sources the
+  // refusals themselves use, and nothing else: `refusedTrailerKeys` for this
+  // same block -- the list the generated hook bakes in and `commit format`
+  // asks -- and `ATTRIBUTION_SHAPED_KEY`, the read-back's -by/-with rule for a
+  // hook-added key the allow-list does not admit ('Made-with'). An ADMITTED
+  // key is two answers for one key, the both-lists rule above applied to the
+  // third list. Both refused by pointer, at the entry, case-insensitively --
+  // the comparison every other trailer check here makes.
+  const stripInjected = read("stripInjected");
+  const refusedHere = refusedTrailerKeys({ allowedAttributionTrailers, forbiddenTrailers, runTrailer: null, subjectCase: null, bodyMaxLineLength: null, stripInjected: [], raw: {} }).map(
+    (key): string => key.toLowerCase(),
+  );
+  stripInjected.forEach((key, index): void => {
+    const admitted = allowedAttributionTrailers.find((other): boolean => other.toLowerCase() === key.toLowerCase());
+    if (admitted !== undefined) {
+      throw new SchemaError(
+        path,
+        `commits.stripInjected[${index}]`,
+        `'${key}' is a key this policy ADMITS ('${admitted}' is listed under commits.allowedAttributionTrailers), and a key the policy admits is never stripped: the generated hook would remove a trailer the allow-list says a commit may carry. List it in one place or the other, not both`,
+      );
+    }
+    if (refusedHere.includes(key.toLowerCase()) || ATTRIBUTION_SHAPED_KEY.test(key)) return;
+    throw new SchemaError(
+      path,
+      `commits.stripInjected[${index}]`,
+      `'${key}' is a key nothing refuses -- it is not an attribution trailer this policy refuses (the built-in list or commits.forbiddenTrailers), and it does not end in -by or -with -- and a key nothing refuses is never stripped: the strip is a remedy for a refusal, and without one it would only edit a commit nobody objected to. Add it to commits.forbiddenTrailers first, or drop it from this list`,
+    );
+  });
   return {
     allowedAttributionTrailers,
     forbiddenTrailers,
     runTrailer,
     subjectCase: parseSubjectCase(path, raw["subjectCase"]),
     bodyMaxLineLength: parseBodyMaxLineLength(path, raw["bodyMaxLineLength"]),
+    stripInjected,
     raw,
   };
 }
