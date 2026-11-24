@@ -11,7 +11,11 @@
       "p3": "priority: p3 (backlog)"
     }
   },
-  "branch": { "template": "{model}/{persona}/{descriptor}", "base": "main" },
+  "branch": {
+    "$comment": "A branch is a CON-40 delivery branch only when its first segment is listed in nen/gates.json delivery.head_ref_prefixes and the PR's author matches delivery.author_pattern and its base is the default branch (zheref/nen#657); 'nen schema check' warns about a {model} fill that list does not cover.",
+    "template": "{model}/{persona}/{descriptor}",
+    "base": "main"
+  },
   "iteration": { "checks": ["build", "lint"], "lane": "nen" },
   "tests": { "required": ["test"], "extra": [] },
   "coverage": { "minimum": 80, "recommended": 85, "ideal": 90, "scope": "touched" },

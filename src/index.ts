@@ -212,6 +212,14 @@ object takes with the nen release that introduced each, and the exit is 2.
 outside the known set is, including another tool's own data, which belongs
 under a '$' key.
 
+The nen/gates.json#delivery.head_ref_prefixes row (zheref/nen#657) holds the
+declared delivery prefixes against nen/workflow.json's branch.template: every
+first-segment fill (each models surface and alias for '{model}', or a literal
+segment) must start with a declared prefix. An uncovered fill is a warn naming
+it and the fix, never a FAIL; another first-segment token, no models surface,
+a label-only delivery block or an absent file reads 'not checked' or
+'label-only' and says why.
+
 Exit: 0 every required file loaded; 1 one did not; 2 nen/gates.json carries a
 key this build does not read.
 

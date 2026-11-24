@@ -25,7 +25,7 @@ import { MARKER_FILE, parseMarker } from "../stop/marker.js";
 import { assertRepoRoot, type RepoRootOptions } from "../repo/root.js";
 import { loadColorVocabulary, type ColorVocabulary } from "./colors.js";
 import { describeContract, loadContract, precedenceRestatementFindings, withinOneEdit, type DeployTarget } from "./contract.js";
-import { GatesDuplicateKeyError, GatesUnknownKeyError, loadGateIdentities, pointerSegment, producerOptInWarnings, visibleKey, type GateIdentities } from "./gates.js";
+import { GatesDuplicateKeyError, GatesUnknownKeyError, loadGateIdentities, pointerSegment, producerOptInWarnings, visibleKey, type DeliveryIdentity, type GateIdentities } from "./gates.js";
 import { loadLabelTaxonomy, type LabelTaxonomy } from "./labels.js";
 import { loadRepoRegistry, type RepoRegistry } from "./repos.js";
 import { SchemaError } from "./errors.js";
@@ -41,6 +41,8 @@ import {
   DEFAULT_TARGET_NONE,
   loadWorkflow,
   WORKFLOW_FILE,
+  type BranchPolicy,
+  type ModelsPolicy,
   type Workflow,
 } from "./workflow.js";
 import { describeDecisions, loadDecisions } from "./decisions.js";
@@ -705,6 +707,137 @@ function defaultTargetCheck(root: string): SchemaCheck {
   return row(true, false, `${shown} (a nonProduction key of ${CONTRACT_FILE} → project.targets)`);
 }
 
+// ── nen/gates.json#delivery.head_ref_prefixes (zheref/nen#657) ──────────────
+//
+// THE DELIVERY PREFIX LIST IS DECLARED, NEVER INFERRED, so it can drift from the
+// branch template the same repository cuts its branches under. This row holds
+// the two together: every first-segment fill `branch.template` can render must
+// start with some declared prefix. A WARN, never a required FAIL: a consumer
+// upgrading nen must not turn red on this alone, and the carve-out it guards
+// only ever narrows when the two disagree (a delivery PR read as an ordinary
+// one owes its at-head rounds -- stricter, never wider).
+
+const DELIVERY_PREFIXES_POINTER = "delivery.head_ref_prefixes";
+const MODEL_TOKEN = "{model}";
+
+/** The verdict of {@link deliveryPrefixDrift}. */
+export type DeliveryPrefixVerdict =
+  | { readonly kind: "covered"; readonly segment: string; readonly fills: readonly string[] }
+  | { readonly kind: "uncovered"; readonly segment: string; readonly fills: readonly string[]; readonly uncovered: readonly string[] }
+  | { readonly kind: "label-only"; readonly labels: readonly string[] }
+  | { readonly kind: "not-checked"; readonly reason: string };
+
+/**
+ * The first-segment fills `branch.template` renders: every surface name and
+ * tier alias of `models` when the first segment is `{model}` (a tier keyed
+ * `note`, or `$`-prefixed, is prose, not a fill), the literal itself when it
+ * carries no token, and `null` when it is some other token -- nothing then
+ * fixes what a branch starts with. Order is the file's; repeats collapse.
+ */
+export function branchFirstSegmentFills(
+  template: string,
+  models: Pick<ModelsPolicy, "surfaces">,
+): { readonly segment: string; readonly fills: readonly string[] | null } {
+  const segment = template.split("/")[0] ?? "";
+  if (segment === MODEL_TOKEN) {
+    const fills: string[] = [];
+    const add = (fill: string): void => {
+      if (fill !== "" && !fills.includes(fill)) fills.push(fill);
+    };
+    for (const [surface, tiers] of Object.entries(models.surfaces)) {
+      if (surface.startsWith("$") || surface === "note") continue;
+      add(surface);
+      for (const [tier, alias] of Object.entries(tiers)) {
+        if (tier.startsWith("$") || tier === "note" || typeof alias !== "string") continue;
+        add(alias);
+      }
+    }
+    return { segment, fills };
+  }
+  if (segment !== "" && !segment.includes("{")) return { segment, fills: [segment] };
+  return { segment, fills: null };
+}
+
+/**
+ * Pure: does `delivery.head_ref_prefixes` cover every first-segment fill of
+ * `branch.template`? A fill is covered when `<fill>/` starts with a declared
+ * prefix (the same case-sensitive `startsWith` `isDeliveryPr` runs).
+ */
+export function deliveryPrefixDrift(
+  branch: Pick<BranchPolicy, "template">,
+  models: Pick<ModelsPolicy, "surfaces">,
+  delivery: Pick<DeliveryIdentity, "headRefPrefixes" | "labels">,
+): DeliveryPrefixVerdict {
+  if (delivery.headRefPrefixes.length === 0) return { kind: "label-only", labels: delivery.labels };
+  const { segment, fills } = branchFirstSegmentFills(branch.template, models);
+  if (fills === null) {
+    return {
+      kind: "not-checked",
+      reason: `${WORKFLOW_FILE} branch.template ${visibleKey(branch.template)} starts with ${visibleKey(segment)}, a token no declared list fixes, so no prefix can be compared`,
+    };
+  }
+  if (fills.length === 0) {
+    return {
+      kind: "not-checked",
+      reason: `${WORKFLOW_FILE} branch.template starts with '${MODEL_TOKEN}', but its models block declares no surface, so there is no fill to compare`,
+    };
+  }
+  const uncovered = fills.filter(
+    (fill): boolean => !delivery.headRefPrefixes.some((prefix): boolean => `${fill}/`.startsWith(prefix)),
+  );
+  return uncovered.length === 0
+    ? { kind: "covered", segment, fills }
+    : { kind: "uncovered", segment, fills, uncovered };
+}
+
+function deliveryPrefixesCheck(root: string): SchemaCheck {
+  const resolved = resolveSchemaFile(root, GATES_FILE);
+  const row = (ok: boolean, detail: string): SchemaCheck => ({
+    file: `${resolved.relative}#${DELIVERY_PREFIXES_POINTER}`,
+    path: resolved.path,
+    ok,
+    detail,
+    required: false,
+    legacy: false,
+    note: null,
+  });
+  if (!resolved.canonical.present) return row(true, `not checked -- ${GATES_FILE} is absent, so there is no delivery block to compare`);
+  let gates: GateIdentities;
+  try {
+    gates = loadGateIdentities(root);
+  } catch {
+    return row(true, `not read -- ${GATES_FILE} did not load; see that row`);
+  }
+  let workflow: Workflow;
+  try {
+    const loaded = loadWorkflow(root);
+    if (!loaded.present) {
+      return row(true, `not checked -- no ${WORKFLOW_FILE}: the default branch.template starts with '${MODEL_TOKEN}' and the default models block declares no surface, so there is no fill to compare`);
+    }
+    workflow = loaded.workflow;
+  } catch {
+    return row(true, `not read -- ${WORKFLOW_FILE} did not load; see that row`);
+  }
+  const verdict = deliveryPrefixDrift(workflow.branch, workflow.models, gates.delivery);
+  const prefixes = gates.delivery.headRefPrefixes.map(visibleKey).join(", ");
+  switch (verdict.kind) {
+    case "label-only":
+      return row(true, `label-only, prefixes not checked (delivery.labels: ${verdict.labels.map(visibleKey).join(", ")})`);
+    case "not-checked":
+      return row(true, `not checked -- ${verdict.reason}`);
+    case "covered":
+      return row(
+        true,
+        `${verdict.fills.length} first-segment fill${verdict.fills.length === 1 ? "" : "s"} of ${WORKFLOW_FILE} branch.template covered (${verdict.fills.map(visibleKey).join(", ")})`,
+      );
+    case "uncovered":
+      return row(
+        false,
+        `drift: ${WORKFLOW_FILE} branch.template ${visibleKey(workflow.branch.template)} cuts branches starting ${verdict.uncovered.map((fill): string => visibleKey(`${fill}/`)).join(", ")}, which no ${GATES_FILE} ${DELIVERY_PREFIXES_POINTER} entry (${prefixes}) covers, so a pull request from such a branch is never a CON-40 delivery PR. Add each prefix to ${GATES_FILE} ${DELIVERY_PREFIXES_POINTER}, or change ${WORKFLOW_FILE} branch.template`,
+      );
+  }
+}
+
 // Load every schema file and report each one's verdict, never stopping at the
 // first failure. Reporting one problem at a time is how a repository adopting
 // nen makes four round trips to learn four things it could have been told at
@@ -841,6 +974,10 @@ export function checkTaxonomy(options: CheckOptions = {}): CheckReport {
     // ...and the `deploy.defaultTarget` row (zheref/nen#300): the one pointer
     // row that can FAIL, because it is checked against a second file.
     defaultTargetCheck(root),
+    // ...and the delivery prefix drift row (zheref/nen#657): gates.json's
+    // declared delivery prefixes against workflow.json's branch template. A
+    // warn at most, never a required FAIL.
+    deliveryPrefixesCheck(root),
     // The release unit's path/content bounds (zheref/nen#348).
     pointerCheck(root, "release", describeRelease),
     // The idle profile (HR-5), cross-checked against nen/decisions.json.

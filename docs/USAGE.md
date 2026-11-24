@@ -1856,6 +1856,22 @@ same name declared twice. **Compatibility:** an optional key, so `version`
 stays `1`; a nen older than the release that reads it ignores the block, which
 leaves the excluded check counted — a stricter verdict, never a wider one.
 
+<a id="delivery-pr-identity"></a>
+**CON-40's delivery-PR identity (`delivery.*`, [#657](https://github.com/zheref/nen/issues/657)).**
+A pull request is a **delivery PR** when all three hold: (a) its head ref
+starts with an entry of `delivery.head_ref_prefixes`, compared
+case-sensitively, **or** it carries a `delivery.labels` label; **and** (b) its
+author matches `delivery.author_pattern`; **and** (c) its base is the
+repository's default branch. The prefix list is a **separate declared list**:
+nen never infers it from `nen/workflow.json`'s `branch.template` or its
+`{model}` token. So a run on any surface — Codex included — that wants its pull
+request read as a delivery PR must cut a branch whose first segment is in that
+list (in nen's own repository, every surface name and alias of its `models`
+block: `claude/`, `fable/`, `opus/`, `codex/`, `astra/`, …), opened by the
+`author_pattern` account into the default branch.
+[`nen schema check`](#nen-schema-check)'s `nen/gates.json#delivery.head_ref_prefixes`
+row warns about a template or `models` fill the list does not cover.
+
 **CON-30's dependency-author carve-out.** `nen/gates.json` may declare an
 optional `dependabot_carve_out`:
 
@@ -8024,6 +8040,32 @@ did not load, under a policy that **does** name a target, gives `ok: false`,
 not required, reading `not checked -- …`: there is a name, a check that was not
 performed is not one that passed, and the contract row already fails the
 report.
+
+**The `nen/gates.json#delivery.head_ref_prefixes` row
+([#657](https://github.com/zheref/nen/issues/657))**, immediately under
+`#deploy.defaultTarget`, also reads two files: the declared
+[delivery prefixes](#delivery-pr-identity) in `nen/gates.json` and
+`branch.template` plus `models` in `nen/workflow.json`. Every first-segment
+fill the template can render must start with a declared prefix (the same
+case-sensitive comparison `nen pr ready` runs): for a `{model}` first segment,
+every surface name and every tier alias of `models` (`rule`, `roles`, a tier
+keyed `note` and `$` keys are not fills); for a literal first segment
+(`delivery/{descriptor}`), that literal plus `/`. All covered reads `ok`
+(`13 first-segment fills of nen/workflow.json branch.template covered
+('claude', 'fable', …)`). An uncovered fill is a **warn** (`ok: false`, not
+required), never a FAIL, so the exit code does not move: `drift:
+nen/workflow.json branch.template '{model}/{persona}/{descriptor}' cuts
+branches starting 'fable/', …, which no nen/gates.json
+delivery.head_ref_prefixes entry ('codex/') covers, so a pull request from
+such a branch is never a CON-40 delivery PR. Add each prefix to
+nen/gates.json delivery.head_ref_prefixes, or change nen/workflow.json
+branch.template`. Cases it cannot judge are `ok` and say so, never a silent
+pass: another token as the first segment (`{persona}/…`), a `{model}`
+template with no `models` surface or no `nen/workflow.json` at all, or an
+absent `nen/gates.json` read `not checked -- …` with the reason; a delivery
+block with no prefixes reads `label-only, prefixes not checked`; and a
+`nen/gates.json` or `nen/workflow.json` that did not load reads `not read --
+… see that row`, as `#deploy.defaultTarget` does.
 
 **The `nen/workflow.json#idle` row (Hatsu's ruling HR-5)**, immediately under
 `#release`, also reads two files: the [idle profile](#nenworkflowjson) in

@@ -48,13 +48,25 @@
     "maxRounds": 3
   },
   "delivery": {
-    "$comment": "Current local delivery branches use the Codex prefix and the maintainer credentials.",
+    "$comment": "CON-40's delivery-PR identity (zheref/nen#657). A pull request is a delivery PR when all three hold: (1) its head ref starts with one of head_ref_prefixes, compared case-sensitively (or it carries one of labels, of which there are none here); (2) its author matches author_pattern; (3) its base is the repository's default branch. head_ref_prefixes is a separate declared list -- nen never infers it from nen/workflow.json -- so it must cover every first-segment fill of workflow.json's branch.template ({model}/{persona}/{descriptor}): every surface name and every tier alias its models block declares, each with a trailing slash. 'nen schema check' warns, on the nen/gates.json#delivery.head_ref_prefixes row, about a fill this list does not cover. Add the prefix here when models gains a surface or an alias.",
     "author_pattern": {
       "pattern": "^zheref$",
       "ignoreCase": true
     },
     "head_ref_prefixes": [
-      "codex/"
+      "claude/",
+      "fable/",
+      "opus/",
+      "sonnet/",
+      "haiku/",
+      "codex/",
+      "astra/",
+      "sol/",
+      "terra/",
+      "luna/",
+      "cursor/",
+      "grok/",
+      "composer/"
     ],
     "labels": []
   }
