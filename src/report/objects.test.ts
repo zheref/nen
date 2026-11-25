@@ -9,7 +9,7 @@
 // is proved by the fixture rather than asserted in a comment.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
@@ -32,6 +32,7 @@ import type { RollupEntry } from "../github/types.js";
 import { defaultDeps, prReady } from "../verbs/pr_ready.js";
 import type { PullRequestSnapshot } from "../github/graphql.js";
 import type { PrStateSource } from "../github/pr_state.js";
+import { makeTempDir } from "../testing/tempdir.js";
 import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 
 // THE GATE IS WATCHED, NOT REPLACED: every call still runs the real `nen pr
@@ -665,7 +666,7 @@ describe("computed readiness uses the real in-process gate (zheref/nen#220)", ()
   // would pass even if objects.ts stopped calling prReady, or ignored its
   // verdict. Both gate outcomes below must travel through the production gate.
   it.each(["MERGEABLE", "CONFLICTING"])("computes %s without a readiness check, and never combines authorities", async (mergeable) => {
-    const root = mkdtempSync(join(tmpdir(), "nen-objects-computed-"));
+    const root = makeTempDir("nen-objects-computed-");
     const gates = readFileSync(join(BANKAI_REPO, "nen", "gates.json"), "utf8");
     mkdirSync(join(root, "nen"));
     writeFileSync(join(root, "nen", "gates.json"), gates);
@@ -721,7 +722,6 @@ describe("computed readiness uses the real in-process gate (zheref/nen#220)", ()
       expect(snapshot).not.toHaveBeenCalled();
     } finally {
       opened.mockRestore();
-      rmSync(root, { recursive: true, force: true });
     }
   });
 });
