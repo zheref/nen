@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { makeTempDir } from "../testing/tempdir.js";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -85,7 +86,7 @@ describe("nen usage record -- the per-effort usage ledger", () => {
   });
 
   it("preserves Unicode source and note text, including section signs", async () => {
-    const root = mkdtempSync(join(tmpdir(), "nen-usage-unicode-"));
+    const root = makeTempDir("nen-usage-unicode-");
     const source = "hanten § 4: nobunaga, synthetic café 日本語 🧪";
     const note = "§ 7 — síntesis 日本語 🧪";
     const result = await capture(["usage", "record", "--effort", "unicode", "--surface", "codex",
@@ -100,7 +101,7 @@ describe("nen usage record -- the per-effort usage ledger", () => {
   });
 
   it.each([["--input", ""], ["--input="]])("names an empty input value at exit 2: %j", async (...flags) => {
-    const root = mkdtempSync(join(tmpdir(), "nen-usage-empty-"));
+    const root = makeTempDir("nen-usage-empty-");
     const result = await capture(["usage", "record", "--effort", "empty", "--surface", "codex", ...flags], root);
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toContain("--input takes a non-negative whole number of tokens, got ''.");
