@@ -1285,6 +1285,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       data: RO("assembles one report document from git reads and files already on disk -- it has no write path in any form"),
       render: DRY("fills a template and WRITES --out, unless --dry-run is given, which prints the token list and writes nothing"),
       mermaid: RO("prints the mermaid text for a --graph document -- one file read, nothing written, no template involved"),
+      check: RO("renders each declared report variant in both formats from its example data and refuses a block, desk or escaping miss -- reads files, writes nothing into the repository"),
     },
   },
   // `review scopes` classifies a branch diff against the repository's own
