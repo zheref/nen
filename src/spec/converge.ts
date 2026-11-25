@@ -39,7 +39,7 @@ import { assertInsideRepo } from "./check.js";
 import { excerptOf, resolveMember, type MemberCheckout } from "./citecheck.js";
 import { diffInventories, InventoryReadError, loadInventory, type LoadedInventory } from "./diff.js";
 import type { InventoryRow } from "./inventory.js";
-import { citationsIn, proseLines, requirementOf, trailingAnnotation } from "./lines.js";
+import { acceptanceScenarioOf, citationsIn, proseLines, requirementOf } from "./lines.js";
 import { readTree, TreeReadError, type MemberTree } from "./tree.js";
 
 export const SPEC_CONVERGE_CONTRACT = "nen.spec.converge/v0.1";
@@ -85,6 +85,13 @@ export interface Write {
   readonly text: string;
 }
 
+export type ConvergeCounts = Record<GapClass, number> & {
+  /** Scenario definition lines outside fenced source data, including uncited lines. */
+  scenariosRead: number;
+  /** Scenario lines with at least one valid citation of the selected member. */
+  scenariosCited: number;
+};
+
 /** KEY ORDER IS THE DOCUMENTED `--json` SHAPE. */
 export interface ConvergeReport {
   readonly contract: string;
@@ -101,7 +108,7 @@ export interface ConvergeReport {
   readonly claims: readonly Claim[];
   readonly writes: readonly Write[];
   readonly action: "none" | "written" | "would-write" | "refused";
-  readonly counts: Readonly<Record<GapClass, number>>;
+  readonly counts: Readonly<ConvergeCounts>;
   readonly reason: string | null;
 }
 
@@ -117,7 +124,7 @@ export interface ConvergeInput {
   readonly dryRun: boolean;
 }
 
-const zeroCounts = (): Record<GapClass, number> => ({ missing: 0, partial: 0, contradicts: 0, unrequested: 0 });
+const zeroCounts = (): ConvergeCounts => ({ missing: 0, partial: 0, contradicts: 0, unrequested: 0, scenariosRead: 0, scenariosCited: 0 });
 
 function unreadable(input: ConvergeInput, inventory: LoadedInventory | null, member: MemberCheckout | null, reason: string): ConvergeReport {
   return {
@@ -199,16 +206,29 @@ export function converge(seams: Seams, input: ConvergeInput): ConvergeReport {
   if (specText === null) return unreadable(input, inventory, member, `${specFile} does not exist; a folder with no spec.md has nothing to converge, which is not the same as converged`);
   const tasksText = readFolderFile(input.repo, tasksFile);
 
-  // 1. Every citation of this member on a requirement line, and what its bytes do now.
+  // 1. Every citation of this member on a requirement or scenario line, and what its bytes do now.
+  const counts = zeroCounts();
   const citations: ConvergedCitation[] = [];
+  const pendingStale: { line: number; end: number; text: string }[] = [];
   const byRequirement = new Map<string, { line: number; states: RangeState[] }>();
   const citedDirs = new Set<string>();
   for (const line of proseLines(specText)) {
-    const requirement = requirementOf(line.text);
+    const scenario = acceptanceScenarioOf(line.text);
+    if (scenario !== null) counts.scenariosRead += 1;
+    const requirement = scenario ?? requirementOf(line.text);
     if (requirement === null) continue;
-    const companions = new Set(trailingAnnotation(line.text).stale);
+    let scenarioCited = false;
+    let afterCitation = 0;
     for (const { text, citation } of citationsIn(line.text)) {
+      const end = line.text.indexOf(text, afterCitation) + text.length;
+      afterCitation = end;
       if (citation === null || citation.code !== input.code) continue;
+      // AC rows use cite-check's numeric-range validity; existing requirement handling is unchanged.
+      if (scenario !== null && (citation.l1 < 1 || citation.l2 < citation.l1)) continue;
+      if (scenario !== null && !scenarioCited) {
+        counts.scenariosCited += 1;
+        scenarioCited = true;
+      }
       citedDirs.add(citation.path.includes("/") ? citation.path.slice(0, citation.path.lastIndexOf("/")) : "");
       const old = readAt(seams, member.path, citation.sha, citation.path);
       const oldExcerpt = old === null ? null : excerptOf(old, citation.l1, citation.l2);
@@ -225,7 +245,10 @@ export function converge(seams: Seams, input: ConvergeInput): ConvergeReport {
         now = findLines(nowText, oldExcerpt);
         state = now === null ? "changed" : "moved";
       }
-      citations.push({ line: line.number, id: requirement.id, text, path: citation.path, lines: [citation.l1, citation.l2], sha: citation.sha, state, now, marked: companions.has(`[STALE @ ${citation.sha}]`), reason });
+      const companion = `[STALE @ ${citation.sha}]`;
+      const marked = line.text.slice(end).trimStart().startsWith(companion);
+      citations.push({ line: line.number, id: requirement.id, text, path: citation.path, lines: [citation.l1, citation.l2], sha: citation.sha, state, now, marked, reason });
+      if (state !== "current" && state !== "unreadable" && !marked) pendingStale.push({ line: line.number, end, text: companion });
       const entry = byRequirement.get(requirement.id) ?? { line: line.number, states: [] };
       entry.states.push(state);
       byRequirement.set(requirement.id, entry);
@@ -271,7 +294,7 @@ export function converge(seams: Seams, input: ConvergeInput): ConvergeReport {
   if (tasksText !== null) {
     for (const line of proseLines(tasksText)) {
       if (!/^\s*[-*]\s+\[[xX]\]/.test(line.text)) continue;
-      const ids = [...new Set([...line.text.matchAll(/\b(?:FR|SC)-\d+\b/g)].map((match): string => match[0]))].filter((id): boolean => gapIds.has(id));
+      const ids = [...new Set([...line.text.matchAll(/\b(?:FR|SC|AC)-\d+\b/g)].map((match): string => match[0]))].filter((id): boolean => gapIds.has(id));
       if (ids.length > 0) claims.push({ line: line.number, text: line.text.trim(), ids });
     }
   }
@@ -279,26 +302,37 @@ export function converge(seams: Seams, input: ConvergeInput): ConvergeReport {
   // 5. The appends.
   const writes: Write[] = [];
   const specLines = specText.split("\n");
-  for (const citation of citations) {
-    if (citation.state === "current" || citation.state === "unreadable" || citation.marked) continue;
-    const index = citation.line - 1;
+  for (const stale of pendingStale) writes.push({ file: specFile, kind: "stale", line: stale.line, text: stale.text });
+  // Insert from right to left so repeated citations retain their own original offsets.
+  for (const stale of [...pendingStale].reverse()) {
+    const index = stale.line - 1;
     const original = specLines[index] as string;
-    const companion = `[STALE @ ${citation.sha}]`;
-    if (original.includes(`${citation.text} ${companion}`)) continue;
-    specLines[index] = original.replace(citation.text, `${citation.text} ${companion}`);
-    writes.push({ file: specFile, kind: "stale", line: citation.line, text: companion });
+    specLines[index] = `${original.slice(0, stale.end)} ${stale.text}${original.slice(stale.end)}`;
   }
   const sha12 = tree.sha.slice(0, 12);
   // SP-9's heading is `## Phase N: Convergence <date>`; the commit read goes in the body, and is the key a rerun finds.
   const phaseKey = `Inventory: ${input.code} @ ${sha12}`;
   const tasks = tasksText ?? "";
-  const phaseWritten = tasks.split("\n").some((line): boolean => line.trim() === phaseKey);
+  const taskLines = proseLines(tasks);
+  const taskProse = taskLines.map((line): string => line.text).join("\n");
+  const phaseWritten = taskLines.some((line): boolean => line.text.trim() === phaseKey);
+  // Older Nen versions may already have recorded this inventory, before AC gaps were visible.
+  const recordedScenarios = new Set<string>();
+  let inventorySection: string | null = null;
+  for (const line of taskLines) {
+    if (/^#{1,2}\s/.test(line.text)) inventorySection = null;
+    if (line.text.trim().startsWith("Inventory: ")) inventorySection = line.text.trim();
+    if (inventorySection !== phaseKey) continue;
+    const scenario = /^\s*-\s+\[[ xX]\]\s+T\d{3,}\b[^\n]*?\[(?:missing|partial|contradicts)\] (AC-\d+) —/.exec(line.text);
+    if (scenario !== null) recordedScenarios.add(scenario[1] as string);
+  }
+  const unwrittenGaps = phaseWritten ? gaps.filter((gap): boolean => /^AC-\d+$/.test(gap.id) && !recordedScenarios.has(gap.id)) : gaps;
   // Each row carries its story (from a task already naming the requirement) and the member's platform, so
   // `spec tasks groups` files it in a story group; a class that changed since the last recorded finding
   // for the same id supersedes that row (SP-10: a reversal is a supersedes line, never an edit).
   const platform = (registry?.families ?? []).flatMap((family) => family.members).find((member): boolean => member.code === input.code)?.platform ?? input.code;
   const storyOf = (id: string): string | null => {
-    for (const line of tasks.split("\n")) {
+    for (const line of taskProse.split("\n")) {
       if (!new RegExp(`\\b${id}\\b`).test(line)) continue;
       const story = /\[US-?(\d+)\]/.exec(line);
       if (story !== null) return `US${story[1] as string}`;
@@ -307,15 +341,15 @@ export function converge(seams: Seams, input: ConvergeInput): ConvergeReport {
   };
   const lastFinding = (id: string): { task: string; class: string } | null => {
     let found: { task: string; class: string } | null = null;
-    for (const match of tasks.matchAll(new RegExp(`^\\s*-\\s+\\[[ xX]\\]\\s+(T\\d{3,})\\b[^\\n]*?\\[(missing|partial|contradicts|unrequested)\\] ${id.replace(/[.*+?^\${}()|[\]\\]/g, "\\$&")} —`, "gm"))) found = { task: match[1] as string, class: match[2] as string };
+    for (const match of taskProse.matchAll(new RegExp(`^\\s*-\\s+\\[[ xX]\\]\\s+(T\\d{3,})\\b[^\\n]*?\\[(missing|partial|contradicts|unrequested)\\] ${id.replace(/[.*+?^\${}()|[\]\\]/g, "\\$&")} —`, "gm"))) found = { task: match[1] as string, class: match[2] as string };
     return found;
   };
   let phaseText: string | null = null;
-  if (gaps.length > 0 && !phaseWritten) {
-    const phases = [...tasks.matchAll(/^##\s+Phase\s+(\d+)\b/gm)].map((match): number => Number(match[1]));
+  if (unwrittenGaps.length > 0) {
+    const phases = [...taskProse.matchAll(/^##\s+Phase\s+(\d+)\b/gm)].map((match): number => Number(match[1]));
     const next = (phases.length === 0 ? 0 : Math.max(...phases)) + 1;
-    let task = Math.max(0, ...[...tasks.matchAll(/\bT(\d{3,})\b/g)].map((match): number => Number(match[1])));
-    const rows = gaps.map((gap): string => {
+    let task = Math.max(0, ...[...taskProse.matchAll(/\bT(\d{3,})\b/g)].map((match): number => Number(match[1])));
+    const rows = unwrittenGaps.map((gap): string => {
       task += 1;
       const story = gap.class === "unrequested" ? null : storyOf(gap.id);
       const previous = lastFinding(gap.id);
@@ -328,7 +362,6 @@ export function converge(seams: Seams, input: ConvergeInput): ConvergeReport {
     writes.push({ file: tasksFile, kind: "phase", line: null, text: heading });
   }
 
-  const counts = zeroCounts();
   for (const gap of gaps) counts[gap.class] += 1;
   let action: ConvergeReport["action"] = "none";
   if (input.write && writes.length > 0) {
@@ -362,6 +395,7 @@ export function renderConverge(report: ConvergeReport): string[] {
   if (report.verdict === "could-not-read") return [`could-not-read: ${report.folder} -- ${report.reason ?? ""}`];
   const lines = [
     `${report.verdict}: ${report.folder} against ${report.member.code} ${report.member.repo ?? ""} @ ${report.inventory.sha?.slice(0, 12) ?? "?"} -- ${GAP_CLASSES.map((name): string => `${report.counts[name]} ${name}`).join(" · ")} · action ${report.action}`,
+    `  scenarios: ${report.counts.scenariosRead} scenario line(s) read · ${report.counts.scenariosCited} citing ${report.member.code}`,
   ];
   for (const gap of report.gaps) lines.push(`  ${gap.class} ${gap.id}${gap.line === null ? "" : ` (spec.md:${gap.line})`} -- ${gap.detail}`);
   if (report.unrequestedReason !== null) lines.push(`  unrequested: not computed -- ${report.unrequestedReason}`);
