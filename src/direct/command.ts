@@ -59,7 +59,8 @@ resolves against --repo's root.
       Validates the registry file and prints: the snapshot date, one line per alias
       (provider, family, surface/tier, the snapshot quote), the surfaces table and the
       live-lookup sources per provider. JSON aliases include the exact declared line
-      (null when absent in an older registry). Exit 0 valid, 1 invalid (the refusal names the
+      (actionable aliases require a nonempty line; reviewer lines may be null).
+      Exit 0 valid, 1 invalid (the refusal names the
       pointer: an alias or surface a routing cell names that is not declared, a cell
       whose surface is not its alias's, bands that do not partition the scores, a
       precedence that does not rank every alias, a snapshot date that is not a date).
@@ -107,6 +108,8 @@ resolves against --repo's root.
                    unread: reported, never a mismatch. within is primary, fallback,
                    recommended or none; match remains the primary compare. compares[].primary
                    names that value; compares[].recommended is its deprecated alias.
+                   mismatch.within.set supplies priority (default primary, recommended,
+                   fallback); all-unread has within none, readable false, match unchanged.
                    picks.fallbackRule requires another provider OR surface (including
                    aggregate fallback substitution by precedence). Actionable aliases need
                    line; escalation must name an actionable alias or be null.

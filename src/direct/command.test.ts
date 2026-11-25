@@ -223,7 +223,7 @@ describe("nen direct resolve --json", () => {
     const result = await verdict("--json");
     expect(result.code).toBe(0);
     const document = JSON.parse(result.out.join("\n")) as Json;
-    expect(Object.keys(document)).toEqual(["contract", "inputs", "undirectable", "domain", "pairs", "aggregate", "winner", "runnerUp", "effort", "mismatch", "effortId", "record"]);
+    expect(Object.keys(document)).toEqual(["contract", "inputs", "undirectable", "domain", "pairs", "aggregate", "winner", "runnerUp", "recommended", "effort", "mismatch", "effortId", "record"]);
     expect(document["contract"]).toBe("nen.direct.resolve/v0.1");
     expect(document["inputs"]).toEqual({ langs: ["swift"], jobs: ["implementation", "unit-tests"], kind: "product", role: null, labels: [], surface: null, model: null, effort: null });
     expect(document["undirectable"]).toBeNull();
@@ -252,6 +252,7 @@ describe("nen direct resolve --json", () => {
     expect(document["mismatch"]).toEqual({
       match: false,
       within: "none",
+      readable: true,
       compares: [
         { field: "surface", session: "codex", recommended: "claude-code", primary: "claude-code", verdict: "mismatch" },
         { field: "model", session: "opus", recommended: "opus", primary: "opus", verdict: "match" },

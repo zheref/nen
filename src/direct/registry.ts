@@ -169,9 +169,13 @@ export interface RoutingEntry {
 export const MISMATCH_COMPARES: readonly string[] = ["surface", "model", "effort"];
 export const MISMATCH_LEDGER = ".nen/direct/<effort>.json";
 
+export const WITHIN_PICKS = ["primary", "recommended", "fallback"] as const;
+export type WithinPick = typeof WITHIN_PICKS[number];
+
 export interface MismatchPolicy {
   readonly compares: readonly string[];
   readonly ledger: string;
+  readonly within?: readonly WithinPick[];
 }
 
 export interface PickPolicy {
@@ -464,7 +468,9 @@ function parseMismatch(path: string, value: unknown): MismatchPolicy {
   if (ledger !== MISMATCH_LEDGER) {
     throw new SchemaError(path, "mismatch.ledger", `must be ${describeValue(MISMATCH_LEDGER)}, the one ledger this binary writes; got ${describeValue(ledger)}`);
   }
-  return { compares, ledger };
+  const within = record["within"] === undefined ? [...WITHIN_PICKS] : requireStringList(path, "mismatch.within.set", requireRecord(path, "mismatch.within", record["within"])["set"]);
+  if (within.length !== WITHIN_PICKS.length || WITHIN_PICKS.some((pick): boolean => !within.includes(pick))) throw new SchemaError(path, "mismatch.within.set", "must list primary, recommended and fallback exactly once, in comparison order");
+  return { compares, ledger, within: within as WithinPick[] };
 }
 
 function parseSide(

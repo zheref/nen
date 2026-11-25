@@ -58,7 +58,7 @@ function mismatchLine(mismatch: Mismatch): string {
     if (compare.verdict === "unread") return `${compare.field} unread`;
     return `${compare.field} ${compare.session} != ${compare.recommended ?? "-"}`;
   });
-  return `mismatch: ${mismatch.match ? "no" : "yes"} (${parts.join("; ")})${mismatch.within === undefined ? "" : `; within: ${mismatch.within}`}`;
+  return `mismatch: ${mismatch.match ? "no" : "yes"} (${parts.join("; ")})${mismatch.within === undefined ? "" : `; within: ${mismatch.within}`}${mismatch.readable === false ? "; unread: no readable compare" : ""}`;
 }
 
 export function renderResolution(resolution: Resolution, recorded: string | null): string[] {
@@ -163,6 +163,7 @@ export function runResolve(context: CommandContext): number {
     aggregate: resolution.aggregate,
     winner: resolution.winner,
     runnerUp: resolution.runnerUp,
+    recommended: resolution.recommended,
     effort: resolution.effort,
     mismatch: resolution.mismatch,
     effortId: record ?? null,

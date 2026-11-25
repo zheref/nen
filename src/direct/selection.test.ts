@@ -1,8 +1,9 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { loadClassifyTaxonomy } from "../classify/taxonomy.js";
 import { loadDirectRegistry, parseDirectRegistry } from "./registry.js";
 import { resolveDirection } from "./resolve.js";
-import { miniFiles, miniRegistryJson, side, type Json } from "./fixtures/harness.js";
+import { capture, consumerRepo, miniFiles, miniRegistryJson, side, type Json } from "./fixtures/harness.js";
 
 // Registry vocabulary and thresholds are fixture data, not built into the resolver.
 function policy(v: Json): void {
@@ -60,6 +61,30 @@ describe("NN#389 registry-owned selection", () => {
   it("AC-2 a wrong effort rejects a fallback model, and absent session stays null", () => {
     expect(direct(["plain"], undefined, undefined, { surface: "s2", model: "exec", effort: "max" }).mismatch.within).toBe("none");
     expect(direct(["plain"]).mismatch).toBeNull();
+  });
+  it("AC-1 exposes recommended through JSON and the durable record, including an empty job axis", async () => {
+    const files = miniFiles((v): void => { policy(v); v.surfaces.s1.modelsKey = "claude"; });
+    const repo = consumerRepo({ claude: { deep: "top", frontier: "maxx" } });
+    const args = ["direct", "resolve", "--registry", files.registryPath, "--taxonomy", files.taxonomyPath, "--repo", repo, "--kind", "product", "--lang", "alpha", "--json"];
+    const result = await capture([...args, "--job", "heavy", "--record", "NN-389"]);
+    expect(result.code).toBe(0);
+    const document = JSON.parse(result.out.join("\n")) as Json;
+    expect(document.recommended).toMatchObject({ alias: "A_MAX", surfaceAlias: "maxx" });
+    expect(JSON.parse(readFileSync(document.record, "utf8")).recommended).toEqual(document.recommended);
+    const empty = await capture(args);
+    expect(empty.code).toBe(0);
+    expect(JSON.parse(empty.out.join("\n")).recommended).toBeNull();
+  });
+  it("AC-2 recommended wins a coinciding fallback, following the declared set order", () => {
+    const edit = (v: Json): void => { v.aliases.A_TOP.escalation = "A_EXEC"; v.mismatch.within = { set: ["primary", "recommended", "fallback"] }; };
+    expect(direct(["heavy"], edit, undefined, { surface: "s2", model: "exec", effort: null }).mismatch.within).toBe("recommended");
+    expect(direct(["heavy"], (v): void => { edit(v); v.mismatch.within.set = ["primary", "fallback", "recommended"]; }, undefined, { surface: "s2", model: "exec", effort: null }).mismatch.within).toBe("fallback");
+  });
+  it("AC-2 all-unread retains legacy match without claiming membership", () => {
+    expect(direct(["plain"], undefined, undefined, { surface: "unread", model: "unread", effort: "unread" }).mismatch).toMatchObject({ match: true, within: "none", readable: false });
+  });
+  it("refuses a duplicate or incomplete within-set order", () => {
+    expect((): void => registry((v): void => { v.mismatch.within = { set: ["primary", "primary", "fallback"] }; })).toThrow(/mismatch.within.set/);
   });
   it("AC-3 companion rows remain visible but cannot change domain, effort, tally or picks", () => {
     const mixed = direct(["plain", "heavy", "port-only"], undefined, companion);

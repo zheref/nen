@@ -62,6 +62,7 @@ import {
   MANY_JOBS,
   MANY_LANGS,
   SHARED_CELL,
+  WITHIN_PICKS,
   type DirectRegistry,
   type RoutedSide,
   type RoutingEntry,
@@ -629,6 +630,7 @@ export interface Mismatch {
   /** One entry per value the session gave, in the order surface, model, effort. */
   readonly compares: readonly Compare[];
   readonly within?: "primary" | "fallback" | "recommended" | "none";
+  readonly readable?: boolean;
 }
 
 /**
@@ -755,10 +757,21 @@ export function resolveInDomain(
   const escalation = own(registry.aliases, winner.alias)?.escalation;
   const recommended = shouldEscalate && escalation != null ? resolveSide(registry, models, escalation, [], inputs.langs, scored.level) : winner;
   const primaryCompare = compareSession(registry, session, winner, scored.level);
+  const comparisons = {
+    primary: primaryCompare,
+    recommended: compareSession(registry, session, recommended, scored.level),
+    fallback: runnerUp === null ? null : compareSession(registry, session, runnerUp, scored.level),
+  };
+  const readable = Object.values(comparisons).some((compare): boolean => compare?.compares.some((entry): boolean => entry.verdict !== "unread") ?? false);
+  const within = (registry.mismatch.within ?? WITHIN_PICKS).find((pick): boolean => {
+    const comparison = comparisons[pick];
+    return comparison?.match === true && comparison.compares.some((entry): boolean => entry.verdict === "match");
+  }) ?? "none";
   const mismatch: Mismatch | null = primaryCompare === null ? null : {
     ...primaryCompare,
     compares: primaryCompare.compares.map((compare): Compare => ({ ...compare, primary: compare.recommended })),
-    within: primaryCompare.match ? "primary" : runnerUp !== null && compareSession(registry, session, runnerUp, scored.level)?.match ? "fallback" : compareSession(registry, session, recommended, scored.level)?.match ? "recommended" : "none",
+    within,
+    readable,
   };
   return {
     inputs,
