@@ -91,8 +91,8 @@ parse, and refuse an unparseable line with the corrected line ready to paste.
                      before it, and was silently dropped at ok:true.
   --line <text>      The invocation to parse. MAY BE EMPTY only when every
                      clause, including its introducing literal, is optional:
-                     '[at <gate>]' accepts an empty line, but 'at [<gate>]'
-                     requires 'at' (only the value is optional). Missing required
+                     '[at <gate>]' accepts an empty line, but the leading 'at' in
+                     'at [<gate>]' is required (only its value is optional). Missing required
                      literals refuse at exit 2 with a corrected line. Word literals
                      match whole whitespace-delimited tokens: 'backlog-loop' does
                      not supply the literal 'backlog'. Symbol separators retain

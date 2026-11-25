@@ -551,3 +551,26 @@ describe("NN#366 literal boundaries", () => {
     expect((await capture(["parse", "classify", "--grammar", "[backlog <repo>]", "--line", ""])).code).toBe(0);
   });
 });
+
+
+describe("NN#366 review edge cases", () => {
+  it.each(["戻る先", "部署-prod"])("refuses a longer token following a non-ASCII literal: %s", async (line) => {
+    const literal = line.startsWith("戻る") ? "戻る" : "部署";
+    expect((await capture(["parse", "demo", "--grammar", `${literal} [<repo>]`, "--line", line])).code).toBe(2);
+  });
+  it.each(["戻る", "部署"])("accepts a complete non-ASCII literal: %s", async (literal) => {
+    expect((await capture(["parse", "demo", "--grammar", `${literal} [<repo>]`, "--line", literal])).code).toBe(0);
+    expect((await capture(["parse", "demo", "--grammar", `${literal} [<repo>]`, "--line", `${literal} target`])).code).toBe(0);
+  });
+  it.each(["at", "at first", "at first at second"])("reserves the required leading literal before a repeated optional one: %s", async (line) => {
+    const result = await capture(["parse", "demo", "--grammar", "at [<target>] [at <fallback>]", "--line", line], [], { json: true });
+    expect(result.code).toBe(0);
+    const value = JSON.parse(result.out.join("\n")) as { slots: { name: string; value: string }[] };
+    expect(value.slots).toEqual(line === "at" ? [] : line === "at first" ? [{ name: "target", value: "first", suffix: false }] : [{ name: "target", value: "first", suffix: false }, { name: "fallback", value: "second", suffix: false }]);
+  });
+  it("refuses a mixed word/symbol introducer rather than discarding its required word", async () => {
+    const result = await capture(["parse", "demo", "--grammar", "backlog [@<repo>]", "--line", ""]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/word.*symbol|symbol.*word/);
+  });
+});

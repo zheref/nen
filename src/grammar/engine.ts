@@ -84,15 +84,9 @@ export interface Slot {
   /**
    * True when the separator itself sits inside `[ ... ]` (`[@<gate>]`), so a
    * line may omit separator and slot together. False for a separator written
-   * OUTSIDE the brackets (`onto [<target-branch>]`): there the literal is
-   * required whenever the line says anything at all.
-   *
-   * "AT ALL" IS THE QUALIFICATION zheref/nen#170 added. On a grammar where
-   * every slot is bracketed, the EMPTY line omits the clause and its literal
-   * together and parses -- identically to the bare literal -- because the
-   * invocation with nothing in it is the ordinary one for such a skill. A
-   * grammar carrying one required slot is unaffected: the empty line still
-   * refuses, naming that slot.
+   * OUTSIDE the brackets (`onto [<target-branch>]`): a leading literal
+   * remains required even when its following value is optional. Later
+   * optional slots retain their existing clause-omission behavior.
    */
   readonly separatorOptional: boolean;
   readonly optional: boolean;
@@ -141,10 +135,9 @@ export class GrammarError extends Error {
 //   [ ... ]             an optional trailing clause -- a separator plus its slot
 //                       (`[@<gate>]`, `[every <mode>]`), a slot behind a literal
 //                       written outside the brackets (`onto [<target-branch>]`),
-//                       or literal words alone (`[then sweep]`). When EVERY slot
-//                       a template declares is bracketed, the empty line is a
-//                       complete invocation of it and parses with every clause
-//                       absent -- zheref/nen#170
+//                       or literal words alone (`[then sweep]`). An empty
+//                       invocation requires the leading literal itself to
+//                       be bracketed; optional values do not make it optional.
 //   [+]                 an optional literal suffix on the slot just declared,
 //                       recognised by its bracket group holding NOTHING ELSE
 //   <slot>{+}           a LIST slot (zheref/nen#410): one or more values joined
@@ -272,7 +265,7 @@ export function parseTemplate(template: string): Grammar {
     }
     if (inner === undefined) {
       // A literal.
-      if (/^[^A-Za-z0-9]+$/.test(raw)) {
+      if (/^[^\p{L}\p{N}]+$/u.test(raw)) {
         // `[+]` -- an optional literal suffix on the slot just declared -- is
         // recognised by its bracket group holding NOTHING ELSE: the next thing
         // after the literal must be the closing ']'. Requiring that lookahead is
@@ -325,6 +318,12 @@ export function parseTemplate(template: string): Grammar {
       };
       alternationPending = false;
       continue;
+    }
+
+    if (pendingSymbol !== null && pendingWords.length > 0) {
+      throw new GrammarError(
+        `template '${template}' is refused: words and a symbol both introduce <${name}>; one would discard the other. Use one introducer per slot, e.g. '${pendingWords.map((pending): string => pending.word).join(" ")} [<${name}>]' or '[${pendingSymbol.symbol}<${name}>]'.`,
+      );
     }
 
     if (pendingSymbol === null && new Set(pendingWords.map((pending): number => pending.depth)).size > 1) {
@@ -627,6 +626,13 @@ function parseInvocationOnce(skill: string, grammar: Grammar, line: string): Inv
   // clause, which is resolved exactly like a separator that captures nothing --
   // is resolved against what the entries to its right have not already taken.
   let remaining = line.trim();
+  const first = grammar.slots[0];
+  // The required leading word belongs to the first slot even when a later
+  // optional clause repeats it. Reserve it before right-to-left splitting.
+  const leadingTail = first !== undefined && first.separator !== null && first.separatorKind === "word" && !first.separatorOptional
+    ? stripLeading(remaining, first.separator, first.separatorKind, first.firstAnchored === true)
+    : null;
+  if (leadingTail !== null) remaining = leadingTail.trim();
   const order = templateOrder(grammar);
   for (let at = order.length - 1; at >= 0; at -= 1) {
     const entry = order[at];
@@ -675,10 +681,9 @@ function parseInvocationOnce(skill: string, grammar: Grammar, line: string): Inv
   // `onto [<target-branch>]` + 'onto' reported target-branch: onto. The literal
   // is stripped (or its absence ruled on) FIRST, so the separator can never be
   // read as the value.
-  const first = grammar.slots[0];
   if (first !== undefined) {
     let text: string | null = remaining.trim();
-    if (first.separator !== null) {
+    if (first.separator !== null && leadingTail === null) {
       const stripped = stripLeading(text, first.separator, first.separatorKind, first.firstAnchored === true);
       if (stripped !== null) {
         text = stripped.trim();
