@@ -1,16 +1,15 @@
 // src/scorecard/command.test.ts -- `nen scorecard trend|snapshot` end to end
 // over scripted `gh` answers and a catalogue on disk (zheref/hatsu#619).
-import { afterAll, describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { describe, expect, it } from "vitest";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import { mergedPullsArgv, PULL_LIMIT, scorecardCommand } from "./command.js";
 import { parseWeek, weeksThrough } from "./scorecard.js";
+import { makeTempDir } from "../testing/tempdir.js";
 
-const scratch = mkdtempSync(join(tmpdir(), "nen-scorecard-"));
-afterAll((): void => rmSync(scratch, { recursive: true, force: true }));
+const scratch = makeTempDir("nen-scorecard-");
 let n = 0;
 
 const NOW = new Date("2026-11-21T12:00:00Z"); // a Saturday in 2026-W47
