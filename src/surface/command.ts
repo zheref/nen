@@ -64,6 +64,7 @@ import {
 } from "./plugin.js";
 import { findSurface, SURFACES, surfaceNames, type SurfaceRow } from "./rules.js";
 import { CAPABILITIES, capabilityNames, findCapabilities, renderCapabilities } from "./capabilities.js";
+import { runMarker } from "./marker.js";
 
 export const GENERATE_CONTRACT = "nen.surface.mirror.generate/v0.1";
 export const CHECK_CONTRACT = "nen.surface.mirror.check/v0.1";
@@ -91,6 +92,8 @@ const USAGE = `nen surface -- mirror a skills directory into another agent surfa
 
 usage:
 ${INSTALL_USAGE}
+  nen surface marker --file <path> [--repo <path>] [--json]
+  nen surface marker --under <directory> --surface <name> [--repo <path>] [--json]
   nen surface capabilities --surface <name> [--json]
   nen surface capabilities [--json]                 (every surface)
   nen surface mirror generate --source <dir> --surface <name> --out <dir>
@@ -110,6 +113,14 @@ ${INSTALL_USAGE}
                               --trees <dir,dir,...> [--config-dir <dir>]
                               [--independent-source <dir>] [--repo <path>]
                               [--json]
+
+marker: read the generator's marker without comparing or changing the file.
+--file reports generated, surface, stamp and grammar (nen-surface-mirror,
+retired-antigravity, or null). --under searches regular files recursively for
+current markers of --surface, listing matches and skipped links/special files.
+Symlink inputs are refused; directory entries that are links are never followed.
+Exit 0: current generation found; 1: none (including retired markers); 2: invalid
+arguments or a read failure. A marker quoted later in the body is not generation.
 
 capabilities: the primitives a RUNNING SESSION on a surface has -- which
 tool asks a human a multiple-choice question, which raises a subagent, which
@@ -335,7 +346,7 @@ const SUBCOMMAND_FLAGS: Readonly<Record<string, { values: readonly string[]; boo
 };
 
 const FAMILY_VALUES = [
-  ...new Set([...Object.values(SUBCOMMAND_FLAGS).flatMap((spec): readonly string[] => spec.values), ...INSTALL_FAMILY_VALUES]),
+  ...new Set([...Object.values(SUBCOMMAND_FLAGS).flatMap((spec): readonly string[] => spec.values), ...INSTALL_FAMILY_VALUES, "file", "under"]),
 ].sort();
 const FAMILY_BOOLEANS = [
   ...new Set([...Object.values(SUBCOMMAND_FLAGS).flatMap((spec): readonly string[] => spec.booleans), ...INSTALL_FAMILY_BOOLEANS]),
@@ -652,12 +663,13 @@ export const surfaceCommand: Command = {
     { verb: "surface status", code: 5, meaning: "the surface's CLI could not be started; nothing is known to be served" },
   ],
   name: "surface",
-  subcommands: ["mirror", "capabilities", "install", "status"],
+  subcommands: ["mirror", "capabilities", "install", "status", "marker"],
   summary: "Mirror a skills directory into another agent surface's layout, check it for drift, and make or report a host's first-party plugin install.",
   usage: USAGE,
   flags: { values: FAMILY_VALUES, booleans: FAMILY_BOOLEANS },
   run(context: CommandContext): number {
-    const family = requireSubcommand("surface", context.args, ["mirror", "capabilities", "install", "status"]);
+    const family = requireSubcommand("surface", context.args, ["mirror", "capabilities", "install", "status", "marker"]);
+    if (family === "marker") return runMarker(context);
     if (family === "capabilities") return runCapabilities(context);
     if (family === "install" || family === "status") {
       try {

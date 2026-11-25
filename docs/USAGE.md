@@ -12,7 +12,7 @@ repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
 what each version changed: 50 command
-families, 182 verbs, every flag checked against that binary.
+families, 183 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -1076,7 +1076,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 182 verbs, grouped as the README groups them. **Reads** is what a
+All 183 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -1183,6 +1183,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`runner`](#family-runner) | [`nen runner relabel`](#nen-runner-relabel) | add a pool's own label, `pool-<id>`, to runners registered before it existed (#340) -- only runners named with `--runner` (`--run` without it is exit 2); a dry run without `--runner` lists the candidates; every write read back | nen/workflow.json (runners), github (gh api GET runners and runners/<id>/labels; gh api POST runners/<id>/labels with --run) | yes |
 | [`surface`](#family-surface) | [`nen surface install`](#nen-surface-install) | make, re-point or report a host's FIRST-PARTY install of a plugin from a checkout, per surface: the Claude Code skills-directory link with the hand-over of a prior marketplace copy, the Codex marketplace and plugin, the Antigravity global plugin link -- never replacing what it did not make, never editing a settings file, every write read back | the checkout's manifests; the surface's own directory (--config-dir) and registry files; claude / codex / agy and one `git rev-parse`; writes a link under --config-dir and runs the surface's install CLI unless --dry-run; no gh | yes |
 | [`surface`](#family-surface) | [`nen surface status`](#nen-surface-status) | the version each surface serves for a plugin, read back from `claude plugin list --json`, `codex plugin list` or the linked `plugin.json`, and whether it is a given checkout; with `--trees`, the copies Claude Code SERVES judged as `check --plugin` judges them | the surface's directory and registry files; claude / codex / agy list and validate commands; with --trees, the copies and the source; writes nothing; no gh | yes |
+| [`surface`](#family-surface) | [`nen surface marker`](#nen-surface-marker) | read a placed file’s surface and grammar, or find current generated files under a directory | placed files | yes |
 | [`surface`](#family-surface) | [`nen surface capabilities`](#nen-surface-capabilities) | what a running session on a surface can do -- picker, subagent, hook events and decision key, worktree isolation, artifact, notify, permissions file and shape, agent model key, rules file and limit, description budget -- as data with a citation per row | nothing; a table this binary ships | yes |
 | [`run`](#family-run) | [`nen run rerun-failed`](#nen-run-rerun-failed) | re-run a workflow run's failed jobs (gh run rerun --failed) | github (gh) | yes |
 | [`run`](#family-run) | [`nen run start`](#nen-run-start) | start a batch run's manifest (`nen.run/v0.1`) at `<git-common-dir>/.nen/runs/<id>.json` with its repository and launch-time idle answers (HR-5); the same answers again is the resume, other answers or another repository refused | git (rev-parse --git-common-dir); writes the manifest unless --dry-run | yes |
@@ -19340,6 +19341,32 @@ declares it — `network: not declared` otherwise) and `config.toml.fragment`
 every persona (the tier under `modelMapped`), `hooks.json`, `cli.json`
 (`Shell(exe:args)` rows plus whatever `surfaces.cursor` declares) and
 `rules/rules.mdc`.
+
+### `nen surface marker`
+
+Read which surface a placed file was generated for, using the same marker reader as
+`surface mirror`. This performs no comparison, refresh or write.
+
+```sh
+nen surface marker --file <path> [--repo <path>] [--json]
+nen surface marker --under <directory> --surface <name> [--repo <path>] [--json]
+```
+
+Relative paths resolve against `--repo` when supplied, otherwise the working directory.
+The file result (`nen.surface.marker/v0.1`) contains `generated`, `surface`, `stamp`
+and `grammar`: `nen-surface-mirror`, `retired-antigravity`, or null. Current markers
+are read at the first body line after frontmatter, a TOML first line, a script's
+second line, or a JSON top-level `$generated` property or native hook-definition
+name. Quoted markers elsewhere do not count. Retired Antigravity markdown, script
+and JSON-description markers report their grammar and surface with `generated: false`.
+
+Directory results list sorted relative `matches` for current markers of the named
+surface and `skipped` symlinks/special files. Symlink inputs are refused; entries
+inside the directory are never followed through links. A read failure refuses the
+whole report, even if another file matched. Exit **0** means a current marker was
+found, **1** means none (including a retired marker), and **2** means invalid
+arguments or a filesystem read failure. A file's marker is provenance metadata,
+not a content-integrity or authenticity check.
 
 ### `nen surface capabilities`
 
