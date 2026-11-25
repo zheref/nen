@@ -1,0 +1,1 @@
+- Verify report readiness through the real in-process gate when no readiness check exists, and prove a check verdict never opens the computed authority (#220).
