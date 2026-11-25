@@ -60,13 +60,13 @@ describe("nen parse <skill> -- the generic --grammar/--line engine (main's own f
   // `--line "at"` exited 0 with the clause absent -- so the ORDINARY
   // invocation of such a skill was the one spelling a caller had to know.
   it("accepts an EMPTY --line when every clause of the grammar is optional", async () => {
-    const empty = await capture(["parse", "jutaisho", "--grammar", "at [<gate:G2|G4>]", "--line", ""]);
+    const empty = await capture(["parse", "jutaisho", "--grammar", "[at <gate:G2|G4>]", "--line", ""]);
     expect(empty.code).toBe(0);
     expect(empty.out).toEqual(["gate: (clause absent)"]);
     expect(empty.err).toEqual([]);
 
     // Identical to the bare-literal spelling, which is the point.
-    const bare = await capture(["parse", "jutaisho", "--grammar", "at [<gate:G2|G4>]", "--line", "at"]);
+    const bare = await capture(["parse", "jutaisho", "--grammar", "[at <gate:G2|G4>]", "--line", "at"]);
     expect(bare.code).toBe(0);
     expect(bare.out).toEqual(empty.out);
   });
@@ -530,4 +530,24 @@ it("keeps an explicit kage-bunshin grammar usable for existing callers", async (
   const result = await capture(["parse", "kage-bunshin", "--grammar", "<urls>{ } --<mode:sequential|parallel> [--cap <cap>]", "--line", `${urls} --parallel`, "--json"], [], { json: true });
   expect(result.code).toBe(0);
   expect(JSON.parse(result.out.join("\n")).slots[0].items).toEqual(urls.split(" "));
+});
+
+
+describe("NN#366 literal boundaries", () => {
+  it.each(["backlog-loop stalls", "backlog_repo", "backlog/repo", "backlog.repo", "backlogé", "backlog:repo"])("AC-1 refuses a token containing the literal: %s", async (line) => {
+    const result = await capture(["parse", "classify", "--grammar", "backlog [<repo>]", "--line", line]);
+    expect(result.code).toBe(2);
+    expect(result.out.join("\n") + result.err.join("\n")).toContain("classify backlog");
+  });
+  it.each(["", "  ", "\t"])("AC-2 requires an unbracketed leading literal: %j", async (line) => {
+    const result = await capture(["parse", "classify", "--grammar", "backlog [<repo>]", "--line", line]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("literal 'backlog'");
+  });
+  it.each(["backlog", "BACKLOG", "backlog\tzheref/nen", "backlog board renders twice"])("preserves complete literal tokens and free tails: %s", async (line) => {
+    expect((await capture(["parse", "classify", "--grammar", "backlog [<repo>]", "--line", line])).code).toBe(0);
+  });
+  it("fully bracketed clauses remain optional", async () => {
+    expect((await capture(["parse", "classify", "--grammar", "[backlog <repo>]", "--line", ""])).code).toBe(0);
+  });
 });

@@ -17609,15 +17609,19 @@ nen parse <skill> --grammar <template> --line <invocation>
 | `--grammar <template>` | except for `kage-bunshin` | The template, exactly as the skill documents it. | A template the engine cannot split unambiguously is a usage error (exit 2), same as an unparseable `--line`. |
 | `--line <text>` | yes | The invocation to parse. | **May be empty** when every clause of the grammar is optional -- see below. |
 
-**An empty `--line` is a complete invocation when nothing is required.** For a
-grammar whose every slot is bracketed (`at [<gate:…>]`), `--line ""` and
-`--line "at"` parse **identically**, both reporting `gate: (clause absent)` at
-exit 0: the invocation with nothing in it is the ordinary one for a skill whose
-only clause is optional, and a caller should not have to know to spell a bare
-`at`. This holds however the template writes the separator -- inside the
-brackets (`[onto <slot>]`) or outside them (`at [<gate>]`). A grammar carrying a
-**required** clause is unaffected: an empty line still refuses at exit 2, naming
-the slot, with the corrected line to paste.
+**An unbracketed leading literal is required.** `backlog [<repo>]` accepts
+`backlog` or `backlog zheref/nen`, but refuses an empty or whitespace-only `--line`
+at exit 2 with a corrected line. Only the value is bracketed. To make the entire
+clause optional, write `[backlog <repo>]`; that grammar still accepts an empty line.
+Required value slots continue to refuse when their values are missing.
+
+**Word literals match whole whitespace-delimited tokens.** A literal `backlog`
+does not match `backlog-loop`, `backlog_repo`, `backlog/repo` or `backlogé`.
+Matching remains case-insensitive, internal phrase whitespace stays flexible,
+and ordinary later separators use the last complete occurrence. Marked
+first-occurrence anchors keep their existing case-sensitive rule. Symbol separators
+such as `@` keep their own adjacency rules. A free slot still accepts a multiword tail;
+repository-name validation remains the repository resolver's job.
 
 **Concrete correction follow-up.** The merged list/alternation grammar remains the baseline. For example, `hatsu@g4+model/gpt` against `<repo>[@<gate:G4|G5>{+}|<severity:high|low>[+]|<label>][#<labels>{&}]` refuses but offers `hatsu@G4#model/gpt`. `hatsu@high++` offers `hatsu@high+`; malformed lists with empty items retain their concrete, normalized items. Mixed alternatives such as `hatsu@high+g4` offer no invented rewrite. Recovery uses the caller's vocabulary and joiners, and a free tail can move only into an immediately following declared free list. Every offered structured correction must reparse with the intended normalized slot names, values, alternatives, suffixes, list items and literal-clause presence unchanged. If relocating a symbol or whole-word separator changes those boundaries, no correction is offered. Missing or empty required structured positions also yield `corrected: null`. Malformed free-list alternatives normalize empty items only when the same free alternative remains selected. Accepted optional empty segments and successful parse shapes remain unchanged.
 

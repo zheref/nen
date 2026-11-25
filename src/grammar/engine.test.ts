@@ -260,26 +260,17 @@ describe("parseInvocation -- single-slot templates with a bracketed clause (zher
     it("refuses a line that does not open with the literal", () => {
       const result = parseInvocation("tensho", grammar, "main");
       expect(result.ok).toBe(false);
-      // Since zheref/nen#170 this grammar requires NOTHING, so the refusal
-      // offers both ways out rather than only the literal: 'main' is neither
-      // the clause nor the empty line.
-      expect(result.problems[0]).toMatch(/must open with 'onto' to supply <target-branch>, or omit that clause entirely/);
+      expect(result.problems[0]).toMatch(/must open with the literal 'onto'/);
       expect(result.corrected).toBe("tensho onto");
     });
 
-    it("an EMPTY line parses, with the clause absent, exactly as the bare literal does", () => {
-      // The whole of zheref/nen#170. `at [<gate>]` is the same shape, and the
-      // empty invocation is the ORDINARY one for a skill whose only clause is
-      // optional -- a caller should not have to know to spell a bare 'onto'.
+    it("requires the unbracketed introducing literal on an empty line", () => {
       const empty = parseInvocation("tensho", grammar, "");
-      const bare = parseInvocation("tensho", grammar, "onto");
-      expect(empty.ok).toBe(true);
+      expect(empty.ok).toBe(false);
       expect(empty.slots).toEqual([]);
-      expect(empty.missing).toEqual([]);
-      expect(empty.echo).toEqual(["target-branch: (clause absent)"]);
+      expect(empty.problems.join(" ")).toContain("literal 'onto'");
       expect(empty.corrected).toBe("tensho onto");
-      // Identical, field for field, but for the line each was given.
-      expect({ ...empty, line: "" }).toEqual({ ...bare, line: "" });
+      expect(parseInvocation("tensho", grammar, "onto").ok).toBe(true);
     });
   });
 
@@ -380,5 +371,16 @@ describe("parseTemplate -- a later slot with no separator (zheref/nen#419)", () 
     expect(parseInvocation("s", parseTemplate("<a> then <b>"), "p then q").slots.map((s) => [s.name, s.value])).toEqual([["a", "p"], ["b", "q"]]);
     expect(parseTemplate("<a>{+}").slots[0]?.joiner).toBe("+");
     expect(parseTemplate("<a:x|y>|<b>").slots).toHaveLength(1);
+  });
+});
+
+
+describe("NN#366 word separators are complete tokens", () => {
+  it.each(["before-until after", "before until-after", "before until_after", "before until/after", "before éuntil after", "before untilé after"])("does not split %s", (line) => {
+    expect(splitLastWord(line, "until")).toBeNull();
+  });
+  it("keeps case-insensitive last occurrence and flexible whitespace", () => {
+    expect(splitLastWord("a UNTIL b until\tc", "until")).toEqual({ head: "a UNTIL b ", tail: "\tc" });
+    expect(splitLastWord("a UP\tTO c", "up to")).toEqual({ head: "a ", tail: " c" });
   });
 });

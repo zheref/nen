@@ -441,7 +441,7 @@ function escapeRegex(value: string): string {
  */
 export function splitLastWord(text: string, phrase: string): { head: string; tail: string } | null {
   const words = phrase.trim().split(/\s+/).map(escapeRegex);
-  const pattern = new RegExp(`(?<![A-Za-z0-9])${words.join("\\s+")}(?![A-Za-z0-9])`, "gi");
+  const pattern = new RegExp(`(?<!\\S)${words.join("\\s+")}(?=\\s|$)`, "gi");
   return lastSplit(text, pattern);
 }
 
@@ -487,7 +487,7 @@ function stripLeading(text: string, separator: string, kind: "word" | "symbol" |
     return text.startsWith(separator) ? text.slice(separator.length) : null;
   }
   const words = separator.trim().split(/\s+/).map(escapeRegex);
-  const pattern = caseSensitive ? firstWordPattern(separator, true) : new RegExp(`^${words.join("\\s+")}(?![A-Za-z0-9])`, "i");
+  const pattern = caseSensitive ? firstWordPattern(separator, true) : new RegExp(`^${words.join("\\s+")}(?=\\s|$)`, "i");
   const hit = pattern.exec(text);
   if (hit === null) return null;
   return text.slice(hit[0].length);
@@ -620,16 +620,8 @@ function parseInvocationOnce(skill: string, grammar: Grammar, line: string): Inv
   const missing: string[] = [];
   const problems: string[] = [];
   const clausePresent: boolean[] = grammar.clauses.map((): boolean => false);
-  // A GRAMMAR WITH NOTHING REQUIRED IN IT HAS AN EMPTY INVOCATION (zheref/nen#170).
-  // `at [<gate>]` used to refuse `--line ""` -- "the line must open with the
-  // literal 'at'" -- while `--line "at"` parsed with the clause absent, so the
-  // ordinary invocation of a skill whose only clause is optional was the one
-  // spelling a caller had to be told about. Literal-only `[ ... ]` clauses are
-  // optional by construction and take no part in this; it is the SLOTS that
-  // decide, and when every one of them is bracketed the whole line may be
-  // omitted. A grammar carrying one required slot still refuses, at 2, with
-  // that slot named -- which is the check below, unchanged.
-  const nothingRequired = grammar.slots.every((slot): boolean => slot.optional);
+  // Brackets apply only to what they enclose: `at [<gate>]` requires `at`,
+  // while `[at <gate>]` may be omitted altogether (NN#366).
 
   // RIGHT TO LEFT (see the header). Each separator -- and each literal-only
   // clause, which is resolved exactly like a separator that captures nothing --
@@ -690,11 +682,8 @@ function parseInvocationOnce(skill: string, grammar: Grammar, line: string): Inv
       const stripped = stripLeading(text, first.separator, first.separatorKind, first.firstAnchored === true);
       if (stripped !== null) {
         text = stripped.trim();
-      } else if ((first.separatorOptional || nothingRequired) && first.optional) {
-        // The whole clause is omissible: either the template bracketed the
-        // separator too (`[onto <slot>]`), or the separator is outside the
-        // brackets (`at [<gate>]`) and NOTHING in this grammar is required, so
-        // an empty line supplies nothing and that is a complete invocation.
+      } else if (first.separatorOptional && first.optional) {
+        // Only a bracketed separator makes the whole clause omissible.
         // Text that is neither the clause nor nothing belongs to no slot.
         if (text !== "") {
           problems.push(
