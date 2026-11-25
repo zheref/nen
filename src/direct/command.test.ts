@@ -87,9 +87,9 @@ describe("nen direct registry", () => {
     expect(document["counts"]).toEqual({ aliases: 10, routingJobs: 39, routingCells: 204 });
   });
 
-  it("includes every alias's exact declared line, including explicit null", async () => {
+  it("includes every alias's exact declared line, including explicit reviewer null", async () => {
     const value = JSON.parse(readFileSync(REAL_REGISTRY, "utf8")) as Json;
-    Object.values(value["aliases"] as Record<string, Json>).forEach((alias, index) => { alias["line"] = index === 0 ? null : `fixture-line-${index}`; });
+    Object.values(value["aliases"] as Record<string, Json>).forEach((alias, index) => { alias["line"] = alias["reviewer"] === true ? null : `fixture-line-${index}`; });
     const repo = tmpRepo({ "reg.json": value });
     const result = await capture(["direct", "registry", "--registry", "reg.json", "--repo", repo, "--json"]);
     expect(result.code).toBe(0);
@@ -251,10 +251,11 @@ describe("nen direct resolve --json", () => {
     const document = JSON.parse((await verdict("--json", "--surface", "codex", "--model", "opus", "--effort", "unread")).out.join("\n")) as Json;
     expect(document["mismatch"]).toEqual({
       match: false,
+      within: "none",
       compares: [
-        { field: "surface", session: "codex", recommended: "claude-code", verdict: "mismatch" },
-        { field: "model", session: "opus", recommended: "opus", verdict: "match" },
-        { field: "effort", session: "unread", recommended: "low", verdict: "unread" },
+        { field: "surface", session: "codex", recommended: "claude-code", primary: "claude-code", verdict: "mismatch" },
+        { field: "model", session: "opus", recommended: "opus", primary: "opus", verdict: "match" },
+        { field: "effort", session: "unread", recommended: "low", primary: "low", verdict: "unread" },
       ],
     });
   });

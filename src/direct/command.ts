@@ -84,6 +84,12 @@ resolves against --repo's root.
                    the winning pairs' most frequent runner-up. A reviewer alias is
                    never the winner: a pair it wins counts for its stand-in, or is
                    skipped and the skip is reported;
+        companions taxonomy jobs marked companion: true keep their pair rows and
+                   companions.role. Mixed requests exclude them from domain, tally,
+                   effort and picks; companion-only requests still direct themselves;
+        recommended beside winner/runnerUp, the pick from picks.recommended.when.anyOf
+                   (maxJobWeight or effortLevel), then aliases.<primary>.escalation,
+                   else primary. A null escalation keeps the primary;
         resolve    the winner's surface (its alias's), the model alias nen/workflow.json
                    spells for that surface and tier ('unspelled' when it does not), the
                    restart line (<alias> from the workflow, <level> from the effort map),
@@ -98,7 +104,12 @@ resolves against --repo's root.
                    the winner's spelled alias, --effort in DIAL space (both levels mapped
                    through the session surface's effort map, so a collapsed top equals
                    the dial below it). The literal 'unread' on a flag marks that compare
-                   unread: reported, never a mismatch.
+                   unread: reported, never a mismatch. within is primary, fallback,
+                   recommended or none; match remains the primary compare. compares[].primary
+                   names that value; compares[].recommended is its deprecated alias.
+                   picks.fallbackRule requires another provider OR surface (including
+                   aggregate fallback substitution by precedence). Actionable aliases need
+                   line; escalation must name an actionable alias or be null.
       An EMPTY --job (or none) is the answer 'undirectable: job axis empty' (winner,
       runner-up, effort and mismatch null; exit 0); an empty --lang reads the shared
       cell for every job. A mismatch is an ANSWER and exits 0; it never blocks.

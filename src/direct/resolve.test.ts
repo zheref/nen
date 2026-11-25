@@ -628,7 +628,7 @@ describe("compareSession -- a mismatch is an answer, compared in the session's o
     const result = direct(context(), inputs(), { surface: "s2", model: "x", effort: "max" });
     expect(result.mismatch?.compares.map((entry): string => entry.field)).toEqual(["surface", "model", "effort"]);
     const bare = direct(context((): void => {}, (): void => {}, {}), inputs(), { surface: null, model: "opus", effort: null });
-    expect(bare.mismatch?.compares).toEqual([{ field: "model", session: "opus", recommended: null, verdict: "unread" }]);
+    expect(bare.mismatch?.compares).toEqual([{ field: "model", session: "opus", recommended: null, primary: null, verdict: "unread" }]);
     expect(bare.mismatch?.match).toBe(true);
   });
 });

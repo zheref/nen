@@ -72,6 +72,7 @@
   "aliases": {
     "SEMANTIC_FRONTIER": {
       "provider": "anthropic",
+      "line": "claude",
       "family": "claude-opus",
       "surface": "claude-code",
       "tier": "deep",
@@ -79,6 +80,7 @@
     },
     "SEMANTIC_MAX": {
       "provider": "anthropic",
+      "line": "claude",
       "family": "claude-fable",
       "surface": "claude-code",
       "tier": "frontier",
@@ -86,6 +88,7 @@
     },
     "BALANCED_AUTHOR": {
       "provider": "anthropic",
+      "line": "claude",
       "family": "claude-sonnet",
       "surface": "claude-code",
       "tier": "fast",
@@ -93,6 +96,7 @@
     },
     "EXECUTION_FRONTIER": {
       "provider": "openai",
+      "line": "gpt",
       "family": "gpt-astra",
       "surface": "codex",
       "tier": "frontier",
@@ -100,6 +104,7 @@
     },
     "EXECUTION_VALUE": {
       "provider": "openai",
+      "line": "gpt",
       "family": "gpt-sol",
       "surface": "codex",
       "tier": "deep",
@@ -107,6 +112,7 @@
     },
     "VISUAL_ORCHESTRATOR": {
       "provider": "google",
+      "line": "gemini",
       "family": "gemini-pro",
       "surface": "antigravity",
       "tier": "deep",
@@ -114,6 +120,7 @@
     },
     "VISUAL_FALLBACK": {
       "provider": "google",
+      "line": "gemini",
       "family": "gemini-flash",
       "surface": "antigravity",
       "tier": "fast",
@@ -121,6 +128,7 @@
     },
     "MECHANICAL_EDITOR": {
       "provider": "cursor",
+      "line": "composer",
       "family": "composer",
       "surface": "cursor",
       "tier": "fast",

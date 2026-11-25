@@ -15,7 +15,7 @@ import { directCommand } from "../command.js";
 
 const FIXTURES = join(process.cwd(), "src", "direct", "fixtures");
 
-/** Hatsu's real registry and taxonomy, copied verbatim. */
+/** Historical Hatsu registry/taxonomy fixtures; the registry carries required line fields. */
 export const REAL_REGISTRY = join(FIXTURES, "direct.registry.json");
 export const REAL_TAXONOMY = join(FIXTURES, "classify.taxonomy.json");
 
@@ -192,12 +192,12 @@ export function miniRegistryJson(): Json {
       },
     },
     aliases: {
-      A_TOP: { provider: "p1", family: "f-top", surface: "s1", tier: "deep", selection: "the top author" },
-      A_MAX: { provider: "p1", family: "f-max", surface: "s1", tier: "frontier", selection: "the escalation" },
-      A_FAST: { provider: "p1", family: "f-fast", surface: "s1", tier: "fast", selection: "the fast author" },
-      A_EXEC: { provider: "p2", family: "f-exec", surface: "s2", tier: "deep", selection: "the executor" },
-      A_CHEAP: { provider: "p3", family: "f-cheap", surface: "s3", tier: "fast", selection: "the cheap editor" },
-      R_BOT: { provider: "p3", family: "f-bot", surface: null, tier: null, reviewer: true, selection: "a reviewer" },
+      A_TOP: { provider: "p1", line: "fixture-one", family: "f-top", surface: "s1", tier: "deep", selection: "the top author" },
+      A_MAX: { provider: "p1", line: "fixture-one", family: "f-max", surface: "s1", tier: "frontier", selection: "the escalation" },
+      A_FAST: { provider: "p1", line: "fixture-one", family: "f-fast", surface: "s1", tier: "fast", selection: "the fast author" },
+      A_EXEC: { provider: "p2", line: "fixture-two", family: "f-exec", surface: "s2", tier: "deep", selection: "the executor" },
+      A_CHEAP: { provider: "p3", line: "fixture-three", family: "f-cheap", surface: "s3", tier: "fast", selection: "the cheap editor" },
+      R_BOT: { provider: "p3", line: "fixture-three", family: "f-bot", surface: null, tier: null, reviewer: true, selection: "a reviewer" },
     },
     surfaces: {
       $comment: "metadata keys are skipped",

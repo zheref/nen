@@ -7596,6 +7596,28 @@ refusal names the pointer) or cannot be read; exit 2 when `--registry` is missin
 
 ### `nen direct resolve`
 
+The resolver also reports `recommended` beside `winner` and `runnerUp`, using the registry's
+`picks.recommended.when.anyOf` predicates (`maxJobWeight` or `effortLevel`). A matching predicate
+selects `aliases.<primary>.escalation`; a null escalation keeps the primary. Both `then` and `else`
+are validated, and unknown predicate shapes refuse at exit 1. Without this optional policy the
+recommended pick is the primary. Versions and prices are never queried by this command.
+
+`mismatch.within` is `primary | fallback | recommended | none`, in that precedence order, with each
+pick compared in the existing alias and effort-dial space. `match` still compares the primary.
+`compares[].primary` names that value; `compares[].recommended` remains its deprecated alias.
+
+Taxonomy jobs marked `companion: true` retain their pair rows, the flag and `companions.role` value
+(`null` if undeclared). When another job exists, companion jobs do not influence the domain,
+aggregate tally, effort or picks. Companion-only requests still direct themselves.
+
+When `picks.fallbackRule` is declared, every cell's actionable runner-up must differ from its
+primary in provider **or** surface; reviewer stand-ins are checked too. At the aggregate, a
+same-pool runner-up is replaced by the highest-precedence other-pool candidate among counted
+pairs' winners and runner-ups. `nen direct registry` also requires a nonempty `line` on every
+actionable alias and refuses escalation names that are unknown or refer to reviewer-only aliases.
+Older registries must supply their model-line declarations before loading; omitted recommendation
+policy and escalation fields remain supported.
+
 Answers "which model, where, at what effort" for one classification, reporting each step:
 
 1. **Domain.** The taxonomy's `domains.rule` rows are **structured data**, evaluated in `order`, **the
