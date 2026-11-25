@@ -120,7 +120,7 @@ describe("nen pr open -- refusals before anything is created", () => {
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toMatch(/has no upstream/);
     expect(result.err.join("\n")).toMatch(/nen wc publish --set-upstream/);
-    expect(result.err.join("\n")).toContain(root);
+    expect(result.err.join("\n")).toContain(JSON.stringify(root));
     expect(result.err.join("\n")).toContain("feature/work");
     expect(result.err.join("\n")).toContain("--repo <effort-checkout>");
     expect(result.err.join("\n")).not.toContain("never been published");
@@ -136,7 +136,7 @@ describe("nen pr open -- refusals before anything is created", () => {
       "--title-file", join(root, "title.txt"), "--body-file", join(root, "body.md")], null, false,
     { out: (): void => {}, err: (line): void => { errors.push(line); } }, withPrivateTarget(seams, "zheref/nen"));
     expect(code).toBe(2);
-    expect(errors.join("\n")).toContain(process.cwd());
+    expect(errors.join("\n")).toContain(JSON.stringify(process.cwd()));
     expect(errors.join("\n")).toContain("feature/work");
     expect(errors.join("\n")).toContain("--repo <effort-checkout>");
     expect(seams.calls.every((call) => call.cwd === process.cwd())).toBe(true);
@@ -149,8 +149,8 @@ describe("nen pr open -- refusals before anything is created", () => {
       { match: "git rev-parse --abbrev-ref feature/work@{upstream}", result: { code: 128 } },
     ]);
     expect(result.code).toBe(2);
-    expect(result.err.join("\n")).toContain(effort);
-    expect(result.err.join("\n")).not.toContain(caller);
+    expect(result.err.join("\n")).toContain(JSON.stringify(effort));
+    expect(result.err.join("\n")).not.toContain(JSON.stringify(caller));
     expect(result.seams.calls.every((call) => call.cwd === effort)).toBe(true);
     expect(calls(result.seams)).toEqual([
       "git symbolic-ref --short HEAD",
