@@ -1166,6 +1166,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`tag`](#family-tag) | [`nen tag cut`](#nen-tag-cut) | cut an annotated git tag pinned at an explicit SHA, never auto-pushed | git (tag/ls-remote/merge-base; --push also reaches origin) | yes |
 | [`fanout`](#family-fanout) | [`nen fanout compute`](#nen-fanout-compute) | which registered consumers (nen/repos.json) are affected by workflows changed in a release range | nen/repos.json, git diff, .github/workflows/ | yes |
 | [`fanout`](#family-fanout) | [`nen fanout record`](#nen-fanout-record) | the same computation, appended to an audit ledger file | nen/repos.json, git diff, .github/workflows/, ledger file | yes |
+| [`report`](#family-report) | [`nen report desk`](#nen-report-desk) | print a valid starting desk with typed optional fields and example judgement | no reads or writes | yes |
 | [`report`](#family-report) | [`nen report data`](#nen-report-data) | one document describing a branch against a base: commits, changed files (with a caller-supplied tier), the evidence seam, the lane's coverage report if it is on disk, the build proof, the last recorded stop, and -- only when one of the five register flags is given -- the issues and pull requests the effort is about; then where the effort is (worktree, stage, gate, turn, local clock), derived | git (rev-parse/symbolic-ref/remote get-url/log/diff), the zoneinfo file the zone names, nen/repos.json for the gate, nen/contract.json for the lane, .nen/proof/&lt;lane&gt;.json, .nen/last-stop.json, the declared coverage artifact, a caller-supplied --tiers file; under --target/--prs/--issues/--backlog also github (gh api, gh pr view) and nen's own in-process readiness gate; under --objects-from a caller-supplied file instead | yes |
 | [`report`](#family-report) | [`nen report render`](#nen-report-render) | fill a template with a data document and write the result: {{token}}, {{{token}}}, {{#each}}, {{#if}} and nothing else, refusing an unknown token by name; --variant injects a declared variant's section flags and --graph injects a validated architecture-delta graph | caller-named --template + --data (+ --graph) files, nen/workflow.json's reports.sections under --variant; writes --out, inside --repo, unless --dry-run | yes |
 | [`report`](#family-report) | [`nen report mermaid`](#nen-report-mermaid) | print the mermaid text for a graph document and nothing else | a caller-named --graph file; writes nothing; no git/gh | no |
@@ -18328,6 +18329,31 @@ no coverage bar is applied, no readiness is computed, nothing is published.
 **`nen report`**
 
 `data` gathers what is on a branch against a base — commits, changed files, the artifacts a run left under `.nen/`, the coverage report the lane's declaration names — into one document; `render` fills a template with that document and writes the result. They are two verbs and not one for the same reason [`board build`](#nen-board-build) and [`board render`](#nen-board-render) are: a verb that gathered AND filled would be a verb whose facts exist only inside the rendering that consumed them, so you could neither diff them, store them beside the report, nor re-render from them. `render` takes any JSON, so a caller who assembles their own facts is not locked out of the templating.
+
+### `nen report desk`
+
+```sh
+nen report desk > desk.json
+```
+
+Print a schema-valid judgement document as JSON (also with `--json`). No repository,
+network or filesystem reads. Optional top-level fields are present; the example
+ask includes `pr: null`, an object with `label` and `url`, and a boolean `star`.
+`rows` and `spendNotes` start as empty objects; `efforts` is an empty list, so the
+starter does not name an object or ledger effort that might not exist. Row notes,
+when added under an actual object reference, accept the optional string fields
+`marks`, `gate`, `gateClass`, `needs`, `session`, `lane` and `thought`.
+Use `nen report desk --row NN-IS-#638` to include all seven fields as strings
+for that object; include the same object in the subsequent report data read.
+
+Use the saved document with `report data --register desk.json`, then render that
+document with `report render`. The unmodified starter assembles even with no
+objects in scope. Replace its example judgement before sharing it. Every reachable
+field error in a malformed desk is reported in one refusal at exit 2; an invalid
+container is named once, without guessing the fields it might have contained.
+Readiness and other facts still come only from the report's object reads.
+
+Exit 0 prints the starter; exit 2 refuses extra arguments or unsupported flags.
 
 ### `nen report data`
 

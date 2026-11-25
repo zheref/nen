@@ -126,12 +126,6 @@ export interface Desk {
 const DESK_SHAPE =
   '{ variant, title, scope, gate, generatedAtLocal?, footerNote?, architectureCaption?, gates: [{ gate, label, cleared?, asks: [{ kind: DECIDE|DO|MERGE, rank, title, why, pr?, options: [{ letter, label, command, consequence, star? }], objects?: [{ label, url }] }] }], rows?: { "<CODE>-<IS|PR>-#<n>"|"<owner>/<name>#<n>"|"pr#<n>"|"issue#<n>": { marks?, gate?, gateClass?, needs?, session?, lane?, thought? } }, legendRows?: [{ mark, meaning }], efforts?: [<effort>], spendNotes?: { "<effort>": "<line>" } }';
 
-function refuseDesk(display: string, where: string, what: string): never {
-  throw new VerbUsageError(
-    `'${display}': ${where} ${what}. The desk is the judgement half of the register -- ${DESK_SHAPE}. Every fact (readiness, counts, notation, tallies, spend) is nen's to fill, so a desk that cannot be read is refused whole rather than rendered with a hole in it.`,
-  );
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -140,172 +134,215 @@ function kindOf(value: unknown): string {
   if (value === null) return "null";
   if (value === undefined) return "nothing";
   if (Array.isArray(value)) return "a list";
-  if (typeof value === "string") return `'${value}'`;
+  if (typeof value === "string") return "a string";
   return `a ${typeof value}`;
 }
 
-function str(record: Record<string, unknown>, key: string, display: string, where: string, required: boolean): string {
-  const value = record[key];
-  if (value === undefined && !required) return "";
-  if (typeof value !== "string") refuseDesk(display, where, `has '${key}' of ${kindOf(value)}, not a string`);
-  return value;
-}
-
-function list(record: Record<string, unknown>, key: string, display: string, where: string, required: boolean): unknown[] {
-  const value = record[key];
-  if (value === undefined && !required) return [];
-  if (!Array.isArray(value)) refuseDesk(display, where, `has '${key}' of ${kindOf(value)}, not a list`);
-  return value;
-}
-
-function url(value: string, display: string, where: string): string {
-  if (!SAFE_URL.test(value)) {
-    refuseDesk(
-      display,
-      where,
-      `has a 'url' of '${value}', which does not start with https://, http://, mailto:, # or / -- escaping makes a 'javascript:' href harmless as text and harmless as nothing else`,
-    );
-  }
-  return value;
-}
-
-/**
- * Every level of the desk admits only its own keys (Nobunaga N5/N13).
- *
- * A KEY NOBODY READS IS AN INSTRUCTION SILENTLY DROPPED, and one of them is
- * worse than the rest: a `verdict` written on a gate, an option or a legend
- * row would be ignored by the renderer's scope chain one day and answer a
- * `{{verdict}}` token the next. So `verdict` is refused by name with the
- * reason, and anything else unknown is refused naming what IS read there.
- */
-function allowKeys(record: Record<string, unknown>, allowed: readonly string[], display: string, where: string): void {
-  if (Object.hasOwn(record, "verdict")) {
-    refuseDesk(
-      display,
-      where,
-      "carries a 'verdict'. A readiness verdict is QUOTED from the object's own readiness, never written -- name the pull request with 'pr' on an ask and nen quotes that row's verdict verbatim",
-    );
-  }
-  const unknown = Object.keys(record).filter((key): boolean => !allowed.includes(key));
-  if (unknown.length > 0) {
-    refuseDesk(
-      display,
-      where,
-      `names ${unknown.map((key): string => `'${key}'`).join(", ")}, which the desk does not write there -- it reads ${allowed.join(", ")}`,
-    );
-  }
-}
-
-function parseOption(entry: unknown, display: string, where: string): DeskOption {
-  if (!isRecord(entry)) refuseDesk(display, where, `is ${kindOf(entry)}, not an option object`);
-  allowKeys(entry, ["letter", "label", "command", "consequence", "star"], display, where);
-  const star = entry["star"];
-  if (star !== undefined && typeof star !== "boolean") {
-    refuseDesk(display, where, `has 'star' of ${kindOf(star)}; it is true on the recommended option and absent or false elsewhere`);
-  }
-  const letter = str(entry, "letter", display, where, true);
-  if (letter.trim() === "") refuseDesk(display, where, "has an empty 'letter'");
-  return {
-    letter,
-    label: str(entry, "label", display, where, true),
-    command: str(entry, "command", display, where, true),
-    consequence: str(entry, "consequence", display, where, true),
-    star: star === true,
-  };
-}
-
-function parseAsk(entry: unknown, display: string, where: string): DeskAsk {
-  if (!isRecord(entry)) refuseDesk(display, where, `is ${kindOf(entry)}, not an ask object`);
-  allowKeys(entry, ["kind", "rank", "title", "why", "pr", "options", "objects"], display, where);
-  const kind = str(entry, "kind", display, where, true);
-  if (!ASK_KINDS.includes(kind)) {
-    refuseDesk(display, where, `has 'kind' of '${kind}'; an ask opens ${ASK_KINDS.join(", ")}`);
-  }
-  const rank = entry["rank"];
-  if (typeof rank !== "number" || !Number.isInteger(rank) || rank <= 0) {
-    refuseDesk(display, where, `has 'rank' of ${kindOf(rank)}, not a positive whole number (1 unblocks the most)`);
-  }
-  const pr = entry["pr"];
-  if (
-    pr !== undefined &&
-    pr !== null &&
-    !(typeof pr === "number" && Number.isInteger(pr) && pr > 0) &&
-    !(typeof pr === "string" && pr.trim() !== "")
-  ) {
-    refuseDesk(display, where, `has 'pr' of ${kindOf(pr)}, not a pull-request reference (a number, notation, or owner/name#<n>)`);
-  }
-  const options = list(entry, "options", display, where, true).map((option, index): DeskOption =>
-    parseOption(option, display, `${where}.options[${index}]`),
-  );
-  const letters = options.map((option): string => option.letter);
-  const duplicate = letters.find((letter, index): boolean => letters.indexOf(letter) !== index);
-  if (duplicate !== undefined) refuseDesk(display, where, `letters two options '${duplicate}'; the picker cannot ask that`);
-  const stars = options.filter((option): boolean => option.star).length;
-  if (stars !== 1) {
-    refuseDesk(display, where, `stars ${stars} options; an ask recommends exactly one, the same one the surface's picker stars`);
-  }
-  const objects = list(entry, "objects", display, where, false).map((object, index): { label: string; url: string } => {
-    const at = `${where}.objects[${index}]`;
-    if (!isRecord(object)) refuseDesk(display, at, `is ${kindOf(object)}, not a { label, url } object`);
-    allowKeys(object, ["label", "url"], display, at);
-    return { label: str(object, "label", display, at, true), url: url(str(object, "url", display, at, true), display, at) };
-  });
-  return {
-    kind,
-    rank,
-    title: str(entry, "title", display, where, true),
-    why: str(entry, "why", display, where, true),
-    pr: typeof pr === "number" || typeof pr === "string" ? pr : null,
-    options,
-    objects,
-  };
-}
-
-function parseGate(entry: unknown, display: string, where: string): DeskGate {
-  if (!isRecord(entry)) refuseDesk(display, where, `is ${kindOf(entry)}, not a gate object`);
-  allowKeys(entry, ["gate", "label", "cleared", "asks"], display, where);
-  const gate = str(entry, "gate", display, where, true);
-  if (gate.trim() === "") refuseDesk(display, where, "has an empty 'gate'");
-  const asks = list(entry, "asks", display, where, true).map((ask, index): DeskAsk =>
-    parseAsk(ask, display, `${where}.asks[${index}]`),
-  );
-  const cleared = str(entry, "cleared", display, where, false);
-  // A GATE WITH NOTHING OWED IS RENDERED CLEARED, NEVER OMITTED -- and a
-  // cleared gate with nothing to say about why reads as a gate nobody checked.
-  if (asks.length === 0 && cleared.trim() === "") {
-    refuseDesk(display, where, "has no asks and no 'cleared' line; a gate with nothing owed is shown cleared, with the line that says so");
-  }
-  if (asks.length > 0 && cleared !== "") {
-    refuseDesk(display, where, "has asks AND a 'cleared' line; a gate is cleared only when nothing on it is owed");
-  }
-  // RANKED HERE, stably, so the desk's order is the rank and never the file's.
-  const ranked = [...asks].sort((a, b): number => a.rank - b.rank);
-  return { gate, label: str(entry, "label", display, where, true), cleared, asks: ranked };
-}
-
-const ROW_FIELDS: readonly (keyof DeskRow)[] = ["marks", "gate", "gateClass", "needs", "session", "lane", "thought"];
-
-function parseRows(value: unknown, display: string): ReadonlyMap<string, DeskRow> {
-  const rows = new Map<string, DeskRow>();
-  if (value === undefined) return rows;
-  if (!isRecord(value)) refuseDesk(display, "'rows'", `is ${kindOf(value)}, not an object keyed 'pr#<n>' / 'issue#<n>'`);
-  for (const [key, entry] of Object.entries(value)) {
-    const where = `rows['${key}']`;
-    if (parseReference(key) === null) {
-      refuseDesk(display, where, `is not keyed by an object reference -- ${REFERENCE_FORMS}`);
-    }
-    if (!isRecord(entry)) refuseDesk(display, where, `is ${kindOf(entry)}, not an object`);
-    allowKeys(entry, ROW_FIELDS, display, where);
-    const row: Record<string, string> = {};
-    for (const field of ROW_FIELDS) row[field] = str(entry, field, display, where, false);
-    rows.set(key, row as unknown as DeskRow);
-  }
-  return rows;
-}
-
-/** `--register <file>`'s parsed document, validated field by field. */
+/** Validate every reachable field; a malformed parent is one error, not invented children. */
 export function parseDesk(document: unknown, display: string): Desk {
-  if (!isRecord(document)) refuseDesk(display, "the document", `is ${kindOf(document)}, not an object`);
+  const errors: string[] = [];
+  function refuseDesk(_display: string, where: string, what: string): void {
+    errors.push(`${where} ${what}.`);
+  }
+  function finish(): void {
+    if (errors.length > 0) throw new VerbUsageError(
+      `'${plainLine(display)}': ${errors.map((error) => plainLine(error)).join("\n")} The desk is the judgement half of the register -- ${DESK_SHAPE}. Every fact (readiness, counts, notation, tallies, spend) is nen's to fill, so a desk that cannot be read is refused whole rather than rendered with a hole in it. Start with 'nen report desk'.`,
+    );
+  }
+  function str(record: Record<string, unknown>, key: string, display: string, where: string, required: boolean): string {
+    const value = record[key];
+    if (value === undefined && !required) return "";
+    if (typeof value !== "string") {
+      refuseDesk(display, where, `has '${key}' of ${kindOf(value)}, not a string`);
+      return "";
+    }
+    return value;
+  }
+
+  function list(record: Record<string, unknown>, key: string, display: string, where: string, required: boolean): unknown[] {
+    const value = record[key];
+    if (value === undefined && !required) return [];
+    if (!Array.isArray(value)) {
+      refuseDesk(display, where, `has '${key}' of ${kindOf(value)}, not a list`);
+      return [];
+    }
+    return value;
+  }
+
+  function url(value: string, display: string, where: string): string {
+    if (!SAFE_URL.test(value)) {
+      refuseDesk(
+        display,
+        where,
+        "has a 'url' which does not start with https://, http://, mailto:, # or / -- escaping makes a 'javascript:' href harmless as text and harmless as nothing else",
+      );
+    }
+    return value;
+  }
+
+  /**
+   * Every level of the desk admits only its own keys (Nobunaga N5/N13).
+   *
+   * A KEY NOBODY READS IS AN INSTRUCTION SILENTLY DROPPED, and one of them is
+   * worse than the rest: a `verdict` written on a gate, an option or a legend
+   * row would be ignored by the renderer's scope chain one day and answer a
+   * `{{verdict}}` token the next. So `verdict` is refused by name with the
+   * reason, and anything else unknown is refused naming what IS read there.
+   */
+  function allowKeys(record: Record<string, unknown>, allowed: readonly string[], display: string, where: string): void {
+    if (Object.hasOwn(record, "verdict")) {
+      refuseDesk(
+        display,
+        where,
+        "carries a 'verdict'. A readiness verdict is QUOTED from the object's own readiness, never written -- name the pull request with 'pr' on an ask and nen quotes that row's verdict verbatim",
+      );
+    }
+    const unknown = Object.keys(record).filter((key): boolean => !allowed.includes(key));
+    if (unknown.length > 0) {
+      refuseDesk(
+        display,
+        where,
+        `names ${unknown.map((key): string => `'${key}'`).join(", ")}, which the desk does not write there -- it reads ${allowed.join(", ")}`,
+      );
+    }
+  }
+
+  function parseOption(entry: unknown, display: string, where: string): DeskOption {
+    if (!isRecord(entry)) {
+      refuseDesk(display, where, `is ${kindOf(entry)}, not an option object`);
+      return { letter: "", label: "", command: "", consequence: "", star: false };
+    }
+    allowKeys(entry, ["letter", "label", "command", "consequence", "star"], display, where);
+    const star = entry["star"];
+    if (star !== undefined && typeof star !== "boolean") {
+      refuseDesk(display, where, `has 'star' of ${kindOf(star)}; it is true on the recommended option and absent or false elsewhere`);
+    }
+    const letter = str(entry, "letter", display, where, true);
+    if (typeof entry["letter"] === "string" && letter.trim() === "") refuseDesk(display, where, "has an empty 'letter'");
+    return {
+      letter,
+      label: str(entry, "label", display, where, true),
+      command: str(entry, "command", display, where, true),
+      consequence: str(entry, "consequence", display, where, true),
+      star: star === true,
+    };
+  }
+
+  function parseAsk(entry: unknown, display: string, where: string): DeskAsk {
+    if (!isRecord(entry)) {
+      refuseDesk(display, where, `is ${kindOf(entry)}, not an ask object`);
+      return { kind: "", rank: 0, title: "", why: "", pr: null, options: [], objects: [] };
+    }
+    allowKeys(entry, ["kind", "rank", "title", "why", "pr", "options", "objects"], display, where);
+    const kind = str(entry, "kind", display, where, true);
+    if (typeof entry["kind"] === "string" && !ASK_KINDS.includes(kind)) {
+      refuseDesk(display, where, `has an invalid 'kind'; an ask opens ${ASK_KINDS.join(", ")}`);
+    }
+    const rank = entry["rank"];
+    if (typeof rank !== "number" || !Number.isInteger(rank) || rank <= 0) {
+      refuseDesk(display, where, `has 'rank' of ${kindOf(rank)}, not a positive whole number (1 unblocks the most)`);
+    }
+    const pr = entry["pr"];
+    if (pr !== undefined && pr !== null) {
+      const reference = typeof pr === "string" || typeof pr === "number" ? parseReference(pr) : null;
+      if (reference === null || !Number.isSafeInteger(reference.number) || reference.number <= 0 || (reference.form !== "slug" && reference.kind === "issue")) {
+        refuseDesk(display, where, "has an invalid 'pr', not a pull-request reference (a number, notation, or owner/name#<n>)");
+      }
+    }
+    const options = list(entry, "options", display, where, true).map((option, index): DeskOption =>
+      parseOption(option, display, `${where}.options[${index}]`),
+    );
+    const seenLetters = new Set<string>();
+    const optionsRaw = Array.isArray(entry["options"]) ? entry["options"] : [];
+    for (const [index, option] of options.entries()) {
+      const raw = optionsRaw[index];
+      if (!isRecord(raw) || typeof raw["letter"] !== "string" || raw["letter"].trim() === "") continue;
+      if (seenLetters.has(option.letter)) refuseDesk(display, `${where}.options[${index}].letter`, "repeats an earlier option's letter; the picker cannot ask that");
+      seenLetters.add(option.letter);
+    }
+    const stars = options.filter((option): boolean => option.star).length;
+    const allStarsKnown = Array.isArray(entry["options"]) && entry["options"].every((option) => isRecord(option) && (option["star"] === undefined || typeof option["star"] === "boolean"));
+    if (stars > 1 || (allStarsKnown && stars === 0)) {
+      refuseDesk(display, where, `stars ${stars} options; an ask recommends exactly one, the same one the surface's picker stars`);
+    }
+    const objects = list(entry, "objects", display, where, false).map((object, index): { label: string; url: string } => {
+      const at = `${where}.objects[${index}]`;
+      if (!isRecord(object)) {
+        refuseDesk(display, at, `is ${kindOf(object)}, not a { label, url } object`);
+        return { label: "", url: "" };
+      }
+      allowKeys(object, ["label", "url"], display, at);
+      const label = str(object, "label", display, at, true);
+      const link = str(object, "url", display, at, true);
+      return { label, url: typeof object["url"] === "string" ? url(link, display, at) : "" };
+    });
+    return {
+      kind,
+      rank: typeof rank === "number" ? rank : 0,
+      title: str(entry, "title", display, where, true),
+      why: str(entry, "why", display, where, true),
+      pr: typeof pr === "number" || typeof pr === "string" ? pr : null,
+      options,
+      objects,
+    };
+  }
+
+  function parseGate(entry: unknown, display: string, where: string): DeskGate {
+    if (!isRecord(entry)) {
+      refuseDesk(display, where, `is ${kindOf(entry)}, not a gate object`);
+      return { gate: "", label: "", cleared: "", asks: [] };
+    }
+    allowKeys(entry, ["gate", "label", "cleared", "asks"], display, where);
+    const gate = str(entry, "gate", display, where, true);
+    if (typeof entry["gate"] === "string" && gate.trim() === "") refuseDesk(display, where, "has an empty 'gate'");
+    const asks = list(entry, "asks", display, where, true).map((ask, index): DeskAsk =>
+      parseAsk(ask, display, `${where}.asks[${index}]`),
+    );
+    const cleared = str(entry, "cleared", display, where, false);
+    // A GATE WITH NOTHING OWED IS RENDERED CLEARED, NEVER OMITTED -- and a
+    // cleared gate with nothing to say about why reads as a gate nobody checked.
+    if (Array.isArray(entry["asks"]) && (entry["cleared"] === undefined || typeof entry["cleared"] === "string") && asks.length === 0 && cleared.trim() === "") {
+      refuseDesk(display, where, "has no asks and no 'cleared' line; a gate with nothing owed is shown cleared, with the line that says so");
+    }
+    if (asks.length > 0 && cleared !== "") {
+      refuseDesk(display, where, "has asks AND a 'cleared' line; a gate is cleared only when nothing on it is owed");
+    }
+    // RANKED HERE, stably, so the desk's order is the rank and never the file's.
+    const ranked = [...asks].sort((a, b): number => a.rank - b.rank);
+    return { gate, label: str(entry, "label", display, where, true), cleared, asks: ranked };
+  }
+
+  const ROW_FIELDS: readonly (keyof DeskRow)[] = ["marks", "gate", "gateClass", "needs", "session", "lane", "thought"];
+
+  function parseRows(value: unknown, display: string): ReadonlyMap<string, DeskRow> {
+    const rows = new Map<string, DeskRow>();
+    if (value === undefined) return rows;
+    if (!isRecord(value)) {
+      refuseDesk(display, "'rows'", `is ${kindOf(value)}, not an object keyed 'pr#<n>' / 'issue#<n>'`);
+      return rows;
+    }
+    for (const [key, entry] of Object.entries(value)) {
+      const where = `rows['${key}']`;
+      if (parseReference(key) === null) {
+        refuseDesk(display, where, `is not keyed by an object reference -- ${REFERENCE_FORMS}`);
+      }
+      if (!isRecord(entry)) {
+        refuseDesk(display, where, `is ${kindOf(entry)}, not an object`);
+        continue;
+      }
+      allowKeys(entry, ROW_FIELDS, display, where);
+      const row: Record<string, string> = {};
+      for (const field of ROW_FIELDS) row[field] = str(entry, field, display, where, false);
+      rows.set(key, row as unknown as DeskRow);
+    }
+    return rows;
+  }
+
+  if (!isRecord(document)) {
+    refuseDesk(display, "the document", `is ${kindOf(document)}, not an object`);
+    finish();
+    throw new Error("unreachable desk refusal");
+  }
   allowKeys(
     document,
     ["variant", "title", "scope", "gate", "generatedAtLocal", "footerNote", "architectureCaption", "gates", "rows", "legendRows", "efforts", "spendNotes"],
@@ -313,35 +350,43 @@ export function parseDesk(document: unknown, display: string): Desk {
     "the document",
   );
   const variant = str(document, "variant", display, "the document", true);
-  if (variant.trim() === "") refuseDesk(display, "the document", "has an empty 'variant'; it names the reports.sections variant this register renders as");
+  if (typeof document["variant"] === "string" && variant.trim() === "") refuseDesk(display, "the document", "has an empty 'variant'; it names the reports.sections variant this register renders as");
   const generatedAtLocal = document["generatedAtLocal"];
   if (generatedAtLocal !== undefined && typeof generatedAtLocal !== "string") {
     refuseDesk(display, "the document", `has 'generatedAtLocal' of ${kindOf(generatedAtLocal)}, not a string`);
   }
   const legendRows = list(document, "legendRows", display, "the document", false).map((entry, index) => {
     const where = `legendRows[${index}]`;
-    if (!isRecord(entry)) refuseDesk(display, where, `is ${kindOf(entry)}, not a { mark, meaning } object`);
+    if (!isRecord(entry)) {
+      refuseDesk(display, where, `is ${kindOf(entry)}, not a { mark, meaning } object`);
+      return { mark: "", meaning: "" };
+    }
     allowKeys(entry, ["mark", "meaning"], display, where);
     return { mark: str(entry, "mark", display, where, true), meaning: str(entry, "meaning", display, where, true) };
   });
   const effortsRaw = document["efforts"];
   let efforts: string[] | null = null;
   if (effortsRaw !== undefined) {
-    if (!Array.isArray(effortsRaw) || effortsRaw.some((entry): boolean => typeof entry !== "string" || entry === "")) {
+    if (!Array.isArray(effortsRaw)) {
       refuseDesk(display, "'efforts'", "is not a list of effort names");
+      efforts = [];
+    } else {
+      for (const [index, effort] of effortsRaw.entries()) {
+        if (typeof effort !== "string" || effort === "") refuseDesk(display, `efforts[${index}]`, "is not a non-empty effort name string");
+      }
+      efforts = [...new Set(effortsRaw.filter((entry): entry is string => typeof entry === "string"))];
     }
-    efforts = [...new Set(effortsRaw as string[])];
   }
   const notesRaw = document["spendNotes"];
   const spendNotes = new Map<string, string>();
   if (notesRaw !== undefined) {
     if (!isRecord(notesRaw)) refuseDesk(display, "'spendNotes'", `is ${kindOf(notesRaw)}, not an object of effort to line`);
-    for (const [effort, line] of Object.entries(notesRaw)) {
+    for (const [effort, line] of Object.entries(isRecord(notesRaw) ? notesRaw : {})) {
       if (typeof line !== "string") refuseDesk(display, `spendNotes['${effort}']`, `is ${kindOf(line)}, not a string`);
-      spendNotes.set(effort, line);
+      if (typeof line === "string") spendNotes.set(effort, line);
     }
   }
-  return {
+  const result: Desk = {
     variant,
     title: str(document, "title", display, "the document", true),
     scope: str(document, "scope", display, "the document", true),
@@ -357,6 +402,8 @@ export function parseDesk(document: unknown, display: string): Desk {
     efforts,
     spendNotes,
   };
+  finish();
+  return result;
 }
 
 // ── notation and references ─────────────────────────────────────────────────

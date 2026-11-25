@@ -376,7 +376,7 @@ describe("the desk is judgement only -- refusals at exit 2", () => {
     const ask = { kind: "DO", rank: 1, title: "t", why: "w", options: [option, { ...option, letter: "B" }] };
     expect(await refused({ ...DESK, gates: [{ gate: "G2", label: "m", asks: [ask] }] })).toMatch(/stars 2 options/);
     const twice = { ...ask, options: [option, { ...option, star: false }] };
-    expect(await refused({ ...DESK, gates: [{ gate: "G2", label: "m", asks: [twice] }] })).toMatch(/letters two options 'A'/);
+    expect(await refused({ ...DESK, gates: [{ gate: "G2", label: "m", asks: [twice] }] })).toMatch(/options\[1\]\.letter repeats/);
     expect(await refused({ ...DESK, gates: [{ gate: "G2", label: "m", asks: [{ ...ask, kind: "ASK" }] }] })).toMatch(/opens DECIDE, DO, MERGE/);
   });
 
@@ -387,7 +387,7 @@ describe("the desk is judgement only -- refusals at exit 2", () => {
 
   it("refuses a link that is not http(s), mailto, # or /", async () => {
     const ask = { ...DESK.gates[0]?.asks[1], objects: [{ label: "x", url: "javascript:alert(1)" }] };
-    expect(await refused({ ...DESK, gates: [{ gate: "G2", label: "merge", asks: [ask] }] })).toMatch(/'javascript:alert\(1\)'/);
+    expect(await refused({ ...DESK, gates: [{ gate: "G2", label: "merge", asks: [ask] }] })).toMatch(/'url' which does not start/);
   });
 
   it("refuses a desk that is not an object, and one missing its title", async () => {
@@ -568,7 +568,7 @@ describe("parseDesk's remaining refusals", () => {
   it("names the field it could not read", () => {
     expect(refuse({ ...DESK, variant: "" })).toThrow(/empty 'variant'/);
     expect(refuse({ ...DESK, generatedAtLocal: 7 })).toThrow(/'generatedAtLocal' of a number/);
-    expect(refuse({ ...DESK, efforts: [1] })).toThrow(/'efforts' is not a list of effort names/);
+    expect(refuse({ ...DESK, efforts: [1] })).toThrow(/efforts\[0\] is not a non-empty effort name string/);
     expect(refuse({ ...DESK, spendNotes: [] })).toThrow(/'spendNotes' is a list/);
     expect(refuse({ ...DESK, spendNotes: { e1: 3 } })).toThrow(/spendNotes\['e1'\] is a number/);
     expect(refuse({ ...DESK, legendRows: [3] })).toThrow(/legendRows\[0\] is a number/);
@@ -576,7 +576,7 @@ describe("parseDesk's remaining refusals", () => {
     expect(refuse({ ...DESK, rows: { "pr#1": 3 } })).toThrow(/rows\['pr#1'\] is a number/);
     expect(refuse({ ...DESK, gates: [3] })).toThrow(/gates\[0\] is a number/);
     expect(refuse({ ...DESK, gates: [{ gate: " ", label: "x", cleared: "c", asks: [] }] })).toThrow(/empty 'gate'/);
-    expect(refuse({ ...DESK, gates: "x" })).toThrow(/'gates' of 'x', not a list/);
+    expect(refuse({ ...DESK, gates: "x" })).toThrow(/'gates' of a string, not a list/);
   });
 
   it("names an ask's and an option's malformed fields", () => {
@@ -585,9 +585,9 @@ describe("parseDesk's remaining refusals", () => {
     const gate = (a: unknown): unknown => ({ ...DESK, gates: [{ gate: "G2", label: "m", asks: [a] }] });
     expect(refuse(gate(3))).toThrow(/asks\[0\] is a number/);
     expect(refuse(gate({ ...ask, rank: 0 }))).toThrow(/'rank' of a number, not a positive whole number/);
-    expect(refuse(gate({ ...ask, pr: true }))).toThrow(/'pr' of a boolean, not a pull-request reference/);
+    expect(refuse(gate({ ...ask, pr: true }))).toThrow(/invalid 'pr', not a pull-request reference/);
     expect(refuse(gate({ ...ask, options: [3] }))).toThrow(/options\[0\] is a number/);
-    expect(refuse(gate({ ...ask, options: [{ ...option, star: "yes" }] }))).toThrow(/'star' of 'yes'/);
+    expect(refuse(gate({ ...ask, options: [{ ...option, star: "yes" }] }))).toThrow(/'star' of a string/);
     expect(refuse(gate({ ...ask, options: [{ ...option, letter: "", star: true }] }))).toThrow(/empty 'letter'/);
     expect(refuse(gate({ ...ask, objects: [3] }))).toThrow(/objects\[0\] is a number/);
     expect(parseDesk(gate({ ...ask, pr: null }), "desk.json").gates[0]?.asks[0]?.pr).toBeNull();
@@ -650,7 +650,7 @@ describe("references across repositories (N1)", () => {
       [{ ...DESK, rows: { "HA-IS-#87": {} }, gates: [DESK.gates[1]] }, /names 'HA-IS-#87', but HA-PR-#87 is a pull request/],
       [{ ...DESK, rows: { "ZZ-PR-#87": {} }, gates: [DESK.gates[1]] }, /'ZZ' is not a product code in nen\/repos.json/],
       [{ ...DESK, rows: { "HA-PR-#87": {}, "zheref/hatsu#87": {} }, gates: [DESK.gates[1]] }, /two rows for HA-PR-#87/],
-      [{ ...DESK, rows: {}, gates: [{ gate: "G2", label: "m", asks: [{ ...DESK.gates[0]?.asks[1], pr: "HA-IS-#85" }] }] }, /names HA-IS-#85, which is an issue/],
+      [{ ...DESK, rows: {}, gates: [{ gate: "G2", label: "m", asks: [{ ...DESK.gates[0]?.asks[1], pr: "HA-IS-#85" }] }] }, /invalid 'pr', not a pull-request reference/],
     ];
     for (const [desk, message] of cases) {
       const { captured } = await run(desk);
@@ -985,4 +985,15 @@ it("C437-3 appends sessions after the complete register and context prefix", asy
   expect(keys.slice(0, keys.indexOf("objects") + 1)).toEqual([
     "contract", "repo", "branch", "base", "generatedAt", "commits", "files", "evidence", "coverage", "proof", "phases", "lastStop", "usage", "objects",
   ]);
+});
+
+ it("round-trips the unchanged desk starter through data and render (#638 AC-2)", async () => {
+  const starter = await capture(["report", "desk"], null, []);
+  expect(starter.code, starter.err.join("\n")).toBe(0);
+  const root = repo({desk: JSON.parse(starter.out.join("\n")), objects: [], workflow: true});
+  const {captured, document} = await registerDocument(root);
+  expect(captured.code, captured.err.join("\n")).toBe(0);
+  writeFileSync(join(root, "starter-data.json"), JSON.stringify(document));
+  const rendered = await capture(["report", "render", "--variant", "register", "--template", join(FIXTURES, "rikugan.html"), "--data", "starter-data.json", "--out", "starter.html"], root, []);
+  expect(rendered.code, rendered.err.join("\n")).toBe(0);
 });

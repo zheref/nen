@@ -2172,3 +2172,7 @@ describe("izanami's read-only row for wc ahead is tied to doAhead's refusals (zh
     expect(await runFamily(wcCommand, ["wc", "ahead", "--repo", ".", "--of", "HEAD", "--out", "x"], process.cwd(), false, io, never)).toBe(2);
   });
 });
+
+ it("classifies the desk starter as read-only", () => {
+  expect(classifyCommand("nen report desk --row pr#1").classification).toBe("read-only");
+});
