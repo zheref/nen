@@ -13667,8 +13667,9 @@ differs: fixture-owner/fixture-app aaaaaaaaaaaa -> aaaaaaaaaaaa -- 1 added, 1 re
 A merged folder held against a **newer inventory of one member**, its gaps
 classified, and — under `--write` — **only ever appended to** (zheref/nen#493
 AC-6; SP-9, SP-10). Every citation of `--code` on a requirement line (FR, SC,
-story) is re-read: its cited bytes at its own sha, and the same range at the
-inventory's sha, both through git in the checkout the checkouts file names
+story) or an acceptance-scenario definition (`AC-###`) is re-read: its cited
+bytes at its own sha, and the same range at the inventory's sha, both through
+git in the checkout the checkouts file names
 (the member chain of [`spec cite-check`](#nen-spec-cite-check), its `origin`
 read back as the inventory's). Each range is `current`, `moved` (the bytes
 are elsewhere in the file now), `changed` (they are nowhere in it),
@@ -13687,8 +13688,9 @@ requirement with a gap is listed under `claims` and closes nothing.
 
 `--write` appends **two things and nothing else**: a `[STALE @ <cited sha>]`
 companion right after each moved, changed or vanished citation — the sentence
-and its citation stay byte for byte, and [`spec check`](#nen-spec-check) reads
-the companion as stale — and one `## Phase <N>: Convergence <date>` section
+and its citation stay byte for byte; [`spec check`](#nen-spec-check) reads
+the companion as stale on FR/SC/story lines, while converge reports it on
+scenario lines too — and one `## Phase <N>: Convergence <date>` section
 (SP-9's heading) at the end of `tasks.md` (created when absent). Its first
 body line, `Inventory: <CODE> @ <sha12>`, records the commit read and is the
 key a rerun finds. Then one open task per gap, numbered after the highest
@@ -13701,6 +13703,9 @@ earlier convergence row, the new row ends `· supersedes T<nnn>` (SP-10's
 reversal line, computed from the two rows). It never renumbers and never
 deletes. A **second run on the same inputs finds its companions and its phase
 and changes zero bytes**; a folder with no gap is left byte-identical.
+If an earlier Nen already recorded the same inventory before it could read
+AC scenarios, convergence appends a new phase containing only the newly
+visible scenario tasks. Existing phases and tasks stay byte-identical.
 
 **Usage**
 
@@ -13731,7 +13736,16 @@ unrequested · action <action>`, one line per gap, per claim and per write.
 `gaps` (`{ class, id, line, detail }` each), `unrequested` (rows, or null),
 `unrequestedReason`, `claims` (`{ line, text, ids }` each), `writes` (`{ file,
 kind: "stale"|"phase", line, text }` each), `action` (`none` \| `written` \|
-`would-write` \| `refused`), `counts` (per class), `reason`. Exit 0 when
+`would-write` \| `refused`), `counts` (per gap class plus `scenariosRead` and
+`scenariosCited`), `reason`. Scenario counts are definition **lines**, outside
+fenced source data: `scenariosRead` includes uncited scenarios;
+`scenariosCited` counts each line once when it has at least one valid citation
+of `--code`, even when that range is stale or unreadable. Other-member or
+malformed citations produce no row. Multiple matching citations still produce
+one `citations[]` entry per range. Text output prints both scenario counts.
+Unreadable reports return zero counts with their refusal reason; they carry
+no partial comparison. Ticked tasks naming an `AC-###` gap are claims just
+as FR/SC tasks are. Exit 0 when
 `converged`; exit 1 on any gap — written or not, it stands until the author
 acts — and when the inputs could not be read; exit 2 on a usage error or a
 spec file resolving outside `--repo`.
@@ -13743,6 +13757,7 @@ nen spec converge --repo . --folder specs/007-converge --inventory /tmp/FX-now.j
 ```
 ```text
 gaps: specs/007-converge against FX fixture-owner/fixture-app @ 0123456789ab -- 0 missing · 1 partial · 0 contradicts · 0 unrequested · action written
+  scenarios: 0 scenario line(s) read · 0 citing FX
   partial FR-001 (spec.md:3) -- 1 moved at 0123456789ab
   unrequested: not computed -- capture/FX/inventory.json does not exist, so there is no earlier capture to tell new rows from old ones
   claim tasks.md:5 ticks FR-001 -- a tick is not evidence; the gap stands
