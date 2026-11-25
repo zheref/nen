@@ -4,7 +4,7 @@ aiReviewers required; base basebase: required (workflow file absent); default ti
 
   head cafebabe · reviewers sasuke,tenma,copilot · approvers sasuke,tenma
   policy bounded · delivery PR no · identities <GATES> (--gates, the caller's file)
-  decided by nen 0.30.0 (/opt/nen/nen-linux-x64) at 2025-01-01T00:00:00Z
+  decided by nen 0.31.0 (/opt/nen/nen-linux-x64) at 2025-01-01T00:00:00Z
 
   The gate is a CONJUNCTION. Every row is evaluated; the verdict is ready only
   when every row is ready, and the line above is the first failing row's reason.
