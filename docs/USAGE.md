@@ -12,7 +12,7 @@ repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
 what each version changed: 50 command
-families, 181 verbs, every flag checked against that binary.
+families, 182 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -258,7 +258,7 @@ including every refusal reason. The raw NUL-delimited stream
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **112 shapes** and **116 ids** (`nen.runner.plan`
+binary carries**, writing or reading — **113 shapes** and **117 ids** (`nen.runner.plan`
 and `nen.wc.worktree.copies` each have two versions, `nen.stop.mark` three, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -294,7 +294,7 @@ file formats).
 
 <!-- contract-ids:begin -->
 - **`audit`** — `nen.audit.deps/v0.1`
-- **`canon`** — `nen.canon.checkout/v0.1` · `nen.canon.clause-check/v0.1` · `nen.canon.lint/v0.1` · `nen.canon.mirror.check/v0.1` · `nen.canon.mirror.generate/v0.1` · `nen.canon.pin.write/v0.1` · `nen.canon.pin/v0.1`
+- **`canon`** — `nen.canon.checkout/v0.1` · `nen.canon.clause-check/v0.1` · `nen.canon.clause-cites/v0.1` · `nen.canon.lint/v0.1` · `nen.canon.mirror.check/v0.1` · `nen.canon.mirror.generate/v0.1` · `nen.canon.pin.write/v0.1` · `nen.canon.pin/v0.1`
 - **`classify`** — `nen.classify.apply/v0.1` · `nen.classify.install/v0.1` · `nen.classify.labels/v0.1` · `nen.classify.status/v0.1`
 - **`commit`** — `nen.commit.check/v0.1` · `nen.commit.write/v0.1`
 - **`contract`** — `nen.contract/v0.1`
@@ -1076,7 +1076,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 181 verbs, grouped as the README groups them. **Reads** is what a
+All 182 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -1215,6 +1215,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`canon`](#family-canon) | [`nen canon mirror generate`](#nen-canon-mirror-generate) | render every canonical rule file, {{TOKEN}}s bound, into the rules location of EACH agent surface the consumer declares (a directory of marked files, or one marked block inside AGENTS.md), writing only changed files, deleting marked orphans, refusing to touch a hand-written file | --rules-dir, or --stack-dir/--leaf inside the canon checkout `canon checkout` resolves (read-only git) + --canon-values; the surface table (src/surface/rules.ts); writes under --repo; no gh | yes |
 | [`canon`](#family-canon) | [`nen canon mirror check`](#nen-canon-mirror-check) | render the mirror in memory and diff every declared surface's committed copy against it: ok / missing / extra / stale / hand-edited per file, foreign for the consumer's own | --rules-dir, or --stack-dir/--leaf inside the resolved canon checkout (read-only git) + --canon-values; the surface table; reads under --repo; --markdown-out writes its table (and its parent directory) there; no gh | yes |
 | [`canon`](#family-canon) | [`nen canon lint`](#nen-canon-lint) | a canon repository's prose held to a caller-owned rules contract (each rule's class picks the check) behind a shrink-only baseline; fenced code and quoted words exempt; never green over a file it could not read | nen/workflow.json `canon.lint`, the --rules contract and the files it names (version source, decisions, rulings, declared values), the --baseline and --base-baseline, the Markdown its include globs match under --root; with --base, git (merge-base, diff, show) | yes |
+| [`canon`](#family-canon) | [`nen canon clause cites`](#nen-canon-clause-cites) | read cited IDs and their status/binding, following displacement chains from caller-declared homes and vocabulary | --text, --home, --status-vocabulary | yes |
 | [`canon`](#family-canon) | [`nen canon clause check`](#nen-canon-clause-check) | a clause id space (HR-{n}, CON-{n}) held unique -- definitions counted, citations never, gaps a notice -- and, with --leaves, every changed clause matched by a change in each file citing it or a `no-leaf-change:` line | --file under --repo; --base as a file or `git show <ref>:<path>`; with --leaves, git (ls-files, diff) and the --body-from file | yes |
 | [`quality`](#family-quality) | [`nen quality tooling`](#nen-quality-tooling) | look up the e2e/adversarial/perf tooling recorded for a scenario in a caller-supplied table | caller's own --table JSON (never a table shipped in nen) | yes |
 | [`quality`](#family-quality) | [`nen quality perf-compare`](#nen-quality-perf-compare) | compare relative regression and declared absolute ceilings | optional caller-supplied ceiling declaration | yes |
@@ -12109,6 +12110,32 @@ always load: handbooks/uzf-core.md, handbooks/security-baseline.md, handbooks/ux
 stack handbook: handbooks/stacks/swiftui-tca-uzf-v2/architecture.md
 ```
 
+**Manifest-aware availability (#569).** The legacy path-derivation form above
+checks token shape, not membership or file existence. To prove availability,
+use the canon's governing Markdown INDEX and its checkout root explicitly:
+
+```sh
+nen canon resolve --repo /consumer --target owner/product \
+  --canon-root /handbooks-checkout --manifest handbooks/INDEX.md
+```
+
+This form reads the INDEX's `Always load` and `Load exactly ONE stack handbook`
+tables, verifies every referenced file inside the resolved root, and returns
+`availability: "verified"`, the manifest path, the authoritative always-load set
+and exactly one stack path. Unknown scenarios fail with `invalid-scenario`, the
+target and registry named. Missing/type-invalid scenario rows keep the existing
+registry refusals. Do not combine manifest authority with `--always-load`,
+`--stack-dir` or `--leaf`. Schema-only registry checks do not prove membership.
+The caller supplies the pinned, verified canon root (e.g. `canon checkout`).
+
+**Directed ports (#457).** Add `--port-from <scenario>`; `--ports-dir` defaults
+to `handbooks/ports`. The JSON includes `portHandbook` beside the target stack;
+a genuinely absent pair is `null` with a reason on stderr, not a failure.
+Self-pairs and source scenarios absent from the manifest (or legacy stack
+folder set) refuse at exit 2. The legacy form can also resolve ports when
+`--canon-root` supplies the tree in which its stack paths exist. A malformed,
+unreadable or escaping pair is refused, never read as absent.
+
 ### `nen canon pin`
 
 Answers "which canonical handbooks repository does this consumer mirror, and at which tag" from the consumer's **own** `nen/repos.json`: the `pinned` field on that repository's `maintained_tools` entry. The pin is data there for two reasons this family depends on: a sync has to know the tag **before** it can check the canon out and render, and [`canon mirror check`](#nen-canon-mirror-check) has to know it to hold the mirror to it -- a mirror that cannot name the tag it was rendered from cannot be checked for drift against it. It lives on `maintained_tools`, not `consumers[]`, because [`repo classify`](#nen-repo-classify) reads a `consumers` entry as a consumer at G2 while a canon repository stands at G4, and `maintained_tools` is the list whose entries classify as canon. [`schema check`](#nen-schema-check) reports the same pin on its `nen/repos.json` row. Where several `maintained_tools` rows name one tool, the **last** row answers for both the pin and the checkout [`canon checkout`](#nen-canon-checkout) reads, so a later unpinned row erases an earlier pin.
@@ -12131,14 +12158,14 @@ nen canon pin --repo <consumer> --write <tag> [--source <owner/name>]
 | `--canon-checkout <path>` | no | With `--write`: an explicit canon checkout, step 1 of [`canon checkout`](#nen-canon-checkout)'s order. | Refused without `--write`. |
 | `--dry-run` | no | With `--write`: print the pin before → after and write nothing. | Refused without `--write`. |
 
-**Output and exit codes** -- prints `source: <owner/name>`, `ref: <tag>`, `recorded in: <path> (maintained_tools[].pinned)`. `--json`: `{ contract: "nen.canon.pin/v0.1", source, ref, tagShaped, recordedIn }`. Exit 0 when exactly one pin answers. Exit **1**, with a distinct reason naming `maintained_tools[].pinned` as the field to record, when `--repo` has no `nen/repos.json`, when no maintained tool is pinned, when several are and `--source` does not say which, or when `--source` names a tool the registry does not pin. A recorded pin that is not tag-shaped (`main`, a SHA) is printed and then **exits 1** too: a canon mirror is rendered from a tag, never a floating branch (`CON-13`). Exit 2 on an omitted `--repo` or an empty `--source`.
+**Output and exit codes** -- prints `source: <owner/name>`, `ref: <tag>`, `commit: <sha or unrecorded>`, `recorded in: <path> (maintained_tools[].pinned)`. `--json`: `{ contract: "nen.canon.pin/v0.1", source, ref, commit, tagShaped, recordedIn }`. Exit 0 when exactly one pin answers. Exit **1**, with a distinct reason naming `maintained_tools[].pinned` as the field to record, when `--repo` has no `nen/repos.json`, when no maintained tool is pinned, when several are and `--source` does not say which, or when `--source` names a tool the registry does not pin. A recorded pin that is not tag-shaped (`main`, a SHA) is printed and then **exits 1** too: a canon mirror is rendered from a tag, never a floating branch (`CON-13`). Exit 2 on an omitted `--repo` or an empty `--source`.
 
 #### Moving the pin: `--write <tag>`
 
 A repin used to be a hand-edit of one JSON key followed by [`schema check`](#nen-schema-check) to read it back -- the one step of a repin that was a text edit, and one that could be applied without the regenerate it owes ([#291](https://github.com/zheref/nen/issues/291)). `--write <tag>` makes it a verb:
 
 - **It writes the row the read form answers from**: the **last** `maintained_tools` row naming the source, compared case-insensitively -- the row [`canon checkout`](#nen-canon-checkout) reads the checkout declaration from too. An earlier row a later one shadows is never touched.
-- **It changes one value and no other byte.** The file is scanned, never re-serialised: indentation, key order, `$comment`s, the other rows, CRLF line endings and a trailing newline (or its absence) are kept, and only the string literal of that one `pinned` is replaced. Where `maintained_tools`, or the edited row's `repo` or `pinned`, appears **more than once**, the edit is refused (`not-one-value-edit`): `JSON.parse` keeps only the last, so the value a reader sees and the one a reviewer reads could differ -- fix the file by hand first. A duplicate anywhere else is not the edit path's. The new text is then **proved** before anything is written: it must parse to the old document with that one value changed, or the write is refused.
+- **It changes the pin and its recorded commit, preserving every unrelated byte.** The file is scanned, never re-serialised: indentation, key order, `$comment`s, the other rows, CRLF line endings and a trailing newline (or its absence) are kept. The `pinned` string is replaced and `pinnedCommit` is inserted or updated on that row. Where `maintained_tools`, or the edited row's `repo`, `pinned` or `pinnedCommit`, appears **more than once**, the edit is refused (`not-one-value-edit`): `JSON.parse` keeps only the last, so the value a reader sees and the one a reviewer reads could differ -- fix the file by hand first. A duplicate anywhere else is not the edit path's. The new text is then **proved** before anything is written: it must parse to the old document with only the intended `pinned` and `pinnedCommit` updates, or the write is refused.
 - **The tag must resolve on the canon, as `refs/tags/<tag>`.** The canon checkout is found exactly as [`canon checkout`](#nen-canon-checkout) finds it -- `--canon-checkout`, then `checkout_env`, then `checkout` -- and verified with the same read-only, isolated git calls as far as the tag: the top of a work tree whose `origin` names the source on the consumer's own host, holding `refs/tags/<tag>` (a branch of the same name does not count) **as a ref of its own**: `git rev-parse --symbolic-full-name refs/tags/<tag>` must print exactly `refs/tags/<tag>`, so a symbolic ref under `refs/tags/` that follows a branch is `tag-missing` too. The **recorded** pin must itself be tag-shaped, as the read form requires: a row pinned to `main` is refused (`pin-not-tag-shaped`) rather than moved -- fix it by hand. A missing tag's advice is the fetch alone (`git -C <checkout> fetch --tags origin`): checking the tag out is the regenerate's step, not this one's. **HEAD need not be on the tag yet and the tree need not be clean**: the pin moves first, and the regenerate that must follow verifies the checkout at the new pin. nen fetches nothing: fetch the tag into the checkout first. A checkout that does not resolve is a refusal with its code (`unresolvable`, `tag-missing`, `wrong-source`, `wrong-host`, ...), never a pin written on trust.
 - **Checked after the tag, read from what was checked.** The row is picked from a first read, but nothing is edited from it. Only after every git call of the tag resolution is the registry's path resolved, its containment checked (below), and the text read again **from that checked real path** -- opened without following a final link, its device, inode, size, modification time and status-change time (ctime) recorded. That text must still pick the same source, row and pin, or the run is refused (`registry-changed`): a file swapped or edited while git ran is never the one edited.
 - **Inside the repository only.** The registry's real path (`realpath`, links resolved) must lie inside `--repo`'s own real root: a `nen/repos.json` that links **out** of the repository is refused at exit 1 (`registry-outside-repo`), naming both paths, and neither file is touched. A link that stays inside is written **through** -- the link is kept, its target replaced -- and the output names the real file written (`written: <real> (through the link <path>)`) -- only when `nen/repos.json` itself is a symbolic link; a symlinked consumer root or a case-variant `--repo` names the real file with no link. In `--json`, `target` is that real file on every run, `--dry-run` included, and `writtenTo` is the same path when a write happened and `null` otherwise.
@@ -12147,7 +12174,7 @@ A repin used to be a hand-edit of one JSON key followed by [`schema check`](#nen
 - **Read back.** After the write the file is reloaded through the registry loader and the new pin checked in the same row; [`schema check`](#nen-schema-check)'s `nen/repos.json` row reads the result exactly as it read the old one, with the new pin in its `pinned tools`.
 - **The mirror is now stale, and it is said.** A moved pin leaves every mirrored file naming the old tag -- which [`canon mirror check`](#nen-canon-mirror-check) reports as `stale` on every surface -- so the output and a `nen: note:` on stderr name the regenerate that must land **in the same commit**: `nen canon mirror generate --repo '<consumer>' --canon-values <path> (--stack-dir <dir> --leaf <name> | --rules-dir <dir>)` -- a **POSIX shell** command, labelled so, with the root printed as one single-quoted word -- which now defaults to the new pin. `--json` carries the same command as `mirror.regenerate` and as an argv array, `mirror.regenerateArgv`.
 
-**Every refusal comes before any write.** Exit **2**: `<tag>` is not tag-shaped (`v<major>.<minor>[.<patch>][-pre]`); an empty `--write`/`--source`, a `--source` that is not `owner/name`, or a flag another `canon` verb reads (`--ref` above all -- the tag is `--write`'s value -- `--rules-dir`, `--stack-dir`, ...); a `nen/repos.json` that does not parse or validate (the loader's pointer). Exit **1**: `--repo` has no `nen/repos.json`, or its real file is outside `--repo`, or it changed while the tag was resolved; the recorded pin is not tag-shaped; no maintained tool is pinned; several are and `--source` does not say which; `--source` names a tool with no pin to move (`--write` moves a recorded pin -- record the first by hand); or `<tag>` does not resolve in the canon checkout, the refusal naming the tag and the checkout step. A `<tag>` equal to the current pin writes nothing and exits 0 once the tag resolves. A failed replace is exit 1 too. `--write` is refused on every other `canon` verb.
+**Every refusal comes before any write.** Exit **2**: `<tag>` is not tag-shaped (`v<major>.<minor>[.<patch>][-pre]`); an empty `--write`/`--source`, a `--source` that is not `owner/name`, or a flag another `canon` verb reads (`--ref` above all -- the tag is `--write`'s value -- `--rules-dir`, `--stack-dir`, ...); a `nen/repos.json` that does not parse or validate (the loader's pointer). Exit **1**: `--repo` has no `nen/repos.json`, or its real file is outside `--repo`, or it changed while the tag was resolved; the recorded pin is not tag-shaped; no maintained tool is pinned; several are and `--source` does not say which; `--source` names a tool with no pin to move (`--write` moves a recorded pin -- record the first by hand); or `<tag>` does not resolve in the canon checkout, the refusal naming the tag and the checkout step. A `<tag>` equal to the current pin records a missing commit; with the same recorded identity it writes nothing and exits 0. A different recorded identity refuses as a moved tag. A failed replace is exit 1 too. `--write` is refused on every other `canon` verb.
 
 **Output** -- `source: <owner/name>`, `pin: <before> -> <after>` (`(unchanged)` when equal), `recorded in: <path> (maintained_tools[<i>].pinned, line <n>)`, `tag: <tag> is <sha12> in <checkout> (resolved from <kind> <what>)`, `written: ...`, and, when the pin moved, `mirror: now STALE -- regenerate it in the same commit (POSIX shell): <command>` (`would be STALE` under `--dry-run`). Text lines are stripped of control characters. `--json`: `{ contract: "nen.canon.pin.write/v0.1", ok: true, source, before, after, changed, dryRun, written, recordedIn, target, writtenTo, row, line, tag: { commit, checkout, resolvedFrom }, mirror: { stale, regenerate, regenerateArgv }, failure: null }`. **Every refusal it names emits a document under `--json` too**, as [`canon checkout`](#nen-canon-checkout) does: `{ contract: "nen.canon.pin.write/v0.1", ok: false, [written: true on read-back-mismatch], failure: { code, message } }`, where `code` is `no-registry`, `registry-outside-repo`, `registry-changed`, `pin-not-tag-shaped`, `no-pin`, `ambiguous-source`, `source-not-pinned`, `not-one-value-edit`, `write-failed`, `read-back-mismatch`, or the checkout's own code when the tag does not resolve (`unresolvable`, `tag-missing`, `wrong-source`, `wrong-host`, ...). An exit-2 usage error carries no document: its refusal is on stderr alone.
 
@@ -12179,6 +12206,19 @@ nen canon pin --repo /path/to/consumer --json
 }
 ```
 (for a registry whose `maintained_tools` carries `{ "repo": "owner/handbooks", "role": "canonical handbooks", "pinned": "v0.6.0" }`; shape from `src/canon/command.test.ts`)
+
+**Recorded commit integrity (#506).** Every `canon pin --write <tag>` now
+records the resolved full SHA as `pinnedCommit` on the same maintained-tools
+row, preserving every other existing byte. An existing field is updated; an
+unchanged tag with an unrecorded commit is upgraded on its next write. A
+same-tag move cannot overwrite a different recorded identity. Bare pin reads
+return `commit` (or `null` and `commit: unrecorded` for legacy rows). When a
+checkout is supplied with `--canon-checkout` or declared in the registry, pin
+reads verify the tag without requiring HEAD to be checked out there. With no
+checkout declaration, the read reports the recorded identity only; no live tag
+verification is claimed. `canon checkout` and both mirror forms compare the
+recorded commit before accepting the tag, naming both SHAs on a moved tag,
+including when an existing checkout's HEAD remains at the old commit.
 
 ### `nen canon checkout`
 
@@ -12327,6 +12367,18 @@ surface: codex -> AGENTS.md
   note: AGENTS.md's canon block is 158211 bytes; 'codex' documents that it stops reading project documents at 32768 bytes (project_doc_max_bytes in .codex/config.toml) ...
 ```
 (shape derived from `src/canon/mirror.ts`'s `renderSurface`/`writeSurface` and `src/canon/command.test.ts`)
+
+**Incoming port mirrors (#457).** The verified-checkout form automatically
+adds every `<from>--<consumer-scenario>.md` pair under `handbooks/ports` (or
+`--ports-dir`) to the same surface rules location, with the normal generated
+marker and drift/orphan rules. Outgoing pairs and the pair INDEX are excluded.
+For standalone `--rules-dir`, also pass `--canon-root` to identify the tree
+containing the ports. That root must pass the same source, host, pinned tag,
+recorded commit and clean-tree verification as `--canon-checkout`; the rules
+directory must be contained within it after resolving links. Without it Nen explicitly reports port handbooks
+unavailable rather than claiming they were included. A supplied `--ports-dir`
+without a root is refused. Source name collisions and escaping links refuse
+before writes. `--not-mirrored` applies to pair filenames as to stack rules.
 
 ### `nen canon mirror check`
 
@@ -12568,6 +12620,42 @@ canon lint: 187 files · 0 new · 0 stale · 0 grown · PL-01 189/189b · PL-02 
 (exit 0; a real run over an export of Hatsu `main` at `1243b272` with the
 `canon.lint` block above added to its `nen/workflow.json` — the guard's counts
 exactly)
+
+### `nen canon clause cites`
+
+Read a request's cited clause IDs once each, with their definition file/line,
+status and binding, then follow displaced clauses transitively. Homes and the
+status vocabulary are explicit caller data; Nen does not decide conflicts or
+infer a product's floor or skill-touch policy.
+
+```sh
+nen canon clause cites --repo /consumer --text request.md \
+  --home HR=docs/ROSTER.md,CON=/canon/CONSTITUTION.md \
+  --status-vocabulary statuses.json --include CON-4,HR-10 --json
+```
+
+`--home` is a comma-separated `PREFIX=file` list; duplicate or malformed homes
+refuse. `--status-vocabulary` is a JSON object, for example:
+
+```json
+{"whole":["ruled","constitution"],"none":["reading"],"displacement":["reversed by","superseded by"],"unannotated":{"CON":"constitution"}}
+```
+
+Status comes from a `Status` table column or balanced parenthesis after the
+anchored bold ID; conflicting or unknown statuses refuse. Bullet definitions
+can use the explicitly declared per-prefix unannotated status. Displacements
+name one or more comma-separated clause IDs, optionally followed by one part
+annotation. Whole displacement binds nothing; a part annotation leaves the
+rest binding as `part`. Cycles terminate and followed IDs remain unique. An
+explicit `--include` list lets the caller supply floor/touch-derived IDs.
+
+`--json`: `{ contract: "nen.canon.clause-cites/v0.1", clauses, readSet, dangling, exit }`, with `clauses` (defined/dangling resolution,
+file, line, status, binding, displacedBy, via), binding `readSet` labels,
+`dangling` and `exit`. Every referenced definition is reported even when it is
+nonbinding; `readSet` is the subset binding whole or in part. Exit 0 when all
+resolve, 1 naming every dangling ID (including a missing displacement target),
+2 for unreadable request/home/vocabulary, unknown or ambiguous status, a prefix
+with no definitions, or malformed inputs. No conflict verdict is implied.
 
 ### `nen canon clause check`
 

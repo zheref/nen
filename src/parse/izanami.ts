@@ -1061,6 +1061,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       // The canon prose verbs (SDD piece N9): pure reads of the checkout, plus
       // git merge-base/diff/show/ls-files under --base and --leaves.
       lint: RO("reads the rules contract, the baseline and the canon's Markdown, and under --base git merge-base, diff and show; writes nothing"),
+      "clause cites": RO("reads request, clause homes and a caller-declared status vocabulary; writes nothing"),
       "clause check": RO("reads one Markdown file, a base file or git object, and under --leaves git ls-files and diff; writes nothing"),
     },
   },
