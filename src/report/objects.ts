@@ -1,3 +1,4 @@
+import { readLedgerSlice, unreadLedger, type LedgerEvidence } from "../pr/ledger-read.js";
 // src/report/objects.ts -- `objects[]`: the pull requests and issues an effort
 // is ABOUT, as facts, for the report that lists them.
 //
@@ -17,7 +18,13 @@
 // DEFAULT rather than a thing you opt out of, because the verb is run inside
 // build loops where a surprise `gh` call is a surprise token requirement.
 //
-// READINESS HAS THREE ANSWERS AND SAYS WHICH ONE IT GAVE. A repository whose CI
+// READINESS HAS FOUR ANSWERS AND SAYS WHICH ONE IT GAVE. A pull request that is
+// no longer open -- MERGED, or CLOSED without merging -- is not evaluated at
+// all: CON-32 readiness is a statement about an OPEN pull request, and asking
+// the gate about a merged one is how a delivered PR's report came to read
+// `not-ready: mergeable=UNKNOWN` (zheref/nen#639) -- GitHub stops computing
+// mergeability once a PR has merged. Its verdict is the state word and
+// `source` is `state`. For an open one: a repository whose CI
 // publishes a check run called `readiness` has already decided the verdict on
 // this exact head, and re-deriving it here would be a second opinion about a
 // question somebody already answered -- so that check's own summary line is
@@ -109,13 +116,41 @@ export interface ObjectThreads {
 }
 
 export interface ObjectReadiness {
-  /** `ready`, `not-ready`, or whatever verdict word the source gave. */
+  /**
+   * `ready`, `not-ready`, or whatever verdict word the source gave -- and
+   * `merged` or `closed` when `source` is `state`.
+   */
   readonly verdict: string;
   /** The line to quote. Empty only when the source gave none. */
   readonly reason: string;
-  /** Which of the two authorities answered. */
-  readonly source: "check" | "computed";
+  /**
+   * Which authority answered: the head's `readiness` check run, nen's
+   * in-process gate, or -- for a pull request that is no longer open -- its
+   * own state, with neither consulted (zheref/nen#639).
+   */
+  readonly source: "check" | "computed" | "state";
 }
+
+/**
+ * The readiness a pull request that is no longer OPEN carries, or null for one
+ * that is (or whose state could not be read, which the gate then answers).
+ *
+ * NEITHER AUTHORITY IS ASKED, AND THAT IS THE FIX (zheref/nen#639). CON-32
+ * decides whether an OPEN pull request may merge. A merged one has; a closed
+ * one will not. GitHub answers `mergeable: UNKNOWN` for a merged pull request,
+ * so the gate's first predicate failed and a delivered PR's report read
+ * `not-ready: mergeable=UNKNOWN (expected MERGEABLE ...)`. The verdict here is
+ * the state, said as a state, and `nen pr ready` itself is unchanged.
+ */
+export function stateReadiness(state: string): ObjectReadiness | null {
+  const upper = state.toUpperCase();
+  if (upper === "MERGED") return { verdict: "merged", reason: MERGED_REASON, source: "state" };
+  if (upper === "CLOSED") return { verdict: "closed", reason: CLOSED_REASON, source: "state" };
+  return null;
+}
+
+const MERGED_REASON = "merged — not evaluated: CON-32 readiness is a statement about an open pull request";
+const CLOSED_REASON = "closed without merging — not evaluated: CON-32 readiness is a statement about an open pull request";
 
 /**
  * ONE ROW. KEY ORDER IS THE CONTRACT, and a pull request carries five keys an
@@ -138,6 +173,7 @@ export interface PrObject {
   /** Issue numbers this pull request references. */
   readonly linked: readonly number[];
   readonly readiness: ObjectReadiness | null;
+  readonly ledger: LedgerEvidence;
   /**
    * What could not be read cleanly about THIS row, named, in the order it was
    * found. Empty when everything read.
@@ -189,7 +225,7 @@ export interface ObjectsOptions {
 
 function refuse(display: string, index: number, what: string): never {
   throw new VerbUsageError(
-    `'${display}': row ${index} ${what}. Every row is one of the two shapes 'nen report data' publishes under 'objects': a pull request ({ kind: "pr", number, title, url, state, labels[], head, mergeStateStatus, checks: { total, green, red, pending }, threads: { total, unresolved }, reviewRequests[], linked[], readiness }) or an issue ({ kind: "issue", number, title, url, state, labels[], linked[], readiness: null }). A row nobody checked is a fact nobody checked, so the whole file is refused rather than one register row published with a hole in it.`,
+    `'${display}': row ${index} ${what}. Every row is one of the two shapes 'nen report data' publishes under 'objects': a pull request ({ kind: "pr", number, title, url, state, labels[], head, mergeStateStatus, checks: { total, green, red, pending }, threads: { total, unresolved }, reviewRequests[], linked[], readiness: null | { verdict, reason, source: "check" | "computed" | "state" } -- "state" only on a MERGED or CLOSED row }) or an issue ({ kind: "issue", number, title, url, state, labels[], linked[], readiness: null }). PR ledger evidence is set to not-read on this offline path; historical ledger input is not current proof. A row nobody checked is a fact nobody checked, so the whole file is refused rather than one register row published with a hole in it.`,
   );
 }
 
@@ -227,6 +263,33 @@ function requireNumbers(row: Record<string, unknown>, key: string, display: stri
   return [...(value as number[])];
 }
 
+/**
+ * `linked[]`, with every entry that numbers no object LEFT OUT AND NAMED.
+ *
+ * A NON-POSITIVE ENTRY IS DROPPED, NOT REFUSED (zheref/nen#639). Before the
+ * reference pattern was tightened, a hex colour in a PR body (`#000000`) was
+ * read as a reference to #0, and the registers published then carry it.
+ * Refusing would mean a retained file no longer loads; carrying it means a
+ * page prints `<owner>/<name>#0`. So it is left out, and the row's `notes[]`
+ * says so -- the same "a field degrades and is named" rule as the live path.
+ * A list that is not whole numbers at all is still refused by index.
+ */
+function readLinked(
+  row: Record<string, unknown>,
+  own: number,
+  display: string,
+  index: number,
+): { readonly numbers: number[]; readonly notes: string[] } {
+  const all = requireNumbers(row, "linked", display, index);
+  // THE ROW'S OWN NUMBER IS LEFT OUT SILENTLY, as the live path leaves it out
+  // of what it reads: an object is not linked to itself.
+  const numbers = all.filter((number): boolean => number > 0 && number !== own);
+  const notes = all
+    .filter((number): boolean => number <= 0)
+    .map((number): string => `linked[] carried ${number}, which numbers no issue or pull request; left out`);
+  return { numbers, notes };
+}
+
 function requireCounts(
   row: Record<string, unknown>,
   key: string,
@@ -249,7 +312,7 @@ function requireCounts(
   return counts;
 }
 
-function readReadiness(row: Record<string, unknown>, display: string, index: number): ObjectReadiness | null {
+function readReadiness(row: Record<string, unknown>, state: string, display: string, index: number): ObjectReadiness | null {
   const value = field(row, "readiness");
   if (value === null || value === undefined) return null;
   if (typeof value !== "object" || Array.isArray(value)) {
@@ -262,14 +325,66 @@ function readReadiness(row: Record<string, unknown>, display: string, index: num
   if (typeof verdict !== "string" || typeof reason !== "string") {
     refuse(display, index, `has a 'readiness' without a string 'verdict' and 'reason'`);
   }
-  if (source !== "check" && source !== "computed") {
+  if (source !== "check" && source !== "computed" && source !== "state") {
     refuse(
       display,
       index,
-      `has 'readiness.source' of ${describe(source)} -- it says WHICH authority answered and is 'check' (the head's own readiness check run) or 'computed' (nen's in-process CON-32 gate)`,
+      `has 'readiness.source' of ${describe(source)} -- it says WHICH authority answered and is 'check' (the head's own readiness check run), 'computed' (nen's in-process CON-32 gate) or 'state' (a MERGED or CLOSED pull request, which neither evaluates)`,
     );
   }
+  // `state` IS A STATEMENT THAT THE PULL REQUEST IS NO LONGER OPEN, and it is
+  // held to exactly what the live path would say (zheref/nen#639): only on a
+  // row whose state routes to it -- MERGED or CLOSED -- and only with the
+  // verdict that state gives. On an OPEN row, an empty or unknown state, or
+  // with another verdict, it is a claim no read of GitHub would have made.
+  if (source === "state") {
+    const expected = stateReadiness(state);
+    if (expected === null) {
+      refuse(
+        display,
+        index,
+        `has 'readiness.source' 'state' on a pull request whose state is ${describe(state)}. 'state' says the pull request is MERGED or CLOSED and so was not evaluated; an open one's readiness is 'check' or 'computed'`,
+      );
+    }
+    if (verdict !== expected.verdict) {
+      refuse(
+        display,
+        index,
+        `has 'readiness.source' 'state' with verdict ${describe(verdict)} on a ${state.toUpperCase()} pull request, whose state verdict is '${expected.verdict}'`,
+      );
+    }
+  }
   return { verdict, reason, source };
+}
+
+/**
+ * A retained row's readiness, with the state verdict put in place of a verdict
+ * the pull request has since outlived (zheref/nen#639, AC-1 on the offline
+ * path).
+ *
+ * A FILE WRITTEN BEFORE THE MERGE carries the gate's verdict on the open pull
+ * request -- or, written after it by an older nen, `not-ready:
+ * mergeable=UNKNOWN`. Quoting either on a row whose state is MERGED or CLOSED
+ * is the defect the live path no longer has, so the state verdict is shown and
+ * the row's notes name the verdict it replaced. Not a refusal: the file is a
+ * true record of what was read then, and it still loads.
+ */
+function settleRetained(
+  readiness: ObjectReadiness | null,
+  state: string,
+): { readonly readiness: ObjectReadiness | null; readonly notes: readonly string[] } {
+  const settled = stateReadiness(state);
+  if (settled === null || readiness?.source === "state") return { readiness, notes: [] };
+  // A NULL IS SETTLED TOO: a row with no verdict would otherwise read "no
+  // readiness authority answered" about a pull request nothing need answer for.
+  if (readiness === null) {
+    return { readiness: settled, notes: [`no readiness was retained for this ${settled.verdict} pull request; the ${settled.verdict} state is shown`] };
+  }
+  const old = readiness.reason !== "" ? readiness.reason : readiness.verdict;
+  return {
+    readiness: settled,
+    notes: [`readiness '${old}' was read before this pull request was ${settled.verdict}; the ${settled.verdict} state is shown instead`],
+  };
 }
 
 /**
@@ -333,7 +448,7 @@ export function parseObjects(document: unknown, display: string): readonly Repor
       labels: requireStrings(row, "labels", display, index),
     };
     if (kind === "issue") {
-      const readiness = readReadiness(row, display, index);
+      const readiness = readReadiness(row, common.state, display, index);
       if (readiness !== null) {
         refuse(
           display,
@@ -341,25 +456,34 @@ export function parseObjects(document: unknown, display: string): readonly Repor
           `is an issue carrying a 'readiness'. CON-32 is a statement about a pull request; an issue's readiness is always null`,
         );
       }
+      const linked = readLinked(row, common.number, display, index);
       return {
         kind: "issue",
         ...common,
-        linked: requireNumbers(row, "linked", display, index),
+        linked: linked.numbers,
         readiness: null,
-        notes: readNotes(row, display, index),
+        notes: [...readNotes(row, display, index), ...linked.notes],
       };
     }
+    const head = requireString(row, "head", display, index);
+    const mergeStateStatus = requireString(row, "mergeStateStatus", display, index);
+    const checks = requireCounts(row, "checks", ["total", "green", "red", "pending"], display, index) as unknown as ObjectChecks;
+    const threads = requireCounts(row, "threads", ["total", "unresolved"], display, index) as unknown as ObjectThreads;
+    const reviewRequests = requireStrings(row, "reviewRequests", display, index);
+    const linked = readLinked(row, common.number, display, index);
+    const retained = settleRetained(readReadiness(row, common.state, display, index), common.state);
     return {
       kind: "pr",
       ...common,
-      head: requireString(row, "head", display, index),
-      mergeStateStatus: requireString(row, "mergeStateStatus", display, index),
-      checks: requireCounts(row, "checks", ["total", "green", "red", "pending"], display, index) as unknown as ObjectChecks,
-      threads: requireCounts(row, "threads", ["total", "unresolved"], display, index) as unknown as ObjectThreads,
-      reviewRequests: requireStrings(row, "reviewRequests", display, index),
-      linked: requireNumbers(row, "linked", display, index),
-      readiness: readReadiness(row, display, index),
-      notes: readNotes(row, display, index),
+      head,
+      mergeStateStatus,
+      checks,
+      threads,
+      reviewRequests,
+      linked: linked.numbers,
+      readiness: retained.readiness,
+      ledger: unreadLedger("ledger comments were not read from GitHub (offline objects file)"),
+      notes: [...readNotes(row, display, index), ...linked.notes, ...retained.notes],
     };
   });
 }
@@ -810,8 +934,13 @@ async function prRow(
   // replaced a malformed field with "" left a row that looks complete and is
   // not -- which is the exact failure `notes[]` was added to close, escaping
   // through the fields the first cut coerced inline.
+  // THE STATE IS READ FIRST BECAUSE IT DECIDES WHETHER READINESS IS ASKED AT
+  // ALL (zheref/nen#639): a MERGED or CLOSED pull request is not evaluated, so
+  // neither the check-run read nor the gate runs for it.
+  const state = degradedString(view, "state", note);
+  const settled = stateReadiness(state);
   const head = degradedString(view, "headRefOid", note);
-  if (head === "") note("the head SHA could not be read, so readiness could not be established");
+  if (head === "" && settled === null) note("the head SHA could not be read, so readiness could not be established");
   const checks = countRollup(view["statusCheckRollup"], note);
   const threads = readThreadCounts(seams, target, number, note);
   const title = degradedString(view, "title", note);
@@ -825,10 +954,11 @@ async function prRow(
   const reasons: string[] = [];
   const hold = (line: string): void => void reasons.push(line);
   const readiness =
-    head === ""
+    settled ??
+    (head === ""
       ? null
       : (readinessFromCheck(seams, target, head, hold) ??
-        (await readinessFromGate(target, number, repoRoot, hold)));
+        (await readinessFromGate(target, number, repoRoot, hold))));
   for (const line of reasons) {
     warn(line);
     // THE CHECKOUT'S ABSOLUTE PATH STAYS ON THE TERMINAL. The gate names the
@@ -837,12 +967,13 @@ async function prRow(
     if (readiness === null) notes.push(redactRoot(line.replace(/^objects: /, ""), repoRoot));
   }
 
+  const own = degradedNumber(view, "number", number, note);
   return {
     kind: "pr",
-    number: degradedNumber(view, "number", number, note),
+    number: own,
     title,
     url: degradedString(view, "url", note),
-    state: degradedString(view, "state", note),
+    state,
     labels: readLabels(view["labels"], note),
     head,
     // VERBATIM, whatever it says. GitHub's own composite is CLEAN/DIRTY/
@@ -856,8 +987,16 @@ async function prRow(
     checks,
     threads,
     reviewRequests: readReviewRequests(view["reviewRequests"], note),
-    linked: [...referencedIssueNumbers(`${title}\n${body}`)].sort((a, b): number => a - b),
+    // A PULL REQUEST IS NOT LINKED TO ITSELF (zheref/nen#639): a body that
+    // names its own number -- a stacked PR's "this is #596" -- would otherwise
+    // print the row among its own references.
+    linked: [...referencedIssueNumbers(`${title}\n${body}`)]
+      .filter((ref): boolean => ref !== own && ref !== number)
+      .sort((a, b): number => a - b),
     readiness,
+    ledger: typeof view["headRefName"] === "string" && view["headRefName"] !== ""
+      ? readLedgerSlice(seams, target, number, view["headRefName"]).evidence
+      : unreadLedger("the PR head branch could not be read"),
     notes,
   };
 }
@@ -1103,8 +1242,11 @@ export function renderObjects(objects: readonly ReportObject[], filtered: { read
         `      ${plainLine(object.head).slice(0, 8)}  ${plainLine(object.mergeStateStatus)}  checks ${object.checks.green}/${object.checks.total} green, ${object.checks.red} red, ${object.checks.pending} pending  threads ${object.threads.unresolved}/${object.threads.total} unresolved`,
       );
     }
-    if (object.linked.length > 0) {
-      lines.push(`      linked: ${object.linked.map((number): string => `#${number}`).join(", ")}`);
+    // A NUMBER <= 0 IS NEVER PRINTED AS A REFERENCE (zheref/nen#639): both
+    // read paths leave one out, and this rendering does not trust that.
+    const linked = object.linked.filter((number): boolean => number > 0);
+    if (linked.length > 0) {
+      lines.push(`      linked: ${linked.map((number): string => `#${number}`).join(", ")}`);
     }
     // A DEGRADED ROW SAYS SO WHERE IT IS READ. The stderr warning is for the
     // operator watching the run; this line is for whoever reads the rendering

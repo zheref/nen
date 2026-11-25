@@ -1,0 +1,1 @@
+- Replace the load-sensitive quotation-blanking timing ratio with a deterministic slice-output bound, a quadratic adverse control, and mixed-quotation semantics coverage.

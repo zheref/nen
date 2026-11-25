@@ -12,10 +12,13 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   appendStepsToOpenPhase,
+  IDLE_WAIT_MS,
+  idleWait,
   ledgerLockPath,
   PHASE_CONTRACT,
   phaseLedgerPath,
   readLedger,
+  WAIT_PHASES,
   writeLedger,
   type PhaseStep,
 } from "./ledger.js";
@@ -111,5 +114,64 @@ describe("appendStepsToOpenPhase under contention (zheref/nen#231)", () => {
     expect(appendStepsToOpenPhase(localEffortHome(root, "phases"), "atomic", [step(1, "x"), step(2, "x")])).toBe(true);
     expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({ contract: PHASE_CONTRACT, effort: "atomic" });
     expect(readdirSync(dirname(path))).toEqual(["atomic.json"]);
+  });
+});
+
+// zheref/nen#639: a readiness phase held open from one sitting to the final
+// report counted ~110 hours of waiting as spend. Derived at read time only.
+describe("idleWait -- what spend counts of one phase", () => {
+  const MINUTE = 60_000;
+  const steps = (...ms: (number | null)[]): PhaseStep[] => ms.map((durationMs): PhaseStep => ({ verb: "build", argv: "x", exitCode: 0, durationMs, stalled: false }));
+
+  it("is one hour on readiness only", () => {
+    expect(IDLE_WAIT_MS).toBe(60 * MINUTE);
+    expect(WAIT_PHASES).toEqual(["readiness"]);
+  });
+
+  it("is null/null for an OPEN phase, wait or not", () => {
+    expect(idleWait({ phase: "readiness", durationMs: null, steps: [] })).toEqual({ countedMs: null, idleWaitMs: null });
+    expect(idleWait({ phase: "rasengan", durationMs: null })).toEqual({ countedMs: null, idleWaitMs: null });
+  });
+
+  it("counts only the timed steps of a closed wait phase untimed for over the line", () => {
+    expect(idleWait({ phase: "readiness", durationMs: 396726699, steps: [] })).toEqual({ countedMs: 0, idleWaitMs: 396726699 });
+    // An entry written before `steps[]` existed reads as none.
+    expect(idleWait({ phase: "readiness", durationMs: 2 * IDLE_WAIT_MS })).toEqual({ countedMs: 0, idleWaitMs: 2 * IDLE_WAIT_MS });
+    // An untimed step counts 0 toward the timed total.
+    expect(idleWait({ phase: "readiness", durationMs: 3 * IDLE_WAIT_MS, steps: steps(5 * MINUTE, null) })).toEqual({
+      countedMs: 5 * MINUTE,
+      idleWaitMs: 3 * IDLE_WAIT_MS - 5 * MINUTE,
+    });
+  });
+
+  it("counts the whole duration at, and just under, the line -- and just over it is idle", () => {
+    expect(idleWait({ phase: "readiness", durationMs: IDLE_WAIT_MS, steps: [] })).toEqual({ countedMs: IDLE_WAIT_MS, idleWaitMs: 0 });
+    expect(idleWait({ phase: "readiness", durationMs: 59 * MINUTE, steps: [] })).toEqual({ countedMs: 59 * MINUTE, idleWaitMs: 0 });
+    expect(idleWait({ phase: "readiness", durationMs: IDLE_WAIT_MS + 1, steps: [] })).toEqual({ countedMs: 0, idleWaitMs: IDLE_WAIT_MS + 1 });
+    // The line is on the UNTIMED span: steps that cover the phase keep it whole.
+    expect(idleWait({ phase: "readiness", durationMs: 5 * 24 * 60 * MINUTE, steps: steps(5 * 24 * 60 * MINUTE - 10 * MINUTE) })).toEqual({
+      countedMs: 5 * 24 * 60 * MINUTE,
+      idleWaitMs: 0,
+    });
+  });
+
+  it("leaves a duration that is not a finite number >= 0 unread, on the entry or any step", () => {
+    const infinite = (JSON.parse('{"d":1e400}') as { d: number }).d;
+    expect(infinite).toBe(Number.POSITIVE_INFINITY);
+    for (const entry of [
+      { phase: "readiness", durationMs: infinite, steps: [] },
+      { phase: "rasengan", durationMs: infinite },
+      { phase: "readiness", durationMs: -5 },
+      { phase: "rasengan", durationMs: Number.NaN },
+      { phase: "readiness", durationMs: 2 * IDLE_WAIT_MS, steps: steps(10, -1) },
+      { phase: "rasengan", durationMs: 1000, steps: steps(infinite) },
+    ]) {
+      expect(idleWait(entry), JSON.stringify(entry)).toEqual({ countedMs: null, idleWaitMs: null });
+    }
+  });
+
+  it("never calls a phase that is not a wait phase idle, however long and untimed", () => {
+    expect(idleWait({ phase: "rasengan", durationMs: 5 * 24 * 60 * MINUTE, steps: [] })).toEqual({ countedMs: 5 * 24 * 60 * MINUTE, idleWaitMs: 0 });
+    expect(idleWait({ phase: "pr", durationMs: 132619, steps: [] })).toEqual({ countedMs: 132619, idleWaitMs: 0 });
   });
 });

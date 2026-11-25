@@ -1,3 +1,4 @@
+import { unreadLedger } from "../pr/ledger-read.js";
 // src/report/register.test.ts -- `nen report data --register <desk>`: the
 // backlog-board § 3 register document, assembled by the verb (zheref/nen#276).
 //
@@ -23,6 +24,7 @@ import { viewArgv } from "../pr/fetch.js";
 import { listArgv } from "../pr/threads.js";
 import { parseTarget } from "../github/target.js";
 import type { ReportPhase, ReportUsage } from "./data.js";
+import { idleWait } from "../phase/ledger.js";
 import {
   assembleRegister,
   formatDuration,
@@ -75,6 +77,7 @@ async function capture(argv: readonly string[], repoFlag: string | null = null, 
 
 const PR_READY = {
   kind: "pr",
+  ledger: unreadLedger("fixture has no live comment read"),
   number: 87,
   title: "feat(report): the register",
   url: "https://github.com/zheref/hatsu/pull/87",
@@ -514,9 +517,9 @@ describe("spend", () => {
   });
 
   const PHASES: ReportPhase[] = [
-    { effort: "e1", phase: "build", startedAt: "", endedAt: "", durationMs: 200_000, exitCode: 0, surface: null, model: null, dial: null, note: null, steps: [{ verb: "build", argv: "", exitCode: 0, durationMs: 41_200, stalled: false }, { verb: "lint", argv: "", exitCode: 0, durationMs: null, stalled: false }] },
-    { effort: "e1", phase: "review", startedAt: "", endedAt: null, durationMs: 50_000, exitCode: null, surface: null, model: null, dial: null, note: null, steps: [] },
-    { effort: "e1", phase: "open", startedAt: "", endedAt: null, durationMs: null, exitCode: null, surface: null, model: null, dial: null, note: null, steps: [] },
+    { effort: "e1", phase: "build", startedAt: "", endedAt: "", durationMs: 200_000, exitCode: 0, surface: null, model: null, dial: null, note: null, steps: [{ verb: "build", argv: "", exitCode: 0, durationMs: 41_200, stalled: false }, { verb: "lint", argv: "", exitCode: 0, durationMs: null, stalled: false }], countedMs: 200_000, idleWaitMs: 0 },
+    { effort: "e1", phase: "review", startedAt: "", endedAt: null, durationMs: 50_000, exitCode: null, surface: null, model: null, dial: null, note: null, steps: [], countedMs: 50_000, idleWaitMs: 0 },
+    { effort: "e1", phase: "open", startedAt: "", endedAt: null, durationMs: null, exitCode: null, surface: null, model: null, dial: null, note: null, steps: [], countedMs: null, idleWaitMs: null },
   ];
   const usage = (over: Partial<ReportUsage>): ReportUsage => ({
     effort: "e1", recordedAt: "", surface: "claude-code", model: "opus", input: null, output: null, cacheRead: null, cacheWrite: null, minutes: null, source: null, note: null, notReported: false, dial: null, ...over,
@@ -531,9 +534,9 @@ describe("spend", () => {
       usage({ effort: "other", input: 999 }),
     ], "a note");
     expect(effort.spendPhases).toEqual([
-      { lane: "build", percent: "100", amount: "3 m 20 s", steps: "build 41.2 s · lint not timed" },
-      { lane: "review", percent: "25", amount: "50.0 s", steps: "" },
-      { lane: "open", percent: "0", amount: "not ended", steps: "" },
+      { lane: "build", percent: "100", amount: "3 m 20 s", steps: "build 41.2 s · lint not timed", idle: false },
+      { lane: "review", percent: "25", amount: "50.0 s", steps: "", idle: false },
+      { lane: "open", percent: "0", amount: "not ended", steps: "", idle: false },
     ]);
     expect(effort.spendUsage).toEqual([
       { surface: "claude-code", model: "opus", input: 11, output: 7, cacheRead: 3, cacheWrite: null, minutes: null, source: "/cost", notReported: false, reported: true },
@@ -663,6 +666,118 @@ describe("linkedLine takes each number's kind from scope (N4)", () => {
     const { document } = await registerDocument(repo({ objects: [ISSUE, linking, PR_BLOCKED], desk: { ...DESK, rows: {} } }));
     const row = (document["objects"] as Record<string, unknown>[]).find((r): boolean => r["number"] === 87);
     expect(row?.["linkedLine"]).toBe("HA#12, HA-IS-#85, HA-PR-#90");
+  });
+});
+
+// ── zheref/nen#639: a delivered PR's register ─────────────────────────────
+
+describe("linkedLine never prints a number that names nothing (zheref/nen#639)", () => {
+  it("drops a retained file's linked 0 with a note, and never writes '#0'", async () => {
+    const retained = { ...PR_READY, linked: [0, 85] };
+    const { captured, document } = await registerDocument(repo({ objects: [ISSUE, retained], desk: { ...DESK, rows: {} } }));
+    expect(captured.code, captured.err.join("\n")).toBe(0);
+    const row = (document["objects"] as Record<string, unknown>[]).find((r): boolean => r["number"] === 87);
+    expect(row?.["linked"]).toEqual([85]);
+    expect(row?.["linkedLine"]).toBe("HA-IS-#85");
+    expect(row?.["notes"]).toContain("linked[] carried 0, which numbers no issue or pull request; left out");
+    expect(JSON.stringify(document)).not.toMatch(/#0\b/);
+  });
+
+  it("leaves a non-positive number out even when a row reached the register unvalidated", () => {
+    const desk = parseDesk({ ...DESK, rows: {}, gates: [] }, "desk.json");
+    const odd = { ...PR_READY, linked: [0, -3, 12] } as unknown as ReportObject;
+    const codes: NotationSource = { codeFor: (slug): string | null => (slug === "zheref/hatsu" ? "HA" : null), slugFor: (): null => null, unavailable: null };
+    for (const source of [codes, NO_CODES]) {
+      const register = assembleRegister(desk, { generatedAt: NOW.toISOString(), objects: [odd], phases: [], usage: [], target: null, codes: source, verdictFile: null });
+      const line = register.objects[0]?.linkedLine ?? "";
+      expect(line).not.toMatch(/#-?0\b|#-3/);
+      expect(line).toMatch(/#12$/);
+    }
+  });
+});
+
+describe("a merged pull request's register row (zheref/nen#639)", () => {
+  it("quotes the state verdict, explains nothing as missing, and counts it toward no open tally", async () => {
+    const merged = {
+      ...PR_READY,
+      state: "MERGED",
+      readiness: { verdict: "merged", reason: "merged — not evaluated: CON-32 readiness is a statement about an open pull request", source: "state" },
+    };
+    const { captured, document } = await registerDocument(repo({ objects: [ISSUE, merged], desk: { ...DESK, rows: {}, gates: [DESK.gates[1]] } }));
+    expect(captured.code, captured.err.join("\n")).toBe(0);
+    const row = (document["objects"] as Record<string, unknown>[]).find((r): boolean => r["number"] === 87);
+    expect(row?.["verdict"]).toBe("merged — not evaluated: CON-32 readiness is a statement about an open pull request");
+    expect(row?.["verdict"]).not.toMatch(/mergeable|not-ready/);
+    expect((row?.["notes"] as string[]).join("\n")).not.toMatch(/no readiness authority answered/);
+    expect(document).toMatchObject({ tallyReady: 0, tallyBlockers: 0, tallyInFlight: 0 });
+  });
+});
+
+describe("spend excludes an idle readiness wait, and says so (zheref/nen#639, SC-1)", () => {
+  const IDLE = "0.0 s counted · idle wait 6612 m 07 s excluded (untimed for over 60 m)";
+  const MINUTE = 60_000;
+  const row = (phase: string, durationMs: number, steps: number[] = []): ReportPhase => {
+    const timed = steps.map((ms) => ({ verb: "build", argv: "x", exitCode: 0, durationMs: ms, stalled: false }));
+    return {
+      effort: "fixture/kp-12-sample", phase, startedAt: "", endedAt: "", durationMs, exitCode: 0, surface: null, model: null, note: null, steps: timed, dial: null,
+      ...idleWait({ phase, durationMs, steps: timed }),
+    };
+  };
+
+  it("bars the failing ledger's pr at 100 % and its readiness at 0 %, naming the wait", async () => {
+    const root = repo({ desk: { ...DESK, rows: {} } });
+    mkdirSync(join(root, ".nen", "phases"), { recursive: true });
+    writeFileSync(join(root, ".nen", "phases", "fixture%2Fkp-12-sample.json"), readFileSync(join(FIXTURES, "idle-readiness-ledger.json"), "utf8"));
+    const { captured, document } = await registerDocument(root);
+    expect(captured.code, captured.err.join("\n")).toBe(0);
+    const spend = document["spendEfforts"] as { name: string; spendPhases: unknown[] }[];
+    expect(spend.map((effort): string => effort.name)).toEqual(["fixture/kp-12-sample"]);
+    expect(spend[0]?.spendPhases).toEqual([
+      { lane: "pr", percent: "100", amount: "2 m 13 s", steps: "", idle: false },
+      { lane: "readiness", percent: "0", amount: IDLE, steps: "", idle: true },
+    ]);
+    // durationMs itself is untouched: the wait is excluded from spend, not erased.
+    expect((document["phases"] as { durationMs: number }[]).map((phase): number => phase.durationMs)).toEqual([132619, 396726699]);
+  });
+
+  it("counts a readiness phase of 59 minutes with no step", () => {
+    const effort = spendEffort("fixture/kp-12-sample", [row("pr", 132619), row("readiness", 59 * MINUTE)], [], "");
+    expect(effort.spendPhases[1]).toEqual({ lane: "readiness", percent: "100", amount: "59 m 00 s", steps: "", idle: false });
+  });
+
+  it("counts a long readiness phase whose timed steps cover the span", () => {
+    const span = 5 * 24 * 60 * MINUTE;
+    const effort = spendEffort("fixture/kp-12-sample", [row("pr", 132619), row("readiness", span, [span - 30 * MINUTE])], [], "");
+    expect(effort.spendPhases[1]).toMatchObject({ percent: "100", amount: "7200 m 00 s", idle: false });
+  });
+
+  it("renders a phase with an unreadable duration as not ended, never NaN or past 100 %", async () => {
+    const root = repo({ desk: { ...DESK, rows: {} } });
+    mkdirSync(join(root, ".nen", "phases"), { recursive: true });
+    // `1e400` is valid JSON and parses to Infinity; the others are hand edits.
+    writeFileSync(
+      join(root, ".nen", "phases", "fixture%2Fkp-12-sample.json"),
+      `{"contract":"nen.phase.ledger/v0.1","effort":"fixture/kp-12-sample","phases":[
+        {"phase":"pr","startedAt":"","endedAt":"x","durationMs":132619,"steps":[]},
+        {"phase":"readiness","startedAt":"","endedAt":"x","durationMs":1e400,"steps":[]},
+        {"phase":"rasengan","startedAt":"","endedAt":"x","durationMs":-5,"steps":[]},
+        {"phase":"review","startedAt":"","endedAt":"x","durationMs":9000,"steps":[{"verb":"build","argv":"x","durationMs":-1}]}]}`,
+    );
+    const { captured, document } = await registerDocument(root);
+    expect(captured.code, captured.err.join("\n")).toBe(0);
+    const phases = (document["spendEfforts"] as { spendPhases: { lane: string; percent: string; amount: string; idle: boolean }[] }[])[0]?.spendPhases ?? [];
+    expect(phases.map((phase): unknown => [phase.lane, phase.percent, phase.amount, phase.idle])).toEqual([
+      ["pr", "100", "2 m 13 s", false],
+      ["readiness", "0", "not ended", false],
+      ["rasengan", "0", "not ended", false],
+      ["review", "0", "not ended", false],
+    ]);
+    expect(JSON.stringify(phases)).not.toMatch(/NaN|Infinity/);
+  });
+
+  it("never calls a long authoring phase with no step idle", () => {
+    const effort = spendEffort("fixture/kp-12-sample", [row("pr", 132619), row("rasengan", 5 * 24 * 60 * MINUTE)], [], "");
+    expect(effort.spendPhases[1]).toEqual({ lane: "rasengan", percent: "100", amount: "7200 m 00 s", steps: "", idle: false });
   });
 });
 

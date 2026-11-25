@@ -46,13 +46,25 @@
           "copilot"
         ],
         "delivery": {
-          "$comment": "A GitHub login cannot contain a space, so this pattern matches no author and the carve-out applies to no pull request until it names the delivery author.",
+          "$comment": "A GitHub login cannot contain a space, so this pattern matches no author and the carve-out applies to no pull request until it names the delivery author. head_ref_prefixes covers the fixed head of every branch the branch.template 'nen scaffold init' writes cuts, with its models block (templates/workflow.json); see docs/USAGE.md#delivery-pr-identity, so 'nen schema check' reads no drift on a freshly seeded repository; keep it in step with nen/workflow.json's branch.template and models (zheref/nen#657).",
           "author_pattern": {
             "pattern": "^no author declared$",
             "ignoreCase": false
           },
           "head_ref_prefixes": [
-            "delivery/"
+            "claude/",
+            "fable/",
+            "opus/",
+            "sonnet/",
+            "haiku/",
+            "codex/",
+            "astra/",
+            "sol/",
+            "terra/",
+            "luna/",
+            "cursor/",
+            "grok/",
+            "composer/"
           ],
           "labels": []
         }

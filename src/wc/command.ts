@@ -28,6 +28,19 @@ import { plainLine } from "../cli/plain.js";
 import { SchemaError } from "../schema/errors.js";
 import { loadWorkflow, WORKFLOW_FILE, type LoadedWorkflow } from "../schema/workflow.js";
 import { addedNote, admittedAdditions, injectedMessage, readBack, sentTrailers } from "../commit/readback.js";
+import {
+  collectStripSidecar,
+  COMPOSED_KEYS_ENV,
+  composedKeysEnv,
+  STRIP_RUN_ENV,
+  confirmStripped,
+  discardStripSidecar,
+  prepareStripSidecar,
+  stripFailureHint,
+  strippedMessage,
+  STRIPPED_EXIT,
+  writtenExit,
+} from "../commit/strip.js";
 import { CATCH_UP_CONTRACT, catchUp, renderConflicts, type RequestedStrategy } from "./catchup.js";
 import { EXIT_ALL_MECHANICAL, loadMechanical, renderClassification } from "./mechanical.js";
 import { classifyWorkingCopy, readWorkingCopyState } from "./classify.js";
@@ -223,15 +236,30 @@ unchanged. ${WORKFLOW_FILE} is therefore loaded ONCE, before the message is
 judged and before anything moves, on every squash: a malformed one is exit 1
 even with --base and no trailer.
 
+A HOOK-INJECTED KEY IS STRIPPED ONLY WHERE THE REPOSITORY OPTS IN
+(zheref/nen#594), exactly as 'nen commit write' does: the fold's 'git commit'
+runs with ${COMPOSED_KEYS_ENV} set to the message file's keys and
+${STRIP_RUN_ENV} to a fresh run id, and a commit-msg hook regenerated from a
+non-empty commits.stripInjected removes a listed key a hook added from the
+trailer block, naming it in <git dir>/nen-stripped-trailers.<run id>; this
+verb reads and deletes its own run's file after the fold, and reports a key
+the fold really lacks as stripped. Neither variable is ever exported by
+hand. Without
+the opt-in a hook-injected refused key is a refusal with no sanctioned way
+around it. The strip never removes a key the message carried, never admits
+a refused key, never amends.
+
 Exits: 0 squashed, dry run, or nothing to squash; 1 a git failure or a
 policy nen cannot read; 2 every refusal above; 3 squashed, and a hook
-injected a refused trailer.
+injected a refused trailer; 4 squashed, and the commit-msg hook stripped a
+hook-injected key (3 wins over 4, 4 over 0). 4 is a COMMITTED outcome, as 0
+and 3 are: never retry it.
 
 --json's contract is '${SQUASH_CONTRACT}': { contract, onto, mergeBase,
 folded: [sha, ...], newSha, dryRun, base, baseRefs: [ref, ...], injected:
-[key, ...] }. folded is oldest-first; newSha is null for a dry run and for
-'nothing to squash'; injected is null whenever nothing was written (not
-checked, never []).
+[key, ...], stripped: [key, ...] }. folded is oldest-first; newSha is null
+for a dry run and for 'nothing to squash'; injected and stripped are null
+whenever nothing was written (not checked, never []).
 baseRefs are the refs the base check ran against; EMPTY means the check was
 NOT performed (neither ref resolves, or nothing to squash), never that it
 passed. Text output is one line per folded commit (sha and subject), a line
@@ -453,7 +481,7 @@ paths } on exit 3, else null) }. After --return, active is false and the
 other fields describe the swap that was undone.
 
 worktree:
-  nen wc worktree --repo <path> --name <name> --base <branch>
+  nen wc worktree --repo <path> --name <name> (--base <branch> | --pr <n> --head <sha>)
                   [--copy-from-core <path>]... [--dry-run] [--json]
 
   --repo            ANY checkout of the project; core (the checkout whose .git
@@ -467,18 +495,30 @@ worktree:
                     origin/<base>: a short name 'git check-ref-format
                     --branch' returns unchanged, never shaped like an option,
                     a refspec or a force.
+  --pr / --head     fetch refs/pull/<n>/head from origin and require that it
+                    matches the full lowercase 40-character pinned commit.
+                    Mutually exclusive with --base. Metadata (open/closed,
+                    trust and forks) is the caller's responsibility.
+                    A unique scratch ref isolates the fetch from FETCH_HEAD;
+                    it is removed before any worktree move or copy.
   --copy-from-core  a repo-relative path copied FROM CORE into the worktree;
                     repeatable. Its segments obey --name's platform rules.
                     Only this flag names the list today: reading
                     nen/contract.json's project.fromCore[] is a follow-up.
   --dry-run         fetch nothing (the tip is read as last fetched), write
                     nothing; print the state and every planned action.
+                    For a PR, print the fetch and detached placement plan.
+                    Remote head verification stays pending. If the pinned
+                    commit or a required tree is absent, tree/overwrite checks also
+                    stay pending; the printed state is conditional on them.
+                    PR dry runs require Git >= 2.44 to disable lazy fetch.
+                    All PR reads and placement disable replacement objects.
 
 --onto, --message-file, --strategy, --abort and --set-upstream are refused
 here, as --name and --copy-from-core are on every other subcommand.
 
-THE STATE TABLE, at <core>/${WORKTREES_DIR}/<name>, DETACHED at origin/<base>'s
-fetched tip ('git fetch --end-of-options origin
+THE STATE TABLE, at <core>/${WORKTREES_DIR}/<name>, DETACHED at the verified
+PR pin or base tip. With --base, the tip is fetched ('git fetch --end-of-options origin
 refs/heads/<base>:refs/remotes/origin/<base>', after 'git remote get-url
 origin' proves there is an origin -- no origin is a refusal, dry or real --
 with no '+': a rewound trunk fails
@@ -554,7 +594,7 @@ it leaves the worktree where it reached ('reached'); 1 a git step or a write
 that failed part-way, the message saying which, and NO --json document.
 
 --json's contract is '${WORKTREE_CONTRACT}': { contract, core, name, path, base,
-tip, fetched, state (created | reused | moved | recreated | refused), reached
+tip, fetched, optional pr/pinnedHead/verificationPending for PR plans, state (created | reused | moved | recreated | refused), reached
 (created | reused | moved | recreated, or null when refused before the state
 step), dryRun, headBefore, head, dropped, coreIgnored, copies: [{ path, action
 (copied | would-copy) }], removed: [{ path, action (removed | would-remove) }],
@@ -562,7 +602,7 @@ kept: [{ path, reason (edited since copy | not a regular file | tracked at the
 tip | not ignored | unverifiable record) }], refusal:
 null | { kind, reason, paths } }. Under --dry-run state is what WOULD happen
 and fetched is false. On a refusal the document is still printed, with state
-'refused' and head null; refusal.kind is one of not-a-checkout, base,
+'refused' and head null; refusal.kind is one of not-a-checkout, base, pr, head-mismatch,
 name-alias, parent-symlink, symlink, stray, locked, not-root, dirty,
 would-overwrite-ignored, copy-source, copy-destination.`;
 
@@ -579,6 +619,7 @@ function squashJson(
   base: string,
   baseRefs: readonly string[],
   injected: readonly string[] | null = null,
+  stripped: readonly string[] | null = null,
 ): Readonly<Record<string, unknown>> {
   return {
     contract: SQUASH_CONTRACT,
@@ -593,6 +634,10 @@ function squashJson(
     // refuses. null when nothing was written (a dry run, nothing to squash) --
     // not checked, never rendered as [].
     injected,
+    // zheref/nen#594: keys the commit-msg hook stripped under
+    // commits.stripInjected, confirmed absent from the fold. APPENDED LAST;
+    // null when nothing was written, for `injected`'s reason.
+    stripped,
   };
 }
 
@@ -737,31 +782,51 @@ function squash(context: CommandContext): number {
   // before the reset: a git that cannot parse stops the squash with nothing
   // moved, and the read-back below compares like with like.
   const sent = sentTrailers(context.seams, root, messageText);
-  const newSha = performSquash(context.seams, root, plan.mergeBase, messageFilePath);
+  // THE STRIP SIDECAR (../commit/strip.ts; zheref/nen#594): a fresh run id
+  // names this run's own sidecar, resolved BEFORE the reset -- a git that
+  // cannot name the git dir stops the squash with nothing moved.
+  const sidecar = prepareStripSidecar(context.seams, root);
+  let newSha: string;
+  try {
+    newSha = performSquash(context.seams, root, plan.mergeBase, messageFilePath, {
+      env: composedKeysEnv(sent, sidecar),
+      failureHint: (gitStderr): string => stripFailureHint(policy, gitStderr),
+    });
+  } catch (error) {
+    discardStripSidecar(sidecar.path);
+    throw error;
+  }
+  const reported = collectStripSidecar(sidecar.path);
   // THE READ-BACK (../commit/readback.ts): the trailers the folded commit
   // actually carries, against the ones the message file did and the policy
   // loaded above. Never an amend.
   const back = readBack(context.seams, root, newSha, sent, policy);
   const admitted = admittedAdditions(back);
   if (admitted.length > 0) context.io.err(`nen: note: ${addedNote(newSha, admitted)}`);
+  const stripped = confirmStripped(reported, back.written);
   if (context.json) {
     context.io.out(
-      JSON.stringify(squashJson(plan.onto, plan.mergeBase, plan.folded, newSha, false, base.name, plan.baseRefs, back.injected), null, 2),
+      JSON.stringify(
+        squashJson(plan.onto, plan.mergeBase, plan.folded, newSha, false, base.name, plan.baseRefs, back.injected, stripped),
+        null,
+        2,
+      ),
     );
   } else {
     printFoldedCommits(context, plan.folded);
     context.io.out(baseCheckLine(base, plan.baseRefs));
     context.io.out(`squashed into ${newSha}`);
   }
+  // EXIT 4 (zheref/nen#594): said whatever the exit, since 3 wins over it.
+  if (stripped.length > 0) context.io.err(`nen wc: ${strippedMessage(newSha, stripped)}`);
   // EXIT 3: the fold happened, and a hook put a refused trailer on it. Not 1
   // (nothing failed to run) and not 2 (no refusal before the write fired).
   if (back.findings.length > 0) {
     context.io.err(
       `nen wc: ${injectedMessage(newSha, back.findings, policy, "'git reset --soft ORIG_HEAD' restores the unsquashed commits; the fold changed no file")}`,
     );
-    return 3;
   }
-  return 0;
+  return writtenExit(back.findings.length, stripped.length);
 }
 
 const STRATEGIES: readonly RequestedStrategy[] = ["rebase", "merge", "auto"];
@@ -918,7 +983,20 @@ function doWorktree(context: CommandContext): number {
   const extra = extraPositionals(context);
   if (extra.length > 0) throw new VerbUsageError(plainLine(`'wc worktree' takes no positional argument; got '${extra[0]}'.`));
   const name = requireValue(context.args, "name", `The worktree's directory under <core>/${WORKTREES_DIR}/.`);
-  const base = requireValue(context.args, "base", "The branch whose fetched tip, origin/<base>, the worktree stands at.");
+  const prText = context.args.values["pr"];
+  const head = context.args.values["head"];
+  const base = context.args.values["base"];
+  if (prText !== undefined || head !== undefined) {
+    if (base !== undefined) throw new VerbUsageError("--pr/--head and --base are mutually exclusive.");
+    if (prText === undefined || !/^[1-9][0-9]*$/.test(prText) || !Number.isSafeInteger(Number(prText))) {
+      throw new VerbUsageError("--pr must be a positive safe integer and must be paired with --head.");
+    }
+    if (head === undefined || !/^[0-9a-f]{40}$/.test(head)) {
+      throw new VerbUsageError("--head must be a full 40-character lowercase commit SHA and must be paired with --pr.");
+    }
+  } else if (base === undefined) {
+    throw new VerbUsageError("Name --base <branch> or --pr <number> --head <full-sha>.");
+  }
   // Every refusal below echoes the caller's own text, stripped (Feitan F7).
   const nameProblem = nameRefusal(name);
   if (nameProblem !== null) throw new VerbUsageError(nameProblem);
@@ -934,7 +1012,7 @@ function doWorktree(context: CommandContext): number {
 
   const outcome = manageWorktree(context.seams, root, {
     name,
-    base,
+    ...(base === undefined ? { pr: Number(prText), head: head! } : { base }),
     copyFromCore,
     dryRun: context.args.booleans.has("dry-run"),
   });
@@ -1058,6 +1136,7 @@ function doAhead(context: CommandContext): number {
 export const wcCommand: Command = {
   exits: [
     { verb: "wc squash", code: 3, meaning: "squashed, and the read-back found a refused trailer on the fold" },
+    { verb: "wc squash", code: STRIPPED_EXIT, meaning: "squashed, and the commit-msg hook stripped a hook-injected key under commits.stripInjected; 3 wins over it" },
     { verb: "wc swap", code: 3, meaning: "a tree is dirty; nothing moved" },
     { verb: "wc catch-up", code: 3, meaning: "stopped on a conflict whose every path is declared mechanical; nothing resolved" },
     { verb: "wc ahead", code: 2, meaning: "also: unreadable -- the clone does not hold --of or --head as a commit, or git could not answer; never zero" },
@@ -1068,15 +1147,18 @@ export const wcCommand: Command = {
   summary: "Classify the working copy, squash it, catch it up, publish it, list the worktrees, swap one into core, keep one at a fixed path, compute whether efforts overlap, or count the commits beyond a reviewed head.",
   usage: USAGE,
   flags: {
-    values: ["base", "onto", "message-file", "strategy", "remote", "name", "plan", "efforts", "always-overlaps", "declared", "of", "head"],
+    values: ["base", "onto", "message-file", "strategy", "remote", "name", "plan", "efforts", "always-overlaps", "declared", "of", "head", "pr"],
     booleans: ["dry-run", "abort", "set-upstream", "take", "return", "status", "run"],
     lists: ["copy-from-core"],
   },
   run(context: CommandContext): number {
     const subcommand = requireSubcommand("wc", context.args, ["classify", "squash", "catch-up", "publish", "worktrees", "swap", "worktree", "prune", "overlap", "ahead"]);
+    if (subcommand !== "worktree" && context.args.values["pr"] !== undefined) {
+      throw new VerbUsageError("--pr is only read by wc worktree.");
+    }
     if (subcommand === "ahead") return doAhead(context);
     // --of / --head ARE AHEAD'S ALONE.
-    for (const flag of ["of", "head"]) {
+    for (const flag of subcommand === "worktree" ? ["of"] : ["of", "head"]) {
       if (context.args.values[flag] !== undefined) {
         throw new VerbUsageError(`--${flag} is not read by 'wc ${subcommand}'; only 'wc ahead' takes it. A flag accepted and ignored is worse than one refused.`);
       }

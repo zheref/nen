@@ -169,7 +169,7 @@ data      One document describing this branch against --base: the commits, the
                    architectureCaption? }. Every FACT is nen's: each row gains
                    notation (nen ref's <CODE>-<IS|PR>-#<N> from nen/repos.json,
                    else <owner>/<name>#<n> named in footerNote), verdict,
-                   labelsLine, checksLine, threadsLine, linkedLine and head;
+                   labelsLine, checksLine, threadsLine, ledgerLine, linkedLine and head;
                    the five tallies, footerCount, spendEfforts (from phases[]
                    and usage[]) and empty graph keys are added after
                    'objects'. A VERDICT IS QUOTED, NEVER WRITTEN: every row's
@@ -188,11 +188,37 @@ data      One document describing this branch against --base: the commits, the
                    candidates. Every ask stars exactly one option.
 
   On the LIVE path a pull request's 'readiness' says which authority answered
-  it: 'check' when the head carries a check run named 'readiness' (its
-  output's verdict line is read), 'computed' when nen's own in-process CON-32
-  gate decided it, and null -- with the reason on stderr and in the row's
-  notes -- when neither could be read. Under --objects-from, 'readiness' is
-  the caller's file's, validated for shape and never re-derived.
+  it: 'state' for a MERGED or CLOSED pull request, which neither authority is
+  asked about (verdict 'merged' or 'closed': CON-32 readiness is a statement
+  about an open pull request); 'check' when the head carries a check run
+  named 'readiness' (its output's verdict line is read), 'computed' when
+  nen's own in-process CON-32 gate decided it, and null -- with the reason on
+  stderr and in the row's notes -- when neither could be read. Under
+  --objects-from, 'readiness' is the caller's file's, validated for shape
+  ('state' only on a MERGED or CLOSED row, with that state's verdict) and
+  never re-derived -- except that a MERGED or CLOSED row's older 'check' or
+  'computed' verdict is replaced by the state verdict, named in its notes.
+  'linked[]' is every '#<n>' the title and body reference (n 1 to 9 digits
+  from 1, ending the token; the '#' not after a word character, '&' or ';',
+  unless glued to one owner/name), less the pull request's own number; a hex
+  colour or '&#39;' is none, and a file's non-positive entry is left out with
+  a note. Known limits: 'docs/USAGE.md#123' reads as #123, and
+  'other/repo#591' as this repository's #591.
+
+  Each PR row has ledger { state, url, verdict, reason, line }, from the
+  same authority as 'nen pr ledger read', with the head branch as effort.
+  state is valid (ok), none (no matching comment), refused (foreign, edited,
+  duplicate, malformed or stale), or not-read (head/login/comments unread).
+  verdict and line preserve the read-back exactly; url is null when absent.
+  --objects-from always reports not-read because no live comment is read.
+  Register ledgerLine quotes line; desks cannot write ledger or ledgerLine.
+  No slice is posted or restored.
+
+  'phases[]' rows end with countedMs and idleWaitMs, derived at read time:
+  a 'readiness' phase untimed for over 60 minutes in all counts only
+  its timed steps, and the rest is its idle wait; durationMs is unchanged.
+  A non-finite or negative duration leaves both null. Spend bars use
+  countedMs, and an idle phase's amount names the wait it excludes.
 
 render    Fills a template with a data document and writes the result. The whole
           template language is '{{token}}' (HTML-escaped), '{{{token}}}' (raw),

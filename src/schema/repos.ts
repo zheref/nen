@@ -141,6 +141,7 @@ export interface RepoRegistry {
    * reader meets one word for one idea.
    */
   readonly toolPins: Readonly<Record<string, string>>;
+  readonly toolPinCommits?: Readonly<Record<string, string>>;
   /**
    * `owner/name` -> where a checkout of that `maintained_tools` entry is found
    * on a machine, for the entries that declare it (zheref/nen#294): the NAME of
@@ -324,9 +325,16 @@ interface ListedRepo extends ListedEntry {
   /** The entry's `pinned` tag, when it records one (a canon pin -- see `RepoRegistry.toolPins`). */
   readonly pinned: string | null;
   /** The entry's `checkout_env`, when it declares one (see `RepoRegistry.toolCheckouts`). */
+  readonly pinnedCommit: string | null;
   readonly checkoutEnv: string | null;
   /** The entry's `checkout` path template, when it declares one. */
   readonly checkout: string | null;
+}
+
+function pinCommit(path: string, pointer: string, raw: unknown): string | null {
+  const value = optionalString(path, `${pointer}.pinnedCommit`, raw);
+  if (value !== null && !/^[a-f0-9]{40}$/i.test(value)) throw new SchemaError(path, `${pointer}.pinnedCommit`, "expected a full 40-character commit SHA");
+  return value;
 }
 
 function parseListedRepos(path: string, section: ListedSection, raw: unknown): readonly ListedRepo[] {
@@ -348,6 +356,7 @@ function parseListedRepos(path: string, section: ListedSection, raw: unknown): r
       index,
       scenario: optionalString(path, `${pointer}.scenario`, record["scenario"]),
       pinned: optionalString(path, `${pointer}.pinned`, record["pinned"]),
+      pinnedCommit: pinCommit(path, pointer, record["pinnedCommit"]),
       checkoutEnv: checkoutEnvField(path, pointer, record["checkout_env"]),
       checkout: checkoutField(path, pointer, record["checkout"]),
     };
@@ -499,11 +508,13 @@ export function parseRepoRegistry(path: string, value: unknown): RepoRegistry {
     lastRow.set(key, tool);
   }
   const toolPins: Record<string, string> = {};
+  const toolPinCommits: Record<string, string> = {};
   const toolPinIndexes: Record<string, number> = {};
   const toolCheckouts: Record<string, ToolCheckout> = {};
   for (const tool of lastRow.values()) {
     if (tool.pinned !== null) {
       toolPins[tool.repo] = tool.pinned;
+      if (tool.pinnedCommit !== null) toolPinCommits[tool.repo] = tool.pinnedCommit;
       toolPinIndexes[tool.repo] = tool.index;
     }
     if (tool.checkoutEnv !== null || tool.checkout !== null) {
@@ -523,6 +534,7 @@ export function parseRepoRegistry(path: string, value: unknown): RepoRegistry {
     pendingOnboarding: slugs(pending),
     listed: [...maintained, ...pending].map(asEntry),
     toolPins,
+    toolPinCommits,
     toolPinIndexes,
     toolCheckouts,
     families: parseFamilies(path, root["families"], productCodes),

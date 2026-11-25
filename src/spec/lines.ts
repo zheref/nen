@@ -209,6 +209,14 @@ export function requirementOf(line: string): Requirement | null {
   return { kind: definition[1] as RequirementKind, id: `${definition[1] as string}-${definition[2] as string}` };
 }
 
+const SCENARIO_DEFINITION = /^\s*(?:[-*+]\s+|\d+\.\s+)?(?:\*\*)?(AC-\d+)(?:\*\*)?\s*[:.–—-]/;
+
+/** An acceptance-scenario definition, separate from the requirements other spec readers hold. */
+export function acceptanceScenarioOf(line: string): { readonly kind: "AC"; readonly id: string } | null {
+  const definition = SCENARIO_DEFINITION.exec(line);
+  return definition === null ? null : { kind: "AC", id: definition[1] as string };
+}
+
 /**
  * An in-folder id qualified for use outside the folder (Hatsu docs/config/spec-repo.md § The id grammar):
  * `FR-7` in folder `002` is `F002-FR-007`. The one padding rule every spec verb uses (SP-10), so a

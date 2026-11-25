@@ -1061,6 +1061,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       // The canon prose verbs (SDD piece N9): pure reads of the checkout, plus
       // git merge-base/diff/show/ls-files under --base and --leaves.
       lint: RO("reads the rules contract, the baseline and the canon's Markdown, and under --base git merge-base, diff and show; writes nothing"),
+      "clause cites": RO("reads request, clause homes and a caller-declared status vocabulary; writes nothing"),
       "clause check": RO("reads one Markdown file, a base file or git object, and under --leaves git ls-files and diff; writes nothing"),
     },
   },
@@ -1177,12 +1178,15 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       begin: MUT("writes an entry to the .nen/phases/<effort>.json ledger -- a local write, but a write"),
       end: MUT("closes an entry in the .nen/phases/<effort>.json ledger -- a local write, but a write"),
       show: RO("prints the ledger; reads one file"),
+      list: RO("lists every effort's ledger under the common dir and each checkout's older .nen/phases/ (git rev-parse, git worktree list); writes, moves and locks nothing"),
     },
   },
   parse: { subcommands: { "*": RO("parses a grammar; never executes what it classified") } },
   pr: {
     subcommands: {
       ready: RO("reports CON-32 readiness -- reads GitHub, never labels, merges or comments"),
+      // zheref/nen#663: the same reads `pr ready`'s version-collision limb makes.
+      "version-collision": RO("reports one pull request's live plugin-version collision -- reads GitHub (GraphQL queries -- the pull request snapshot and open pullRequests by cursor -- never a mutation; REST GETs of git refs, compare, contents, pull request files), never labels, merges or comments"),
       staleness: RO("computes staleness from a wakes file -- pure computation"),
       "body-check": RO("checks a body against requirements -- reads files only"),
       // fetch/next-blocker run ../pr/fetch.ts's REST reviews call, which is
@@ -1525,6 +1529,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       diff: RO("reads two inventory files; writes nothing"),
       converge: GATED_DRY(["--write"], "reads the folder, the inventories and the member checkout through git; --write appends [STALE] companions to spec.md and a convergence phase to tasks.md unless --dry-run is given"),
       coverage: RO("reads the spec folders and inventory files, or an issue body, a PR body and a test report; writes nothing"),
+      due: RO("reads nen/repos.json and capture/<CODE>/inventory.json, and gh api GETs of each member's tags and compare; writes nothing and starts no recapture"),
       parity: RO("reads parity.md and spec.md, and with --target the issues and PRs over gh issue list / gh pr list; writes nothing"),
       "tasks groups": RO("reads spec.md and tasks.md and git rev-parse HEAD; writes nothing"),
       trace: GATED_DRY(["--write"], "reads every folder's spec.md, tasks.md and parity.md; --write writes <root>/traceability.md unless --dry-run is given"),
@@ -1583,6 +1588,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
     },
   },
   tag: { subcommands: { cut: MUT("creates a tag locally even without --push") } },
+  tool: { subcommands: { install: MUT("downloads and installs a verified executable on the existing PATH") } },
   tests: { subcommands: { map: RO("reads an issue body and test reports from disk; runs, fetches and writes nothing") } },
   wake: {
     subcommands: {

@@ -93,13 +93,20 @@ describe("bounded release-line compiler", () => {
     expect(compileReleaseLinePattern("..").match("😀").kind).toBe("match");
   });
 
-  it("accepts witnesses for EVERY one of Nen's thirteen actual policy patterns", () => {
+  it("accepts witnesses for EVERY one of Nen's twenty actual policy patterns", () => {
     const curl = "curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.21.0/bootstrap/nen.sh -o nen-bootstrap.sh";
     const bash = "bash nen-bootstrap.sh --ref v0.21.0";
     const assign = 'nen="$(bash nen-bootstrap.sh --ref v0.21.0)"';
     const bootstrap = "nen bootstrap --ref v0.21.0 --source zheref/nen";
     const script = " --script ./nen-bootstrap.sh";
     const witnesses: Readonly<Record<string, readonly (readonly string[])[]>> = {
+      "src/verbs/fixtures/non-opted-in-main/i-default-readable-no-block.explain.txt": [["  decided by nen 0.30.0 (/opt/nen/nen-linux-x64) at 2025-01-01T00:00:00Z"]],
+      "src/verbs/fixtures/non-opted-in-main/ii-default-unreadable-base-same.explain.txt": [["  decided by nen 0.30.0 (/opt/nen/nen-linux-x64) at 2025-01-01T00:00:00Z"]],
+      "src/verbs/fixtures/non-opted-in-main/iii-default-unreadable-base-readable.explain.txt": [["  decided by nen 0.30.0 (/opt/nen/nen-linux-x64) at 2025-01-01T00:00:00Z"]],
+      "src/verbs/fixtures/non-opted-in-main/iv-default-malformed.explain.txt": [["  decided by nen 0.30.0 (/opt/nen/nen-linux-x64) at 2025-01-01T00:00:00Z"]],
+      "src/verbs/fixtures/non-opted-in-main/v-default-unknown-key.explain.txt": [["  decided by nen 0.30.0 (/opt/nen/nen-linux-x64) at 2025-01-01T00:00:00Z"]],
+      "src/verbs/fixtures/non-opted-in-main/vi-no-gates-file.explain.txt": [["  decided by nen 0.30.0 (/opt/nen/nen-linux-x64) at 2025-01-01T00:00:00Z"]],
+      "src/verbs/fixtures/non-opted-in-main/vii-failing-check-default-unreadable.explain.txt": [["  decided by nen 0.30.0 (/opt/nen/nen-linux-x64) at 2025-01-01T00:00:00Z"]],
       "src/version.ts": [['export const VERSION = "0.21.0";'], ['export const COMPATIBLE_MINOR_FLOOR = "0.21";']],
       "README.md": [[curl], [bash], [assign, assign + ' && "$nen" --version'], [bootstrap + script], ["Once the `v0.21.0` release and its assets are published, the first prints"], ["`0.21.0`. Before the tag exists, a fresh install's `curl` command in"]],
       "docs/USAGE.md": [[curl], [bash], [assign], [bootstrap, bootstrap + script], ["/home/me/.cache/nen/zheref_nen/v0.21.0/nen-linux-x64"]],
@@ -118,6 +125,6 @@ describe("bounded release-line compiler", () => {
         count++;
       });
     }
-    expect(count).toBe(13);
+    expect(count).toBe(20);
   });
 });

@@ -85,6 +85,27 @@ describe("scaffoldInit", () => {
     expect(readFileSync(`${hookPath}.bak`, "utf8")).toBe(projectsOwnHook);
   });
 
+  // zheref/nen#594: the policy's commits.stripInjected reaches the hook; an
+  // edited list is a DIFFERENT hook (refused without --force, regenerated
+  // with it), and an unchanged empty list stays 'unchanged'.
+  it("passes an existing policy's commits.stripInjected into the hook, and regenerates it under --force when the list changes", () => {
+    const root = tempRoot();
+    mkdirSync(join(root, "nen"), { recursive: true });
+    writeFileSync(join(root, "nen", "workflow.json"), JSON.stringify({ commits: { allowedAttributionTrailers: ["X-Agent"] } }));
+    const first = scaffoldInit({ root, platform: "linux", directories: [], hook: HOOK, stack: STACK });
+    expect(first.hookOutcome).toBe("installed");
+    expect(readFileSync(first.hookWritten, "utf8")).not.toContain("NEN_COMPOSED_TRAILER_KEYS");
+    expect(scaffoldInit({ root, platform: "linux", directories: [], hook: HOOK, stack: STACK }).hookOutcome).toBe("unchanged");
+
+    writeFileSync(join(root, "nen", "workflow.json"), JSON.stringify({ commits: { allowedAttributionTrailers: ["X-Agent"], stripInjected: ["Co-authored-by"] } }));
+    expect(scaffoldInit({ root, platform: "linux", directories: [], hook: HOOK, stack: STACK }).hookOutcome).toBe("refused");
+    const forced = scaffoldInit({ root, platform: "linux", directories: [], hook: HOOK, stack: STACK, force: true });
+    expect(forced.hookOutcome).toBe("installed");
+    const body = readFileSync(forced.hookWritten, "utf8");
+    expect(body).toContain('if [ -n "${NEN_COMPOSED_TRAILER_KEYS+x}" ]; then');
+    expect(body).toContain("nen_strip_keys='Co-authored-by=co-authored-by'");
+  });
+
   it("takes a caller-supplied hook path", () => {
     const root = tempRoot();
     const result = scaffoldInit({ root, platform: "linux", directories: [], hook: HOOK, stack: STACK, hookPath: "custom/hooks/commit-msg" });

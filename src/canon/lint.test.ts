@@ -5,7 +5,7 @@
 // baseline admits, goes stale and refuses to grow under --base. The rules
 // contract is Hatsu's own, copied as ./fixtures/prose.lint.json, so the verb is
 // proven against the file it will read.
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -190,6 +190,110 @@ describe("nen canon lint -- every fail rule fires on a planted copy, by id", () 
     const root = base();
     put(root, "claude/skills/plant/SKILL.md", "# P\n\nHR-2 is a reading, never a push path; HR-1 and HR-20 are not it.\n");
     await expectClean(root);
+  });
+});
+
+describe("bare references in rendered ruling rows", () => {
+  const stem = "effort--R-2026-11-04-02";
+  const record = "ruling-records/" + stem + ".json";
+  const lead = '| <a id="hr-42"></a>**HR-42** · [' + stem + "](" + record + ") |";
+
+  function rulingFixture(): string {
+    const root = base();
+    put(root, "docs/" + record, "{}\n");
+    return root;
+  }
+
+  it("exempts the question, options and answer, including an escaped pipe before a reference", async () => {
+    const root = rulingFixture();
+    put(root, "docs/ROSTER.md", lead + " Question #101 | (A) option \\| or #102 | Picked #103 | ruled | Settled |\n");
+    await expectClean(root);
+  });
+
+  function bareRefOnly(root: string, rulingsFile?: unknown): void {
+    put(root, "contracts/prose.lint.json", JSON.stringify({
+      paths: { include: ["docs/*.md"] },
+      rulingsFile,
+      rules: [{ id: "REF-1", class: "bare-ref", severity: "fail", pattern: "#\\d+" }],
+    }));
+  }
+
+  it("exempts a rendered row with a bare-ref-only contract that declares its rulings file", async () => {
+    const root = base();
+    bareRefOnly(root, "docs/rulings.md");
+    put(root, "docs/rulings.md", lead + " Question #101 | Option #102 | Answer #103 | ruled | Settled |\n");
+    await expectClean(root);
+  });
+
+  it("still reports a rendered reference when a bare-ref-only contract omits the rulings file", async () => {
+    const root = base();
+    bareRefOnly(root);
+    put(root, "docs/ROSTER.md", lead + " Question #101 | Option | Answer | ruled | Settled |\n");
+    await expectFinding(root, "REF-1", /#101/);
+  });
+
+  it("still reports lead-authored references with a bare-ref-only contract", async () => {
+    const root = base();
+    bareRefOnly(root, "docs/rulings.md");
+    put(root, "docs/rulings.md", lead + " Question | Option | Answer | Status #104 | Settled |\n");
+    await expectFinding(root, "REF-1", /#104/);
+  });
+
+  it("lints included files without loading an unused rulings file for reading status", async () => {
+    const root = base();
+    bareRefOnly(root, "excluded/rulings.md");
+    await expectClean(root);
+  });
+
+  it.each([42, null, " "])("refuses an invalid optional rulingsFile (%j)", async (rulingsFile) => {
+    const root = base();
+    bareRefOnly(root, rulingsFile);
+    await expectWiring(root, /rulingsFile must be a nonempty string/);
+  });
+
+  it("still requires a readable rulings file for reading-status checks", async () => {
+    const root = base();
+    const rulesPath = "contracts/prose.lint.json";
+    const config = {
+      paths: { include: ["docs/*.md"] },
+      rules: [{ id: "REF-2", class: "reading-cited-as-ruled", severity: "fail", pattern: "(HR-\\d+)" }],
+    };
+    put(root, rulesPath, JSON.stringify(config));
+    await expectWiring(root, /lacks rulingsFile/);
+    put(root, rulesPath, JSON.stringify({ ...config, rulingsFile: "docs/missing.md" }));
+    await expectWiring(root, /rulings file docs\/missing\.md is missing/);
+  });
+
+  it("still lints status, settlement and ordinary prose", async () => {
+    const root = rulingFixture();
+    put(root, "docs/ROSTER.md", lead + " Question #101 | Option #102 | Answer #103 | Status #104 | Settlement #105 |\n\nSee #106.\n");
+    const result = await lint(root, [], true);
+    expect(result.code).toBe(1);
+    const { findings } = JSON.parse(result.stdout) as { findings: { rule: string; line: number; text: string }[] };
+    expect(findings.map(({ rule, line }) => [rule, line])).toEqual([["PL-05", 1], ["PL-05", 1], ["PL-05", 3]]);
+    expect(findings[0]?.text).toContain("#104");
+    expect(findings[1]?.text).toContain("#105");
+    expect(findings[2]?.text).toContain("#106");
+  });
+
+  it("still lints the same rendered form outside the declared rulings file", async () => {
+    const root = rulingFixture();
+    put(root, "docs/other.md", lead + " Question #107 | Option | Answer | ruled | Settled |\n");
+    await expectFinding(root, "PL-05", /#107/);
+  });
+
+  it.each([
+    ["mismatched anchor", lead.replace("hr-42", "hr-43"), "Option | Answer | ruled | Settled |"],
+    ["mismatched record label", lead.replace("[" + stem + "]", "[other]"), "Option | Answer | ruled | Settled |"],
+    ["unrecognised record path", lead.replace("ruling-records/", ""), "Option | Answer | ruled | Settled |"],
+    ["missing closing pipe", lead, "Option | Answer | ruled | Settled"],
+    ["missing cell", lead, "Option | Answer | ruled |"],
+    ["extra unescaped pipe", lead, "Option | A fragment | Answer | ruled | Settled |"],
+  ])("still lints a row with %s", async (_reason, prefix, cells) => {
+    const root = rulingFixture();
+    put(root, "docs/" + stem + ".json", "{}\n");
+    put(root, "docs/ROSTER.md", prefix + " Question #108 | " + cells + "\n");
+    await expectFinding(root, "PL-05", /#108/);
   });
 });
 
@@ -716,19 +820,55 @@ describe("canon lint internals", () => {
     expect(exemptQuoted('"a" "b"\n"c"')).toBe("       \n   ");
   });
 
-  it("blanks quotations in linear time: 8x the quotes costs far less than 64x the time (Feitan F3 on #526)", () => {
-    const time = (count: number): number => {
-      const text = '"q" '.repeat(count);
-      const t0 = performance.now();
-      for (let i = 0; i < 3; i++) expect(exemptQuoted(text).trim()).toBe("");
-      return performance.now() - t0;
+  // Count slice-output lengths, not elapsed time: scheduling and coverage
+  // instrumentation cannot turn an otherwise correct result into a failure.
+  // This observes the original repeated-prefix/suffix reconstruction defect
+  // (Feitan F3 on #526), not a claim about every possible nonlinear algorithm.
+  const slicedWork = (blank: (text: string) => string, text: string): { output: string; characters: number } => {
+    const slice = String.prototype.slice;
+    let characters = 0;
+    const spy = vi.spyOn(String.prototype, "slice").mockImplementation(function (this: string, start?: number, end?: number): string {
+      const result = slice.call(this, start, end);
+      characters += result.length;
+      return result;
+    });
+    try {
+      const output = blank(text);
+      return { output, characters };
+    } finally {
+      spy.mockRestore();
+    }
+  };
+
+  const withinCopyBudget = (characters: number, text: string): boolean => characters <= 2 * text.length;
+
+  it.each([5_000, 40_000])("bounds quotation reconstruction work for %i quotes (Feitan F3 on #526)", (count) => {
+    const text = '"q" '.repeat(count);
+    const measured = slicedWork(exemptQuoted, text);
+    expect(measured.output).toBe("    ".repeat(count));
+    expect(withinCopyBudget(measured.characters, text)).toBe(true);
+  });
+
+  it("the same work bound rejects the original repeated-reslicing behavior", () => {
+    const quadratic = (text: string): string => {
+      let result = text;
+      for (const match of text.matchAll(/"[^"\n]{1,600}"/g)) {
+        result = result.slice(0, match.index) + " ".repeat(match[0].length) + result.slice(match.index + match[0].length);
+      }
+      return result;
     };
-    time(1_000); // warm up
-    const small = Math.max(time(5_000), 1);
-    const large = time(40_000);
-    // Quadratic growth would be ~64x; linear is ~8x. A generous bound of 32x
-    // separates the two without a wall-clock limit a loaded host could trip.
-    expect(large / small).toBeLessThan(32);
+    const text = '"q" '.repeat(200);
+    const control = slicedWork(quadratic, text);
+    expect(control.output).toBe(exemptQuoted(text)); // semantics alone miss the defect
+    expect(control.characters).toBe(200 * (text.length - 3));
+    expect(withinCopyBudget(control.characters, text)).toBe(false);
+  });
+
+  it("preserves mixed quotation, newline and inline-code semantics under the work bound", () => {
+    const text = 'a "b c" d\n“e”\n`"` then "q"\nopen " here\nclosed " there';
+    const measured = slicedWork(exemptQuoted, text);
+    expect(measured.output).toBe('a       d\n   \n`"` then    \nopen " here\nclosed " there');
+    expect(withinCopyBudget(measured.characters, text)).toBe(true);
   });
 
   it("reads reading status from a Status column by header and from a (reading) token", () => {

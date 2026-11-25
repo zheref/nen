@@ -16,6 +16,7 @@
 // only ever the one path this function can produce.
 
 export interface CanonResolution {
+  readonly portHandbook?: string | null;
   readonly scenario: string;
   readonly alwaysLoad: readonly string[];
   /** The single stack handbook path -- `<stackDir>/<scenario>/<leaf>`. */

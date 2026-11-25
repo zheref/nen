@@ -8,6 +8,6 @@
     <AppxPackageSigningEnabled>False</AppxPackageSigningEnabled>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="KroCore\KroCore.csproj" />
+    <ProjectReference Include="FixtureCore\FixtureCore.csproj" />
   </ItemGroup>
 </Project>
