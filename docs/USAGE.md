@@ -18700,7 +18700,8 @@ the catalogue's owner. A relative path resolves against `--repo`.
 **first** markdown table row whose first cell is that aspect and whose second
 cell is a delta: `⬆` (or `improves`) +1, `➖` (or `unchanged`) 0, `⬇` (or
 `regresses`) −1; variation selectors and emphasis are ignored. Rows inside
-fenced code and HTML comments are not rows, and a later row naming the same
+fenced code and HTML comments are not rows, nor is a row indented four or more
+spaces or by a tab (indented code), and a later row naming the same
 aspect, such as a quoted older table, never overwrites the first. A named row
 with no delta reads `unreadable`; an aspect with no row reads `absent`; both
 count as `unrecorded`.
@@ -18746,6 +18747,9 @@ started yet).
     weeks: [{ week, start, end, partial, merged, scored, pulls }],
     aspects: [{ aspect, tallies: [{ improves, unchanged, regresses, unrecorded, net }] }] }] }
 ```
+
+`catalogue.sha256` hashes the catalogue file's bytes with CRLF read as LF, so
+for a CRLF file it differs from `sha256sum` of the file and agrees across hosts.
 
 ### `nen scorecard snapshot`
 

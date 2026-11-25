@@ -95,8 +95,9 @@ describe("readAspects", () => {
   });
 
   it("reads a row indented four spaces as indented code, never as the table", () => {
-    const body = ["    | Security | ⬇ |", "", table([["Security", "⬆"]])].join("\n");
+    const body = ["    | Security | ⬇ |", "\t| Observability | ⬇ |", "", table([["Security", "⬆"], ["Observability", "⬆"]])].join("\n");
     expect(readAspects(body, ASPECTS).Security).toBe("improves");
+    expect(readAspects(body, ASPECTS).Observability).toBe("improves");
   });
 
   it("reads a CRLF body and ignores a row with a single cell", () => {

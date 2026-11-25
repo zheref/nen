@@ -10,9 +10,9 @@
 // (Hatsu's contracts/pr-sections.json). Nothing about it is compiled in, so
 // nen carries no build-time dependency on the Hatsu contract (zheref/nen#669/AC-3).
 
-import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeSync } from "node:fs";
+import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, relative, isAbsolute } from "node:path";
 import { emit, parseCallerToken, readInteger, refuseExtraPositionals, requireSubcommand, requireValue, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import { commaList } from "../cli/comma.js";
 import { resolveAgainstRepo } from "../cli/inputs.js";
@@ -61,7 +61,8 @@ No aspect is compiled into nen. A relative path resolves against --repo.
 A pull request scores an aspect through the FIRST markdown table row whose
 first cell is that aspect (case-insensitive) and whose second cell is a delta:
 ⬆ (or 'improves') +1, ➖ (or 'unchanged') 0, ⬇ (or 'regresses') -1. Rows in
-fenced code or HTML comments are not rows. A named row with no glyph is
+fenced code or HTML comments are not rows, nor is a row indented four or more
+spaces or by a tab (indented code). A named row with no glyph is
 unreadable; an aspect with no row is absent; both count as 'unrecorded'.
 
 Each cell carries improves, unchanged, regresses, unrecorded and net
@@ -102,8 +103,9 @@ target or catalogue, a trend week not started yet, an --out outside --repo).
               repository, period: { week, start, end }, catalogue: { contract,
               sha256 }, merged, scored, pulls, aspects: [{ aspect, improves,
               unchanged, regresses, unrecorded, net }] } }
-            written: created | updated | unchanged | null (could not read;
-            snapshot null, reason says why)`;
+            written: created | updated | unchanged | null (could not read or
+            write; snapshot null, reason says why)
+  Both catalogue.sha256 values hash the catalogue's bytes with CRLF read as LF.`;
 
 function day(iso: string, offsetDays: number): string {
   return new Date(Date.parse(iso) + offsetDays * 86_400_000).toISOString().slice(0, 10);
@@ -214,7 +216,9 @@ function snapshotPath(root: string, out: string, weekId: string): string {
   const lexical = join(resolveAgainstRepo(root, out), `${weekId}.json`);
   const containment = realContainment(root, lexical);
   if (!containment.contained) {
-    const via = containment.link === null ? "" : ` '${containment.link}' is a symlink to '${containment.target ?? "somewhere else"}'.`;
+    // Name a redirecting link only when it sits inside the root; a parent outside it (macOS /var -> /private/var) is not why.
+    const inside = containment.link !== null && !relative(root, containment.link).startsWith("..") && !isAbsolute(relative(root, containment.link));
+    const via = inside ? ` '${containment.link}' is a symlink to '${containment.target ?? "somewhere else"}'.` : "";
     throw new VerbUsageError(`--out '${out}' resolves outside the repository at ${root}.${via} A snapshot is written inside the checkout the workflow commits; point --out under it.`);
   }
   let link = false;
@@ -227,6 +231,39 @@ function snapshotPath(root: string, out: string, weekId: string): string {
   return lexical;
 }
 
+/** A temp file a killed run left beside this week's snapshot, so the workflow never commits one. */
+function removeStaleTemps(dir: string, stem: string): void {
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!name.startsWith(stem) || !name.endsWith(".tmp")) continue;
+    try {
+      rmSync(join(dir, name), { force: true });
+    } catch {
+      // Still held (Windows); the next run tries again.
+    }
+  }
+}
+
+/** Windows refuses a rename over a file another process holds open (antivirus, indexer) for a moment; retry those briefly. */
+function renameWithRetry(from: string, to: string): void {
+  const transient = new Set(["EPERM", "EACCES", "EBUSY"]);
+  for (let attempt = 0; ; attempt++) {
+    try {
+      renameSync(from, to);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code ?? "";
+      if (process.platform !== "win32" || !transient.has(code) || attempt >= 4) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50 * (attempt + 1));
+    }
+  }
+}
+
 /** Writes `text` to `file` by temp file and rename, unless the file already holds it (CRLF read as LF). */
 function writeSnapshot(file: string, text: string): { written: "created" | "updated" | "unchanged" } | { reason: string } {
   const code = (error: unknown): string => (error as NodeJS.ErrnoException).code ?? String(error);
@@ -236,19 +273,26 @@ function writeSnapshot(file: string, text: string): { written: "created" | "upda
   } catch (error) {
     if (code(error) !== "ENOENT") return { reason: `the existing snapshot could not be read (${code(error)})` };
   }
+  const stem = `.${basename(file)}.nen-`;
+  removeStaleTemps(dirname(file), stem);
   if (previous === text) return { written: "unchanged" };
-  const temp = join(dirname(file), `.${basename(file)}.nen-${process.pid}-${randomBytes(6).toString("hex")}.tmp`);
+  const temp = join(dirname(file), `${stem}${process.pid}-${randomBytes(6).toString("hex")}.tmp`);
   try {
     mkdirSync(dirname(file), { recursive: true });
     const fd = openSync(temp, "wx", 0o644);
     try {
-      writeSync(fd, text);
+      writeFileSync(fd, text);
+      fsyncSync(fd);
     } finally {
       closeSync(fd);
     }
-    renameSync(temp, file);
+    renameWithRetry(temp, file);
   } catch (error) {
-    rmSync(temp, { force: true });
+    try {
+      rmSync(temp, { force: true });
+    } catch {
+      // Left for the next run's stale-temp sweep; the write error is the one reported.
+    }
     return { reason: `the snapshot could not be written (${code(error)})` };
   }
   return { written: previous === null ? "created" : "updated" };

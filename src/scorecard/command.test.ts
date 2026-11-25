@@ -192,6 +192,16 @@ describe("nen scorecard snapshot", () => {
     expect(result.out).toContain("updated:");
   });
 
+  it("sweeps a temp file a killed run left beside the week's snapshot", async () => {
+    const root = repo();
+    mkdirSync(join(root, "scorecard"));
+    writeFileSync(join(root, "scorecard", ".2026-W46.json.nen-1-abcdef.tmp"), "{");
+    writeFileSync(join(root, "scorecard", "keep.tmp"), "mine");
+    const result = await run(root, ["snapshot", "--catalogue", "pr-sections.json", "--target", "o/a", "--out", "scorecard"], script());
+    expect(result.code).toBe(0);
+    expect(readdirSync(join(root, "scorecard")).sort()).toEqual(["2026-W46.json", "keep.tmp"]);
+  });
+
   it("reads a CRLF checkout of an unchanged snapshot as unchanged", async () => {
     const root = repo();
     const first = await run(root, ["snapshot", "--catalogue", "pr-sections.json", "--target", "o/a", "--out", "scorecard"], script(), true);
