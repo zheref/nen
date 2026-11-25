@@ -260,6 +260,7 @@ export function scaffoldNew(options: ScaffoldNewOptions): ScaffoldNewResult {
       options.hook,
       refusedTrailerKeys(policy.commits),
       trailerAdmitted(policy.commits, options.hook.agentTrailer),
+      policy.commits.stripInjected,
     );
     // THROUGH ./hook.ts's WRITER, exactly as `scaffold init` does. A hook
     // written 0644 is one `git` skips in silence on every commit, and this verb

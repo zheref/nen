@@ -1,0 +1,140 @@
+{
+  "contract": "nen.pr.ready/v0.1",
+  "verdict": "ready",
+  "gateLine": "ready",
+  "firstFailing": null,
+  "failing": [],
+  "judgedHead": "cafebabe",
+  "localHead": null,
+  "conjuncts": [
+    {
+      "id": "mergeable",
+      "clause": "CON-42/1",
+      "title": "Mergeable",
+      "order": 1,
+      "status": "ready",
+      "reason": null,
+      "note": null,
+      "missing": null
+    },
+    {
+      "id": "checks-green",
+      "clause": "CON-32(a)",
+      "title": "Every reported check green, on the latest run per check name",
+      "order": 2,
+      "status": "ready",
+      "reason": null,
+      "note": null,
+      "missing": null
+    },
+    {
+      "id": "round-stalled",
+      "clause": "CON-32(b)",
+      "title": "No configured reviewer's requested round has stalled",
+      "order": 3,
+      "status": "ready",
+      "reason": null,
+      "note": null,
+      "missing": null
+    },
+    {
+      "id": "rounds-owed",
+      "clause": "CON-32(b)",
+      "title": "No configured reviewer's round owed at the current head",
+      "order": 4,
+      "status": "ready",
+      "reason": null,
+      "note": null,
+      "missing": null,
+      "owedRounds": []
+    },
+    {
+      "id": "approvals-at-head",
+      "clause": "CON-32(b)/CON-16",
+      "title": "Every approving reviewer's latest round is an APPROVE at the current head",
+      "order": 5,
+      "status": "ready",
+      "reason": null,
+      "note": null,
+      "missing": null
+    },
+    {
+      "id": "unresolved-threads",
+      "clause": "CON-32(d)",
+      "title": "Zero unresolved review threads",
+      "order": 6,
+      "status": "ready",
+      "reason": null,
+      "note": null,
+      "missing": null
+    }
+  ],
+  "caveats": [
+    {
+      "id": "addressed-is-approximated",
+      "clause": "CON-32(c)",
+      "text": "\"Addressed\" is APPROXIMATED by a current-head review round, an APPROVE when approval_policy is 'required', and zero unresolved threads. The gate cannot read whether a thread's substance was actually answered. Replying remains the author's obligation."
+    },
+    {
+      "id": "which-checks-reported",
+      "clause": "CON-32(a)",
+      "text": "That a BUILD check exists specifically is NOT asserted -- only that at least one check reported and that every reported check is green on its latest run. An EMPTY rollup FAILS, so absence is a finding here and never a pass; what the gate cannot tell you is WHICH checks reported. Confirm by eye that the one your repository requires is among them."
+    },
+    {
+      "id": "channel-less-findings",
+      "clause": "CON-32(e)",
+      "text": "A reviewer finding with NO thread object -- a suppressed-comments block rendered in the review BODY -- has nothing for the unresolved-threads row to count. Read the review bodies, not only their threads."
+    }
+  ],
+  "remedy": null,
+  "meta": {
+    "ref": "9",
+    "repo": "acme/widget",
+    "pr": 9,
+    "headSha": "cafebabe",
+    "reviewers": [
+      "sasuke",
+      "tenma",
+      "copilot"
+    ],
+    "approvers": [
+      "sasuke",
+      "tenma"
+    ],
+    "approvalPolicy": "required",
+    "roundPolicy": "bounded",
+    "aiReviewers": {
+      "effective": "required",
+      "base": {
+        "sha": "basebase",
+        "policy": "required",
+        "fallback": "workflow file absent"
+      },
+      "defaultTip": {
+        "sha": "basebase",
+        "policy": "required",
+        "fallback": "workflow file absent"
+      }
+    },
+    "excludeRun": null,
+    "requiredHead": null,
+    "excludedChecks": [],
+    "declaredExclusions": [],
+    "declaredExclusionsSource": "acme/widget@basebase and acme/widget@basebase (intersection)",
+    "notes": [],
+    "deliveryPr": false,
+    "identities": {
+      "source": "schema",
+      "path": "<GATES>",
+      "read": "gates-flag"
+    },
+    "dependabotCarveOut": false,
+    "warnings": [],
+    "evaluatedAt": "2025-01-01T00:00:00Z",
+    "generator": {
+      "program": "nen",
+      "version": "<VERSION>",
+      "executable": "/opt/nen/nen-linux-x64"
+    }
+  }
+}

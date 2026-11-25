@@ -744,11 +744,16 @@ export function scaffoldInit(options: ScaffoldInitOptions): ScaffoldInitResult {
     // policy, rather than one that checks for a trailer nobody could add
     // without it also being refused. `hookSpec` carries the SAME reconciliation
     // for `runTrailer`, computed above: an existing policy's `commits.runTrailer`
-    // wins over `--run-trailer` too.
+    // wins over `--run-trailer` too. `commits.stripInjected` (zheref/nen#594)
+    // goes through as the policy states it: empty -- the default -- renders
+    // the hook byte for byte as before (so an existing hook stays
+    // `unchanged`); a list adds ./hook.ts's strip step, and a repository that
+    // edits it regenerates with --force.
     renderCommitMsgHook(
       hookSpec,
       refusedTrailerKeys(policy.commits),
       trailerAdmitted(policy.commits, options.hook.agentTrailer),
+      policy.commits.stripInjected,
     ),
     "commit-msg",
   );

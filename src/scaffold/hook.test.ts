@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { renderCommitMsgHook, renderPreCommitHook, type HookSpec } from "./hook.js";
+import { createHash } from "node:crypto";
+import { HOOK_COMPOSED_KEYS_ENV, HOOK_STRIP_RUN_ENV, renderCommitMsgHook, renderPreCommitHook, STRIP_SIDECAR_FILE, type HookSpec } from "./hook.js";
 
 const SPEC: HookSpec = { agentTrailer: "X-Agent", runTrailer: "X-Run", markerEnvVar: "X_AUTOMATED" };
 
@@ -140,5 +141,118 @@ describe("renderPreCommitHook -- the trunk guard", () => {
     const script = renderPreCommitHook("main");
     expect(script).toContain("2>/dev/null || true");
     expect(script).not.toContain("-z \"$current\"");
+  });
+});
+
+describe("renderCommitMsgHook -- commits.stripInjected, the opt-in strip step (zheref/nen#594)", () => {
+  const sha256 = (text: string): string => createHash("sha256").update(text, "utf8").digest("hex");
+
+  // THE PIN THE OPT-IN STANDS ON. These digests are of the hook this function
+  // rendered BEFORE the strip step existed (origin/main c6775f81), for three
+  // shapes: an empty list must reproduce them byte for byte, or every
+  // consumer's `nen scaffold init` would stop answering `unchanged`.
+  it.each([
+    ["a run trailer and two refused keys", SPEC, ["Co-Authored-By", "Claude-Session"], true, "da777316399ae3db3e2a26388b35a238a117b9a72f121d3d54815a04072aa358"],
+    ["no run trailer, nothing refused", { ...SPEC, runTrailer: null }, [], true, "020070bb474f7c71be9e2571d61785e7953ceb4167383806641b994b3732b23f"],
+    ["the agent trailer not admitted", SPEC, ["Co-Authored-By"], false, "ca45ce399f42f6dad1cd3ad724dcab433217cb7e6c2bf8cfc1618853b2decd06"],
+  ] as const)("an EMPTY list is byte-identical to the hook before #594: %s", (_name, spec, refused, admitted, digest) => {
+    expect(sha256(renderCommitMsgHook(spec, refused, admitted, []))).toBe(digest);
+    expect(renderCommitMsgHook(spec, refused, admitted, [])).toBe(renderCommitMsgHook(spec, refused, admitted));
+    expect(renderCommitMsgHook(spec, refused, admitted)).not.toContain(HOOK_COMPOSED_KEYS_ENV);
+  });
+
+  it("a non-empty list renders the step, gated on the variable being SET (set-but-empty counts), keys baked in", () => {
+    const script = renderCommitMsgHook(SPEC, ["Co-Authored-By"], true, ["Co-authored-by", "Made-with"]);
+    expect(script).toContain(`if [ -n "\${${HOOK_COMPOSED_KEYS_ENV}+x}" ]; then`);
+    expect(script).not.toContain(`\${${HOOK_COMPOSED_KEYS_ENV}:-}`);
+    expect(script).toContain("nen_strip_keys='Co-authored-by=co-authored-by Made-with=made-with'");
+    expect(script).toContain(`>>"$nen_git_dir/${STRIP_SIDECAR_FILE}.$nen_run"`);
+    expect(script).toContain("git rev-parse --git-dir");
+    expect(script).toContain("commit-msg: stripped the hook-injected '$nen_key:' trailer (commits.stripInjected)");
+  });
+
+  it("runs the strip BEFORE the refusal greps, and leaves every refusal in place", () => {
+    const script = renderCommitMsgHook(SPEC, ["Co-Authored-By"], true, ["Co-Authored-By"]);
+    expect(script.indexOf(HOOK_COMPOSED_KEYS_ENV)).toBeGreaterThan(script.indexOf('msg_file="$1"'));
+    expect(script.indexOf(HOOK_COMPOSED_KEYS_ENV)).toBeLessThan(script.indexOf("grep -qiE '^Co-Authored-By:'"));
+    expect(script).toContain(`grep -qiE '^Co-Authored-By:' "$msg_file"`);
+  });
+
+  it("skips a key the composed message carried -- the case match on the comma-joined, lower-cased list", () => {
+    const script = renderCommitMsgHook(SPEC, [], true, ["Co-authored-by"]);
+    expect(script).toContain(`*",$nen_lower,"*) continue ;;`);
+    expect(script).toContain("LC_ALL=C tr 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' 'abcdefghijklmnopqrstuvwxyz'");
+  });
+
+  it("de-duplicates the list case-insensitively, keeping the first spelling", () => {
+    expect(renderCommitMsgHook(SPEC, [], true, ["Co-authored-by", "CO-AUTHORED-BY"])).toContain("nen_strip_keys='Co-authored-by=co-authored-by'");
+  });
+
+  it("carries no bashism the step could trip on: no [[, no local, no echo -e, and the awk program holds no single quote", () => {
+    const script = renderCommitMsgHook(SPEC, [], true, ["Co-authored-by"]);
+    expect(script).not.toContain("[[");
+    expect(script).not.toMatch(/\blocal\b/);
+    expect(script).not.toContain("echo -e");
+    const awk = /LC_ALL=C awk -v key="\$nen_lower" '([^']*)'/.exec(script);
+    expect(awk).not.toBeNull();
+    // D: the exact key, then optional spaces/tabs, then the colon -- never a prefix.
+    expect(awk?.[1]).toContain("tolower(substr(txt[i], 1, k)) == key && substr(txt[i], k + 1) ~ /^[ \\t]*:/");
+  });
+
+  it("records a strip only under a WELL-FORMED run id, and says a leaked variable leaked (hanten round 1, E)", () => {
+    const script = renderCommitMsgHook(SPEC, [], true, ["Co-authored-by"]);
+    expect(script).toContain(`nen_run="\${${HOOK_STRIP_RUN_ENV}:-}"`);
+    expect(script).toContain("''|*[!0123456789abcdef]*) nen_run='' ;;");
+    expect(script).toContain(`but ${HOOK_COMPOSED_KEYS_ENV} was found without a nen run id (${HOOK_STRIP_RUN_ENV} missing or malformed): it was exported or leaked`);
+    expect(script).toContain("NEITHER VARIABLE IS EVER");
+  });
+
+  it("is LOCALE-PROOF: no bracket range or character class in the step, every tr and awk under LC_ALL=C (zheref/nen#682, J)", () => {
+    const script = renderCommitMsgHook(SPEC, ["Co-Authored-By"], true, ["Co-authored-by"]);
+    const start = script.indexOf(`if [ -n "\${${HOOK_COMPOSED_KEYS_ENV}+x}" ]; then`);
+    const end = script.indexOf("\nfi\n", start);
+    const step = script
+      .slice(start, end)
+      .split("\n")
+      .filter((line): boolean => !line.trimStart().startsWith("#"))
+      .join("\n");
+    expect(step.length).toBeGreaterThan(0);
+    // No range inside any bracket expression, and no POSIX class.
+    // ("[ -s ... ]" and "[ -n ... ]" are the test command, not a bracket expression.)
+    for (const bracket of (step.match(/\[[^\]\n]*\]/g) ?? []).filter((text): boolean => !text.startsWith("[ "))) {
+      expect(bracket, bracket).not.toMatch(/[0-9A-Za-z]-[0-9A-Za-z]/);
+      expect(bracket, bracket).not.toContain("[:");
+    }
+    // Every tr and every awk is run under LC_ALL=C -- none without it.
+    expect(step.match(/\btr '/g)?.length).toBe(step.match(/LC_ALL=C tr '/g)?.length);
+    expect(step.match(/\bawk -v/g)?.length).toBe(1);
+    expect(step.match(/LC_ALL=C tr /g)?.length).toBe(2);
+    expect(step).toContain("LC_ALL=C awk -v key=");
+  });
+
+  it("never replaces the message with EMPTY output: the replace is guarded by [ -s ] (hanten round 1, F)", () => {
+    const script = renderCommitMsgHook(SPEC, [], true, ["Co-authored-by"]);
+    expect(script).toContain(`>"$msg_file.nen-strip" && [ -s "$msg_file.nen-strip" ]; then`);
+  });
+
+  it("adds ONE header line saying the hook also removes a listed injected trailer -- only when the list is non-empty (hanten round 1, H)", () => {
+    const line = "# It also REMOVES a listed trailer a hook injected, first (commits.stripInjected),";
+    expect(renderCommitMsgHook(SPEC, [], true, ["Co-authored-by"])).toContain(line);
+    expect(renderCommitMsgHook(SPEC, [], true, ["Co-authored-by"]).indexOf(line)).toBeLessThan(renderCommitMsgHook(SPEC, [], true, ["Co-authored-by"]).indexOf("set -eu"));
+    expect(renderCommitMsgHook(SPEC, [], true, [])).not.toContain(line);
+  });
+
+  it("leaves every pre-existing refusal grep byte for byte, list or no list (the invariant)", () => {
+    const without = renderCommitMsgHook(SPEC, ["Co-Authored-By"], true, []);
+    const withList = renderCommitMsgHook(SPEC, ["Co-Authored-By"], true, ["Co-authored-by"]);
+    const grep = `if grep -qiE '^Co-Authored-By:' "$msg_file"; then`;
+    expect(without).toContain(grep);
+    expect(withList).toContain(grep);
+  });
+
+  it("is byte-stable: the same list renders the same script", () => {
+    expect(renderCommitMsgHook(SPEC, ["Co-Authored-By"], true, ["Co-authored-by"])).toBe(
+      renderCommitMsgHook(SPEC, ["Co-Authored-By"], true, ["Co-authored-by"]),
+    );
   });
 });

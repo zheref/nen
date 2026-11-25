@@ -252,6 +252,12 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     expect(result.classification).toBe("read-only");
   });
 
+  it("classifies nen pr version-collision as read-only, as pr ready (zheref/nen#663)", () => {
+    expect(classifyCommand("nen pr version-collision 925 --gh-repo owner/repo --json").classification).toBe("read-only");
+    expect(classifyCommand("nen pr version-collision --target owner/repo --pr 925 --require-head abcdef1 --explain").classification).toBe("read-only");
+    expect(classifyCommand("nen pr version-collision 925 --gh-repo o/r; git push").classification).toBe("unknown");
+  });
+
   it("refuses the issue's exact repro: nen label apply --run", () => {
     const result = classifyCommand("nen label apply XX-PR-#1 --label wake --repo-slug o/r --run");
     expect(result.classification).toBe("mutating");
@@ -318,6 +324,7 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     expect(classifyCommand("nen pr retarget --target o/r --pr 1 --base main").classification).toBe("mutating");
     expect(classifyCommand("nen pr request-reviews --target o/r --pr 1 --add-reviewers a").classification).toBe("mutating");
     expect(classifyCommand("nen tag cut --name v1.0.0 --at abc123").classification).toBe("mutating");
+    expect(classifyCommand("nen tool install --contract /trusted/scans.json --row secretScan --bin-dir /tmp/bin").classification).toBe("mutating");
     expect(classifyCommand("nen run rerun-failed --target o/r --run-id 9").classification).toBe("mutating");
     // The run manifest (SDD piece N7): start/append write unless --dry-run;
     // verify, budget, wc overlap, stage check and loop slots --from-run read.
@@ -351,6 +358,12 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     expect(classifyCommand("nen spec index --repo .").classification).toBe("read-only");
     expect(classifyCommand("nen spec index --repo . --write").classification).toBe("mutating");
     expect(classifyCommand("nen spec index --repo . --write --dry-run").classification).toBe("read-only");
+    // zheref/nen#673: the due-check is read-only, so an unattended weekly task may run it.
+    expect(classifyCommand("nen spec due --repo . --family port --json").classification).toBe("read-only");
+    // zheref/nen#583: the phase-ledger listing reads only, so the Hatsu desk may run it unattended; begin/end still write.
+    expect(classifyCommand("nen phase list --repo . --since 30 --json").classification).toBe("read-only");
+    expect(classifyCommand("nen phase show --effort HA/85").classification).toBe("read-only");
+    expect(classifyCommand("nen phase begin --effort HA/85 --phase breath").classification).toBe("mutating");
     // The canon prose verbs (SDD piece N9): four reads.
     expect(classifyCommand("nen canon lint --root . --rules contracts/prose.lint.json --baseline b.json --base origin/main --json").classification).toBe("read-only");
     expect(classifyCommand("nen canon clause check --file docs/ROSTER.md --prefix HR --base origin/main:docs/ROSTER.md --leaves 'claude/**/*.md'").classification).toBe("read-only");

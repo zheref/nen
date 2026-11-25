@@ -1,5 +1,6 @@
 // Caller-owned vocabulary: no section ids, job keys or family names live here.
 import { requireArray, requireRecord, requireString, SchemaError } from "../schema/errors.js";
+import { wrongCatalogueKind } from "../issue/cataloguekind.js";
 import type { ClassifyTaxonomy } from "../classify/taxonomy.js";
 import type { BodyRequirement } from "./bodycheck.js";
 
@@ -39,6 +40,10 @@ function section(path: string, pointer: string, raw: unknown): Section {
 }
 export function parseSectionCatalogue(path: string, raw: unknown): SectionCatalogue {
   const root = requireRecord(path, "$", raw);
+  // An issue-sections catalogue is named as that before any field is read: its
+  // first misfit ('sections' as an object) reads like schema drift (zheref/nen#607).
+  const wrongKind = wrongCatalogueKind(raw, "pr-sections");
+  if (wrongKind !== null) throw new SchemaError(path, null, wrongKind);
   const sections = requireArray(path, "sections", root.sections).map((value, index): Section => section(path, `sections[${index}]`, value));
   const footer = requireArray(path, "footer", root.footer).map((value, index): Section => section(path, `footer[${index}]`, value));
   const ids = [...sections, ...footer].map((entry): string => entry.id);

@@ -51,8 +51,9 @@ import { readTextFile } from "../cli/inputs.js";
 import { runCheck } from "./check.js";
 import { CommitlintConfigError, declaredSubjectCase, readSubjectCaseRule, subjectCaseFindings } from "./commitlint.js";
 import { declaredBodyWidth, lineLengthFindings, readLineLengthRules, wrapFormatBody } from "./bodywidth.js";
-import { COMMIT_MESSAGE_PATH, write, WRITE_CONTRACT } from "./write.js";
+import { COMMIT_MESSAGE_PATH, validateMessageText, write, WRITE_CONTRACT } from "./write.js";
 import { injectedMessage } from "./readback.js";
+import { COMPOSED_KEYS_ENV, STRIP_RUN_ENV, strippedMessage, STRIPPED_EXIT, writtenExit } from "./strip.js";
 import {
   COMMIT_TYPES,
   formatCommitMessage,
@@ -80,6 +81,7 @@ const USAGE = `nen commit -- Conventional Commits formatting (tensho §4), and t
 build-proof check that says whether this tree is the one a build proved.
 
 usage:
+  nen commit format --repo <path> --message-file <path>
   nen commit format --type feat --subject "a short imperative subject"
                     [--scope <scope>] [--breaking] [--body "paragraph one"]
                     [--trailer key=value,key2=value2] [--repo <path>]
@@ -149,6 +151,13 @@ ASSUMED AND BINDING (the maintainer's ruling) -- on every line before the
 trailer block, prose commitlint reads as footer included. The trailer block
 has no declared form: under an unreadable config it is judged against 100
 for reference only.
+
+'format --message-file <path>' validates the existing file without rewriting it,
+wrapping its body, reading the index, or committing. Relative paths resolve
+against --repo. It cannot be combined with message-building flags (--type,
+--scope, --subject, --body, --trailer, --breaking). On success it emits the
+original message (or { message } with --json); shape refusals exit 2 and
+broken policy/configuration exits 1, using the same validators as 'write'.
 
 'format' WRAPS every --body line the rule would refuse to that width -- 100
 where no readable rule or declaration states one, and not at all under a rule
@@ -242,12 +251,33 @@ applies. An added key nothing refuses
 is a 'note:' line, exit unchanged. A read-back git could not answer is exit
 1: the commit exists, the check did not happen.
 
+A HOOK-INJECTED KEY CAN BE STRIPPED, ONLY WHERE THE REPOSITORY OPTS IN
+(zheref/nen#594). Without it -- commits.stripInjected empty, the default -- a
+refused key a harness's own hook adds is a refusal with no sanctioned way
+around it (never --no-verify). With keys listed and the commit-msg hook
+regenerated ('nen scaffold init ... --force'), the child 'git commit' runs
+with ${COMPOSED_KEYS_ENV} set to the composed message's keys and
+${STRIP_RUN_ENV} to a fresh random run id, and the hook removes a listed key
+from the trailer block when the message nen composed did not carry it,
+naming it in <git dir>/nen-stripped-trailers.<run id> -- this run's file
+alone, read and deleted after the commit. A key is reported as stripped only
+when the read-back confirms the commit lacks it. Neither variable is ever
+exported by hand: the hook reads a composed-keys variable with no run id as
+leaked, and records nothing. The strip never removes a key the composed
+message carried, never admits a refused key, and never amends. A commit the
+hook refused for a listed key adds a hint: the hook may predate
+commits.stripInjected.
+
 Exits: 0 committed (and nothing refused was added); 1 a broken config, a
 refused proof, an empty index, a failed git; 2 the shape; 3 committed, and a
-hook injected a refused trailer. --json's contract is '${WRITE_CONTRACT}': {
-contract, sha (null on a dry run), subject, trailers: [{ key, value }] (READ
-BACK from the written commit; the composed message's on a dry run), injected:
-[key, ...] (null on a dry run -- not checked), dryRun }.`;
+hook injected a refused trailer; 4 committed, and the hook stripped a
+hook-injected key (3 wins over 4, 4 over 0). 4 is a COMMITTED outcome, as 0
+and 3 are: never retry it. --json's contract is
+'${WRITE_CONTRACT}': { contract, sha (null on a dry run), subject, trailers:
+[{ key, value }] (READ BACK from the written commit; the composed message's
+on a dry run), injected: [key, ...] (null on a dry run -- not checked),
+dryRun, stripped: [key, ...] (null on a dry run, [] when nothing was
+stripped) }.`;
 
 /**
  * The exit-1 line for a nen/workflow.json that will not load, shared by
@@ -269,7 +299,7 @@ function policyFailure(error: SchemaError, act: "shape a message" | "commit"): s
  * the instruction somebody gave.
  */
 const COMMIT_SUBCOMMAND_FLAGS: Readonly<Record<string, readonly string[]>> = {
-  format: ["type", "scope", "subject", "body", "trailer", "breaking"],
+  format: ["message-file", "type", "scope", "subject", "body", "trailer", "breaking"],
   check: ["require-proof"],
   write: ["message-file", "trailer", "require-proof", "dry-run"],
 };
@@ -303,6 +333,30 @@ function refuseForeignFlags(subcommand: string, context: CommandContext): void {
 function commitlintFailure(error: CommitlintConfigError): string {
   const what = error.rule === "subject-case" ? "a subject" : "a message";
   return `nen: ${error.message}. nen will not call ${what} well-formed under a ${error.rule} rule it could not read: fix the file, then run this again.`;
+}
+
+function runFormatFile(context: CommandContext): number {
+  const mixed = ["type", "scope", "subject", "body", "trailer", "breaking"].filter(
+    (flag): boolean => context.args.values[flag] !== undefined || context.args.lists[flag] !== undefined || context.args.booleans.has(flag),
+  );
+  if (mixed.length > 0) throw new VerbUsageError(`--message-file cannot be combined with --${mixed.join(", --")}.`);
+  const root = assertRepoRoot({ repoFlag: context.repoFlag });
+  const path = requireValue(context.args, "message-file", "The existing message to validate.");
+  const message = readTextFile(path, root, "The message is validated without rewriting it or reading the index.", true);
+  const result = validateMessageText(root, message, {
+    warn: (warning): void => context.io.err(`nen: warning: ${warning}`),
+    note: (note): void => context.io.err(`nen: note: ${note}`),
+  });
+  const failures = result.failures.map((error): string => error instanceof CommitlintConfigError ? commitlintFailure(error) : policyFailure(error, "shape a message"));
+  if (failures.length > 0) {
+    if (context.json) return refuse(context.io, true, "commit format", 1, [...failures, ...result.reasons]);
+    for (const failure of failures) context.io.err(failure);
+    for (const reason of result.reasons) context.io.err(`nen: ${reason}`);
+    return 1;
+  }
+  if (result.reasons.length > 0) return refuse(context.io, context.json, "commit format", 2, result.reasons);
+  context.io.out(context.json ? JSON.stringify({ message }, null, 2) : message);
+  return 0;
 }
 
 function runWrite(context: CommandContext): number {
@@ -345,17 +399,26 @@ function runWrite(context: CommandContext): number {
   // this repository refuses -- ./readback.ts's three rules. Not 1 -- nothing failed to run,
   // and the commit exists -- and not 2 -- the invocation was right. The report
   // above still names the sha; the commit is left for the caller to drop.
+  // EXIT 4 (zheref/nen#594): written, and the repository's hook stripped a
+  // hook-injected key it opted into stripping. Said on stderr whatever the
+  // exit, because 3 wins over it and must not hide it.
+  const stripped = outcome.report.stripped ?? [];
+  if (stripped.length > 0 && outcome.report.sha !== null) {
+    context.io.err(`nen commit write: ${strippedMessage(outcome.report.sha, stripped)}`);
+  }
+  let injected = 0;
   if (outcome.findings.length > 0 && outcome.report.sha !== null && outcome.policy !== null && outcome.undo !== null) {
     context.io.err(`nen commit write: ${injectedMessage(outcome.report.sha, outcome.findings, outcome.policy, outcome.undo)}`);
-    return 3;
+    injected = outcome.findings.length;
   }
-  return 0;
+  return writtenExit(injected, stripped.length);
 }
 
 export const commitCommand: Command = {
   jsonRefusals: ["format"],
   exits: [
     { verb: "commit write", code: 3, meaning: "committed, and the read-back found a trailer the policy refuses; the commit is left in place" },
+    { verb: "commit write", code: STRIPPED_EXIT, meaning: "committed, and the commit-msg hook stripped a hook-injected key under commits.stripInjected; 3 wins over it" },
   ],
   name: "commit",
   subcommands: ["format", "check", "write"],
@@ -370,6 +433,7 @@ export const commitCommand: Command = {
     refuseForeignFlags(subcommand, context);
     if (subcommand === "check") return runCheck(context);
     if (subcommand === "write") return runWrite(context);
+    if (context.args.values["message-file"] !== undefined) return runFormatFile(context);
     const type = context.args.values["type"] as CommitType | undefined;
     if (type === undefined) throw new VerbUsageError("--type is required.");
     const subject = context.args.values["subject"];

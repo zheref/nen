@@ -415,7 +415,7 @@ describe("ci runs the same three commands a developer runs", () => {
     const test = shared.find((step) => step["name"] === "Test");
     expect(test?.["run"]).toBe("bun run test");
     expect(own).toEqual(
-      shared.map((step) => (step === test ? { ...step, run: "bun run test -- --minWorkers=1 --maxWorkers=8" } : step)),
+      shared.map((step) => (step === test ? { ...step, run: "bun run test -- --maxWorkers=8" } : step)),
     );
   });
 

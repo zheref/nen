@@ -1,0 +1,1 @@
+- Parse supports final first-anchored free-text clauses, whitespace-joined list items, spaced hyphen placeholders, and the published kage-bunshin invocation grammar (#458, #593).
