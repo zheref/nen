@@ -14,7 +14,7 @@ Release unit for `v0.30.0..v0.31.0`: [#596](https://github.com/zheref/nen/pull/5
 - **Dry-run `would update` lines from `labels sync` and `classify install --sync` now end with the remote's current values** (`(was: color #000000)`, `(was: description "old")`), so a caller comparing those lines by exact equality must add the suffix; `classify install --sync`'s default-branch refusal now names `nen labels sync … --ref <branch>` as the way to diff an unmerged declaration ([#596](https://github.com/zheref/nen/pull/596)).
 - **`nen pr request-reviews --json`, head-pinned `nen watch until --pr --json` and `nen loop slots --from-run` add sixth-stop handoff fields and slot release.** Live `request-reviews --json` calls now include `repo`, `pr`, `requestHead` and `exitCode` (and resolve `unrecordedBots[].login` on exit `9`), and head-pinned `watch until --pr --until ready --require-base-gates --json` (with no caller gate overrides) adds `intervalMs` and `sixthStopObservations`, so callers comparing those JSON documents by exact equality must add them. With `--prompt-gate`, `loop slots --from-run` now releases a local slot on a verified `nen.stop.sixth-stop/v0.1` handoff while readiness remains `not-ready`, holds on an unreadable sixth-stop record or `--repair-hold`, and appends the sixth-stop status to `facts` ([#655](https://github.com/zheref/nen/pull/655)).
 
-- **Older nen refuses a ledger that has a delta row.** Repin to v0.31.0 before reading or writing review ledgers with per-delta `ran` rows ([#678](https://github.com/zheref/nen/pull/678), issue [#662](https://github.com/zheref/nen/issues/662)).
+- **Older nen refuses a review ledger containing a stored invocation with `outcome: "delta"`.** Repin to v0.31.0 before reading or writing ledgers that record per-delta passes ([#678](https://github.com/zheref/nen/pull/678), issue [#662](https://github.com/zheref/nen/issues/662)).
 
 ### Added and changed
 
@@ -46,7 +46,7 @@ Release unit for `v0.30.0..v0.31.0`: [#596](https://github.com/zheref/nen/pull/5
 ### Breaking / consumer notes
 
 - `nen surface mirror generate` and `check` now refuse a Codex `AGENTS.md` over 32,768 UTF-8 bytes at exit 2. The refusal names the first affected persona or shared include, its byte range and the first unread byte. Previously generation succeeded with a warning and check could pass despite silent truncation. Split oversized source instructions before regenerating; the read limit is not raised and no partial mirror is written. Closes #641.
-## Added
+### Added
 
 - `nen shu coverage --touched` reads `coverage.exclusions` path patterns from the lane declaration and reports every excluded file, absent set, and unmatched pattern, including for dry runs and proved captures (#645).
 ### Added
