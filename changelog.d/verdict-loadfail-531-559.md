@@ -1,0 +1,1 @@
+- Readiness reports per-check names/conclusions and excluded checks separately, and terminal merged/closed states with exit10. Red checkpoints can attribute file-load failures through a data-only names report; missing names explicitly report unreadable criterion evidence (#531, #559).
