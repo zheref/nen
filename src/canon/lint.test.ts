@@ -5,7 +5,7 @@
 // baseline admits, goes stale and refuses to grow under --base. The rules
 // contract is Hatsu's own, copied as ./fixtures/prose.lint.json, so the verb is
 // proven against the file it will read.
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -820,19 +820,55 @@ describe("canon lint internals", () => {
     expect(exemptQuoted('"a" "b"\n"c"')).toBe("       \n   ");
   });
 
-  it("blanks quotations in linear time: 8x the quotes costs far less than 64x the time (Feitan F3 on #526)", () => {
-    const time = (count: number): number => {
-      const text = '"q" '.repeat(count);
-      const t0 = performance.now();
-      for (let i = 0; i < 3; i++) expect(exemptQuoted(text).trim()).toBe("");
-      return performance.now() - t0;
+  // Count slice-output lengths, not elapsed time: scheduling and coverage
+  // instrumentation cannot turn an otherwise correct result into a failure.
+  // This observes the original repeated-prefix/suffix reconstruction defect
+  // (Feitan F3 on #526), not a claim about every possible nonlinear algorithm.
+  const slicedWork = (blank: (text: string) => string, text: string): { output: string; characters: number } => {
+    const slice = String.prototype.slice;
+    let characters = 0;
+    const spy = vi.spyOn(String.prototype, "slice").mockImplementation(function (this: string, start?: number, end?: number): string {
+      const result = slice.call(this, start, end);
+      characters += result.length;
+      return result;
+    });
+    try {
+      const output = blank(text);
+      return { output, characters };
+    } finally {
+      spy.mockRestore();
+    }
+  };
+
+  const withinCopyBudget = (characters: number, text: string): boolean => characters <= 2 * text.length;
+
+  it.each([5_000, 40_000])("bounds quotation reconstruction work for %i quotes (Feitan F3 on #526)", (count) => {
+    const text = '"q" '.repeat(count);
+    const measured = slicedWork(exemptQuoted, text);
+    expect(measured.output).toBe("    ".repeat(count));
+    expect(withinCopyBudget(measured.characters, text)).toBe(true);
+  });
+
+  it("the same work bound rejects the original repeated-reslicing behavior", () => {
+    const quadratic = (text: string): string => {
+      let result = text;
+      for (const match of text.matchAll(/"[^"\n]{1,600}"/g)) {
+        result = result.slice(0, match.index) + " ".repeat(match[0].length) + result.slice(match.index + match[0].length);
+      }
+      return result;
     };
-    time(1_000); // warm up
-    const small = Math.max(time(5_000), 1);
-    const large = time(40_000);
-    // Quadratic growth would be ~64x; linear is ~8x. A generous bound of 32x
-    // separates the two without a wall-clock limit a loaded host could trip.
-    expect(large / small).toBeLessThan(32);
+    const text = '"q" '.repeat(200);
+    const control = slicedWork(quadratic, text);
+    expect(control.output).toBe(exemptQuoted(text)); // semantics alone miss the defect
+    expect(control.characters).toBe(200 * (text.length - 3));
+    expect(withinCopyBudget(control.characters, text)).toBe(false);
+  });
+
+  it("preserves mixed quotation, newline and inline-code semantics under the work bound", () => {
+    const text = 'a "b c" d\n“e”\n`"` then "q"\nopen " here\nclosed " there';
+    const measured = slicedWork(exemptQuoted, text);
+    expect(measured.output).toBe('a       d\n   \n`"` then    \nopen " here\nclosed " there');
+    expect(withinCopyBudget(measured.characters, text)).toBe(true);
   });
 
   it("reads reading status from a Status column by header and from a (reading) token", () => {
