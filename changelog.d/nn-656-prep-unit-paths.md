@@ -1,1 +1,0 @@
-- Bound release-unit updates for the seven non-opted-in readiness `--explain` goldens to their exact paths and `decided by nen <version>` provenance lines, keeping the executable path, timestamp, and every other line fixed. Record the v0.31.0 regeneration provenance in the fixture README so the later release only needs version changes and changelog recollation.
