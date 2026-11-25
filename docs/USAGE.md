@@ -12,7 +12,7 @@ repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
 what each version changed: 50 command
-families, 182 verbs, every flag checked against that binary.
+families, 183 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -258,7 +258,7 @@ including every refusal reason. The raw NUL-delimited stream
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **113 shapes** and **117 ids** (`nen.runner.plan`
+binary carries**, writing or reading — **114 shapes** and **118 ids** (`nen.runner.plan`
 and `nen.wc.worktree.copies` each have two versions, `nen.stop.mark` three, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -321,7 +321,7 @@ file formats).
 - **`shu`** — `nen.shu.<verb>/v0.1` · `nen.shu.coverage-capture/v0.1` · `nen.shu.coverage/v0.1` · `nen.shu.detect/v0.1` · `nen.shu.evidence/v0.1` · `nen.shu.proof/v0.1` · `nen.shu.test-report/v0.1` · `nen.shu.tools/v0.1` · `nen.shu.warmup/v0.1`
 - **`spec`** — `nen.spec.check/v0.1` · `nen.spec.cite-check/v0.1` · `nen.spec.converge/v0.1` · `nen.spec.coverage/v0.1` · `nen.spec.diff/v0.1` · `nen.spec.due/v0.1` · `nen.spec.index/v0.1` · `nen.spec.inventory/v0.1` · `nen.spec.number/v0.1` · `nen.spec.parity/v0.1` · `nen.spec.tasks/v0.1` · `nen.spec.trace/v0.1`
 - **`stop`** — `nen.stop.answer/v0.1` · `nen.stop.list/v0.1` · `nen.stop.mark/v0.1` · `nen.stop.mark/v0.2` · `nen.stop.mark/v0.3` · `nen.stop.prompt/v0.1` · `nen.stop.proposed-issue/v0.1` · `nen.stop.sixth-stop/v0.1`
-- **`surface`** — `nen.surface.capabilities/v0.1` · `nen.surface.install/v0.1` · `nen.surface.mirror.check-installed/v0.1` · `nen.surface.mirror.check-plugin/v0.1` · `nen.surface.mirror.check/v0.1` · `nen.surface.mirror.generate/v0.1` · `nen.surface.status/v0.1`
+- **`surface`** — `nen.surface.marker/v0.1` · `nen.surface.capabilities/v0.1` · `nen.surface.install/v0.1` · `nen.surface.mirror.check-installed/v0.1` · `nen.surface.mirror.check-plugin/v0.1` · `nen.surface.mirror.check/v0.1` · `nen.surface.mirror.generate/v0.1` · `nen.surface.status/v0.1`
 - **`tests`** — `nen.tests.map/v0.1`
 - **`usage`** — `nen.usage.ledger/v0.1`
 - **`wc`** — `nen.wc.catch-up/v0.2` · `nen.wc.prune/v0.1` · `nen.wc.publish/v0.1` · `nen.wc.squash/v0.1` · `nen.wc.swap.state/v0.1` · `nen.wc.swap/v0.1` · `nen.wc.worktree.copies/v0.1` · `nen.wc.worktree.copies/v0.2` · `nen.wc.worktree/v0.1` · `nen.wc.worktrees/v0.1`
@@ -1076,7 +1076,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 182 verbs, grouped as the README groups them. **Reads** is what a
+All 183 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -1183,6 +1183,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`runner`](#family-runner) | [`nen runner relabel`](#nen-runner-relabel) | add a pool's own label, `pool-<id>`, to runners registered before it existed (#340) -- only runners named with `--runner` (`--run` without it is exit 2); a dry run without `--runner` lists the candidates; every write read back | nen/workflow.json (runners), github (gh api GET runners and runners/<id>/labels; gh api POST runners/<id>/labels with --run) | yes |
 | [`surface`](#family-surface) | [`nen surface install`](#nen-surface-install) | make, re-point or report a host's FIRST-PARTY install of a plugin from a checkout, per surface: the Claude Code skills-directory link with the hand-over of a prior marketplace copy, the Codex marketplace and plugin, the Antigravity global plugin link -- never replacing what it did not make, never editing a settings file, every write read back | the checkout's manifests; the surface's own directory (--config-dir) and registry files; claude / codex / agy and one `git rev-parse`; writes a link under --config-dir and runs the surface's install CLI unless --dry-run; no gh | yes |
 | [`surface`](#family-surface) | [`nen surface status`](#nen-surface-status) | the version each surface serves for a plugin, read back from `claude plugin list --json`, `codex plugin list` or the linked `plugin.json`, and whether it is a given checkout; with `--trees`, the copies Claude Code SERVES judged as `check --plugin` judges them | the surface's directory and registry files; claude / codex / agy list and validate commands; with --trees, the copies and the source; writes nothing; no gh | yes |
+| [`surface`](#family-surface) | [`nen surface marker`](#nen-surface-marker) | read a placed file’s surface and grammar, or find current generated files under a directory | placed files | yes |
 | [`surface`](#family-surface) | [`nen surface capabilities`](#nen-surface-capabilities) | what a running session on a surface can do -- picker, subagent, hook events and decision key, worktree isolation, artifact, notify, permissions file and shape, agent model key, rules file and limit, description budget -- as data with a citation per row | nothing; a table this binary ships | yes |
 | [`run`](#family-run) | [`nen run rerun-failed`](#nen-run-rerun-failed) | re-run a workflow run's failed jobs (gh run rerun --failed) | github (gh) | yes |
 | [`run`](#family-run) | [`nen run start`](#nen-run-start) | start a batch run's manifest (`nen.run/v0.1`) at `<git-common-dir>/.nen/runs/<id>.json` with its repository and launch-time idle answers (HR-5); the same answers again is the resume, other answers or another repository refused | git (rev-parse --git-common-dir); writes the manifest unless --dry-run | yes |
@@ -19382,6 +19383,37 @@ declares it — `network: not declared` otherwise) and `config.toml.fragment`
 every persona (the tier under `modelMapped`), `hooks.json`, `cli.json`
 (`Shell(exe:args)` rows plus whatever `surfaces.cursor` declares) and
 `rules/rules.mdc`.
+
+### `nen surface marker`
+
+Read which surface a placed file was generated for, using the same marker reader as
+`surface mirror`. This performs no comparison, refresh or write.
+
+```sh
+nen surface marker --file <path> [--repo <path>] [--json]
+nen surface marker --under <directory> --surface <name> [--repo <path>] [--json]
+```
+
+Relative paths resolve against `--repo` when supplied, otherwise the working directory.
+`--json` emits top-level `contract`, `file`, `generated`, `surface`, `stamp`,
+and `grammar` for a file; or `contract`, `under`, `surface`, `generated`, `matches`
+and `skipped` for a directory. The contract is `nen.surface.marker/v0.1`.
+The file result contains `generated`, `surface`, `stamp`
+and `grammar`: `nen-surface-mirror`, `retired-antigravity`, or null. Current markers
+are read at the first body line after frontmatter, a TOML first line, a script's
+second line, or a JSON top-level `$generated` property or native hook-definition
+name. Quoted markers elsewhere do not count. Retired Antigravity markdown, script
+and JSON-description markers report their grammar and surface with `generated: false`.
+
+Directory results list sorted relative `matches` for current markers of the named
+surface and `skipped` symlinks/special files. Symlink inputs are refused; entries
+inside the directory observed as links are skipped. This is a read-only traversal,
+not an atomic filesystem snapshot; callers must keep the tree stable during the query.
+A read failure refuses the
+whole report, even if another file matched. Exit **0** means a current marker was
+found, **1** means none (including a retired marker), and **2** means invalid
+arguments or a filesystem read failure. A file's marker is provenance metadata,
+not a content-integrity or authenticity check.
 
 ### `nen surface capabilities`
 
