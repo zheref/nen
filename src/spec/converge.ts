@@ -39,7 +39,7 @@ import { assertInsideRepo } from "./check.js";
 import { excerptOf, resolveMember, type MemberCheckout } from "./citecheck.js";
 import { diffInventories, InventoryReadError, loadInventory, type LoadedInventory } from "./diff.js";
 import type { InventoryRow } from "./inventory.js";
-import { citationsIn, proseLines, requirementOf, trailingAnnotation } from "./lines.js";
+import { acceptanceScenarioOf, citationsIn, proseLines, requirementOf, trailingAnnotation } from "./lines.js";
 import { readTree, TreeReadError, type MemberTree } from "./tree.js";
 
 export const SPEC_CONVERGE_CONTRACT = "nen.spec.converge/v0.1";
@@ -85,6 +85,13 @@ export interface Write {
   readonly text: string;
 }
 
+export type ConvergeCounts = Record<GapClass, number> & {
+  /** Scenario definition lines outside fenced source data, including uncited lines. */
+  scenariosRead: number;
+  /** Scenario lines with at least one valid citation of the selected member. */
+  scenariosCited: number;
+};
+
 /** KEY ORDER IS THE DOCUMENTED `--json` SHAPE. */
 export interface ConvergeReport {
   readonly contract: string;
@@ -101,7 +108,7 @@ export interface ConvergeReport {
   readonly claims: readonly Claim[];
   readonly writes: readonly Write[];
   readonly action: "none" | "written" | "would-write" | "refused";
-  readonly counts: Readonly<Record<GapClass, number>>;
+  readonly counts: Readonly<ConvergeCounts>;
   readonly reason: string | null;
 }
 
@@ -117,7 +124,7 @@ export interface ConvergeInput {
   readonly dryRun: boolean;
 }
 
-const zeroCounts = (): Record<GapClass, number> => ({ missing: 0, partial: 0, contradicts: 0, unrequested: 0 });
+const zeroCounts = (): ConvergeCounts => ({ missing: 0, partial: 0, contradicts: 0, unrequested: 0, scenariosRead: 0, scenariosCited: 0 });
 
 function unreadable(input: ConvergeInput, inventory: LoadedInventory | null, member: MemberCheckout | null, reason: string): ConvergeReport {
   return {
@@ -199,16 +206,24 @@ export function converge(seams: Seams, input: ConvergeInput): ConvergeReport {
   if (specText === null) return unreadable(input, inventory, member, `${specFile} does not exist; a folder with no spec.md has nothing to converge, which is not the same as converged`);
   const tasksText = readFolderFile(input.repo, tasksFile);
 
-  // 1. Every citation of this member on a requirement line, and what its bytes do now.
+  // 1. Every citation of this member on a requirement or scenario line, and what its bytes do now.
+  const counts = zeroCounts();
   const citations: ConvergedCitation[] = [];
   const byRequirement = new Map<string, { line: number; states: RangeState[] }>();
   const citedDirs = new Set<string>();
   for (const line of proseLines(specText)) {
-    const requirement = requirementOf(line.text);
+    const scenario = acceptanceScenarioOf(line.text);
+    if (scenario !== null) counts.scenariosRead += 1;
+    const requirement = scenario ?? requirementOf(line.text);
     if (requirement === null) continue;
+    let scenarioCited = false;
     const companions = new Set(trailingAnnotation(line.text).stale);
     for (const { text, citation } of citationsIn(line.text)) {
       if (citation === null || citation.code !== input.code) continue;
+      if (scenario !== null && !scenarioCited) {
+        counts.scenariosCited += 1;
+        scenarioCited = true;
+      }
       citedDirs.add(citation.path.includes("/") ? citation.path.slice(0, citation.path.lastIndexOf("/")) : "");
       const old = readAt(seams, member.path, citation.sha, citation.path);
       const oldExcerpt = old === null ? null : excerptOf(old, citation.l1, citation.l2);
@@ -271,7 +286,7 @@ export function converge(seams: Seams, input: ConvergeInput): ConvergeReport {
   if (tasksText !== null) {
     for (const line of proseLines(tasksText)) {
       if (!/^\s*[-*]\s+\[[xX]\]/.test(line.text)) continue;
-      const ids = [...new Set([...line.text.matchAll(/\b(?:FR|SC)-\d+\b/g)].map((match): string => match[0]))].filter((id): boolean => gapIds.has(id));
+      const ids = [...new Set([...line.text.matchAll(/\b(?:FR|SC|AC)-\d+\b/g)].map((match): string => match[0]))].filter((id): boolean => gapIds.has(id));
       if (ids.length > 0) claims.push({ line: line.number, text: line.text.trim(), ids });
     }
   }
@@ -328,7 +343,6 @@ export function converge(seams: Seams, input: ConvergeInput): ConvergeReport {
     writes.push({ file: tasksFile, kind: "phase", line: null, text: heading });
   }
 
-  const counts = zeroCounts();
   for (const gap of gaps) counts[gap.class] += 1;
   let action: ConvergeReport["action"] = "none";
   if (input.write && writes.length > 0) {
@@ -362,6 +376,7 @@ export function renderConverge(report: ConvergeReport): string[] {
   if (report.verdict === "could-not-read") return [`could-not-read: ${report.folder} -- ${report.reason ?? ""}`];
   const lines = [
     `${report.verdict}: ${report.folder} against ${report.member.code} ${report.member.repo ?? ""} @ ${report.inventory.sha?.slice(0, 12) ?? "?"} -- ${GAP_CLASSES.map((name): string => `${report.counts[name]} ${name}`).join(" · ")} · action ${report.action}`,
+    `  scenarios: ${report.counts.scenariosRead} scenario line(s) read · ${report.counts.scenariosCited} citing ${report.member.code}`,
   ];
   for (const gap of report.gaps) lines.push(`  ${gap.class} ${gap.id}${gap.line === null ? "" : ` (spec.md:${gap.line})`} -- ${gap.detail}`);
   if (report.unrequestedReason !== null) lines.push(`  unrequested: not computed -- ${report.unrequestedReason}`);

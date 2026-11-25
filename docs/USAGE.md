@@ -13667,7 +13667,7 @@ differs: fixture-owner/fixture-app aaaaaaaaaaaa -> aaaaaaaaaaaa -- 1 added, 1 re
 A merged folder held against a **newer inventory of one member**, its gaps
 classified, and — under `--write` — **only ever appended to** (zheref/nen#493
 AC-6; SP-9, SP-10). Every citation of `--code` on a requirement line (FR, SC,
-story) is re-read: its cited bytes at its own sha, and the same range at the
+story) or an acceptance-scenario definition (`AC-###`) is re-read: its cited bytes at its own sha, and the same range at the
 inventory's sha, both through git in the checkout the checkouts file names
 (the member chain of [`spec cite-check`](#nen-spec-cite-check), its `origin`
 read back as the inventory's). Each range is `current`, `moved` (the bytes
@@ -13731,7 +13731,16 @@ unrequested · action <action>`, one line per gap, per claim and per write.
 `gaps` (`{ class, id, line, detail }` each), `unrequested` (rows, or null),
 `unrequestedReason`, `claims` (`{ line, text, ids }` each), `writes` (`{ file,
 kind: "stale"|"phase", line, text }` each), `action` (`none` \| `written` \|
-`would-write` \| `refused`), `counts` (per class), `reason`. Exit 0 when
+`would-write` \| `refused`), `counts` (per gap class plus `scenariosRead` and
+`scenariosCited`), `reason`. Scenario counts are definition **lines**, outside
+fenced source data: `scenariosRead` includes uncited scenarios;
+`scenariosCited` counts each line once when it has at least one valid citation
+of `--code`, even when that range is stale or unreadable. Other-member or
+malformed citations produce no row. Multiple matching citations still produce
+one `citations[]` entry per range. Text output prints both scenario counts.
+Unreadable reports return zero counts with their refusal reason; they carry
+no partial comparison. Ticked tasks naming an `AC-###` gap are claims just
+as FR/SC tasks are. Exit 0 when
 `converged`; exit 1 on any gap — written or not, it stands until the author
 acts — and when the inputs could not be read; exit 2 on a usage error or a
 spec file resolving outside `--repo`.
