@@ -318,10 +318,12 @@ ${SURFACE_LIST}
       A destination caught mid-merge is refused the same way, whether or not
       its marker survived on line 1, but named as an UNRESOLVED MERGE
       CONFLICT with its first conflict line, never as hand-written. A
-      conflict is a '<<<<<<<' or '>>>>>>>' line; the '|||||||' and '======='
-      lines git writes between them count only inside such a hunk, so a lone
-      '=======' (a setext heading underline) is not one. Finish the merge,
-      then regenerate.
+      marked orphan -- a generated file whose canon source is gone -- that
+      holds a conflict is refused with that same cause and left in place,
+      not deleted. A conflict is a '<<<<<<<' or '>>>>>>>' line; the
+      '|||||||' and '=======' lines git writes between them count only
+      inside such a hunk, so a lone '=======' (a setext heading underline)
+      is not one. Finish the merge, then regenerate.
 
       An unmarked file in a rules directory with no canon source is the
       consumer's own: never deleted, listed as 'foreign', never drift.
@@ -370,7 +372,11 @@ ${SURFACE_LIST}
       not drift. On a document surface the block's sections are classified one
       canon file at a time; a block with a broken marker pair reads
       hand-edited whole, and a document with no block reads missing whole.
-      Exit 1 iff any surface has drift and the run completed.
+      An unresolved merge conflict is reported as CONFLICT, naming the
+      destination and its first fence line, and is not also hand-edited. A
+      lone setext underline is not a conflict. JSON carries these
+      destinations in each surface's conflicts. Exit 1 iff any surface has
+      drift, including a conflict, and the run completed.
       --markdown-out also writes the drift as a table (Surface | File | Issue),
       creating its parent directory; a relative path resolves against --repo,
       never the current directory. A table that cannot be written (a parent
@@ -1480,6 +1486,7 @@ function check(context: CommandContext, inputs: MirrorInputs): number {
       `  extra: ${listOr(report.extra)}`,
       `  stale: ${listOr(report.stale)}`,
       `  hand-edited: ${listOr(report.handEdited)}`,
+      ...(report.conflicts.length === 0 ? [] : [`  conflicts: ${report.conflicts.map((conflict): string => `${conflict.path} (line ${conflict.line})`).join(", ")}`]),
       ...(report.foreign.length === 0 ? [] : [`  foreign (the consumer's own, not drift): ${report.foreign.join(", ")}`]),
     );
   }

@@ -574,6 +574,36 @@ describe("nen canon mirror check -- CLI wiring", () => {
     expect(surfaces.find((entry): boolean => entry.surface === "codex")).toMatchObject({ handEdited: ["01-a.md"], ok: ["02-b.md"] });
   });
 
+  it("reports a conflict and its line in text, JSON and Markdown without changing exit 1 (#349)", async () => {
+    const fx = fixture();
+    expect((await capture(mirrorArgs("generate", fx, ["--surfaces", "claude-code"]), fx.root)).code).toBe(0);
+    const path = ".claude/rules/01-a.md";
+    const text = "<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> topic\n";
+    writeFileSync(join(fx.root, path), text);
+    const human = await capture(mirrorArgs("check", fx, ["--surfaces", "claude-code", "--markdown-out", "drift.md"]), fx.root);
+    expect(human.code).toBe(1);
+    expect(human.out.join("\n")).toContain(`conflicts: ${path} (line 1)`);
+    expect(human.out.join("\n")).toContain("hand-edited: (none)");
+    expect(readFileSync(join(fx.root, "drift.md"), "utf8")).toContain("unresolved merge conflict (line 1)");
+    const machine = await capture(mirrorArgs("check", fx, ["--surfaces", "claude-code", "--json"]), fx.root);
+    expect(machine.code).toBe(1);
+    expect(json(machine)["surfaces"]).toEqual([expect.objectContaining({ conflicts: [{ path, line: 1 }], handEdited: [] })]);
+    expect(readFileSync(join(fx.root, path), "utf8")).toBe(text);
+  });
+
+  it("refuses a conflicted marked orphan instead of deleting it (#349)", async () => {
+    const fx = fixture();
+    mkdirSync(join(fx.root, ".claude", "rules"), { recursive: true });
+    const orphan = `${fileMarker({ source: "owner/handbooks", ref: "v1.1.0", scenario: "scenario-x" }, "99-old.md")}\n<<<<<<< HEAD\nold\n=======\ntheirs\n>>>>>>> topic\n`;
+    const orphanPath = join(fx.root, ".claude", "rules", "99-old.md");
+    writeFileSync(orphanPath, orphan);
+    const result = await capture(mirrorArgs("generate", fx, ["--surfaces", "claude-code"]), fx.root);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/claude-code: \.claude\/rules\/99-old\.md has an unresolved merge conflict \(line 2: '<<<<<<< HEAD'\)/);
+    expect(readFileSync(orphanPath, "utf8")).toBe(orphan);
+    expect(existsSync(join(fx.root, ".claude", "rules", "01-a.md"))).toBe(false);
+  });
+
   it("reports STALE on every surface when the pin moved and nothing was regenerated, and writes the --markdown-out table", async () => {
     const fx = fixture();
     expect((await capture(mirrorArgs("generate", fx), fx.root)).code).toBe(0);
