@@ -3,21 +3,23 @@
 //
 // READ-ONLY ON GITHUB. The only call either verb makes is `gh pr list --state
 // merged`: the merged pull requests it scores are read, never commented on,
-// labelled or edited (#619 AC-1). `snapshot`'s one write is a local file under
+// labelled or edited (zheref/nen#669/AC-1). `snapshot`'s one write is a local file under
 // --out, which the caller's scheduled workflow commits.
 //
 // THE ASPECT CATALOGUE IS READ AT RUN TIME from the file --catalogue names
 // (Hatsu's contracts/pr-sections.json). Nothing about it is compiled in, so
-// nen carries no build-time dependency on the Hatsu contract (#619 AC-3).
+// nen carries no build-time dependency on the Hatsu contract (zheref/nen#669/AC-3).
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { basename, dirname, join } from "node:path";
 import { emit, parseCallerToken, readInteger, refuseExtraPositionals, requireSubcommand, requireValue, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import { commaList } from "../cli/comma.js";
 import { resolveAgainstRepo } from "../cli/inputs.js";
 import { plainLine } from "../cli/plain.js";
 import { parseTarget, TargetError, type Target } from "../github/target.js";
 import { resolveRepoRoot } from "../repo/root.js";
+import { realContainment } from "../repo/contain.js";
 import { SchemaError } from "../schema/errors.js";
 import type { Seams } from "../seam/exec.js";
 import {
@@ -72,10 +74,13 @@ aspect. Every catalogue aspect appears in every repository, recorded or not.
              review page, one table per repository, instead of the plain
              rendering.
   snapshot   one completed week for ONE --target, written to
-             <out>/<YYYY-Www>.json (--out resolves against --repo). The file
-             carries no generation time: re-running over unchanged pull
-             requests and an unchanged catalogue file (its sha256 is
-             recorded) writes the same bytes. A running week is refused.
+             <out>/<YYYY-Www>.json (--out resolves against --repo and must
+             stay inside it, symlinks resolved; the file is never written
+             through a symlink, and is replaced by temp file and rename).
+             The file carries no generation time: re-running over unchanged
+             pull requests and an unchanged catalogue file (its sha256, CRLF
+             read as LF, is recorded) writes the same bytes. A running week
+             is refused.
 
 The only GitHub call is 'gh pr list --repo <target> --state merged --search
 "merged:<from>..<to>" --json number,title,url,mergedAt,body --limit ${PULL_LIMIT}';
@@ -83,8 +88,9 @@ no pull request is written to. A repository whose read fails, or whose window
 fills the limit, is could-not-read with the reason, never an empty row.
 
 Exits: 0 every repository read (snapshot: written or unchanged); 1 a
-repository could not be read, nothing written for it; 2 usage (a missing
-flag, a malformed week, target or catalogue).
+repository could not be read, or snapshot's file could not be read or
+written, nothing written for it; 2 usage (a missing flag, a malformed week,
+target or catalogue, a trend week not started yet, an --out outside --repo).
 
 --json shapes (key order as listed):
   trend:    { contract: "${SCORECARD_TREND_CONTRACT}", catalogue: { path, contract,
@@ -116,11 +122,22 @@ function isPull(value: unknown): value is MergedPull {
   return Number.isSafeInteger(row.number) && typeof row.mergedAt === "string" && !Number.isNaN(Date.parse(row.mergedAt)) && (typeof row.body === "string" || row.body === null);
 }
 
+/** The first line of a tool's stderr, control characters stripped and capped, for a reason. */
+function firstLine(text: string): string {
+  const line = plainLine(text.trim().split("\n")[0] ?? "");
+  return line.length > STDERR_CAP ? `${line.slice(0, STDERR_CAP)}…` : line;
+}
+
+const STDERR_CAP = 200;
+
 /** One repository's merged PRs, or why they could not be read. */
 export function fetchMergedPulls(seams: Seams, target: string, weeks: readonly Week[]): MergedPull[] | { reason: string } {
   const result = seams.run("gh", mergedPullsArgv(target, weeks));
-  if (result.spawnFailed) return { reason: "'gh' could not be started: install the GitHub CLI and run 'gh auth login'" };
-  if (result.code !== 0) return { reason: `gh pr list exited ${result.code}: ${plainLine(result.stderr.trim().split("\n")[0] ?? "") || "no output"}` };
+  if (result.spawnFailed) {
+    if (/ENOBUFS/.test(result.stderr)) return { reason: "gh pr list answered more than nen buffers; narrow --weeks" };
+    return { reason: `'gh' could not be started (${firstLine(result.stderr) || "no reason given"}): install the GitHub CLI and run 'gh auth login'` };
+  }
+  if (result.code !== 0) return { reason: `gh pr list exited ${result.code}: ${firstLine(result.stderr) || "no output"}` };
   let parsed: unknown;
   try {
     parsed = JSON.parse(result.stdout);
@@ -167,6 +184,7 @@ function throughWeek(context: CommandContext, allowCurrent: boolean): Week {
   const week = parseWeek(value);
   if (week === null) throw new VerbUsageError(`--through '${value}' is not an ISO week; write YYYY-Www (2026-W47)${allowCurrent ? " or 'current'" : ""}.`);
   if (!allowCurrent && Date.parse(week.end) > now.getTime()) throw new VerbUsageError(`--through ${value} has not ended yet; a snapshot records a completed week only.`);
+  if (allowCurrent && Date.parse(week.start) > now.getTime()) throw new VerbUsageError(`--through ${value} has not started yet; name a week up to the running one, or 'current'.`);
   return week;
 }
 
@@ -187,6 +205,55 @@ function runTrend(context: CommandContext): number {
   return trend.repositories.every((repo): boolean => repo.unreadable === null) ? 0 : 1;
 }
 
+/**
+ * `<out>/<week>.json`, refused at exit 2 unless the path the kernel would write
+ * stays inside --repo, symbolic links resolved (zheref/nen#669 review), and
+ * unless the file itself is not a symbolic link.
+ */
+function snapshotPath(root: string, out: string, weekId: string): string {
+  const lexical = join(resolveAgainstRepo(root, out), `${weekId}.json`);
+  const containment = realContainment(root, lexical);
+  if (!containment.contained) {
+    const via = containment.link === null ? "" : ` '${containment.link}' is a symlink to '${containment.target ?? "somewhere else"}'.`;
+    throw new VerbUsageError(`--out '${out}' resolves outside the repository at ${root}.${via} A snapshot is written inside the checkout the workflow commits; point --out under it.`);
+  }
+  let link = false;
+  try {
+    link = lstatSync(lexical).isSymbolicLink();
+  } catch {
+    // Absent: created below.
+  }
+  if (link) throw new VerbUsageError(`--out: '${lexical}' is a symbolic link; a snapshot is never written through one.`);
+  return lexical;
+}
+
+/** Writes `text` to `file` by temp file and rename, unless the file already holds it (CRLF read as LF). */
+function writeSnapshot(file: string, text: string): { written: "created" | "updated" | "unchanged" } | { reason: string } {
+  const code = (error: unknown): string => (error as NodeJS.ErrnoException).code ?? String(error);
+  let previous: string | null = null;
+  try {
+    previous = readFileSync(file, "utf8").replace(/\r\n/g, "\n");
+  } catch (error) {
+    if (code(error) !== "ENOENT") return { reason: `the existing snapshot could not be read (${code(error)})` };
+  }
+  if (previous === text) return { written: "unchanged" };
+  const temp = join(dirname(file), `.${basename(file)}.nen-${process.pid}-${randomBytes(6).toString("hex")}.tmp`);
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    const fd = openSync(temp, "wx", 0o644);
+    try {
+      writeSync(fd, text);
+    } finally {
+      closeSync(fd);
+    }
+    renameSync(temp, file);
+  } catch (error) {
+    rmSync(temp, { force: true });
+    return { reason: `the snapshot could not be written (${code(error)})` };
+  }
+  return { written: previous === null ? "created" : "updated" };
+}
+
 function runSnapshot(context: CommandContext): number {
   refuseExtraPositionals(context.args, 2);
   for (const flag of ["weeks"]) if (context.args.values[flag] !== undefined) throw new VerbUsageError(`scorecard snapshot records one week; --${flag} is trend's.`);
@@ -199,25 +266,20 @@ function runSnapshot(context: CommandContext): number {
   const out = requireValue(context.args, "out", "It names the directory the snapshot is written under, inside the consumer's checkout.");
   const week = throughWeek(context, false);
   const target = repos[0] as Target;
+  const file = snapshotPath(root, out, week.id);
   const repo = repoTrend(target.slug, catalogue.aspects, [week], context.seams.now(), fetchMergedPulls(context.seams, target.slug, [week]));
-  const file = join(resolveAgainstRepo(root, out), `${week.id}.json`);
   if (repo.unreadable !== null) {
     emit(context.io, context.json, { path: file, written: null, reason: repo.unreadable, snapshot: null }, [plainLine(`${target.slug} · could-not-read: ${repo.unreadable}; nothing written`)]);
     return 1;
   }
   const snapshot = snapshotOf(repo, catalogue);
   const text = `${JSON.stringify(snapshot, null, 2)}\n`;
-  let previous: string | null = null;
-  try {
-    previous = readFileSync(file, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new VerbUsageError(`--out: the existing snapshot '${file}' could not be read (${(error as NodeJS.ErrnoException).code ?? String(error)}); nothing written.`);
+  const outcome = writeSnapshot(file, text);
+  if ("reason" in outcome) {
+    emit(context.io, context.json, { path: file, written: null, reason: outcome.reason, snapshot: null }, [plainLine(`${target.slug} · could-not-write: ${outcome.reason}; nothing written`)]);
+    return 1;
   }
-  const written = previous === text ? "unchanged" : previous === null ? "created" : "updated";
-  if (written !== "unchanged") {
-    mkdirSync(dirname(file), { recursive: true });
-    writeFileSync(file, text);
-  }
+  const written = outcome.written;
   emit(context.io, context.json, { path: file, written, reason: null, snapshot }, [
     plainLine(`${target.slug} · ${week.id} · ${snapshot.merged} merged PR(s), ${snapshot.scored} scored · ${written}: ${file}`),
     ...snapshot.aspects.map((row): string => plainLine(`  ${row.aspect}: net ${row.net === null ? "·" : row.net} (⬆${row.improves} ➖${row.unchanged} ⬇${row.regresses}, ${row.unrecorded} unrecorded)`)),

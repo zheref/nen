@@ -18720,7 +18720,7 @@ something other than merged rows, or fills `gh pr list`'s 1000-row ceiling is
 `--weeks` weeks (default 4, at most 52) ending with `--through`: by default
 the last completed week; `current` takes the running one, marked `partial`
 (`*` in plain text, `(running)` in markdown), because its numbers can still
-move. One `gh pr list` per `--target`. `--markdown` prints a review page
+move; a `--through` week that has not started is refused. One `gh pr list` per `--target`. `--markdown` prints a review page
 instead of the plain rendering: one table per repository, aspects down in
 catalogue order, weeks across, each cell `**net** (⬆/➖/⬇)`, under a
 `merged / scored` row.
@@ -18735,7 +18735,8 @@ nen scorecard trend --catalogue <pr-sections.json> --target <owner/name>[,<owner
 
 **Exit codes**: `0` every repository read · `1` a repository could not be
 read; the others are still reported · `2` usage (a missing flag, a malformed
-week, target or catalogue, a repository named twice).
+week, target or catalogue, a repository named twice, a `--through` week not
+started yet).
 
 **`--json`** top-level keys, in this order:
 
@@ -18750,11 +18751,16 @@ week, target or catalogue, a repository named twice).
 
 One **completed** week (`--through`, default the last completed one; a
 running week is refused) for **one** `--target`, written to
-`<out>/<YYYY-Www>.json`, `--out` resolving against `--repo`. The file carries
-the repository, the period, the catalogue's `contract` and `sha256`, the merged
+`<out>/<YYYY-Www>.json`, `--out` resolving against `--repo` and refused
+(exit 2, before GitHub is read) unless the path the kernel would write stays
+inside it, symbolic links resolved; a snapshot file that is itself a symbolic
+link is refused too. The file is replaced by temp file and rename, so a killed
+run never leaves half a snapshot. The file carries
+the repository, the period, the catalogue's `contract` and `sha256` (of its
+bytes with CRLF read as LF, so every host names the same one), the merged
 and scored counts, the pull request numbers and every aspect's tally, and **no
 generation time**: a rerun over unchanged pull requests and an unchanged
-catalogue file (its `sha256` is recorded) reads `unchanged` and writes nothing, so the workflow that commits it has nothing to commit. A pull
+catalogue file (its `sha256` is recorded) reads `unchanged` and writes nothing, so the workflow that commits it has nothing to commit; a CRLF checkout of an unchanged snapshot reads `unchanged` too. A pull
 request body edited after the fact reads `updated`. When the repository cannot
 be read, nothing is written.
 
@@ -18766,7 +18772,9 @@ nen scorecard snapshot --catalogue <pr-sections.json> --target <owner/name>
 ```
 
 **Exit codes**: `0` written, updated or unchanged · `1` the repository could
-not be read; nothing written · `2` usage.
+not be read, or the snapshot file could not be read or written (`reason`
+names the fault); nothing written · `2` usage, an `--out` outside `--repo`
+included.
 
 **`--json`** top-level keys, in this order:
 
@@ -18774,7 +18782,7 @@ not be read; nothing written · `2` usage.
 { path, written, reason, snapshot: { contract: "nen.scorecard.snapshot/v0.1", repository,
   period: { week, start, end }, catalogue: { contract, sha256 }, merged, scored, pulls,
   aspects: [{ aspect, improves, unchanged, regresses, unrecorded, net }] } }
-written: created | updated | unchanged | null (could not read; snapshot null, reason says why)
+written: created | updated | unchanged | null (could not read or write; snapshot null, reason says why)
 ```
 
 ## Reviewers

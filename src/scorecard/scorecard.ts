@@ -30,7 +30,7 @@ export interface AspectCatalogue {
   readonly aspects: readonly string[];
   /** The catalogue's own `contract` field, echoed; null when it carries none. */
   readonly contract: string | null;
-  /** sha256 of the catalogue file's bytes, so a snapshot names what it was scored against. */
+  /** sha256 of the catalogue file's bytes with CRLF read as LF, so a snapshot names what it was scored against on any host. */
   readonly sha256: string;
 }
 
@@ -39,8 +39,9 @@ export function parseAspectCatalogue(path: string, bytes: Buffer): AspectCatalog
   let raw: unknown;
   try {
     raw = JSON.parse(bytes.toString("utf8"));
-  } catch (error) {
-    throw new SchemaError(path, "$", `not JSON (${error instanceof Error ? error.message : String(error)})`);
+  } catch {
+    // The parser's message can quote the file's own text; name only that it is not JSON.
+    throw new SchemaError(path, "$", "not JSON");
   }
   const root = requireRecord(path, "$", raw);
   const aspects = requireArray(path, "aspects", root.aspects).map((value, index): string => requireString(path, `aspects[${index}]`, value).trim());
@@ -51,7 +52,7 @@ export function parseAspectCatalogue(path: string, bytes: Buffer): AspectCatalog
   return {
     aspects,
     contract: typeof root.contract === "string" ? root.contract : null,
-    sha256: createHash("sha256").update(bytes).digest("hex"),
+    sha256: createHash("sha256").update(bytes.toString("utf8").replace(/\r\n/g, "\n")).digest("hex"),
   };
 }
 
@@ -65,7 +66,8 @@ export function readDelta(cell: string): Delta | null {
 }
 
 function cells(line: string): string[] | null {
-  const match = /^\s*\|(.*)\|\s*$/.exec(line);
+  // At most three spaces of indent: four or more is an indented code block (CommonMark), never a table row.
+  const match = /^ {0,3}\|(.*)\|\s*$/.exec(line);
   if (match === null) return null;
   return (match[1] as string).split("|").map((cell): string => cell.trim());
 }
@@ -297,7 +299,7 @@ export function renderTrend(trend: Trend): string[] {
 }
 
 function escapeCell(text: string): string {
-  return text.replace(/\|/g, "\\|");
+  return text.replace(/[\r\n]+/g, " ").replace(/\|/g, "\\|");
 }
 
 /** The markdown rendering for a review page: one table per repository. */

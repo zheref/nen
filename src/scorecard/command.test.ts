@@ -1,7 +1,7 @@
 // src/scorecard/command.test.ts -- `nen scorecard trend|snapshot` end to end
 // over scripted `gh` answers and a catalogue on disk (zheref/hatsu#619).
 import { describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
@@ -50,8 +50,11 @@ describe("nen scorecard trend", () => {
     ], true);
     expect(result.code).toBe(0);
     expect(result.seams.calls).toHaveLength(2);
-    for (const recorded of result.seams.calls) expect(recorded.args.slice(0, 4)).toEqual(["pr", "list", "--repo", recorded.args[3]]);
-    expect(result.seams.calls.every((recorded) => recorded.command === "gh" && recorded.args.includes("merged"))).toBe(true);
+    expect(result.seams.calls.map((recorded) => [recorded.command, ...recorded.args.slice(0, 6)])).toEqual([
+      ["gh", "pr", "list", "--repo", "o/a", "--state", "merged"],
+      ["gh", "pr", "list", "--repo", "o/b", "--state", "merged"],
+    ]);
+    expect(readdirSync(root)).toEqual(["pr-sections.json"]);
     const trend = JSON.parse(result.out) as { contract: string; weeks: string[]; repositories: { repository: string; aspects: { aspect: string; tallies: { net: number | null }[] }[] }[] };
     expect(Object.keys(trend)).toEqual(["contract", "catalogue", "weeks", "repositories"]);
     expect(trend.contract).toBe("nen.scorecard.trend/v0.1");
@@ -115,6 +118,13 @@ describe("nen scorecard trend", () => {
     expect(result.out).toContain("'gh' could not be started");
   });
 
+  it("names a gh answer past nen's buffer as too large, not as gh missing", async () => {
+    const root = repo();
+    const result = await run(root, ["trend", "--catalogue", "pr-sections.json", "--target", "o/a", "--weeks", "1"], [{ match: `gh ${mergedPullsArgv("o/a", [parseWeek("2026-W46")!]).join(" ")}`, result: { spawnFailed: true, stderr: "spawnSync gh ENOBUFS" } }]);
+    expect(result.code).toBe(1);
+    expect(result.out).toContain("narrow --weeks");
+  });
+
   it.each([
     [["trend", "--target", "o/a"], "--catalogue"],
     [["trend", "--catalogue", "missing.json", "--target", "o/a"], "could not be read"],
@@ -124,6 +134,8 @@ describe("nen scorecard trend", () => {
     [["trend", "--catalogue", "pr-sections.json", "--target", "o/a", "--weeks", "0"], "1 to 52"],
     [["trend", "--catalogue", "pr-sections.json", "--target", "o/a", "--through", "2026-11"], "ISO week"],
     [["trend", "--catalogue", "pr-sections.json", "--target", "o/a", "--out", "x"], "writes nothing"],
+    [["trend", "--catalogue", "pr-sections.json", "--target", "o/a", "--through", "2026-W48"], "has not started"],
+    [["snapshot", "--catalogue", "pr-sections.json", "--target", "o/a", "--out", "../escaped"], "outside the repository"],
     [["snapshot", "--catalogue", "pr-sections.json", "--target", "o/a,o/b", "--out", "s"], "ONE repository"],
     [["snapshot", "--catalogue", "pr-sections.json", "--target", "o/a", "--out", "s", "--through", "current"], "completed week"],
     [["snapshot", "--catalogue", "pr-sections.json", "--target", "o/a", "--out", "s", "--through", "2026-W47"], "has not ended"],
@@ -160,9 +172,14 @@ describe("nen scorecard snapshot", () => {
     expect(saved.repository).toBe("o/a");
     expect(saved.period.week).toBe("2026-W46");
     expect(saved.aspects.map((row) => [row.aspect, row.net])).toEqual([["Observability", 1], ["Security", null], ["Traceability", 0]]);
+    const bytes = readFileSync(report.path);
+    const mtime = statSync(report.path).mtimeMs;
     const again = await run(root, ["snapshot", "--catalogue", "pr-sections.json", "--target", "o/a", "--out", "scorecard"], script());
     expect(again.code).toBe(0);
     expect(again.out).toContain("unchanged:");
+    expect(readFileSync(report.path).equals(bytes)).toBe(true);
+    expect(statSync(report.path).mtimeMs).toBe(mtime);
+    expect(readdirSync(join(root, "scorecard"))).toEqual(["2026-W46.json"]);
     expect(again.out).toContain("  Observability: net 1 (⬆1 ➖0 ⬇0, 0 unrecorded)");
   });
 
@@ -175,12 +192,41 @@ describe("nen scorecard snapshot", () => {
     expect(result.out).toContain("updated:");
   });
 
-  it("refuses at exit 2, naming the path, when the existing snapshot cannot be read", async () => {
+  it("reads a CRLF checkout of an unchanged snapshot as unchanged", async () => {
+    const root = repo();
+    const first = await run(root, ["snapshot", "--catalogue", "pr-sections.json", "--target", "o/a", "--out", "scorecard"], script(), true);
+    const path = (JSON.parse(first.out) as { path: string }).path;
+    writeFileSync(path, readFileSync(path, "utf8").replace(/\n/g, "\r\n"));
+    const again = await run(root, ["snapshot", "--catalogue", "pr-sections.json", "--target", "o/a", "--out", "scorecard"], script());
+    expect(again.out).toContain("unchanged:");
+  });
+
+  it("exits 1 naming the fault, nothing written, when the existing snapshot cannot be read", async () => {
     const root = repo();
     mkdirSync(join(root, "scorecard", "2026-W46.json"), { recursive: true });
-    const result = await run(root, ["snapshot", "--catalogue", "pr-sections.json", "--target", "o/a", "--out", "scorecard"], script());
-    expect(result.code).toBe(2);
-    expect(result.err).toContain("EISDIR");
+    const result = await run(root, ["snapshot", "--catalogue", "pr-sections.json", "--target", "o/a", "--out", "scorecard"], script(), true);
+    expect(result.code).toBe(1);
+    const report = JSON.parse(result.out) as { written: null; reason: string };
+    expect(report.written).toBeNull();
+    expect(report.reason).toContain("EISDIR");
+  });
+
+  it.skipIf(process.platform === "win32")("refuses at exit 2 an --out that leaves the repository through a symlink, and a snapshot file that is one", async () => {
+    const root = repo();
+    const outside = join(scratch, `outside-${++n}`);
+    mkdirSync(outside);
+    symlinkSync(outside, join(root, "linked"));
+    const through = await run(root, ["snapshot", "--catalogue", "pr-sections.json", "--target", "o/a", "--out", "linked"], script());
+    expect(through.code).toBe(2);
+    expect(through.err).toContain("outside the repository");
+    mkdirSync(join(root, "scorecard"));
+    writeFileSync(join(root, "elsewhere.json"), "keep\n");
+    symlinkSync(join(root, "elsewhere.json"), join(root, "scorecard", "2026-W46.json"));
+    const file = await run(root, ["snapshot", "--catalogue", "pr-sections.json", "--target", "o/a", "--out", "scorecard"], script());
+    expect(file.code).toBe(2);
+    expect(file.err).toContain("symbolic link");
+    expect(readFileSync(join(root, "elsewhere.json"), "utf8")).toBe("keep\n");
+    expect(readdirSync(outside)).toEqual([]);
   });
 
   it("writes nothing and exits 1 when the repository cannot be read", async () => {

@@ -41,8 +41,15 @@ describe("parseAspectCatalogue", () => {
     expect(() => parseAspectCatalogue("c.json", Buffer.from(JSON.stringify(raw)))).toThrow(SchemaError);
   });
 
-  it("refuses bytes that are not JSON", () => {
-    expect(() => parseAspectCatalogue("c.json", Buffer.from("{"))).toThrow(/not JSON/);
+  it("refuses bytes that are not JSON, quoting none of them", () => {
+    expect(() => parseAspectCatalogue("c.json", Buffer.from("{secret-ish"))).toThrow(/not JSON/);
+    expect(() => parseAspectCatalogue("c.json", Buffer.from("{secret-ish"))).not.toThrow(/secret/);
+  });
+
+  it("hashes a CRLF checkout of the catalogue as its LF bytes, so every host names the same sha256", () => {
+    const lf = Buffer.from(JSON.stringify({ aspects: ["Cost"] }, null, 2));
+    const crlf = Buffer.from(lf.toString("utf8").replace(/\n/g, "\r\n"));
+    expect(parseAspectCatalogue("c.json", crlf).sha256).toBe(parseAspectCatalogue("c.json", lf).sha256);
   });
 });
 
@@ -87,6 +94,11 @@ describe("readAspects", () => {
     expect(readAspects("<!-- start\n| Security | ⬇ |\nend --> | Observability | ⬆ |\n| Security | ⬆ |", ASPECTS)).toMatchObject({ Security: "improves", Observability: "improves" });
   });
 
+  it("reads a row indented four spaces as indented code, never as the table", () => {
+    const body = ["    | Security | ⬇ |", "", table([["Security", "⬆"]])].join("\n");
+    expect(readAspects(body, ASPECTS).Security).toBe("improves");
+  });
+
   it("reads a CRLF body and ignores a row with a single cell", () => {
     expect(readAspects("| Security |\r\n| Security | ⬆ |\r\n", ASPECTS).Security).toBe("improves");
   });
@@ -108,6 +120,14 @@ describe("weeks", () => {
     expect(lastCompletedWeek(friday).id).toBe("2026-W46");
     expect(lastCompletedWeek(new Date("2026-11-23T00:00:00Z")).id).toBe("2026-W47");
     expect(weeksThrough(parseWeek("2026-W02")!, 3).map((week) => week.id)).toEqual(["2025-W52", "2026-W01", "2026-W02"]);
+  });
+
+  it("names weeks across a year boundary from a clock", () => {
+    expect(currentWeek(new Date("2027-01-01T12:00:00Z")).id).toBe("2026-W53");
+    expect(currentWeek(new Date("2024-12-30T00:00:00Z")).id).toBe("2025-W01");
+    expect(lastCompletedWeek(new Date("2027-01-04T00:00:00Z")).id).toBe("2026-W53");
+    expect(lastCompletedWeek(new Date("2027-01-03T23:59:59.999Z")).id).toBe("2026-W52");
+    expect(weeksThrough(parseWeek("2027-W01")!, 2).map((week) => week.id)).toEqual(["2026-W53", "2027-W01"]);
   });
 });
 
@@ -134,6 +154,12 @@ describe("repoTrend", () => {
     expect(trend.aspects[1]!.tallies[0]).toEqual({ improves: 0, unchanged: 1, regresses: 1, unrecorded: 0, net: -1 });
     expect(trend.aspects[2]!.tallies[0]).toEqual({ improves: 0, unchanged: 0, regresses: 0, unrecorded: 2, net: null });
     expect(trend.aspects[0]!.tallies[1]).toEqual({ improves: 0, unchanged: 0, regresses: 0, unrecorded: 1, net: null });
+  });
+
+  it("buckets a PR merged at a week's last millisecond in it, and one at the next Monday 00:00Z in the next", () => {
+    const edge = [pull(4, "2026-11-15T23:59:59.999Z", [["Observability", "⬆"]]), pull(5, "2026-11-16T00:00:00.000Z", [["Observability", "⬇"]])];
+    const trend = repoTrend("o/r", ASPECTS, weeks, now, edge);
+    expect(trend.weeks.map((week) => [week.week, week.pulls])).toEqual([["2026-W46", [4]], ["2026-W47", [5]]]);
   });
 
   it("carries an unreadable repository's reason and no weeks", () => {
