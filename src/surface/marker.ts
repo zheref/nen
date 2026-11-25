@@ -27,7 +27,7 @@ export function inspectMarker(text: string): { generated: boolean; grammar: stri
 export function runMarker(context: CommandContext): number {
   const values = context.args.values;
   const file = values["file"]; const under = values["under"]; const surface = values["surface"];
-  if (context.args.positionals.length !== 2 || (file === undefined) === (under === undefined)) {
+  if (context.args.positionals.length !== 2 || context.args.passthrough.length !== 0 || (file === undefined) === (under === undefined)) {
     throw new VerbUsageError("surface marker requires exactly one of --file <path> or --under <directory> --surface <name>.");
   }
   for (const key of [...Object.keys(values), ...context.args.booleans]) {

@@ -1,13 +1,11 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { describe, expect, it } from "vitest";
+import { mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { makeTempDir } from "../testing/tempdir.js";
 import { join } from "node:path";
 import { run } from "../index.js";
 import { markerFor, markerText, readMarker } from "./mirror.js";
 
-const roots: string[] = [];
-function temp(): string { const root = mkdtempSync(join(tmpdir(), "nen-marker-")); roots.push(root); return root; }
-afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+const temp = (): string => makeTempDir("nen-marker-");
 async function invoke(args: string[]): Promise<{ code: number; out: string; err: string }> {
   const out: string[] = []; const err: string[] = [];
   const code = await run(["surface", "marker", ...args], { out: (s) => { out.push(s); }, err: (s) => { err.push(s); } });
@@ -46,6 +44,11 @@ describe("surface marker (NN#658)", () => {
     const file = join(temp(), "placed"); writeFileSync(file, markerFor("codex"));
     const result = await invoke(["--file", file]);
     expect(result.code).toBe(0); expect(result.out).toContain("surface: codex"); expect(result.out).toContain("grammar: nen-surface-mirror");
+  });
+  it("refuses passthrough and resolves relative inputs against --repo", async () => {
+    const root = temp(); writeFileSync(join(root, "placed"), markerFor("codex"));
+    expect((await invoke(["--file", "placed", "--repo", root])).code).toBe(0);
+    expect((await invoke(["--file", "placed", "--repo", root, "--", "extra"])).code).toBe(2);
   });
   const retired = "<!-- GENERATED for surface: antigravity -- do not edit; edit the source and regenerate -->";
   it.each([retired, `---\nname: old\n---\n${retired}`, `#!/bin/sh\r\n# ${retired}\r\n`, JSON.stringify({ version: 1, description: retired })])("reports retired grammar without claiming current generation (AC-4)", async (text) => {

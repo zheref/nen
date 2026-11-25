@@ -258,7 +258,7 @@ including every refusal reason. The raw NUL-delimited stream
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **113 shapes** and **117 ids** (`nen.runner.plan`
+binary carries**, writing or reading — **114 shapes** and **118 ids** (`nen.runner.plan`
 and `nen.wc.worktree.copies` each have two versions, `nen.stop.mark` three, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -321,7 +321,7 @@ file formats).
 - **`shu`** — `nen.shu.<verb>/v0.1` · `nen.shu.coverage-capture/v0.1` · `nen.shu.coverage/v0.1` · `nen.shu.detect/v0.1` · `nen.shu.evidence/v0.1` · `nen.shu.proof/v0.1` · `nen.shu.test-report/v0.1` · `nen.shu.tools/v0.1` · `nen.shu.warmup/v0.1`
 - **`spec`** — `nen.spec.check/v0.1` · `nen.spec.cite-check/v0.1` · `nen.spec.converge/v0.1` · `nen.spec.coverage/v0.1` · `nen.spec.diff/v0.1` · `nen.spec.due/v0.1` · `nen.spec.index/v0.1` · `nen.spec.inventory/v0.1` · `nen.spec.number/v0.1` · `nen.spec.parity/v0.1` · `nen.spec.tasks/v0.1` · `nen.spec.trace/v0.1`
 - **`stop`** — `nen.stop.answer/v0.1` · `nen.stop.list/v0.1` · `nen.stop.mark/v0.1` · `nen.stop.mark/v0.2` · `nen.stop.mark/v0.3` · `nen.stop.prompt/v0.1` · `nen.stop.proposed-issue/v0.1` · `nen.stop.sixth-stop/v0.1`
-- **`surface`** — `nen.surface.capabilities/v0.1` · `nen.surface.install/v0.1` · `nen.surface.mirror.check-installed/v0.1` · `nen.surface.mirror.check-plugin/v0.1` · `nen.surface.mirror.check/v0.1` · `nen.surface.mirror.generate/v0.1` · `nen.surface.status/v0.1`
+- **`surface`** — `nen.surface.marker/v0.1` · `nen.surface.capabilities/v0.1` · `nen.surface.install/v0.1` · `nen.surface.mirror.check-installed/v0.1` · `nen.surface.mirror.check-plugin/v0.1` · `nen.surface.mirror.check/v0.1` · `nen.surface.mirror.generate/v0.1` · `nen.surface.status/v0.1`
 - **`tests`** — `nen.tests.map/v0.1`
 - **`usage`** — `nen.usage.ledger/v0.1`
 - **`wc`** — `nen.wc.catch-up/v0.2` · `nen.wc.prune/v0.1` · `nen.wc.publish/v0.1` · `nen.wc.squash/v0.1` · `nen.wc.swap.state/v0.1` · `nen.wc.swap/v0.1` · `nen.wc.worktree.copies/v0.1` · `nen.wc.worktree.copies/v0.2` · `nen.wc.worktree/v0.1` · `nen.wc.worktrees/v0.1`
@@ -19353,7 +19353,10 @@ nen surface marker --under <directory> --surface <name> [--repo <path>] [--json]
 ```
 
 Relative paths resolve against `--repo` when supplied, otherwise the working directory.
-The file result (`nen.surface.marker/v0.1`) contains `generated`, `surface`, `stamp`
+`--json` emits top-level `contract`, `file`, `generated`, `surface`, `stamp`,
+and `grammar` for a file; or `contract`, `under`, `surface`, `generated`, `matches`
+and `skipped` for a directory. The contract is `nen.surface.marker/v0.1`.
+The file result contains `generated`, `surface`, `stamp`
 and `grammar`: `nen-surface-mirror`, `retired-antigravity`, or null. Current markers
 are read at the first body line after frontmatter, a TOML first line, a script's
 second line, or a JSON top-level `$generated` property or native hook-definition
@@ -19362,7 +19365,9 @@ and JSON-description markers report their grammar and surface with `generated: f
 
 Directory results list sorted relative `matches` for current markers of the named
 surface and `skipped` symlinks/special files. Symlink inputs are refused; entries
-inside the directory are never followed through links. A read failure refuses the
+inside the directory observed as links are skipped. This is a read-only traversal,
+not an atomic filesystem snapshot; callers must keep the tree stable during the query.
+A read failure refuses the
 whole report, even if another file matched. Exit **0** means a current marker was
 found, **1** means none (including a retired marker), and **2** means invalid
 arguments or a filesystem read failure. A file's marker is provenance metadata,
