@@ -114,7 +114,8 @@ diff        Added, removed and changed rows by stable id between two
             Exit 0 identical or differing; 1 when an inventory could not be
             read; 2 when the two name different members.
 converge    A folder's citations of one member (--code) re-read at the
-            inventory's sha in the checkout the checkouts file names: gaps
+            inventory's sha in the checkout the checkouts file names, on
+            FR/SC/story and AC-### scenario definitions: gaps
             missing · partial · contradicts · unrequested (the last against
             capture/<CODE>/inventory.json). A ticked task is a claim, never
             evidence. --write APPENDS ONLY: [STALE @ <sha>] beside a moved,
@@ -122,6 +123,9 @@ converge    A folder's citations of one member (--code) re-read at the
             <date>' to tasks.md (first line 'Inventory: <CODE> @ <sha12>'),
             each row tagged [US<k>] [platform:<p>] and ending '· supersedes
             T<nnn>' when its class changed; a second run changes nothing.
+            Counts include scenariosRead and scenariosCited (lines, once
+            per line, with a valid citation of --code); uncited scenarios
+            invent no citation or gap. Fenced source data is excluded.
             Exit 1 on any gap or when the inputs could not be read.
 coverage    Capture form: per member and row kind, covered/total (a row is
             covered when one of the member's citations overlaps it), plus

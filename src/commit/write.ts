@@ -210,14 +210,17 @@ function gitError(stderr: string, code: number): string {
   return outputLines(stderr).join(" ") || `exit ${code}`;
 }
 
-export function write(seams: Seams, root: string, options: WriteOptions): WriteOutcome {
-  // 1. THE CONFIGS AND THE MESSAGE, WHOLE: the flags' shape, then the
-  // composed text under the shared validators, the one loaded policy, and the
-  // subject-case check `commit format` runs. A broken config is exit 1 with
-  // every fault named; otherwise a shape reason is exit 2.
-  const { trailers: appended, reasons: flagReasons } = parseTrailerFlags(options.trailerFlags);
-  if (flagReasons.length > 0) return { kind: "usage", reasons: flagReasons };
-  const message = composeMessage(options.messageText, appended);
+/** Read-only validation shared by file-format and commit-write; never wraps input. */
+export function validateMessageText(
+  root: string,
+  message: string,
+  options: Pick<WriteOptions, "warn" | "note">,
+): {
+  readonly parsed: ReturnType<typeof parseCommitMessageFile>;
+  readonly loaded: LoadedWorkflow | null;
+  readonly reasons: readonly string[];
+  readonly failures: readonly ConfigFailure[];
+} {
   const parsed = parseCommitMessageFile(message);
   const reasons: string[] = parsed.ok ? [...validateCommitMessage(parsed.value.input)] : [...parsed.reasons];
   const failures: ConfigFailure[] = [];
@@ -237,7 +240,7 @@ export function write(seams: Seams, root: string, options: WriteOptions): WriteO
       readLineLengthRules(root, null);
     } else {
       reasons.push(...attributionRefusalMessages(loaded, parsed.value.input.trailers.map((trailer): string => trailer.key)));
-      const found = subjectCaseFindings(root, message.split("\n")[0] ?? "", declaredSubjectCase(loaded));
+      const found = subjectCaseFindings(root, message.split(/\r?\n/)[0] ?? "", declaredSubjectCase(loaded));
       for (const warning of found.warnings) options.warn(warning);
       for (const note of found.notes) options.note(note);
       reasons.push(...found.refusals);
@@ -254,6 +257,18 @@ export function write(seams: Seams, root: string, options: WriteOptions): WriteO
     if (!(error instanceof CommitlintConfigError)) throw error;
     failures.push(error);
   }
+  return { parsed, loaded, reasons, failures };
+}
+
+export function write(seams: Seams, root: string, options: WriteOptions): WriteOutcome {
+  // 1. THE CONFIGS AND THE MESSAGE, WHOLE: the flags' shape, then the
+  // composed text under the shared validators, the one loaded policy, and the
+  // subject-case check `commit format` runs. A broken config is exit 1 with
+  // every fault named; otherwise a shape reason is exit 2.
+  const { trailers: appended, reasons: flagReasons } = parseTrailerFlags(options.trailerFlags);
+  if (flagReasons.length > 0) return { kind: "usage", reasons: flagReasons };
+  const message = composeMessage(options.messageText, appended);
+  const { parsed, loaded, reasons, failures } = validateMessageText(root, message, options);
   if (failures.length > 0) return { kind: "broken", failures, reasons };
   if (reasons.length > 0) return { kind: "usage", reasons };
   /* c8 ignore next -- a message that did not parse has its parse reasons above */

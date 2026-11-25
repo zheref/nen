@@ -93,6 +93,7 @@ export type CheckoutFailureCode =
   | "no-consumer-origin"
   | "wrong-host"
   | "tag-missing"
+  | "moved-tag"
   | "off-pin"
   | "dirty"
   | "git-unavailable";

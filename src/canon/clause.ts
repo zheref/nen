@@ -70,7 +70,7 @@ function bulletRe(prefix: string): RegExp {
 const splitLines = (text: string): string[] => text.replace(/\r\n?/g, "\n").split("\n");
 
 /** Every definition in document order, with repeats -- the repeats are the signal. */
-export function scanClauses(text: string, prefix: string): ClauseScan {
+export function scanClauses(text: string, prefix: string, includeGaps = true): ClauseScan {
   const definitions: Definition[] = [];
   const mismatches: { line: number; anchor: number; label: number }[] = [];
   splitLines(text).forEach((line, index): void => {
@@ -94,7 +94,7 @@ export function scanClauses(text: string, prefix: string): ClauseScan {
     .sort((a, b): number => a.id - b.id);
   const max = definitions.length === 0 ? 0 : Math.max(...definitions.map((d): number => d.id));
   const gaps: number[] = [];
-  for (let id = 1; id <= max; id++) if (!lines.has(id)) gaps.push(id);
+  for (let id = 1; includeGaps && id <= max; id++) if (!lines.has(id)) gaps.push(id);
   return { definitions, duplicates, mismatches, gaps };
 }
 

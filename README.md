@@ -37,15 +37,15 @@ on any integrity gap (unfetchable manifest, missing entry, digest mismatch)
 rather than falling back to an unverified download:
 
 ```
-curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.30.0/bootstrap/nen.sh -o nen-bootstrap.sh
-bash nen-bootstrap.sh --ref v0.30.0
+curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.31.0/bootstrap/nen.sh -o nen-bootstrap.sh
+bash nen-bootstrap.sh --ref v0.31.0
 ```
 
 It prints the path to a verified, executable binary on stdout and nothing
 else, so it composes directly:
 
 ```
-nen="$(bash nen-bootstrap.sh --ref v0.30.0)"
+nen="$(bash nen-bootstrap.sh --ref v0.31.0)"
 "$nen" --version
 ```
 
@@ -115,12 +115,12 @@ shell profile, or a CI job's setup step — and reuse the path; `nen bootstrap`
 is the in-CLI form of the same fetch, for re-pinning from an existing checkout:
 
 ```bash
-nen="$(bash nen-bootstrap.sh --ref v0.30.0)" && "$nen" --version
-nen bootstrap --ref v0.30.0 --source zheref/nen --script ./nen-bootstrap.sh
+nen="$(bash nen-bootstrap.sh --ref v0.31.0)" && "$nen" --version
+nen bootstrap --ref v0.31.0 --source zheref/nen --script ./nen-bootstrap.sh
 ```
 
-Once the `v0.30.0` release and its assets are published, the first prints
-`0.30.0`. Before the tag exists, a fresh install's `curl` command in
+Once the `v0.31.0` release and its assets are published, the first prints
+`0.31.0`. Before the tag exists, a fresh install's `curl` command in
 [Install](#install) cannot fetch `bootstrap/nen.sh` from that ref and fails
 before the bootstrap runs; that download failure is not bootstrap exit 6.
 After the tag exists, the script can be downloaded, but without the release's
@@ -479,10 +479,10 @@ it stays pending and holds every pull request's checks with it.
 
 ## The verb surface
 
-`nen --help` lists every command family (49); each
+`nen --help` lists every command family (50); each
 family's own `--help` (`nen pr --help`, `nen board --help`, ...) documents
 its verbs and flags in full. [`docs/USAGE.md`](docs/USAGE.md) documents all
-180 verbs outside the binary — each one's purpose, arguments, exit codes and
+184 verbs outside the binary — each one's purpose, arguments, exit codes and
 `--json` shape — plus the conventions they share and the developer workflows
 they compose into. The families group roughly as:
 
@@ -527,8 +527,9 @@ they compose into. The families group roughly as:
   read from its lockfile or `Package.resolved` (never by running its package
   manager) and queried at the OSV endpoint a caller's declaring contract
   names, on four exits: clean, findings, wiring, not scanned
-- **Reports** — `report` (`data`, `render`): the facts an effort's report is
-  made of, and the fill that turns them into one
+- **Reports** — `report` (`data`, `render`, `mermaid`, `check`): the facts an effort's report is
+  made of, the fill that turns them into one, the mermaid text of a graph, and
+  the check that both formats hold the declared blocks
 - **Surfaces** — `surface` (`mirror generate`, `mirror check`, `install`,
   `status`, `capabilities`): one skills directory rendered into another agent
   surface's own layout, the drift check that says whether the committed copy is
