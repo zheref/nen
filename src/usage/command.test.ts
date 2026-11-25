@@ -84,6 +84,30 @@ describe("nen usage record -- the per-effort usage ledger", () => {
     });
   });
 
+  it("preserves Unicode source and note text, including section signs", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-usage-unicode-"));
+    const source = "hanten § 4: nobunaga, synthetic café 日本語 🧪";
+    const note = "§ 7 — síntesis 日本語 🧪";
+    const result = await capture(["usage", "record", "--effort", "unicode", "--surface", "codex",
+      "--not-reported", "--source", source, "--note", note], root, true);
+    expect(result.code).toBe(0);
+    expect(result.err).toEqual([]);
+    const ledger = JSON.parse(readFileSync(join(root, USAGE_LEDGER_DIR, "unicode.json"), "utf8")) as Ledger;
+    expect(ledger.contract).toBe(USAGE_CONTRACT);
+    expect(ledger.entries).toHaveLength(1);
+    expect(ledger.entries[0]).toMatchObject({ source, note, notReported: true });
+    expect(JSON.parse(result.out.join("\n"))).toMatchObject({ entry: { source, note } });
+  });
+
+  it.each([["--input", ""], ["--input="]])("names an empty input value at exit 2: %j", async (...flags) => {
+    const root = mkdtempSync(join(tmpdir(), "nen-usage-empty-"));
+    const result = await capture(["usage", "record", "--effort", "empty", "--surface", "codex", ...flags], root);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("--input takes a non-negative whole number of tokens, got ''.");
+    expect(result.out).toEqual([]);
+    expect(existsSync(join(root, USAGE_LEDGER_DIR))).toBe(false);
+  });
+
   it("--not-reported records every number null and notReported true", async () => {
     const root = mkdtempSync(join(tmpdir(), "nen-usage-"));
     const result = await capture(["usage", "record", "--effort", "e", "--surface", "cursor", "--not-reported"], root);
