@@ -35,7 +35,7 @@ const TOOLS = parseRepoRegistry("/tools/nen/repos.json", {
 
 describe("resolveScenario -- a lookup, with the gaps told apart (zheref/nen#28)", () => {
   it("reads the scenario recorded for a known consumer", () => {
-    expect(resolveScenario(REGISTRY, "zheref/KroApple")).toEqual({ ok: true, scenario: "swiftui-tca-uzf-v2" });
+    expect(resolveScenario(REGISTRY, "zheref/KroApple")).toEqual({ ok: true, scenario: "swiftui-tca-uzf-v2", sourceRows: ["consumers[0]"] });
   });
 
   // zheref/nen#219 criterion 6: a consumer recorded ONLY under consumers[]
@@ -138,17 +138,17 @@ describe("resolveScenario -- maintained_tools[] and pending_onboarding[] rows ca
   // code match (rule 3.5a) is what resolveToken() returns for both tools, and
   // the scenario is still read off the maintained_tools[] row.
   it("reads a maintained tool's scenario off its own maintained_tools[] row", () => {
-    expect(resolveScenario(TOOLS, "zheref/hatsu")).toEqual({ ok: true, scenario: "hatsu-plugin" });
-    expect(resolveScenario(TOOLS, "zheref/nen")).toEqual({ ok: true, scenario: "bun-cli" });
+    expect(resolveScenario(TOOLS, "zheref/hatsu")).toEqual({ ok: true, scenario: "hatsu-plugin", sourceRows: ["maintained_tools[0]"] });
+    expect(resolveScenario(TOOLS, "zheref/nen")).toEqual({ ok: true, scenario: "bun-cli", sourceRows: ["maintained_tools[1]"] });
   });
 
   // Criterion 2: the same holds for pending_onboarding[].
   it("reads a pending onboarding's scenario off its own pending_onboarding[] row", () => {
-    expect(resolveScenario(TOOLS, "zheref/KroCloud")).toEqual({ ok: true, scenario: "cloud-functions" });
+    expect(resolveScenario(TOOLS, "zheref/KroCloud")).toEqual({ ok: true, scenario: "cloud-functions", sourceRows: ["pending_onboarding[0]"] });
   });
 
   it("matches the listed row case-insensitively, as every other registry lookup does", () => {
-    expect(resolveScenario(TOOLS, "ZHEREF/Nen")).toEqual({ ok: true, scenario: "bun-cli" });
+    expect(resolveScenario(TOOLS, "ZHEREF/Nen")).toEqual({ ok: true, scenario: "bun-cli", sourceRows: ["maintained_tools[1]"] });
   });
 
   // An empty string names no scenario directory. Read as a scenario it was a
@@ -170,7 +170,7 @@ describe("resolveScenario -- maintained_tools[] and pending_onboarding[] rows ca
     const tool = resolveScenario(blank, "o/tool");
     expect(tool.ok).toBe(false);
     if (!tool.ok) expect(tool.reason).toMatch(/Add one to its maintained_tools\[\] row/);
-    expect(resolveScenario(blank, "o/both")).toEqual({ ok: true, scenario: "bun-cli" });
+    expect(resolveScenario(blank, "o/both")).toEqual({ ok: true, scenario: "bun-cli", sourceRows: ["maintained_tools[1]"] });
   });
 
   // Criterion 6: a consumers[] entry that states a scenario is read exactly
@@ -181,7 +181,7 @@ describe("resolveScenario -- maintained_tools[] and pending_onboarding[] rows ca
       consumers: [{ repo: "zheref/bankai-scaffold", consumes: [], scenario: "scaffold" }],
       maintained_tools: [{ repo: "zheref/bankai-scaffold", role: "scaffolder" }],
     });
-    expect(resolveScenario(both, "zheref/bankai-scaffold")).toEqual({ ok: true, scenario: "scaffold" });
+    expect(resolveScenario(both, "zheref/bankai-scaffold")).toEqual({ ok: true, scenario: "scaffold", sourceRows: ["consumers[0]"] });
   });
 
   it("a repository has ONE scenario: the same value stated on two of its rows is read", () => {
@@ -189,7 +189,7 @@ describe("resolveScenario -- maintained_tools[] and pending_onboarding[] rows ca
       consumers: [{ repo: "zheref/bankai-scaffold", consumes: [], scenario: "scaffold" }],
       maintained_tools: [{ repo: "zheref/bankai-scaffold", scenario: "scaffold" }],
     });
-    expect(resolveScenario(agree, "zheref/bankai-scaffold")).toEqual({ ok: true, scenario: "scaffold" });
+    expect(resolveScenario(agree, "zheref/bankai-scaffold")).toEqual({ ok: true, scenario: "scaffold", sourceRows: ["consumers[0]", "maintained_tools[0]"] });
   });
 
   it("a consumer whose entry states none is read off its maintained_tools[] row when that row states one", () => {
@@ -197,7 +197,7 @@ describe("resolveScenario -- maintained_tools[] and pending_onboarding[] rows ca
       consumers: [{ repo: "zheref/bankai-scaffold", consumes: [] }],
       maintained_tools: [{ repo: "zheref/bankai-scaffold", scenario: "scaffold" }],
     });
-    expect(resolveScenario(listedOnly, "zheref/bankai-scaffold")).toEqual({ ok: true, scenario: "scaffold" });
+    expect(resolveScenario(listedOnly, "zheref/bankai-scaffold")).toEqual({ ok: true, scenario: "scaffold", sourceRows: ["maintained_tools[0]"] });
   });
 
   // Cause 4: reading either value would be a guess about which one governs
@@ -283,6 +283,6 @@ describe("resolveScenario -- maintained_tools[] and pending_onboarding[] rows ca
     const result = resolveScenario(handBuilt, "zheref/tooling");
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toMatch(/\(under 'maintained_tools'\), but its row there carries no 'scenario' field/);
-    expect(resolveScenario(handBuilt, "zheref/KroApple")).toEqual({ ok: true, scenario: "swiftui-tca-uzf-v2" });
+    expect(resolveScenario(handBuilt, "zheref/KroApple")).toEqual({ ok: true, scenario: "swiftui-tca-uzf-v2", sourceRows: ["consumers[0]"] });
   });
 });

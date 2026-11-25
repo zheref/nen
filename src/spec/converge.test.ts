@@ -49,6 +49,122 @@ const run = (w: World, inventory: string, ...extra: string[]): Promise<Captured>
 const read = (w: World, name: string): string => readFileSync(join(w.spec, w.folder, name), "utf8");
 
 describe("nen spec converge", () => {
+  it.each(["current", "moved", "changed", "vanished", "unreadable"] as const)("reads an acceptance scenario's %s citation and classifies its gap", async (state) => {
+    const w = world();
+    const sha = state === "unreadable" ? "f".repeat(40) : w.first;
+    writeFileSync(join(w.spec, w.folder, "spec.md"), `**AC-001**: Given a list When opened Then it shows. [src: FX:app/List.kt:10-12 @ ${sha} · observed]\n`);
+    const changed = state === "moved" ? `new\n${numbered("list", 30)}` : state === "changed" ? numbered("list", 30).replace("list 11\n", "changed\n") : numbered("list", 30);
+    const next = state === "vanished" ? commit(w.member, {}, ["app/List.kt"]) : commit(w.member, { "app/List.kt": changed, "app/New.kt": "new\n" });
+    const result = await run(w, inventoryAt(next));
+    expect(result.code).toBe(state === "current" ? 0 : 1);
+    const report = result.json();
+    expect(report["citations"]).toMatchObject([{ id: "AC-001", line: 1, state }]);
+    expect(report["counts"]).toMatchObject({ scenariosRead: 1, scenariosCited: 1 });
+    expect(report["gaps"]).toMatchObject(state === "current" ? [] : [{ id: "AC-001", class: state === "changed" ? "contradicts" : state === "vanished" ? "missing" : "partial" }]);
+  });
+
+  it("counts scenario definitions once, without inventing citations for uncited, other-member or malformed lines", async () => {
+    const w = world();
+    const cite = `[src: FX:app/List.kt:10-12 @ ${w.first} · observed]`;
+    const text = [
+      `1. **AC-001**: Given a list When opened Then it shows. ${cite} ${cite}`,
+      `- AC-002: Another member. ${cite.replace("FX:", "ZZ:")}`,
+      "* **AC-003**: No citation. [UNVERIFIED]",
+      "+ AC-004: Malformed citation. [src: FX:broken]",
+      `AC-007: Zero-based range. ${cite.replace(":10-12", ":0-1")}`,
+      `AC-008: Reversed range. ${cite.replace(":10-12", ":12-10")}`,
+      "```source-data", `AC-005: Quoted data. ${cite}`, "```",
+      `Mentions AC-006 in prose. ${cite}`,
+      `- **FR-001**: Existing requirement. ${cite}`,
+      "",
+    ].join("\n");
+    writeFileSync(join(w.spec, w.folder, "spec.md"), text);
+    const result = await run(w, inventoryAt(w.first));
+    expect(result.code).toBe(0);
+    expect(result.json()["counts"]).toMatchObject({ scenariosRead: 6, scenariosCited: 1 });
+    expect((result.json()["citations"] as { id: string }[]).map((citation) => citation.id)).toEqual(["AC-001", "AC-001", "FR-001"]);
+    const plain = await spec(["converge", "--folder", w.folder, "--inventory", inventoryAt(w.first), "--code", "FX", "--checkouts", w.checkouts], w.spec, defaultSeams());
+    expect(plain.out.join("\n")).toContain("6 scenario line(s) read · 1 citing FX");
+    writeFileSync(join(w.spec, w.folder, "spec.md"), text.replaceAll("FX:", "ZZ:"));
+    const uncited = (await run(w, inventoryAt(w.first))).json();
+    expect(uncited).toMatchObject({ citations: [], gaps: [], counts: { scenariosRead: 6, scenariosCited: 0 } });
+  });
+
+  it("associates stale companions with each occurrence, not every range sharing its SHA", async () => {
+    const w = world();
+    const list = `[src: FX:app/List.kt:10-12 @ ${w.first} · observed]`;
+    const other = `[src: FX:app/Other.kt:1-2 @ ${w.first} · observed]`;
+    writeFileSync(join(w.spec, w.folder, "spec.md"), `AC-001: Two ranges, including a repeated citation. ${list} ${list} ${other}\n`);
+    const first = commit(w.member, { "app/List.kt": `new\n${numbered("list", 30)}` });
+    await run(w, inventoryAt(first), "--write");
+    const observed = (await run(w, inventoryAt(first))).json();
+    expect(observed["citations"]).toMatchObject([{ state: "moved", marked: true }, { state: "moved", marked: true }, { state: "current", marked: false }]);
+    expect(read(w, "spec.md").match(/\[STALE @ /g)).toHaveLength(2);
+    const second = commit(w.member, { "app/Other.kt": `new\n${numbered("other", 5)}` });
+    await run(w, inventoryAt(second), "--write");
+    const after = read(w, "spec.md");
+    expect(after.match(/\[STALE @ /g)).toHaveLength(3);
+    expect(after).toContain(`${other} [STALE @ ${w.first}]`);
+    expect((await run(w, inventoryAt(second), "--write")).json()).toMatchObject({ action: "none", writes: [] });
+    expect(read(w, "spec.md")).toBe(after);
+  });
+
+  it("appends newly visible scenario tasks after an older convergence phase for the same inventory", async () => {
+    const w = world();
+    const first = read(w, "spec.md");
+    writeFileSync(join(w.spec, w.folder, "spec.md"), `${first}AC-001: Scenario. [src: FX:app/List.kt:10-12 @ ${w.first} · observed]\n`);
+    const next = commit(w.member, { "app/List.kt": `new\n${numbered("list", 30)}` });
+    const inventory = inventoryAt(next);
+    const prior = `# Tasks\n\n## Phase 1: Convergence 2026-10-22\n\nInventory: FX @ ${next.slice(0, 12)}\n\n- [ ] T001 [platform:FX] [partial] FR-001 — 1 moved\n`;
+    writeFileSync(join(w.spec, w.folder, "tasks.md"), prior);
+    const result = await run(w, inventory, "--write");
+    expect(result.json()["writes"]).toContainEqual({ file: `${w.folder}/tasks.md`, kind: "phase", line: null, text: "## Phase 2: Convergence 2026-10-23" });
+    const after = read(w, "tasks.md");
+    expect(after.startsWith(prior)).toBe(true);
+    expect(after).toContain("T002 [platform:FX] [partial] AC-001");
+    expect(after.match(/\[partial\] FR-001/g)).toHaveLength(1);
+    expect((await run(w, inventory, "--write")).json()).toMatchObject({ action: "none", writes: [] });
+    expect(read(w, "tasks.md")).toBe(after);
+  });
+
+  it("keeps scenario gaps despite ticked claims, and appends stale markers and tasks idempotently", async () => {
+    const tasks = "# Tasks\n\n- [x] T001 [US1] Complete AC-001 and AC-002; AC-001 again\n- [ ] T002 Complete AC-001\n```source-data\n- [x] T003 Complete AC-001\n```\n";
+    const w = world(tasks);
+    const specText = `- **AC-001**: List scenario. [src: FX:app/List.kt:10-12 @ ${w.first} · observed]\n- **AC-002**: Other scenario. [src: FX:app/Other.kt:1-2 @ ${w.first} · observed]\n`;
+    writeFileSync(join(w.spec, w.folder, "spec.md"), specText);
+    const next = commit(w.member, { "app/List.kt": `new\n${numbered("list", 30)}` });
+    const inventory = inventoryAt(next);
+    const dry = await run(w, inventory, "--write", "--dry-run");
+    expect(dry.json()).toMatchObject({ action: "would-write", claims: [{ line: 3, ids: ["AC-001"] }] });
+    expect(read(w, "spec.md")).toBe(specText);
+    expect(read(w, "tasks.md")).toBe(tasks);
+    const first = await run(w, inventory, "--write");
+    expect(first.code).toBe(1);
+    expect(first.json()["gaps"]).toMatchObject([{ id: "AC-001", class: "partial" }]);
+    const specAfter = read(w, "spec.md");
+    const tasksAfter = read(w, "tasks.md");
+    expect(specAfter).toBe(specText.replace("· observed]", `· observed] [STALE @ ${w.first}]`));
+    expect(tasksAfter).toContain("[US1] [platform:FX] [partial] AC-001");
+    const second = await run(w, inventory, "--write");
+    expect(second.json()).toMatchObject({ action: "none", writes: [], claims: [{ ids: ["AC-001"] }] });
+    expect(read(w, "spec.md")).toBe(specAfter);
+    expect(read(w, "tasks.md")).toBe(tasksAfter);
+  });
+
+  it("does not take story, supersedes or numbering metadata from fenced task examples", async () => {
+    const prior = "# Tasks\n\n```source-data\n## Phase 9: Quoted\n- [x] T123 [US9] [missing] AC-001 — quoted\n```\n\n- [ ] T001 Setup\n";
+    const w = world(prior);
+    writeFileSync(join(w.spec, w.folder, "spec.md"), `AC-001: Scenario. [src: FX:app/List.kt:10-12 @ ${w.first} · observed]\n`);
+    const next = commit(w.member, { "app/List.kt": `new\n${numbered("list", 30)}` });
+    const result = await run(w, inventoryAt(next), "--write");
+    expect(result.json()["claims"]).toEqual([]);
+    const appended = read(w, "tasks.md").slice(prior.length);
+    expect(appended).toContain("## Phase 1: Convergence 2026-10-23");
+    expect(appended).toContain("T002 [platform:FX] [partial] AC-001");
+    expect(appended).not.toContain("US9");
+    expect(appended).not.toContain("supersedes");
+  });
+
   it("is converged, exit 0, and writes nothing when every cited range reads the same", async () => {
     const w = world();
     const next = commit(w.member, { "app/Unrelated.kt": "x\n" });
