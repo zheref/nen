@@ -63,7 +63,7 @@ describe("requirementOf", () => {
   ])("reads %j as defining %s", (line, id) => {
     expect(requirementOf(line)?.id).toBe(id);
   });
-  it.each(["Mentions FR-001 in passing", "- T001 builds FR-001", "## Requirements"])("does not read %j as a definition", (line) => {
+  it.each(["Mentions FR-001 in passing", "- T001 builds FR-001", "## Requirements", "- **AC-001**: A scenario, read separately by convergence"])("does not read %j as a definition", (line) => {
     expect(requirementOf(line)).toBeNull();
   });
 });
