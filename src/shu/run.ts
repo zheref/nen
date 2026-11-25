@@ -86,6 +86,8 @@ import {
   type ResolvedTarget,
 } from "./render.js";
 import { ARTIFACT_TOKEN, DEVICE_ID_TOKEN, findDevice, substituteSteps, tokensUsed } from "./launch.js";
+import { archiveFacts, type ArchiveFacts, type ArchiveWindow } from "./archive-artifacts.js";
+import { plainLine } from "../cli/plain.js";
 
 /**
  * The two long-running verbs. They go through the interactive seam -- stdio
@@ -185,6 +187,8 @@ export interface ShuArtifactReport {
   readonly kind: "path";
   readonly value: string;
   readonly exists: boolean;
+  /** Present only on archive reports; other verbs retain their existing rows. */
+  readonly archive?: ArchiveFacts;
 }
 
 /**
@@ -767,6 +771,11 @@ export function renderReport(report: ShuReport): readonly string[] {
             .join(", "),
         ),
   );
+  for (const entry of report.artifacts) {
+    const facts = entry.archive;
+    if (facts === undefined) continue;
+    lines.push(labelled("archive fact", `${plainLine(entry.value)}: ${facts.status}; bytes=${facts.bytes ?? "unknown"}; modified=${facts.modifiedAt ?? "unknown"}; produced this run=${facts.producedThisRun ?? "unknown"} (${facts.freshness}); run start=${facts.runStartedAt ?? "not run"}; run end=${facts.runEndedAt ?? "not run"}; ${facts.digest === null ? "digest=unavailable" : `${facts.digest.algorithm}=${facts.digest.value}`}${facts.error === null ? "" : `; error=${plainLine(facts.error)}`}`));
+  }
   // BESIDE `artifacts`, AND IT IS THE OTHER HALF OF THE SAME QUESTION. Both
   // lines answer "which files does this run put on disk": `artifacts` names the
   // ones the TOOL writes and nen only reports, this one names the ones NEN
@@ -834,6 +843,7 @@ function logReport(mode: ShuLogReport["mode"], redirected: readonly string[] = [
 function artifactReports(
   plan: RenderedInvocation,
   repoRoot: string,
+  archiveWindow: ArchiveWindow | null,
 ): readonly ShuArtifactReport[] {
   return plan.artifacts.map((value, index): ShuArtifactReport => {
     // A FOCUSED PLAN'S ARTIFACTS ARE ITS `select` BLOCK'S, and a refusal
@@ -841,6 +851,10 @@ function artifactReports(
     // the wrong line of their file.
     const owner = plan.selection?.pointer ?? `project.verbs.${plan.lane}.${plan.verb}`;
     const absolute = insideRepo(repoRoot, value, `${owner}.artifacts[${index}]`);
+    if (plan.verb === "archive") {
+      const archive = archiveFacts(absolute, archiveWindow);
+      return { kind: "path", value, exists: archiveWindow === null ? entryExists(absolute) : archive.status !== "missing", archive };
+    }
     return { kind: "path", value, exists: entryExists(absolute) };
   });
 }
@@ -855,6 +869,7 @@ function assemble(
   durationMs: number | null,
   mode: ShuLogReport["mode"],
   proof: BuildProof | null = null,
+  archiveStarted: number | null = null,
 ): ShuReport {
   return {
     contract: contractName(plan.verb),
@@ -869,7 +884,7 @@ function assemble(
     preconditions,
     exitCode,
     durationMs,
-    artifacts: artifactReports(plan, repoRoot),
+    artifacts: artifactReports(plan, repoRoot, archiveStarted === null || durationMs === null ? null : { started: archiveStarted, ended: archiveStarted + durationMs }),
     log: logReport(mode, stdoutTargets(steps)),
     proof,
     selection: plan.selection ?? null,
@@ -915,6 +930,8 @@ function declaredStall(step: RenderedStep): ShuStallReport | null {
 export type ReportSink = (report: ShuReport) => void;
 
 export interface RunOptions {
+  /** Internal observer: read policy from the exact declaration and lane being executed. */
+  readonly onDeclaration?: (project: ProjectBlock, lane: string) => void;
   readonly verb: string;
   readonly lane: string | null;
   readonly dryRun: boolean;
@@ -1210,6 +1227,7 @@ export async function runVerb(
     verb: options.verb,
     platform: context.seams.platform,
   });
+  options.onDeclaration?.(project, rendered.lane);
   // TWO BLOCKS BEHIND ONE FLAG, AND THE VERB PICKS. `deploy` always resolves a
   // destination (the flag is required there, and `resolveTarget` is what
   // refuses its absence); `dev` and `run` resolve a DEVICE only when one was
@@ -1977,7 +1995,7 @@ async function runCaptured(
       emitReport(
         context,
         sink,
-        assemble(plan, cwd, repoRoot, preconditions, steps, EXIT_TOOL_NOT_INSTALLED, context.seams.now().getTime() - started, "streamed"),
+        assemble(plan, cwd, repoRoot, preconditions, steps, EXIT_TOOL_NOT_INSTALLED, context.seams.now().getTime() - started, "streamed", null, index === 0 ? null : started),
       );
       throw new ShuRefusal(
         EXIT_TOOL_NOT_INSTALLED,
@@ -1994,7 +2012,7 @@ async function runCaptured(
       emitReport(
         context,
         sink,
-        assemble(plan, cwd, repoRoot, preconditions, steps, 1, context.seams.now().getTime() - started, "streamed"),
+        assemble(plan, cwd, repoRoot, preconditions, steps, 1, context.seams.now().getTime() - started, "streamed", null, started),
       );
       context.io.err(
         `${label} stalled: ${renderArgv(step)} -- every one of the ${outcome.stall.maxStrikes} declared remedies ran and it went quiet again. nen exits 1; the step itself was never killed and has no exit code to report.`,
@@ -2006,7 +2024,7 @@ async function runCaptured(
       emitReport(
         context,
         sink,
-        assemble(plan, cwd, repoRoot, preconditions, steps, 1, context.seams.now().getTime() - started, "streamed"),
+        assemble(plan, cwd, repoRoot, preconditions, steps, 1, context.seams.now().getTime() - started, "streamed", null, started),
       );
       context.io.err(
         `${label} failed: ${renderArgv(step)} -- exited ${outcome.exitCode}. nen exits 1 whatever the tool's own code was; the tool's code is in the report above.`,
@@ -2027,6 +2045,7 @@ async function runCaptured(
       context.seams.now().getTime() - started,
       "streamed",
       greenBuild(context, plan, repoRoot),
+      started,
     ),
   );
   return 0;

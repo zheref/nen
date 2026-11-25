@@ -262,7 +262,7 @@ function scenario(context: CommandContext): number {
   const registry = requireRegistry((): RepoRegistry => loadRepoRegistry(root));
   const result = resolveScenario(registry, target.slug);
   if (context.json) {
-    context.io.out(JSON.stringify(result, null, 2));
+    context.io.out(JSON.stringify(result.ok ? { ok: true, scenario: result.scenario } : result, null, 2));
     return result.ok ? 0 : 1;
   }
   if (!result.ok) {

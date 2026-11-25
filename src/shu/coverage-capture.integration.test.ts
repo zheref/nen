@@ -64,6 +64,7 @@ function writer(declared: readonly string[], extra = "", before = ""): string {
 }
 
 interface RepoOptions {
+  readonly exclusions?: readonly string[];
   /** Extra JS the coverage tool runs after writing its reports. */
   readonly during?: string;
   /** JS the coverage tool runs BEFORE writing -- it may exit, or skip the write. */
@@ -92,7 +93,7 @@ function repo(options: RepoOptions = {}): string {
   mkdirSync(join(dir, "nen"));
   const artifacts = options.artifacts ?? [SUMMARY];
   const verbs: Record<string, unknown> = {
-    coverage: { exe: process.execPath, argv: ["-e", writer(artifacts, options.during, options.before)], artifacts },
+    coverage: { exe: process.execPath, argv: ["-e", writer(artifacts, options.during, options.before)], artifacts, ...(options.exclusions === undefined ? {} : { exclusions: options.exclusions }) },
   };
   if (options.testArtifacts !== undefined && options.testArtifacts !== null) {
     // The test row's tool writes what the COVERAGE row declares -- the shape
@@ -144,6 +145,18 @@ describe.skipIf(!HAVE_GIT)("--from-capture, against the real git", () => {
     expect(JSON.parse(reused.out.join("\n"))).toEqual(JSON.parse(ran.out.join("\n")));
     const touched = (JSON.parse(reused.out.join("\n")) as { touched: { matched: string[] } }).touched;
     expect(touched.matched).toEqual(["src/a.ts", CAFE]);
+  });
+
+  it("NN#645 reuses the same declared exclusions from a proved capture", async () => {
+    const dir = repo({ exclusions: ["=src/a.ts", "unused/**"] });
+    const measured = await nen(dir, MEASURE);
+    expect(measured.code).toBe(0);
+    const reused = await nen(dir, [...MEASURE, "--from-capture"]);
+    expect(reused.code).toBe(0);
+    const doc = JSON.parse(reused.out.join("\n")) as { touched: unknown };
+    expect(doc.touched).toMatchObject({ files: [CAFE], matched: [CAFE], exclusions: { declared: true,
+      excluded: [{ path: "src/a.ts", patterns: ["=src/a.ts"] }], unmatchedPatterns: ["unused/**"] } });
+    expect(JSON.parse(measured.out.join("\n")).touched).toEqual(doc.touched);
   });
 
   it("capture, then edit a touched file: refused at 8, no document", async () => {

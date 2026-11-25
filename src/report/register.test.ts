@@ -1,3 +1,4 @@
+import { unreadLedger } from "../pr/ledger-read.js";
 // src/report/register.test.ts -- `nen report data --register <desk>`: the
 // backlog-board § 3 register document, assembled by the verb (zheref/nen#276).
 //
@@ -76,6 +77,7 @@ async function capture(argv: readonly string[], repoFlag: string | null = null, 
 
 const PR_READY = {
   kind: "pr",
+  ledger: unreadLedger("fixture has no live comment read"),
   number: 87,
   title: "feat(report): the register",
   url: "https://github.com/zheref/hatsu/pull/87",

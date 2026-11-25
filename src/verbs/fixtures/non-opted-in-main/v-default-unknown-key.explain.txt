@@ -4,7 +4,7 @@ aiReviewers required; base basebase: required (workflow file absent); default ti
 
   head cafebabe · reviewers sasuke,tenma,copilot · approvers sasuke,tenma
   policy bounded · delivery PR no · identities <GATES> (--gates, the caller's file)
-  decided by nen 0.30.0 (/opt/nen/nen-linux-x64) at 2025-01-01T00:00:00Z
+  decided by nen 0.31.0 (/opt/nen/nen-linux-x64) at 2025-01-01T00:00:00Z
   note: could not confirm the default-branch tip declares no exclusion: the default-branch tip refused its declaration (acme/widget@defa017:nen/gates.json: at $, carries 'future_gate', which this build does not read. That object takes version (nen >= 0.1.0), reviewers (nen >= 0.1.0), default_approvers (nen >= 0.1.0), base_reviewers (nen >= 0.1.0), delivery (nen >= 0.1.0), dependabot_carve_out (nen >= 0.7.0), approval_policy (nen >= 0.10.0), round_policy (nen >= 0.11.0), round_quorum (nen >= 0.17.0), checks (nen >= 0.20.0); and any '$'-prefixed annotation. This is nen <VERSION>: a key a newer nen introduced is read only by that nen, so upgrade nen; a misspelling, correct or remove. Refused rather than ignored, so a declared gate is never dropped by a binary that does not know it (zheref/nen#310).) at acme/widget@defa017:nen/gates.json. No declared exclusion was applied; every check counts on CON-32(a).
 
   The gate is a CONJUNCTION. Every row is evaluated; the verdict is ready only

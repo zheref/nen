@@ -1,3 +1,4 @@
+import { readLedgerSlice, unreadLedger, type LedgerEvidence } from "../pr/ledger-read.js";
 // src/report/objects.ts -- `objects[]`: the pull requests and issues an effort
 // is ABOUT, as facts, for the report that lists them.
 //
@@ -172,6 +173,7 @@ export interface PrObject {
   /** Issue numbers this pull request references. */
   readonly linked: readonly number[];
   readonly readiness: ObjectReadiness | null;
+  readonly ledger: LedgerEvidence;
   /**
    * What could not be read cleanly about THIS row, named, in the order it was
    * found. Empty when everything read.
@@ -223,7 +225,7 @@ export interface ObjectsOptions {
 
 function refuse(display: string, index: number, what: string): never {
   throw new VerbUsageError(
-    `'${display}': row ${index} ${what}. Every row is one of the two shapes 'nen report data' publishes under 'objects': a pull request ({ kind: "pr", number, title, url, state, labels[], head, mergeStateStatus, checks: { total, green, red, pending }, threads: { total, unresolved }, reviewRequests[], linked[], readiness: null | { verdict, reason, source: "check" | "computed" | "state" } -- "state" only on a MERGED or CLOSED row }) or an issue ({ kind: "issue", number, title, url, state, labels[], linked[], readiness: null }). A row nobody checked is a fact nobody checked, so the whole file is refused rather than one register row published with a hole in it.`,
+    `'${display}': row ${index} ${what}. Every row is one of the two shapes 'nen report data' publishes under 'objects': a pull request ({ kind: "pr", number, title, url, state, labels[], head, mergeStateStatus, checks: { total, green, red, pending }, threads: { total, unresolved }, reviewRequests[], linked[], readiness: null | { verdict, reason, source: "check" | "computed" | "state" } -- "state" only on a MERGED or CLOSED row }) or an issue ({ kind: "issue", number, title, url, state, labels[], linked[], readiness: null }). PR ledger evidence is set to not-read on this offline path; historical ledger input is not current proof. A row nobody checked is a fact nobody checked, so the whole file is refused rather than one register row published with a hole in it.`,
   );
 }
 
@@ -480,6 +482,7 @@ export function parseObjects(document: unknown, display: string): readonly Repor
       reviewRequests,
       linked: linked.numbers,
       readiness: retained.readiness,
+      ledger: unreadLedger("ledger comments were not read from GitHub (offline objects file)"),
       notes: [...readNotes(row, display, index), ...linked.notes, ...retained.notes],
     };
   });
@@ -991,6 +994,9 @@ async function prRow(
       .filter((ref): boolean => ref !== own && ref !== number)
       .sort((a, b): number => a - b),
     readiness,
+    ledger: typeof view["headRefName"] === "string" && view["headRefName"] !== ""
+      ? readLedgerSlice(seams, target, number, view["headRefName"]).evidence
+      : unreadLedger("the PR head branch could not be read"),
     notes,
   };
 }

@@ -16,7 +16,12 @@ import { refuseExtraPositionals } from "../cli/command.js";
 // artifacts are on disk; `render` fills a template with it. No coverage bar is
 // applied, no readiness is computed, nothing is published. The exit codes say
 // only whether the reading and the filling worked.
+//
+// `check` is the third read: it fills every variant `reports.sections` declares
+// in both formats from the example data and refuses a block, desk or escaping
+// miss. It writes nothing into the repository.
 
+import { statSync } from "node:fs";
 import { basename } from "node:path";
 import {
   emit,
@@ -43,6 +48,7 @@ import { openTaxonomy } from "../schema/taxonomy.js";
 import { codeFor as productCodeFor, recordedRepoFor } from "../repo/resolve.js";
 import { graphInjection, graphToMermaid, parseGraph, type GraphDocument } from "./graph.js";
 import { renderReport } from "./render.js";
+import { CHECK_CONTRACT, checkReports, runReportCheckSelfTest } from "./check.js";
 
 const USAGE = `nen report -- the facts an effort's report is made of, and the fill that turns them into one.
 
@@ -50,6 +56,7 @@ usage:
   nen report data --repo <path> --base <ref> [--lane <name>] [--tiers <file>] [--target <owner/name>] [--prs <n,...>] [--issues <n,...>] [--backlog] [--objects-from <file>] [--label <name>]... [--severity <name>[+] --severity-family <ns>:<family> --severity-order <a,b,..>] [--register <desk>] [--tz <zone>] [--open-stop] [--effort <id>]... [--json]
   nen report render --template <file> --data <file> --out <file> [--variant <name>] [--graph <file>] [--dry-run] [--repo <path>] [--json]
   nen report mermaid --graph <file>
+  nen report check --repo <path> [--variant <name>] [--self-test] [--json]
 
 data      One document describing this branch against --base: the commits, the
           changed files (with a tier from --tiers, or null), the evidence rows
@@ -169,7 +176,7 @@ data      One document describing this branch against --base: the commits, the
                    architectureCaption? }. Every FACT is nen's: each row gains
                    notation (nen ref's <CODE>-<IS|PR>-#<N> from nen/repos.json,
                    else <owner>/<name>#<n> named in footerNote), verdict,
-                   labelsLine, checksLine, threadsLine, linkedLine and head;
+                   labelsLine, checksLine, threadsLine, ledgerLine, linkedLine and head;
                    the five tallies, footerCount, spendEfforts (from phases[]
                    and usage[]) and empty graph keys are added after
                    'objects'. A VERDICT IS QUOTED, NEVER WRITTEN: every row's
@@ -204,6 +211,15 @@ data      One document describing this branch against --base: the commits, the
   colour or '&#39;' is none, and a file's non-positive entry is left out with
   a note. Known limits: 'docs/USAGE.md#123' reads as #123, and
   'other/repo#591' as this repository's #591.
+
+  Each PR row has ledger { state, url, verdict, reason, line }, from the
+  same authority as 'nen pr ledger read', with the head branch as effort.
+  state is valid (ok), none (no matching comment), refused (foreign, edited,
+  duplicate, malformed or stale), or not-read (head/login/comments unread).
+  verdict and line preserve the read-back exactly; url is null when absent.
+  --objects-from always reports not-read because no live comment is read.
+  Register ledgerLine quotes line; desks cannot write ledger or ledgerLine.
+  No slice is posted or restored.
 
   'phases[]' rows end with countedMs and idleWaitMs, derived at read time:
   a 'readiness' phase untimed for over 60 minutes in all counts only
@@ -246,10 +262,44 @@ mermaid   Prints the mermaid text for a --graph document and nothing else: no
           involved. Deterministic and in document order, so two runs over an
           unchanged document are byte-identical.
 
-Exit codes: 0 both verbs on success; 1 a git command that failed for a reason
-other than the flags (no repository, an unreadable object); 2 a missing or
-unresolvable flag, a template this language does not have, or a token the data
-has not got.`;
+check     Renders every variant declared under 'reports.sections' in both
+          formats from the example data document, and refuses when the two
+          renders do not hold. For each variant (or the one --variant names)
+          it fills templates/<template>.md and templates/<template>.html from
+          templates/report-examples/<variant>.data.json, injecting the same
+          sections map 'report render --variant' injects and, when
+          templates/report-examples/<variant>.graph.json or
+          templates/graph.example.json is present, the same graph keys
+          '--graph' injects. Nothing is written into the repository.
+
+          Exit 0 when every checked variant conforms. Exit 1 names the variant,
+          the template and the rule: a refused render; a surviving '{{'; a
+          block sequence that is not the declared one, in either format; the
+          two formats disagreeing; an ask with zero or more than one starred
+          option; a value whose escaping shows in a Markdown code span, fence
+          or indented code block. Exit 2 is wiring: no reports.sections, a
+          policy that will not parse, an unknown --variant, or a missing
+          template or example.
+
+          Block order is the '<!-- <slug>:block <name> -->' lines, where the
+          slug is the one the template already writes. An HTML render with
+          none of those is read from the anchors the templates already render
+          (a masthead header, a section id per block). An ask is
+          '<!-- <slug>:ask -->', and exactly one of its option lines
+          ('- **A** · …') carries a star. '--self-test' renders throwaway
+          fixtures for each refusal and for the wiring exits, and reads no
+          --repo.
+
+  --variant <name>   Check this variant only. Unknown is wiring, and names
+                     the declared variants.
+  --self-test        Prove each refusal and the wiring exits on throwaway
+                     fixtures. Ignores --repo.
+
+Exit codes: 0 on success; 1 a git command that failed for a reason other than
+the flags (no repository, an unreadable object), or 'report check' naming a
+variant, template and rule; 2 a missing or unresolvable flag, a template this
+language does not have, a token the data has not got, or 'report check'
+wiring (no reports.sections, a missing template or example).`;
 
 /** Per-subcommand flags, so a flag meant for the other verb is refused, not ignored. */
 const SUBCOMMAND_FLAGS: Readonly<Record<string, { values: readonly string[]; booleans: readonly string[]; lists?: readonly string[] }>> = {
@@ -260,9 +310,10 @@ const SUBCOMMAND_FLAGS: Readonly<Record<string, { values: readonly string[]; boo
   },
   render: { values: ["template", "data", "out", "variant", "graph"], booleans: ["dry-run"] },
   mermaid: { values: ["graph"], booleans: [] },
+  check: { values: ["variant"], booleans: ["self-test"] },
 };
 
-const SUBCOMMANDS: readonly string[] = ["data", "render", "mermaid"];
+const SUBCOMMANDS: readonly string[] = ["data", "render", "mermaid", "check"];
 
 const FAMILY_VALUES = [
   ...new Set(Object.values(SUBCOMMAND_FLAGS).flatMap((spec): readonly string[] => spec.values)),
@@ -856,10 +907,51 @@ function runRender(context: CommandContext): number {
   return 0;
 }
 
+function runCheck(context: CommandContext): number {
+  refuseExtraPositionals(context.args, 2);
+  if (context.args.booleans.has("self-test")) {
+    if (context.args.values["variant"] !== undefined) {
+      throw new VerbUsageError("--variant is not read by 'report check --self-test'. The self-test renders its own fixtures; drop --variant.");
+    }
+    const result = runReportCheckSelfTest();
+    if (context.json) {
+      emit(context.io, true, { contract: CHECK_CONTRACT, selfTest: true, ok: result.code === 0 }, []);
+      return result.code;
+    }
+    for (const line of result.lines) {
+      if (result.code === 0) context.io.out(line);
+      else context.io.err(line);
+    }
+    return result.code;
+  }
+  const root = requireRepoFlag(context, "It names the repository whose reports.sections, templates and example data are checked.");
+  let info;
+  try {
+    info = statSync(root);
+  } catch {
+    throw new VerbUsageError(`--repo '${root}' is not a directory. 'report check' reads that tree's nen/workflow.json and templates/.`);
+  }
+  if (!info.isDirectory()) {
+    throw new VerbUsageError(`--repo '${root}' is not a directory. 'report check' reads that tree's nen/workflow.json and templates/.`);
+  }
+  const named = context.args.values["variant"];
+  if (named !== undefined && named.trim() === "") {
+    throw new VerbUsageError("--variant was given an empty value. Omit it to check every declared variant, or name one.");
+  }
+  const report = checkReports(root, named ?? null);
+  if (context.json) {
+    emit(context.io, true, { contract: report.contract, variants: report.variants, ok: report.ok, findings: report.findings }, []);
+    return report.code;
+  }
+  const write = report.code === 0 ? context.io.out : context.io.err;
+  for (const line of report.lines) write(line);
+  return report.code;
+}
+
 export const reportCommand: Command = {
   name: "report",
   subcommands: SUBCOMMANDS,
-  summary: "Assemble an effort's report data, and fill a template with it.",
+  summary: "Assemble an effort's report data, fill a template with it, and check the declared variants.",
   usage: USAGE,
   flags: { values: FAMILY_VALUES, booleans: FAMILY_BOOLEANS, lists: FAMILY_LISTS },
   run(context: CommandContext): number | Promise<number> {
@@ -867,6 +959,7 @@ export const reportCommand: Command = {
     refuseForeignFlags(subcommand, context);
     if (subcommand === "data") return runData(context);
     if (subcommand === "mermaid") return runMermaid(context);
+    if (subcommand === "check") return runCheck(context);
     return runRender(context);
   },
 };
