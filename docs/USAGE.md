@@ -15357,6 +15357,15 @@ nen shu typecheck: lane 'docs' (gatsby) declares no 'typecheck'. It declares: bu
 
 Produce the lane's distributable artifact. Across the stacks this family is designed for, most lanes declare `{ "unsupported": "<why>" }` here, and the refusal quotes that sentence at exit 4.
 
+On `archive` only, each declared `artifacts[]` row retains `kind`, `value`, `exists` and gains `archive: {status, bytes, modifiedAt, runStartedAt, runEndedAt, producedThisRun, freshness, digest, error}`. Human output names the same facts beside each artifact.
+
+Regular readable files report byte size, UTC modification time, and `digest: {algorithm: "sha256", value: "<hex>"}`. The reader uses a 64KiB buffer, checks the open descriptor against the observed file, and withholds the digest if the file changes during reading. Empty files have zero bytes and their standard SHA-256 digest. Directories, symlinks and other non-regular files are named by status and are never traversed or hashed. Missing files have `status: "missing"` and `exists: false`; filesystem/read failures are `unreadable` with an error, not silently missing. Unavailable byte/digest/freshness facts are null.
+
+For a successfully read file, `producedThisRun` is the timestamp-based freshness verdict: true only when mtime, at the run clock's millisecond precision, lies within the archive invocation's start/end interval (`freshness: "during-run"`). Older artifacts are false/`older-than-run`; future-dated artifacts are false/`after-run`. This is an observation, **not provenance proof**: a timestamp can be preserved or altered, and the build proof still binds a source tree to a build, not an artifact to that tree. Dry runs, preflight refusals and a first child that could not start report `not-inspected`, `not-run` and null freshness/digest facts without opening artifact content.
+
+Artifact facts also accompany a failed archive command; freshness does not mean the command succeeded. These observations do not change the command's exit code or the existing containment refusals. No upload, publication or build-proof behavior changes.
+
+
 
 **Output and exit codes** — the report, as text or `--json`; `0`/`1`/`2`/`3`/`4`/`5` as the family's table above. `--json` is the family's [shared run report](#shu-run-report), with `contract: "nen.shu.archive/v0.1"`.
 ### `nen shu release`

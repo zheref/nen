@@ -196,7 +196,13 @@ verbs:
               fails, the checker's own code reported on the step line. A
               lane that declares none is exit 4, naming the missing
               nen/contract.json pointer project.verbs.<lane>.typecheck.
-  archive     Produce the lane's distributable artifact.
+  archive     Produce the lane's distributable artifact. Each declared path
+              gains archive facts: status, bytes, modifiedAt, runStartedAt,
+              runEndedAt, producedThisRun, freshness, sha256 digest and error.
+              Only regular readable files are hashed, through a bounded buffer.
+              Freshness compares mtime with the archive run's start/end; it
+              does not bind a package to a build proof. Dry/preflight reports
+              say not-inspected, not-run and make no freshness claim.
   release     Publish it, where the lane declares a publication step.
   dev         Start the lane's DEBUG build. Long-running: nen inherits this
               terminal and hands it to the child. With --target <name> it
