@@ -12,7 +12,7 @@ repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
 what each version changed: 50 command
-families, 183 verbs, every flag checked against that binary.
+families, 184 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -258,7 +258,7 @@ including every refusal reason. The raw NUL-delimited stream
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **114 shapes** and **118 ids** (`nen.runner.plan`
+binary carries**, writing or reading — **115 shapes** and **119 ids** (`nen.runner.plan`
 and `nen.wc.worktree.copies` each have two versions, `nen.stop.mark` three, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -311,7 +311,7 @@ file formats).
 - **`release`** — `nen.release.unit-check/v0.1`
 - **`repo`** — `nen.repo.classify/v0.1` · `nen.repo.family/v0.1`
 - **`refusal`** — `nen.refusal/v0.1`
-- **`report`** — `nen.report.data/v0.1` · `nen.report.graph/v0.1` · `nen.report.render/v0.1`
+- **`report`** — `nen.report.check/v0.1` · `nen.report.data/v0.1` · `nen.report.graph/v0.1` · `nen.report.render/v0.1`
 - **`review`** — `nen.review.scopes/v0.1`
 - **`run`** — `nen.run.record/v0.1` · `nen.run/v0.1`
 - **`runner`** — `nen.runner.plan/v0.1` · `nen.runner.plan/v0.2`
@@ -1076,7 +1076,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 183 verbs, grouped as the README groups them. **Reads** is what a
+All 184 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -1169,6 +1169,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`report`](#family-report) | [`nen report data`](#nen-report-data) | one document describing a branch against a base: commits, changed files (with a caller-supplied tier), the evidence seam, the lane's coverage report if it is on disk, the build proof, the last recorded stop, and -- only when one of the five register flags is given -- the issues and pull requests the effort is about; then where the effort is (worktree, stage, gate, turn, local clock), derived | git (rev-parse/symbolic-ref/remote get-url/log/diff), the zoneinfo file the zone names, nen/repos.json for the gate, nen/contract.json for the lane, .nen/proof/&lt;lane&gt;.json, .nen/last-stop.json, the declared coverage artifact, a caller-supplied --tiers file; under --target/--prs/--issues/--backlog also github (gh api, gh pr view) and nen's own in-process readiness gate; under --objects-from a caller-supplied file instead | yes |
 | [`report`](#family-report) | [`nen report render`](#nen-report-render) | fill a template with a data document and write the result: {{token}}, {{{token}}}, {{#each}}, {{#if}} and nothing else, refusing an unknown token by name; --variant injects a declared variant's section flags and --graph injects a validated architecture-delta graph | caller-named --template + --data (+ --graph) files, nen/workflow.json's reports.sections under --variant; writes --out, inside --repo, unless --dry-run | yes |
 | [`report`](#family-report) | [`nen report mermaid`](#nen-report-mermaid) | print the mermaid text for a graph document and nothing else | a caller-named --graph file; writes nothing; no git/gh | no |
+| [`report`](#family-report) | [`nen report check`](#nen-report-check) | render every declared variant in both formats from its example data and refuse a block-order, desk or escaping miss | nen/workflow.json's reports.sections, templates/&lt;slug&gt;.{md,html}, templates/report-examples/; writes nothing | no |
 | [`review`](#family-review) | [`nen review scopes`](#nen-review-scopes) | which review scopes a branch diff raises, off the repository's own review.scopes block, plus the changed paths no scope claims | nen/workflow.json's review block, git diff --name-only; writes nothing; no gh | yes |
 | [`audit`](#family-audit) | [`nen audit deps`](#nen-audit-deps) | a directory's dependency pins read from its lockfile or Package.resolved (never by running its package manager) and, with --query, asked about at the declaring contract's OSV querybatch endpoint; four exits: clean, findings, wiring, not scanned | the --contract row (an absolute JSON file), package.json and the lockfile directly under --repo (pnpm, yarn, npm) or Package.resolved (root, .xcodeproj, .xcworkspace), OSV over https (with --query); never git, gh or the package manager | yes |
 | [`surface`](#family-surface) | [`nen surface mirror generate`](#nen-surface-mirror-generate) | render every &lt;name&gt;/SKILL.md under a skills directory into another agent surface's own layout (codex, cursor, antigravity): the body verbatim but for its relative links, re-aimed for the depth each copy lands at, the frontmatter reduced to the keys that surface documents, invocation mentions respelled, personas written where the surface keeps them — plus, per flag, the surface's hook manifest (`--hooks`), rules file (`--rules`), permission pack (`--permissions`) and model aliases (`--models`), and a `--stamp` in the marker | caller-named --source + --agents directories and pack files; writes --out; no git/gh | yes |
@@ -18343,7 +18344,7 @@ no coverage bar is applied, no readiness is computed, nothing is published.
 
 **`nen report`**
 
-`data` gathers what is on a branch against a base — commits, changed files, the artifacts a run left under `.nen/`, the coverage report the lane's declaration names — into one document; `render` fills a template with that document and writes the result. They are two verbs and not one for the same reason [`board build`](#nen-board-build) and [`board render`](#nen-board-render) are: a verb that gathered AND filled would be a verb whose facts exist only inside the rendering that consumed them, so you could neither diff them, store them beside the report, nor re-render from them. `render` takes any JSON, so a caller who assembles their own facts is not locked out of the templating.
+`data` gathers what is on a branch against a base — commits, changed files, the artifacts a run left under `.nen/`, the coverage report the lane's declaration names — into one document; `render` fills a template with that document and writes the result. They are two verbs and not one for the same reason [`board build`](#nen-board-build) and [`board render`](#nen-board-render) are: a verb that gathered AND filled would be a verb whose facts exist only inside the rendering that consumed them, so you could neither diff them, store them beside the report, nor re-render from them. `render` takes any JSON, so a caller who assembles their own facts is not locked out of the templating. [`check`](#nen-report-check) renders every variant `reports.sections` declares, in Markdown and HTML, from the example data, and refuses when the two renders do not hold the declared blocks, the desk or the escaping.
 
 ### `nen report data`
 
@@ -18673,6 +18674,51 @@ flowchart LR
   classDef added stroke-width:2px
   classDef changed stroke-width:2px,stroke-dasharray:0
   classDef removed stroke-width:1px,stroke-dasharray:4 2
+```
+
+### `nen report check`
+
+Renders every variant declared under `reports.sections` in both formats from
+the example data document, and refuses when the two renders do not hold
+([#406](https://github.com/zheref/nen/issues/406)). For each variant — or the
+one `--variant` names — it fills `templates/<template>.md` and
+`templates/<template>.html` from
+`templates/report-examples/<variant>.data.json`. The fill is the same one
+[`report render`](#nen-report-render) uses: the variant's section flags, and,
+when `templates/report-examples/<variant>.graph.json` or
+`templates/graph.example.json` is present, the same graph keys `--graph`
+injects. **Nothing is written** into the repository.
+
+Block order is the `<!-- <slug>:block <name> -->` lines, in the order
+`reports.sections` declares them. The slug is the one the template already
+writes. An HTML render with none of those comments is read from the anchors the
+templates already render (a masthead header, a section id per block). An ask
+is `<!-- <slug>:ask -->`, and exactly one of its option
+lines (`- **A** · …`) carries a star. A value whose HTML escaping shows inside
+a Markdown code span, fence or indented code block is a refusal: a cell that
+shows `&amp;` literally is not the value that was filled.
+
+**Usage**
+
+```text
+nen report check --repo <path> [--variant <name>] [--self-test] [--json]
+```
+
+**Output and exit codes** — one line on stdout when every checked variant
+conforms. Exit 1 prints each miss on stderr, naming the variant, the template
+and the rule: a refused render, a surviving `{{`, a block sequence that is not
+the declared one in either format, the two formats disagreeing, an ask with
+zero or more than one starred option, or escaping that shows in a Markdown
+cell. Exit 2 is wiring: no `reports.sections`, a policy that will not parse, an
+unknown `--variant`, or a missing template or example. `--self-test` renders
+throwaway fixtures for each of those refusals and for the wiring exits, and
+reads no `--repo`. `--json` emits `nen.report.check/v0.1` with `variants`,
+`ok` and `findings`.
+
+**Example**
+
+```bash
+nen report check --repo . --variant turn
 ```
 
 ## Reviewers

@@ -126,17 +126,23 @@ export interface RenderResult {
   readonly lines: readonly string[];
 }
 
+/** The filled text, the tokens it named, and the injected root keys. */
+export interface RenderedFill {
+  readonly filled: string;
+  readonly tokens: readonly string[];
+  readonly injected: readonly string[];
+}
+
 /**
- * Fill one template, or refuse.
+ * Fill one template and return the text, without writing it.
  *
- * EVERY TemplateError BECOMES A VerbUsageError, so the whole language -- a tag
- * this template does not have, a block left open, a token the data has not got,
- * a value with no text form -- exits 2 and never 1. They are all the same class
- * of problem: the invocation was understood, the inputs disagree, and no retry
- * changes that.
+ * `report check` has to refuse for the same reasons `report render` does -- an
+ * unknown token, a data document that is not an object, a `variant` key that
+ * disagrees with the one being filled -- so both verbs call this rather than
+ * keeping a second copy of those refusals. The dry-run token list on a refusal
+ * stays here too, because it is part of the refusal text, not of the write.
  */
-export function renderReport(repoRoot: string, options: RenderOptions): RenderResult {
-  const absoluteOut = assertOutPath(repoRoot, options.out);
+export function renderFilled(repoRoot: string, options: Omit<RenderOptions, "out">): RenderedFill {
   const templateText = readTextFile(
     options.template,
     repoRoot,
@@ -212,19 +218,35 @@ export function renderReport(repoRoot: string, options: RenderOptions): RenderRe
     throw error;
   }
 
+  return { filled, tokens, injected };
+}
+
+/**
+ * Fill one template, or refuse.
+ *
+ * EVERY TemplateError BECOMES A VerbUsageError, so the whole language -- a tag
+ * this template does not have, a block left open, a token the data has not got,
+ * a value with no text form -- exits 2 and never 1. They are all the same class
+ * of problem: the invocation was understood, the inputs disagree, and no retry
+ * changes that. The write happens only after the fill, and only when this is
+ * not a dry run: `--out` was already checked, so a refusal never creates the file.
+ */
+export function renderReport(repoRoot: string, options: RenderOptions): RenderResult {
+  const absoluteOut = assertOutPath(repoRoot, options.out);
+  const rendered = renderFilled(repoRoot, options);
   if (!options.dryRun) {
     mkdirSync(dirname(absoluteOut), { recursive: true });
-    writeFileSync(absoluteOut, filled, "utf8");
+    writeFileSync(absoluteOut, rendered.filled, "utf8");
   }
 
   const report: RenderReport = {
     contract: RENDER_CONTRACT,
     template: options.template,
     out: options.out,
-    tokens,
+    tokens: rendered.tokens,
     written: !options.dryRun,
     variant: options.variant ?? null,
-    injected,
+    injected: rendered.injected,
   };
   return { report, lines: renderLines(report, options) };
 }

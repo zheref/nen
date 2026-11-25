@@ -482,7 +482,7 @@ it stays pending and holds every pull request's checks with it.
 `nen --help` lists every command family (50); each
 family's own `--help` (`nen pr --help`, `nen board --help`, ...) documents
 its verbs and flags in full. [`docs/USAGE.md`](docs/USAGE.md) documents all
-183 verbs outside the binary — each one's purpose, arguments, exit codes and
+184 verbs outside the binary — each one's purpose, arguments, exit codes and
 `--json` shape — plus the conventions they share and the developer workflows
 they compose into. The families group roughly as:
 
@@ -527,8 +527,9 @@ they compose into. The families group roughly as:
   read from its lockfile or `Package.resolved` (never by running its package
   manager) and queried at the OSV endpoint a caller's declaring contract
   names, on four exits: clean, findings, wiring, not scanned
-- **Reports** — `report` (`data`, `render`): the facts an effort's report is
-  made of, and the fill that turns them into one
+- **Reports** — `report` (`data`, `render`, `mermaid`, `check`): the facts an effort's report is
+  made of, the fill that turns them into one, the mermaid text of a graph, and
+  the check that both formats hold the declared blocks
 - **Surfaces** — `surface` (`mirror generate`, `mirror check`, `install`,
   `status`, `capabilities`): one skills directory rendered into another agent
   surface's own layout, the drift check that says whether the committed copy is
