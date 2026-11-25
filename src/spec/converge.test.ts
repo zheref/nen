@@ -71,6 +71,8 @@ describe("nen spec converge", () => {
       `- AC-002: Another member. ${cite.replace("FX:", "ZZ:")}`,
       "* **AC-003**: No citation. [UNVERIFIED]",
       "+ AC-004: Malformed citation. [src: FX:broken]",
+      `AC-007: Zero-based range. ${cite.replace(":10-12", ":0-1")}`,
+      `AC-008: Reversed range. ${cite.replace(":10-12", ":12-10")}`,
       "```source-data", `AC-005: Quoted data. ${cite}`, "```",
       `Mentions AC-006 in prose. ${cite}`,
       `- **FR-001**: Existing requirement. ${cite}`,
@@ -79,13 +81,50 @@ describe("nen spec converge", () => {
     writeFileSync(join(w.spec, w.folder, "spec.md"), text);
     const result = await run(w, inventoryAt(w.first));
     expect(result.code).toBe(0);
-    expect(result.json()["counts"]).toMatchObject({ scenariosRead: 4, scenariosCited: 1 });
+    expect(result.json()["counts"]).toMatchObject({ scenariosRead: 6, scenariosCited: 1 });
     expect((result.json()["citations"] as { id: string }[]).map((citation) => citation.id)).toEqual(["AC-001", "AC-001", "FR-001"]);
     const plain = await spec(["converge", "--folder", w.folder, "--inventory", inventoryAt(w.first), "--code", "FX", "--checkouts", w.checkouts], w.spec, defaultSeams());
-    expect(plain.out.join("\n")).toContain("4 scenario line(s) read · 1 citing FX");
+    expect(plain.out.join("\n")).toContain("6 scenario line(s) read · 1 citing FX");
     writeFileSync(join(w.spec, w.folder, "spec.md"), text.replaceAll("FX:", "ZZ:"));
     const uncited = (await run(w, inventoryAt(w.first))).json();
-    expect(uncited).toMatchObject({ citations: [], gaps: [], counts: { scenariosRead: 4, scenariosCited: 0 } });
+    expect(uncited).toMatchObject({ citations: [], gaps: [], counts: { scenariosRead: 6, scenariosCited: 0 } });
+  });
+
+  it("associates stale companions with each occurrence, not every range sharing its SHA", async () => {
+    const w = world();
+    const list = `[src: FX:app/List.kt:10-12 @ ${w.first} · observed]`;
+    const other = `[src: FX:app/Other.kt:1-2 @ ${w.first} · observed]`;
+    writeFileSync(join(w.spec, w.folder, "spec.md"), `AC-001: Two ranges, including a repeated citation. ${list} ${list} ${other}\n`);
+    const first = commit(w.member, { "app/List.kt": `new\n${numbered("list", 30)}` });
+    await run(w, inventoryAt(first), "--write");
+    const observed = (await run(w, inventoryAt(first))).json();
+    expect(observed["citations"]).toMatchObject([{ state: "moved", marked: true }, { state: "moved", marked: true }, { state: "current", marked: false }]);
+    expect(read(w, "spec.md").match(/\[STALE @ /g)).toHaveLength(2);
+    const second = commit(w.member, { "app/Other.kt": `new\n${numbered("other", 5)}` });
+    await run(w, inventoryAt(second), "--write");
+    const after = read(w, "spec.md");
+    expect(after.match(/\[STALE @ /g)).toHaveLength(3);
+    expect(after).toContain(`${other} [STALE @ ${w.first}]`);
+    expect((await run(w, inventoryAt(second), "--write")).json()).toMatchObject({ action: "none", writes: [] });
+    expect(read(w, "spec.md")).toBe(after);
+  });
+
+  it("appends newly visible scenario tasks after an older convergence phase for the same inventory", async () => {
+    const w = world();
+    const first = read(w, "spec.md");
+    writeFileSync(join(w.spec, w.folder, "spec.md"), `${first}AC-001: Scenario. [src: FX:app/List.kt:10-12 @ ${w.first} · observed]\n`);
+    const next = commit(w.member, { "app/List.kt": `new\n${numbered("list", 30)}` });
+    const inventory = inventoryAt(next);
+    const prior = `# Tasks\n\n## Phase 1: Convergence 2026-10-22\n\nInventory: FX @ ${next.slice(0, 12)}\n\n- [ ] T001 [platform:FX] [partial] FR-001 — 1 moved\n`;
+    writeFileSync(join(w.spec, w.folder, "tasks.md"), prior);
+    const result = await run(w, inventory, "--write");
+    expect(result.json()["writes"]).toContainEqual({ file: `${w.folder}/tasks.md`, kind: "phase", line: null, text: "## Phase 2: Convergence 2026-10-23" });
+    const after = read(w, "tasks.md");
+    expect(after.startsWith(prior)).toBe(true);
+    expect(after).toContain("T002 [platform:FX] [partial] AC-001");
+    expect(after.match(/\[partial\] FR-001/g)).toHaveLength(1);
+    expect((await run(w, inventory, "--write")).json()).toMatchObject({ action: "none", writes: [] });
+    expect(read(w, "tasks.md")).toBe(after);
   });
 
   it("keeps scenario gaps despite ticked claims, and appends stale markers and tasks idempotently", async () => {
