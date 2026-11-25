@@ -126,6 +126,7 @@ export interface RecordedRun {
    * here, because the argv then names no file.
    */
   readonly stdin?: string;
+  readonly timeoutMs?: number;
 }
 
 export class ScriptedSeams implements Seams {
@@ -221,6 +222,7 @@ export class ScriptedSeams implements Seams {
       cwd: options.cwd ?? null,
       env: options.env ?? null,
       ...(options.stdin === undefined ? {} : { stdin: options.stdin }),
+      ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
     });
     const found = this.find(command, args, "subprocess");
     return {

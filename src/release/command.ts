@@ -6,6 +6,7 @@
 // ../release/preflight.ts's pure table, which reports every one, never
 // stopping at the first failure.
 
+import { releaseState } from "./state.js";
 import { readdirSync } from "node:fs";
 import {
   emit,
@@ -151,10 +152,21 @@ function resolveHoldState(result: CommandResult, holdVar: string): HoldState {
   return { kind: "held", value, recognizedTruthy: HOLD_TRUTHY.has(lowered) };
 }
 
-const USAGE = `nen release preflight --repo-slug <owner/name> --tag <vX.Y.Z> --range <vPrev>..<cut-point> --changelog <path> --owner-repo <owner/name> [--hold-var <name>] [--critical-issues <n,n>] [--live-chores-from <path>] [--fragment-dir <dir>] [--repo <path>] [--json]
+const USAGE = `nen release state --kind github --repo-slug <owner/name> --tag <tag> [--json]
+nen release preflight --repo-slug <owner/name> --tag <vX.Y.Z> --range <vPrev>..<cut-point> --changelog <path> --owner-repo <owner/name> [--hold-var <name>] [--critical-issues <n,n>] [--live-chores-from <path>] [--fragment-dir <dir>] [--repo <path>] [--json]
 nen release resolve-target --repo <path> --token <main|last-commit|checkout|hash|branch> [--trunk main]
 nen release self-check --repo <path> --pr-merge-sha <sha> --previous-tag <ref> --cut-point <ref>
 nen release unit-check --pr <n|owner/name#n|CODE#n> --repo <path> [--json]
+
+state:
+  Read one GitHub Release by exact tag, including drafts and all asset pages.
+  Read-only authenticated GraphQL query; positive releases need read access.
+  Absence requires repository write access to prove draft visibility. Unknown
+  permission fails closed for absence. The whole read has a 30-second deadline.
+  Exit 0: absent, draft or published. Exit 1: could not look (state and assets
+  are null), including credential, transport, timeout or malformed evidence.
+  Exit 2: bad flags or unsupported destination kind, named before any read.
+  No release or tag is created, edited, retried, downloaded or published.
 
 preflight:
   Every precondition of the release preflight table, checked and reported
@@ -273,11 +285,12 @@ const DEFAULT_HOLD_VAR = "RELEASE_HOLD";
 
 export const releaseCommand: Command = {
   name: "release",
-  subcommands: ["preflight", "resolve-target", "self-check", "unit-check"],
+  subcommands: ["preflight", "resolve-target", "self-check", "unit-check", "state"],
   summary: "Preflight table, target resolution, a release PR's self-enumeration check, and release-unit membership.",
   usage: USAGE,
   flags: {
     values: [
+      "kind",
       "repo-slug",
       "tag",
       "range",
@@ -296,7 +309,9 @@ export const releaseCommand: Command = {
     ],
   },
   run(context: CommandContext): number {
-    const subcommand = requireSubcommand("release", context.args, ["preflight", "resolve-target", "self-check", "unit-check"]);
+    const subcommand = requireSubcommand("release", context.args, ["preflight", "resolve-target", "self-check", "unit-check", "state"]);
+    if (subcommand === "state") return releaseState(context);
+    if (context.args.values["kind"] !== undefined) throw new VerbUsageError("--kind is read only by release state");
     if (subcommand === "resolve-target") return resolveTarget(context);
     if (subcommand === "self-check") return selfCheck(context);
     if (subcommand === "unit-check") return unitCheck(context);

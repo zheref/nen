@@ -308,7 +308,7 @@ file formats).
 - **`pr`** — `nen.pr.converge/v0.1` · `nen.pr.edit-body/v0.1` · `nen.pr.edit-title/v0.1` · `nen.pr.ledger/v0.1` · `nen.pr.mark-ready/v0.1` · `nen.pr.merge-delivery/v0.1` · `nen.pr.merge-unit/v0.1` · `nen.pr.open/v0.1` · `nen.pr.sections/v0.1` · `nen.pr.ready.head-mismatch/v0.1` · `nen.pr.ready/v0.1` · `nen.pr.threads-settle/v0.1` · `nen.pr.threads/v0.1` · `nen.pr.version-collision/v0.1`
 - **`prose-lint`** — `nen.prose-lint/v0.1` (the `$schema` a [`canon lint`](#nen-canon-lint) rules contract may carry)
 - **`ref`** — `nen.ref.resolve/v0.1`
-- **`release`** — `nen.release.unit-check/v0.1`
+- **`release`** — `nen.release.state/v0.1` · `nen.release.unit-check/v0.1`
 - **`repo`** — `nen.repo.classify/v0.1` · `nen.repo.family/v0.1`
 - **`refusal`** — `nen.refusal/v0.1`
 - **`report`** — `nen.report.data/v0.1` · `nen.report.graph/v0.1` · `nen.report.render/v0.1`
@@ -1155,6 +1155,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`ref`](#family-ref) | [`nen ref format`](#nen-ref-format) | formats the &lt;CODE&gt;-&lt;IS\|PR&gt;-#&lt;N&gt; notation, checking the code against the registry first | nen/repos.json | yes |
 | [`ref`](#family-ref) | [`nen ref parse`](#nen-ref-parse) | parses a token in object notation | none | yes |
 | [`ref`](#family-ref) | [`nen ref resolve`](#nen-ref-resolve) | where one canon citation (`<path> § N`, `§ *Title*`, `#anchor`, `HR-n`, `CON-n`) lands, or `unresolved` with candidates; never re-aims one | the cited Markdown file under --root | yes |
+| [`release`](#family-release) | [`nen release state`](#nen-release-state) | one tag’s absent, draft or published GitHub Release state and complete asset list | github (authenticated read-only GraphQL query) | yes |
 | [`release`](#family-release) | [`nen release preflight`](#nen-release-preflight) | every getsuga §2 release-cut precondition, checked and reported whole | github (gh variable get, git ls-remote), CHANGELOG.md, changelog.d/, git log --merges, git ls-tree/cat-file (the CHANGELOG's history, for the release-PR allowance) | yes |
 | [`release`](#family-release) | [`nen release resolve-target`](#nen-release-resolve-target) | resolve a release token (main/last-commit/checkout/hash/branch) to a SHA and test trunk ancestry | git (fetch/rev-parse/merge-base, reaches origin) | yes |
 | [`release`](#family-release) | [`nen release self-check`](#nen-release-self-check) | whether a release PR should list itself in its own range | git (merge-base ancestry, local only) | yes |
@@ -9466,6 +9467,40 @@ one declaring none did not move it above. This is a test rather than a
 repo-agnostic and runs against any repository's cut point, while the floor is a
 literal compiled into *this* binary and can only be reconciled against *this*
 repository's changelog.
+
+### `nen release state`
+
+Reads one exact tag’s GitHub Release and all its asset pages. It is a separate,
+read-only act from `shu release`; it never creates, edits, publishes, retries or
+repairs a release, cuts a tag, or downloads an asset.
+
+```text
+nen release state --kind github --repo-slug <owner/name> --tag <tag> [--json]
+```
+
+A positively observed release can be read with read access. To prove absence,
+an authenticated GitHub user with repository write access must establish draft
+visibility. A read-only or GitHub App credential with an invisible release
+returns “could not look”. Repository redirects are disabled and the returned
+owner/name must match the requested destination. Authentication uses `gh`’s existing
+credential on github.com; no credential is printed or written.
+
+| Exit | Meaning |
+|---|---|
+| `0` | `absent`, `draft` or `published`, plus the complete assets array (id, name, size in bytes); empty for absent |
+| `1` | Could not look: credential/tool/network/timeout failure, query errors, malformed response, incomplete or changing asset evidence; `state` and `assets` are null |
+| `2` | Invalid flags or an unsupported destination kind, named before any query |
+
+`--json` emits top-level keys: contract `nen.release.state/v0.1`, kind, repo, tag, state and assets;
+unknown state also carries a reason. The named-tag GraphQL query sees draft
+releases, unlike REST’s published-only by-tag endpoint. Asset pagination rejects
+repeated cursors, duplicates, missing items or changing release identity/state,
+update timestamp or total count. Totals above GitHub’s 1,000-asset limit, pages above 100 items and
+contradictory continuation evidence fail as unknown. A 1,000-page ceiling
+also fails as unknown. This is
+an observed read, not an atomic snapshot: a concurrent change that leaves those
+fields unchanged cannot be detected. The whole read has a 30-second deadline shared across captured queries; the
+current query child is terminated on expiry and the result is unknown.
 
 ### `nen release preflight`
 
