@@ -13,11 +13,15 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
+    // Shared by focused selection, full coverage and CI. This bounds test
+    // workers only; subprocesses still belong to the admitted host workload.
+    // Effective limits and host-admission boundary: docs/test-workers.md.
+    maxWorkers: 2,
     include: ["src/**/*.test.ts"],
     exclude: ["node_modules/**", "dist/**"],
     // Every temp directory a test makes lives in one sandbox that is removed when
     // the run ends, pass or fail (zheref/nen#635): see src/testing/temp-sandbox.ts.
-    globalSetup: ["src/testing/global-setup.ts"],
+    globalSetup: ["src/testing/worker-budget.ts", "src/testing/global-setup.ts"],
     // Deterministic ordering, so a failure reported by CI is reproducible by
     // name locally. Sequence, not parallelism, is what these tests need: they
     // are pure functions and a fixture directory, not a server.
