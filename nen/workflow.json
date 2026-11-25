@@ -77,6 +77,48 @@
         ]
       },
       {
+        "path": "src/verbs/fixtures/non-opted-in-main/i-default-readable-no-block.explain.txt",
+        "lines": [
+          "^  decided by nen [0-9]+\\.[0-9]+\\.[0-9]+ \\(/opt/nen/nen-linux-x64\\) at 2025-01-01T00:00:00Z$"
+        ]
+      },
+      {
+        "path": "src/verbs/fixtures/non-opted-in-main/ii-default-unreadable-base-same.explain.txt",
+        "lines": [
+          "^  decided by nen [0-9]+\\.[0-9]+\\.[0-9]+ \\(/opt/nen/nen-linux-x64\\) at 2025-01-01T00:00:00Z$"
+        ]
+      },
+      {
+        "path": "src/verbs/fixtures/non-opted-in-main/iii-default-unreadable-base-readable.explain.txt",
+        "lines": [
+          "^  decided by nen [0-9]+\\.[0-9]+\\.[0-9]+ \\(/opt/nen/nen-linux-x64\\) at 2025-01-01T00:00:00Z$"
+        ]
+      },
+      {
+        "path": "src/verbs/fixtures/non-opted-in-main/iv-default-malformed.explain.txt",
+        "lines": [
+          "^  decided by nen [0-9]+\\.[0-9]+\\.[0-9]+ \\(/opt/nen/nen-linux-x64\\) at 2025-01-01T00:00:00Z$"
+        ]
+      },
+      {
+        "path": "src/verbs/fixtures/non-opted-in-main/v-default-unknown-key.explain.txt",
+        "lines": [
+          "^  decided by nen [0-9]+\\.[0-9]+\\.[0-9]+ \\(/opt/nen/nen-linux-x64\\) at 2025-01-01T00:00:00Z$"
+        ]
+      },
+      {
+        "path": "src/verbs/fixtures/non-opted-in-main/vi-no-gates-file.explain.txt",
+        "lines": [
+          "^  decided by nen [0-9]+\\.[0-9]+\\.[0-9]+ \\(/opt/nen/nen-linux-x64\\) at 2025-01-01T00:00:00Z$"
+        ]
+      },
+      {
+        "path": "src/verbs/fixtures/non-opted-in-main/vii-failing-check-default-unreadable.explain.txt",
+        "lines": [
+          "^  decided by nen [0-9]+\\.[0-9]+\\.[0-9]+ \\(/opt/nen/nen-linux-x64\\) at 2025-01-01T00:00:00Z$"
+        ]
+      },
+      {
         "path": "README.md",
         "lines": [
           "^curl -fsSL https://raw\\.githubusercontent\\.com/zheref/nen/v[0-9]+\\.[0-9]+\\.[0-9]+/bootstrap/nen\\.sh -o nen-bootstrap\\.sh$",
