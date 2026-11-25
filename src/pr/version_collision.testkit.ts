@@ -105,6 +105,7 @@ export function worldSource(world: CollisionWorld, subject: number, options: Rea
     const own = pr();
     return {
       pullRequest: {
+        state: "OPEN",
         number: subject,
         mergeable: "MERGEABLE",
         isDraft: false,
