@@ -151,6 +151,20 @@ describe("nen spec converge", () => {
     expect(read(w, "tasks.md")).toBe(tasksAfter);
   });
 
+  it("does not take story, supersedes or numbering metadata from fenced task examples", async () => {
+    const prior = "# Tasks\n\n```source-data\n## Phase 9: Quoted\n- [x] T123 [US9] [missing] AC-001 — quoted\n```\n\n- [ ] T001 Setup\n";
+    const w = world(prior);
+    writeFileSync(join(w.spec, w.folder, "spec.md"), `AC-001: Scenario. [src: FX:app/List.kt:10-12 @ ${w.first} · observed]\n`);
+    const next = commit(w.member, { "app/List.kt": `new\n${numbered("list", 30)}` });
+    const result = await run(w, inventoryAt(next), "--write");
+    expect(result.json()["claims"]).toEqual([]);
+    const appended = read(w, "tasks.md").slice(prior.length);
+    expect(appended).toContain("## Phase 1: Convergence 2026-10-23");
+    expect(appended).toContain("T002 [platform:FX] [partial] AC-001");
+    expect(appended).not.toContain("US9");
+    expect(appended).not.toContain("supersedes");
+  });
+
   it("is converged, exit 0, and writes nothing when every cited range reads the same", async () => {
     const w = world();
     const next = commit(w.member, { "app/Unrelated.kt": "x\n" });

@@ -314,6 +314,7 @@ export function converge(seams: Seams, input: ConvergeInput): ConvergeReport {
   const phaseKey = `Inventory: ${input.code} @ ${sha12}`;
   const tasks = tasksText ?? "";
   const taskLines = proseLines(tasks);
+  const taskProse = taskLines.map((line): string => line.text).join("\n");
   const phaseWritten = taskLines.some((line): boolean => line.text.trim() === phaseKey);
   // Older Nen versions may already have recorded this inventory, before AC gaps were visible.
   const recordedScenarios = new Set<string>();
@@ -331,7 +332,7 @@ export function converge(seams: Seams, input: ConvergeInput): ConvergeReport {
   // for the same id supersedes that row (SP-10: a reversal is a supersedes line, never an edit).
   const platform = (registry?.families ?? []).flatMap((family) => family.members).find((member): boolean => member.code === input.code)?.platform ?? input.code;
   const storyOf = (id: string): string | null => {
-    for (const line of tasks.split("\n")) {
+    for (const line of taskProse.split("\n")) {
       if (!new RegExp(`\\b${id}\\b`).test(line)) continue;
       const story = /\[US-?(\d+)\]/.exec(line);
       if (story !== null) return `US${story[1] as string}`;
@@ -340,14 +341,14 @@ export function converge(seams: Seams, input: ConvergeInput): ConvergeReport {
   };
   const lastFinding = (id: string): { task: string; class: string } | null => {
     let found: { task: string; class: string } | null = null;
-    for (const match of tasks.matchAll(new RegExp(`^\\s*-\\s+\\[[ xX]\\]\\s+(T\\d{3,})\\b[^\\n]*?\\[(missing|partial|contradicts|unrequested)\\] ${id.replace(/[.*+?^\${}()|[\]\\]/g, "\\$&")} —`, "gm"))) found = { task: match[1] as string, class: match[2] as string };
+    for (const match of taskProse.matchAll(new RegExp(`^\\s*-\\s+\\[[ xX]\\]\\s+(T\\d{3,})\\b[^\\n]*?\\[(missing|partial|contradicts|unrequested)\\] ${id.replace(/[.*+?^\${}()|[\]\\]/g, "\\$&")} —`, "gm"))) found = { task: match[1] as string, class: match[2] as string };
     return found;
   };
   let phaseText: string | null = null;
   if (unwrittenGaps.length > 0) {
-    const phases = [...tasks.matchAll(/^##\s+Phase\s+(\d+)\b/gm)].map((match): number => Number(match[1]));
+    const phases = [...taskProse.matchAll(/^##\s+Phase\s+(\d+)\b/gm)].map((match): number => Number(match[1]));
     const next = (phases.length === 0 ? 0 : Math.max(...phases)) + 1;
-    let task = Math.max(0, ...[...tasks.matchAll(/\bT(\d{3,})\b/g)].map((match): number => Number(match[1])));
+    let task = Math.max(0, ...[...taskProse.matchAll(/\bT(\d{3,})\b/g)].map((match): number => Number(match[1])));
     const rows = unwrittenGaps.map((gap): string => {
       task += 1;
       const story = gap.class === "unrequested" ? null : storyOf(gap.id);
