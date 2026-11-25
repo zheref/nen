@@ -11,7 +11,7 @@ binary](#getting-the-binary)), or as `bun src/index.ts` from a checkout of this
 repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
-what each version changed: 50 command
+what each version changed: 51 command
 families, 185 verbs, every flag checked against that binary.
 
 ## Conventions
