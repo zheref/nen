@@ -10498,8 +10498,8 @@ appended: #478 NN#453 [delivery] opus/kurapika/sdd-n8-schema-keys -> integration
 ### `nen run claim`
 
 Records one claimed effort in a started run: `claims[] { issue, branch, at }`, in that key order.
-Uses the same lock and atomic write as `run append` and `run park`. The latest claim for the
-same issue and branch is `unchanged` if no park occurred at or after it. A later claim after a
+Uses the same lock and atomic write as `run append` and `run park`. The latest claim matching the
+same issue and branch is `unchanged` if no park occurred at or after it, even if another branch was claimed in between. A later claim after a
 park resumes the effort under the existing `loop slots --from-run` rules. A new claim must be
 strictly later than that issue's latest claim and park; a tied or backwards clock refuses, so
 callers retry after the clock advances. Unreadable stored claims are refused without repair.

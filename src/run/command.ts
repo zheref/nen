@@ -19,6 +19,7 @@ import {
   type Command,
   type CommandContext,
 } from "../cli/command.js";
+import { plainLine } from "../cli/plain.js";
 import { splitList } from "../cli/inputs.js";
 import { resolveRepoRoot } from "../repo/root.js";
 import { loadWorkflow } from "../schema/workflow.js";
@@ -490,7 +491,7 @@ function doClaim(context: CommandContext): number {
     ]);
     return 0;
   } catch (error) {
-    context.io.err(`nen: ${error instanceof Error ? error.message : String(error)}`);
+    context.io.err(plainLine(`nen: ${error instanceof Error ? error.message : String(error)}`));
     return 1;
   }
 }

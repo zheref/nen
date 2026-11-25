@@ -717,12 +717,14 @@ export function planClaim(
   normalise: (issue: string) => string = (value): string => value,
 ): { readonly outcome: "claimed" | "unchanged"; readonly manifest: RunManifest; readonly entry: RunClaim } {
   const read = readClaims(manifest);
-  if (!read.ok) throw new RunManifestError(`cannot record claim: ${read.reason}; stored claims left untouched.`);
-  const previous = read.claims.filter((entry): boolean => normalise(entry.issue) === issue)
+  if (!read.ok) throw new RunManifestError("cannot record claim: stored claims are unreadable; expected issue, branch and timestamp fields; values left untouched.");
+  const previous = read.claims.filter((entry): boolean => normalise(entry.issue).toLowerCase() === issue.toLowerCase())
     .reduce<RunClaim | undefined>((latest, entry) => latest === undefined || Date.parse(entry.at) >= Date.parse(latest.at) ? entry : latest, undefined);
-  const parks = manifest.parked.filter((entry): boolean => normalise(entry.issue) === issue);
-  const parked = previous !== undefined && parks.some((entry): boolean => Date.parse(entry.at) >= Date.parse(previous.at));
-  if (previous !== undefined && previous.branch === branch && !parked) return { outcome: "unchanged", manifest, entry: previous };
+  const pair = read.claims.filter((entry): boolean => normalise(entry.issue).toLowerCase() === issue.toLowerCase() && entry.branch === branch)
+    .reduce<RunClaim | undefined>((latest, entry) => latest === undefined || Date.parse(entry.at) >= Date.parse(latest.at) ? entry : latest, undefined);
+  const parks = manifest.parked.filter((entry): boolean => normalise(entry.issue).toLowerCase() === issue.toLowerCase());
+  const parked = pair !== undefined && parks.some((entry): boolean => Date.parse(entry.at) >= Date.parse(pair.at));
+  if (pair !== undefined && !parked) return { outcome: "unchanged", manifest, entry: pair };
   // The slot reader gives parks precedence on equal timestamps. Never invent
   // a future instant or claim success while that reader would still see a park.
   if ((previous !== undefined && Date.parse(now) <= Date.parse(previous.at)) || parks.some((entry): boolean => Date.parse(now) <= Date.parse(entry.at))) {

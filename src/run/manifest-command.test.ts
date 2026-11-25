@@ -143,6 +143,46 @@ describe("nen run claim (NN#564)", () => {
     expect((await capture([...CLAIM, "--row", "hold"], options)).code).toBe(2);
     expect((await capture([...START, "--branch", "effort/564"], options)).code).toBe(2);
   });
+
+  it("uses case-insensitive identity for retries and parks, as the slot reader does", async () => {
+    const { root, common } = repo();
+    const options = { common, repoFlag: root, json: true };
+    await capture(START, options);
+    await capture(["run", "claim", "--id", "r1", "--issue", "Zheref/NEN#564"], options);
+    const retry = await capture(CLAIM, options);
+    expect(JSON.parse(retry.out.join("\n")).outcome).toBe("unchanged");
+    await capture(["run", "park", "--id", "r1", "--issue", "ZHEREF/nen#564", "--row", "hold"], { ...options, now: "2026-10-22T00:00:01Z" });
+    expect((await capture(CLAIM, { ...options, now: "2026-10-22T00:00:01Z" })).code).toBe(1);
+    const resumed = await capture(CLAIM, { ...options, now: "2026-10-22T00:00:02Z" });
+    expect(JSON.parse(resumed.out.join("\n")).outcome).toBe("claimed");
+    expect(JSON.parse(readFileSync(join(common, ".nen", "runs", "r1.json"), "utf8")).claims).toHaveLength(2);
+  });
+
+  it("AC-2: retries an earlier issue/branch pair unchanged after another branch claim", async () => {
+    const { root, common } = repo();
+    const options = { common, repoFlag: root, json: true };
+    await capture(START, options);
+    await capture([...CLAIM, "--branch", "A"], options);
+    await capture([...CLAIM, "--branch", "B"], { ...options, now: "2026-10-22T00:00:01Z" });
+    const retry = await capture([...CLAIM, "--branch", "A"], { ...options, now: "2026-10-22T00:00:02Z" });
+    expect(JSON.parse(retry.out.join("\n")).outcome).toBe("unchanged");
+    const claims = JSON.parse(readFileSync(join(common, ".nen", "runs", "r1.json"), "utf8")).claims;
+    expect(claims.map((entry: { branch: string }) => entry.branch)).toEqual(["A", "B"]);
+  });
+
+  it("refuses corrupt stored fields without echoing their contents", async () => {
+    const { root, common } = repo();
+    const options = { common, repoFlag: root };
+    await capture(START, options);
+    const path = join(common, ".nen", "runs", "r1.json");
+    const bad = [{ issue: { unrelated: "private\u001b[31mvalue" }, branch: null, at: "2026-10-22T00:00:00Z" }];
+    writeFileSync(path, JSON.stringify({ ...JSON.parse(readFileSync(path, "utf8")), claims: bad }));
+    const result = await capture(CLAIM, options);
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toContain("stored claims are unreadable");
+    expect(result.err.join("\n")).not.toMatch(/private|unrelated|\u001b/);
+    expect(JSON.parse(readFileSync(path, "utf8")).claims).toEqual(bad);
+  });
 });
 
 describe("nen run start", () => {
