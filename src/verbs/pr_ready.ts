@@ -497,7 +497,7 @@ export interface ReadyMeta {
   readonly headSha: string | null;
   readonly reviewers: readonly string[];
   readonly approvers: readonly string[];
-  readonly approvalPolicy: "required" | "review-round-only";
+  readonly approvalPolicy: "required" | "review-round-only" | "merge-is-approval";
   readonly roundPolicy: RoundPolicy;
   readonly excludeRun: string | null;
   /**
@@ -1957,7 +1957,16 @@ export async function readReady(
     const state = observedState === "MERGED" ? "merged" : "closed";
     const mergeCommit = typeof fetched.state["merge_commit"] === "string" ? fetched.state["merge_commit"] : null;
     const report = unevaluatedReport(ref, deps.now(), deps.executable(), applied, policy, stallMinutes, excludeRun, excludeCheckNames, [...flagWarnings(applied), ...applied.warnings], `PR is ${state}`, "No readiness decision is needed for a terminal pull request.");
-    return verdictOf({ ...report, judgedHead: githubHead === "" ? null : githubHead, meta: { ...report.meta, requiredHead: requiredHead ?? null }, conjuncts: [], verdict: state, gateLine: `${state}: merge commit ${mergeCommit ?? "(none recorded)"}`, terminal: { state, mergeCommit } });
+    const human = applied.identities.approvalPolicy === "merge-is-approval"
+      ? applied.identities.reviewer(applied.identities.defaultApprovers[0] ?? "") : undefined;
+    const merger = fetched.state["merged_by"];
+    const humanApproved = state === "merged" && fetched.state["approval_policy_read"] === true &&
+      (!readsBase || applied.read === "base") && human?.kind === "human" &&
+      fetched.state["merged_by_type"] === "User" && typeof merger === "string" && human.loginPattern.test(merger);
+    const approval = human === undefined ? "" : humanApproved
+      ? `; human approval decision: ${human.name} (${merger}) performed the merge; no review was created`
+      : "; human approval decision not confirmed: no merge by the declared human was verified";
+    return verdictOf({ ...report, judgedHead: githubHead === "" ? null : githubHead, meta: { ...report.meta, requiredHead: requiredHead ?? null, warnings: [...report.meta.warnings, ...fetched.warnings] }, conjuncts: [], verdict: state, gateLine: `${state}: merge commit ${mergeCommit ?? "(none recorded)"}${approval}`, terminal: { state, mergeCommit } });
   }
 
   // ── the local tip, for the warning only ──────────────────────────────────

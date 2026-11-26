@@ -196,6 +196,7 @@ export async function runReadyGate(options: RunReadyGate): Promise<ReadyGateOutc
     readonly judgedHead?: string | null;
     readonly conjuncts?: readonly Conjunct[];
     readonly meta?: {
+      readonly approvalPolicy?: string;
       readonly aiReviewers?: AiReviewersReading;
       readonly declaredExclusions?: readonly DeclaredExclusionReport[];
       readonly warnings?: readonly string[];
@@ -221,6 +222,7 @@ export async function runReadyGate(options: RunReadyGate): Promise<ReadyGateOutc
   // --reviewers, so the base's file is the one route a merge may rest on; an
   // absent `meta.identities`, or a route a later build adds, is refused.
   const read = parsed.meta?.identities?.read;
+  const humanOnly = parsed.meta?.approvalPolicy === "merge-is-approval";
   const untrusted = read !== "base";
   const refusal =
     untrusted && parsed.verdict === "ready"
@@ -230,7 +232,7 @@ export async function runReadyGate(options: RunReadyGate): Promise<ReadyGateOutc
       : [];
   return {
     name: "pr ready",
-    ok: parsed.verdict === "ready" && !untrusted,
+    ok: parsed.verdict === "ready" && !untrusted && !humanOnly,
     judgedHead: parsed.judgedHead ?? null,
     // What a declared `checks.excluded` entry removed from CON-32(a)
     // (zheref/nen#249, Feitan F2): a merge transcript never records a widened
@@ -248,6 +250,7 @@ export async function runReadyGate(options: RunReadyGate): Promise<ReadyGateOutc
         .filter((warning): boolean => typeof warning === "string" && !warning.startsWith("excluded by declaration: "))
         .map((warning): string => plainLine(`pr ready: warning: ${redact(warning)}`)),
       ...refusal,
+      ...(humanOnly ? ["pr ready: refused for an agent merge: merge-is-approval reserves the merge decision for the named human."] : []),
       ...captured.errLines.map(redact),
     ],
   };

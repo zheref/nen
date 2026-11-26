@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import { ALT_REPO, BANKAI_REPO, EVENT_REPO } from "./fixtures/paths.js";
 import { fileURLToPath } from "node:url";
 import {
@@ -1292,5 +1293,24 @@ describe("round_check_producer (zheref/nen#546) -- optional, refused by pointer 
     expect(() => parseGateIdentities(at, file({ app: { slug: "cursor", id: 1 } }, { wake: "event" }))).toThrow(
       /reviewers\[1\]\.round_check_producer, is declared on a wake: 'event' reviewer/,
     );
+  });
+});
+
+
+describe("merge-is-approval declaration (NEN-661/AC-1)", () => {
+  const config = JSON.parse(readFileSync(new URL("./fixtures/human-merge/nen/gates.json", import.meta.url), "utf8"));
+  it("retains the single declared human", () => {
+    const ids = parseGateIdentities("gates.json", config);
+    expect(ids.defaultApprovers).toEqual(["maintainer"]);
+    expect(ids.reviewer("maintainer")?.kind).toBe("human");
+  });
+  it.each([undefined, null, [], ["unknown"], ["maintainer", "review-bot"], ["review-bot"]])("refuses missing, empty, undeclared or nonsolo identities: %j", (names) => {
+    expect(() => parseGateIdentities("gates.json", { ...config, default_approvers: names })).toThrow(/default_approvers/);
+  });
+  it.each([undefined, "bot"])("requires explicitly human kind: %j", (kind) => {
+    expect(() => parseGateIdentities("gates.json", { ...config, reviewers: [{ ...config.reviewers[0], kind }, config.reviewers[1]] })).toThrow(/kind 'human'/);
+  });
+  it.each([".*", "^.+$", "solo-maintainer", "^(alice|bob)$", "^app\\[bot\\]$"])("refuses ambiguous or bot login %s", (pattern) => {
+    expect(() => parseGateIdentities("gates.json", { ...config, reviewers: [{ ...config.reviewers[0], login_pattern: { pattern, ignoreCase: true } }, config.reviewers[1]] })).toThrow();
   });
 });

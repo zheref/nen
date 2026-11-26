@@ -2414,3 +2414,44 @@ it("reports the older evaluated attempt beside an excluded newer run (#531)", ()
     { name: "build", conclusion: "SUCCESS", excluded: true },
   ]);
 });
+
+
+describe("named human merge decision (NEN-661/AC-2, AC-3, AC-5)", () => {
+  const config = JSON.parse(readFileSync(new URL("../schema/fixtures/human-merge/nen/gates.json", import.meta.url), "utf8"));
+  const ids = parseGateIdentities("gates.json", config);
+  const own = readyState({ author: "solo-maintainer", author_type: "User", reviews: [{ author: "review-bot", state: "COMMENTED", commit_id: HEAD, submitted_at: NOW }] });
+  it("retains the named approver outside base_reviewers and only promises readiness for their decision", () => {
+    const result = evaluateReady(ids, own, OPTIONS);
+    expect(result.ready).toBe(true);
+    expect(result.context.approvers).toEqual(["maintainer"]);
+    expect(result.line).toContain("human merge decision by maintainer (solo-maintainer)");
+    expect(result.line).toContain("no review approval or merge has occurred");
+    expect(result.line).toContain("does not authorize an agent merge");
+    expect(own.reviews).toHaveLength(1);
+  });
+  it.each([
+    [{ checks: [{ ...greenCheck(), conclusion: "FAILURE" }] }, "checks-green"],
+    [{ reviews: [] }, "rounds-owed"],
+    [{ unresolved_threads: 1 }, "unresolved-threads"],
+    [{ author: "someone-else" }, "approvals-at-head"],
+    [{ author: undefined }, "approvals-at-head"],
+    [{ author_type: "Bot" }, "approvals-at-head"],
+    [{ author_type: undefined }, "approvals-at-head"],
+  ])("retains other conditions and refuses an unverified author: %j", (change, failure) => {
+    const result = evaluateReady(ids, { ...own, ...(change as object) }, OPTIONS);
+    expect(result.ready).toBe(false);
+    expect(result.failing).toContain(failure);
+  });
+  it("does not waive a human's separately configured review round", () => {
+    const withRound = parseGateIdentities("gates.json", { ...config, base_reviewers: ["review-bot", "maintainer"] });
+    expect(evaluateReady(withRound, own, OPTIONS).ready).toBe(false);
+  });
+  it("keeps required-policy behavior unchanged", () => {
+    const required = parseGateIdentities("gates.json", { ...config, approval_policy: "required", base_reviewers: ["review-bot", "maintainer"] });
+    expect(evaluateReady(required, own, OPTIONS).ready).toBe(false);
+  });
+  it("keeps conditional approvers binding", () => {
+    const conditional = parseGateIdentities("gates.json", { ...config, reviewers: [config.reviewers[0], { ...config.reviewers[1], approves_when_posted_at_head: true }] });
+    expect(evaluateReady(conditional, own, OPTIONS).firstFailing).toBe("approvals-at-head");
+  });
+});

@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "reviewers": [
+    {
+      "name": "maintainer",
+      "kind": "human",
+      "login_pattern": {
+        "pattern": "^solo-maintainer$",
+        "ignoreCase": true
+      }
+    },
+    {
+      "name": "review-bot",
+      "kind": "bot",
+      "login_pattern": {
+        "pattern": "^review-bot$",
+        "ignoreCase": true
+      }
+    }
+  ],
+  "approval_policy": "merge-is-approval",
+  "default_approvers": [
+    "maintainer"
+  ],
+  "base_reviewers": [
+    "review-bot"
+  ],
+  "delivery": {
+    "author_pattern": {
+      "pattern": "^solo-maintainer$",
+      "ignoreCase": true
+    },
+    "head_ref_prefixes": [
+      "codex/"
+    ]
+  }
+}

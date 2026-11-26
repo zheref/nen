@@ -142,13 +142,14 @@ export const PULL_REQUEST_QUERY = `
         number
         state
         mergeCommit { oid }
+        mergedBy { login __typename }
         mergeable
         isDraft
         headRefOid
         headRefName
         baseRefName
         baseRefOid
-        author { login }
+        author { login __typename }
         labels(first:100) { nodes { name } }
         reviewRequests(first:100) {
           nodes { requestedReviewer { ... on User { login } ... on Bot { login } ... on Team { name } } }
@@ -346,6 +347,7 @@ export interface GhPullRequestNode {
   readonly state?: unknown;
   /** `mergeCommit.oid`, unwrapped; `null`/absent while unmerged. */
   readonly mergeCommitOid?: unknown;
+  readonly mergedBy?: unknown;
   readonly author: unknown;
   // Unwrapped from `labels(first:100) { nodes { name } }`.
   readonly labels: unknown;
@@ -512,6 +514,7 @@ function toGhPullRequestNode(raw: unknown): GhPullRequestNode | undefined {
     baseRefOid: raw["baseRefOid"],
     state: raw["state"],
     mergeCommitOid: digPath(raw, "mergeCommit", "oid"),
+    mergedBy: raw["mergedBy"],
     // `author { login }` is ALREADY the shape parsePullRequest() reads
     // (`{login}` object or bare string), so it is carried across untouched.
     author: raw["author"],
