@@ -11,8 +11,8 @@ binary](#getting-the-binary)), or as `bun src/index.ts` from a checkout of this
 repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
-what each version changed: 50 command
-families, 185 verbs, every flag checked against that binary.
+what each version changed: 51 command
+families, 188 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -258,7 +258,7 @@ including every refusal reason. The raw NUL-delimited stream
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **116 shapes** and **120 ids** (`nen.runner.plan`
+binary carries**, writing or reading — **118 shapes** and **122 ids** (`nen.runner.plan`
 and `nen.wc.worktree.copies` each have two versions, `nen.stop.mark` three, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -317,6 +317,7 @@ file formats).
 - **`runner`** — `nen.runner.plan/v0.1` · `nen.runner.plan/v0.2`, `nen.runner.summary/v0.1`
 - **`scaffold`** — `nen.scaffold.init/v0.1` · `nen.scaffold.migrate/v0.1` · `nen.scaffold.new/v0.1` · `nen.scaffold.template/v0.1`
 - **`schema`** — `nen.schema.set/v0.1`
+- **`scorecard`** — `nen.scorecard.snapshot/v0.1` · `nen.scorecard.trend/v0.1`
 - **`session`** — `nen.session.ledger/v0.1`
 - **`shu`** — `nen.shu.<verb>/v0.1` · `nen.shu.coverage-capture/v0.1` · `nen.shu.coverage/v0.1` · `nen.shu.detect/v0.1` · `nen.shu.evidence/v0.1` · `nen.shu.proof/v0.1` · `nen.shu.test-report/v0.1` · `nen.shu.tools/v0.1` · `nen.shu.warmup/v0.1`
 - **`spec`** — `nen.spec.check/v0.1` · `nen.spec.cite-check/v0.1` · `nen.spec.converge/v0.1` · `nen.spec.coverage/v0.1` · `nen.spec.diff/v0.1` · `nen.spec.due/v0.1` · `nen.spec.index/v0.1` · `nen.spec.inventory/v0.1` · `nen.spec.number/v0.1` · `nen.spec.parity/v0.1` · `nen.spec.tasks/v0.1` · `nen.spec.trace/v0.1`
@@ -1077,7 +1078,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 185 verbs, grouped as the README groups them. **Reads** is what a
+All 188 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -1171,6 +1172,8 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`report`](#family-report) | [`nen report render`](#nen-report-render) | fill a template with a data document and write the result: {{token}}, {{{token}}}, {{#each}}, {{#if}} and nothing else, refusing an unknown token by name; --variant injects a declared variant's section flags and --graph injects a validated architecture-delta graph | caller-named --template + --data (+ --graph) files, nen/workflow.json's reports.sections under --variant; writes --out, inside --repo, unless --dry-run | yes |
 | [`report`](#family-report) | [`nen report mermaid`](#nen-report-mermaid) | print the mermaid text for a graph document and nothing else | a caller-named --graph file; writes nothing; no git/gh | no |
 | [`report`](#family-report) | [`nen report check`](#nen-report-check) | render every declared variant in both formats from its example data and refuse a block-order, desk or escaping miss | nen/workflow.json's reports.sections, templates/&lt;slug&gt;.{md,html}, templates/report-examples/; writes nothing | no |
+| [`scorecard`](#family-scorecard) | [`nen scorecard trend`](#nen-scorecard-trend) | each repository's merged pull requests scored per ISO week on the aspects a caller's section catalogue declares, every aspect in catalogue order, net = improves − regresses; plain or `--markdown` review page | caller-named --catalogue JSON, github (gh pr list --state merged, read only); writes nothing | yes |
+| [`scorecard`](#family-scorecard) | [`nen scorecard snapshot`](#nen-scorecard-snapshot) | one repository's completed-week score snapshot, written as &lt;out&gt;/&lt;YYYY-Www&gt;.json with no generation time, so a rerun over unchanged pull requests and catalogue writes the same bytes | caller-named --catalogue JSON, github (gh pr list --state merged, read only); writes --out inside --repo | yes |
 | [`review`](#family-review) | [`nen review scopes`](#nen-review-scopes) | which review scopes a branch diff raises, off the repository's own review.scopes block, plus the changed paths no scope claims | nen/workflow.json's review block, git diff --name-only; writes nothing; no gh | yes |
 | [`audit`](#family-audit) | [`nen audit deps`](#nen-audit-deps) | a directory's dependency pins read from its lockfile or Package.resolved (never by running its package manager) and, with --query, asked about at the declaring contract's OSV querybatch endpoint; four exits: clean, findings, wiring, not scanned | the --contract row (an absolute JSON file), package.json and the lockfile directly under --repo (pnpm, yarn, npm) or Package.resolved (root, .xcodeproj, .xcworkspace), OSV over https (with --query); never git, gh or the package manager | yes |
 | [`surface`](#family-surface) | [`nen surface mirror generate`](#nen-surface-mirror-generate) | render every &lt;name&gt;/SKILL.md under a skills directory into another agent surface's own layout (codex, cursor, antigravity): the body verbatim but for its relative links, re-aimed for the depth each copy lands at, the frontmatter reduced to the keys that surface documents, invocation mentions respelled, personas written where the surface keeps them — plus, per flag, the surface's hook manifest (`--hooks`), rules file (`--rules`), permission pack (`--permissions`) and model aliases (`--models`), and a `--stamp` in the marker | caller-named --source + --agents directories and pack files; writes --out; no git/gh | yes |
@@ -18779,6 +18782,117 @@ reads no `--repo`. `--json` emits `nen.report.check/v0.1` with `variants`,
 
 ```bash
 nen report check --repo . --variant turn
+```
+
+<a id="family-scorecard"></a>
+
+**`nen scorecard`**
+
+Merged pull requests, scored on improvement aspects, per repository per ISO
+week (Monday 00:00 UTC to the next Monday). `trend` charts a run of weeks
+across one or more repositories for a review; `snapshot` records one completed
+week for one repository, as the file a scheduled workflow commits. Both are
+**read-only on GitHub**: the only call is `gh pr list --state merged`, and no
+pull request is commented on, labelled or edited.
+
+**The aspects are the caller's.** `--catalogue` names a section catalogue read
+**at run time**; its top-level `aspects` array is the list and the order (a
+non-empty array of unique strings, compared case-insensitively, none holding
+`|`, `*`, `_` or `` ` ``, which a table cell's emphasis loses). No aspect is compiled into nen, so a consumer adding a fourteenth aspect
+changes data, never a nen release, and nen takes no build-time dependency on
+the catalogue's owner. A relative path resolves against `--repo`.
+
+**The row grammar is nen's.** A pull request scores an aspect through the
+**first** markdown table row whose first cell is that aspect and whose second
+cell is a delta: `⬆` (or `improves`) +1, `➖` (or `unchanged`) 0, `⬇` (or
+`regresses`) −1; variation selectors and emphasis are ignored. Rows inside
+fenced code and HTML comments are not rows, nor is a row indented four or more
+spaces or by a tab (indented code), and a later row naming the same
+aspect, such as a quoted older table, never overwrites the first. A named row
+with no delta reads `unreadable`; an aspect with no row reads `absent`; both
+count as `unrecorded`.
+
+Each cell carries `improves`, `unchanged`, `regresses`, `unrecorded` and `net`
+(`improves − regresses`). `net` is `null` (rendered `·`) when no merged pull
+request of the week recorded the aspect, which is never the same as `0`.
+**Every catalogue aspect appears for every repository**, recorded or not.
+
+The search is widened a day either side of the window and each pull request
+is bucketed by its exact `mergedAt`. A repository whose read fails, answers
+something other than merged rows, or fills `gh pr list`'s 1000-row ceiling is
+`could-not-read` with the reason, **never an empty row**.
+
+### `nen scorecard trend`
+
+`--weeks` weeks (default 4, at most 52) ending with `--through`: by default
+the last completed week; `current` takes the running one, marked `partial`
+(`*` in plain text, `(running)` in markdown), because its numbers can still
+move; a `--through` week that has not started is refused. One `gh pr list` per `--target`. `--markdown` prints a review page
+instead of the plain rendering: one table per repository, aspects down in
+catalogue order, weeks across, each cell `**net** (⬆/➖/⬇)`, under a
+`merged / scored` row.
+
+**Usage**
+
+```text
+nen scorecard trend --catalogue <pr-sections.json> --target <owner/name>[,<owner/name>...]
+                    [--weeks <n>] [--through <YYYY-Www> | --through current]
+                    [--markdown] [--repo <path>] [--json]
+```
+
+**Exit codes**: `0` every repository read · `1` a repository could not be
+read; the others are still reported · `2` usage (a missing flag, a malformed
+week, target or catalogue, a repository named twice, a `--through` week not
+started yet).
+
+**`--json`** top-level keys, in this order:
+
+```text
+{ contract: "nen.scorecard.trend/v0.1", catalogue: { path, contract, sha256, aspects },
+  weeks, repositories: [{ repository, unreadable,
+    weeks: [{ week, start, end, partial, merged, scored, pulls }],
+    aspects: [{ aspect, tallies: [{ improves, unchanged, regresses, unrecorded, net }] }] }] }
+```
+
+`catalogue.sha256` hashes the catalogue file's bytes with CRLF read as LF, so
+for a CRLF file it differs from `sha256sum` of the file and agrees across hosts.
+
+### `nen scorecard snapshot`
+
+One **completed** week (`--through`, default the last completed one; a
+running week is refused) for **one** `--target`, written to
+`<out>/<YYYY-Www>.json`, `--out` resolving against `--repo` and refused
+(exit 2, before GitHub is read) unless the path the kernel would write stays
+inside it, symbolic links resolved; a snapshot file that is itself a symbolic
+link is refused too. The file is replaced by temp file and rename, so a killed
+run never leaves half a snapshot. The file carries
+the repository, the period, the catalogue's `contract` and `sha256` (of its
+bytes with CRLF read as LF, so every host names the same one), the merged
+and scored counts, the pull request numbers and every aspect's tally, and **no
+generation time**: a rerun over unchanged pull requests and an unchanged
+catalogue file (its `sha256` is recorded) reads `unchanged` and writes nothing, so the workflow that commits it has nothing to commit; a CRLF checkout of an unchanged snapshot reads `unchanged` too. A pull
+request body edited after the fact reads `updated`. When the repository cannot
+be read, nothing is written.
+
+**Usage**
+
+```text
+nen scorecard snapshot --catalogue <pr-sections.json> --target <owner/name>
+                       --out <dir> [--through <YYYY-Www>] [--repo <path>] [--json]
+```
+
+**Exit codes**: `0` written, updated or unchanged · `1` the repository could
+not be read, or the snapshot file could not be read or written (`reason`
+names the fault); nothing written · `2` usage, an `--out` outside `--repo`
+included.
+
+**`--json`** top-level keys, in this order:
+
+```text
+{ path, written, reason, snapshot: { contract: "nen.scorecard.snapshot/v0.1", repository,
+  period: { week, start, end }, catalogue: { contract, sha256 }, merged, scored, pulls,
+  aspects: [{ aspect, improves, unchanged, regresses, unrecorded, net }] } }
+written: created | updated | unchanged | null (could not read or write; snapshot null, reason says why)
 ```
 
 ## Reviewers

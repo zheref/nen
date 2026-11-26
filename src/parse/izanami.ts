@@ -1362,6 +1362,12 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       ),
     },
   },
+  scorecard: {
+    subcommands: {
+      trend: RO("reads a catalogue file and merged pull requests through gh pr list; writes nothing"),
+      snapshot: MUT("writes <out>/<YYYY-Www>.json after reading merged pull requests through gh pr list"),
+    },
+  },
   // THE `shu` FAMILY'S ROWS, AND WHY EVERY EXECUTING VERB IS `dry-run-gated`.
   //
   // Everything this family spawns comes out of a file in the TARGET repository
