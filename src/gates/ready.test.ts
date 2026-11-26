@@ -2442,14 +2442,6 @@ describe("named human merge decision (NEN-661/AC-2, AC-3, AC-5)", () => {
     expect(result.ready).toBe(false);
     expect(result.failing).toContain(failure);
   });
-  it("keeps delimiter-containing human identities binding for another author", () => {
-    for (const name of [",", "maintainer,solo"]) {
-      const named = parseGateIdentities("gates.json", { ...config, default_approvers: [name], reviewers: [{ ...config.reviewers[0], name }, config.reviewers[1]] });
-      const result = evaluateReady(named, { ...own, author: "someone-else" }, OPTIONS);
-      expect(result.context.approvers).toEqual([name]);
-      expect(result.failing).toContain("approvals-at-head");
-    }
-  });
   it("does not promise readiness in the approval limb while another condition fails", () => {
     const result = evaluateReady(ids, { ...own, unresolved_threads: 1 }, OPTIONS);
     expect(result.ready).toBe(false);

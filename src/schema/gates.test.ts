@@ -1299,6 +1299,12 @@ describe("round_check_producer (zheref/nen#546) -- optional, refused by pointer 
 
 describe("merge-is-approval declaration (NEN-661/AC-1)", () => {
   const config = JSON.parse(readFileSync(new URL("./fixtures/human-merge/nen/gates.json", import.meta.url), "utf8"));
+  it.each([",", "maintainer,solo", " maintainer", "maintainer\t"])("refuses aliases that could erase an owed round: %j", (name) => {
+    const human = { ...config, default_approvers: [name], base_reviewers: [name, "review-bot"], reviewers: [{ ...config.reviewers[0], name }, config.reviewers[1]] };
+    expect(() => parseGateIdentities("gates.json", human)).toThrow(/reviewer names without commas or surrounding whitespace/);
+    const conditional = { ...config, base_reviewers: [name], reviewers: [config.reviewers[0], { ...config.reviewers[1], name, approves_when_posted_at_head: true }] };
+    expect(() => parseGateIdentities("gates.json", conditional)).toThrow(/reviewer names without commas or surrounding whitespace/);
+  });
   it("retains the single declared human", () => {
     const ids = parseGateIdentities("gates.json", config);
     expect(ids.defaultApprovers).toEqual(["maintainer"]);

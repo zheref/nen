@@ -4,6 +4,8 @@ A solo maintainer can opt into `"approval_policy": "merge-is-approval"`.
 Keep exactly one name in `default_approvers`, declared in `reviewers` with
 `"kind": "human"` and a whole literal login pattern such as `"^solo-maintainer$"`.
 Missing, empty, undeclared, bot, multiple, or ambiguous identities are refused.
+Reviewer aliases must have no commas or surrounding whitespace, so the round
+transport retains every configured identity.
 Keep the independent review providers in `base_reviewers`; naming the human there
 still requires their review round, because this policy changes only the approval limb.
 

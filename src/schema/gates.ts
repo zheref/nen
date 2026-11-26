@@ -1305,6 +1305,14 @@ export function parseGateIdentities(path: string, value: unknown): GateIdentitie
     );
   }
   if (approvalPolicy === "merge-is-approval") {
+    // Round selection still uses CSV and POSIX-space normalization. Reject
+    // aliases that could lose a declared round before evaluating this mode.
+    for (const [index, reviewer] of reviewers.entries()) {
+      if (reviewer.name.includes(",") || /^[ \t\n\v\f\r]|[ \t\n\v\f\r]$/.test(reviewer.name)) {
+        throw new SchemaError(path, `reviewers[${index}].name`,
+          "merge-is-approval requires reviewer names without commas or surrounding whitespace so every declared round retains its identity.");
+      }
+    }
     const human = reviewers.find((reviewer) => reviewer.name === defaultApprovers[0]);
     if (defaultApprovers.length !== 1 || human?.kind !== "human" ||
         !/^\^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*\$$/.test(human.loginPattern.source)) {
