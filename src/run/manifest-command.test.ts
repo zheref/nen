@@ -170,6 +170,24 @@ describe("nen run claim (NN#564)", () => {
     expect(claims.map((entry: { branch: string }) => entry.branch)).toEqual(["A", "B"]);
   });
 
+  it.each(["hold", "other-row"])("refuses a backwards live park on %s without changing the manifest", async (row) => {
+    const { root, common } = repo();
+    const options = { common, repoFlag: root };
+    const park = ["run", "park", "--id", "r1", "--issue", "NN#564", "--row"];
+    await capture(START, options);
+    await capture(CLAIM, { ...options, now: "2026-10-22T00:00:01Z" });
+    await capture([...park, "hold"], { ...options, now: "2026-10-22T00:00:02Z" });
+    await capture(CLAIM, { ...options, now: "2026-10-22T00:00:04Z" });
+    const path = join(common, ".nen", "runs", "r1.json");
+    const before = readFileSync(path, "utf8");
+    for (const extra of [[], ["--dry-run"]]) {
+      const result = await capture([...park, row, ...extra], { ...options, now: "2026-10-22T00:00:03Z" });
+      expect(result.code).toBe(1);
+      expect(result.err.join("\n")).toContain("clock");
+      expect(readFileSync(path, "utf8")).toBe(before);
+    }
+  });
+
   it("refuses corrupt stored fields without echoing their contents", async () => {
     const { root, common } = repo();
     const options = { common, repoFlag: root };

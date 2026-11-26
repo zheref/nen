@@ -10541,7 +10541,9 @@ nen run claim --id batch-2026-11-25 --issue NN#564 --branch effort/run-claim --r
 
 Records that an effort is **parked** on an unanswered ask-once row (HR-5: an idle batch parks the
 effort instead of asking): `parked[] { issue, row, at }`. Parking the same issue on the same row again is
-`unchanged`. A run nobody started is exit 1.
+`unchanged` unless a later claim reclaimed it; then the park timestamp advances. A live park
+whose clock precedes the latest claim refuses at exit 1, as do unreadable claims and a run nobody
+started. Historical imports retain their original timestamps and replay without manufacturing a new park.
 
 **Usage**
 

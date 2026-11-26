@@ -38,6 +38,7 @@ import {
   planPark,
   planStart,
   combineModes,
+  readClaims,
   readRunManifest,
   renderModes,
   ROW_ID,
@@ -514,7 +515,13 @@ function doPark(context: CommandContext): number {
       path,
       (existing) => {
         if (existing === null) throw new RunManifestError(`no run '${id}' at ${path} -- 'nen run start --id ${id}' first.`);
-        return planPark(existing, issue, row, context.seams.now().toISOString(), (ref): string => normaliseLenient(root, ref));
+        const now = context.seams.now().toISOString();
+        const claims = readClaims(existing);
+        if (!claims.ok) throw new RunManifestError("cannot record park: stored claims are unreadable; values left untouched.");
+        if (claims.claims.some((claim): boolean => normaliseLenient(root, claim.issue).toLowerCase() === issue.toLowerCase() && Date.parse(claim.at) > Date.parse(now))) {
+          throw new RunManifestError("cannot record park: clock precedes this issue's latest claim; retry later.");
+        }
+        return planPark(existing, issue, row, now, (ref): string => normaliseLenient(root, ref));
       },
       !dryRun,
       { readPath: located.readPath, ops: modeOps(context) },
