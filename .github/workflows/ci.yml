@@ -129,7 +129,7 @@ jobs:
           # it is the one that skips itself, so it is the only one worth paying
           # a second run for.
           bun src/host/ci.ts bunx vitest run src/supply/bootstrap.test.ts \
-            --reporter=json --outputFile=vitest-supply.json >/dev/null
+            --reporter=json --reporter=./src/dev/test-budget-reporter.ts --outputFile=vitest-supply.json >/dev/null
           skipped="$(bun -e 'const r = await Bun.file("vitest-supply.json").json(); console.log(r.numPendingTests ?? 0)')"
           echo "skipped in the supply suite on ${{ matrix.os }}: ${skipped}"
           if [ "${skipped}" != "0" ]; then
@@ -223,7 +223,7 @@ jobs:
           # it is the one that skips itself, so it is the only one worth paying
           # a second run for.
           bunx vitest run src/supply/bootstrap.test.ts \
-            --reporter=json --outputFile=vitest-supply.json >/dev/null
+            --reporter=json --reporter=./src/dev/test-budget-reporter.ts --outputFile=vitest-supply.json >/dev/null
           skipped="$(bun -e 'const r = await Bun.file("vitest-supply.json").json(); console.log(r.numPendingTests ?? 0)')"
           echo "skipped in the supply suite on ${{ matrix.os }}: ${skipped}"
           if [ "${skipped}" != "0" ]; then

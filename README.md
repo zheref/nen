@@ -565,7 +565,25 @@ bun run typecheck && bun run lint && bun run test   # or: bun src/index.ts dev t
 ```
 
 Tests live beside their sources (`src/**/*.test.ts`). `bun run test` runs them
-under vitest, the declared harness and the only runner CI runs. Bun's own
+under vitest, the declared harness and the only runner CI runs. The shared
+`vitest.config.ts` explicitly defaults to two workers (minimum and maximum),
+including focused tests, full coverage and CI. The host-admission focused lane
+keeps its narrower explicit one-worker setting. A `nen-test-budget` JSON receipt
+on stderr records the resolved pool, effective bounds and configuration sources;
+JSON/JUnit reporter selections retain this receipt. Intentional numeric overrides
+must set compatible minimum and maximum values, for example
+`bun run test --minWorkers=1 --maxWorkers=1`. Pool-specific options and Vitest's
+legacy worker environment variables take precedence and are recorded as such.
+Invalid, CPU-relative or unexplained worker settings refuse the run; additional
+pool modes or workspace pools need their own verified receipt support.
+
+This bounds Vitest pool concurrency per invocation. Tests can spawn Bun, Git or
+shell children; those children remain part of the admitted workload's host
+budget. It does not cap total descendants, RSS, CPU use, simultaneous CI jobs or
+multiple test invocations. Host admission still applies. Failed or interrupted
+coverage never establishes verification; missing coverage remains missing.
+
+Bun's own
 `bun test` runs the same files, and the two report the same count, file for
 file. Nothing runs `bun test` automatically, so it stays green only if you run
 it before opening a PR ([#280](https://github.com/zheref/nen/issues/280)).

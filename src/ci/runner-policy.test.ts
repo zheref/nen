@@ -53,6 +53,18 @@ const sources = Object.fromEntries(
     .map((name) => [name, readFileSync(join(WORKFLOWS, name), "utf8")]),
 );
 
+describe("test-budget reporter wiring", () => {
+  it("keeps resource evidence beside the supply suite's JSON reporter on both CI platforms", () => {
+    const workflow = parse(sources["ci.yml"]!) as Row;
+    for (const id of ["check", "check-windows"]) {
+      const job = (workflow.jobs as Row)[id] as Row;
+      const step = (job.steps as Row[]).find((item) => item.name === "Assert the shell suite actually ran");
+      expect(step?.run).toContain("--reporter=json --reporter=./src/dev/test-budget-reporter.ts");
+      expect(step?.run).toContain("--outputFile=vitest-supply.json");
+    }
+  });
+});
+
 function violations(workflows: Record<string, string>): string[] {
   const found: string[] = [];
   for (const [name, source] of Object.entries(workflows)) {
