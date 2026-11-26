@@ -13,7 +13,7 @@ import { goldenFiles, runScenario, SCENARIOS } from "./fixtures/pr_ready.golden-
 
 const GOLDENS = join(process.cwd(), "src", "verbs", "fixtures", "non-opted-in-main");
 
-describe("pr ready without the version-collision opt-in is byte-identical to origin/main (zheref/nen#663)", () => {
+describe("pr ready without the version-collision opt-in preserves main behavior with #531 additive diagnostics (zheref/nen#663)", () => {
   it("every golden belongs to a scenario, and every scenario has its four goldens", () => {
     const expected = Object.keys(SCENARIOS).flatMap((name): string[] => [`${name}.exit.json`, `${name}.explain.txt`, `${name}.json`, `${name}.txt`]);
     expect(readdirSync(GOLDENS).filter((file): boolean => file !== "README.md").sort()).toEqual(expected.sort());
