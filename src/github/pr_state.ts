@@ -1469,7 +1469,24 @@ export async function fetchPrState(
 
   if (node.state === "MERGED" || node.state === "CLOSED") {
     if ((node.state === "MERGED" || node.mergeCommitOid !== null && node.mergeCommitOid !== undefined) && (typeof node.mergeCommitOid !== "string" || !/^[0-9a-f]{40}$/i.test(node.mergeCommitOid))) return { ok: false, reason: "terminal pull request has no valid full merge commit SHA", remedy: "Ask GitHub again; a merged PR must name its merge commit." };
-    return { ok: true, warnings: [], state: { pr_state: node.state, merge_commit: node.mergeCommitOid, head_sha: node.headRefOid } };
+    // Terminal reporting remains available if gate configuration cannot be read.
+    // Attribution uses the recorded PR base declaration, not proof of merge-time policy.
+    let approvalPolicyRead = options.identitiesAtBase === undefined;
+    const warnings: string[] = [];
+    if (options.identitiesAtBase !== undefined) {
+      try {
+        await options.identitiesAtBase(typeof node.baseRefOid === "string" ? node.baseRefOid : "");
+        approvalPolicyRead = true;
+      } catch {
+        warnings.push("human merge approval could not be confirmed: base gate configuration unread");
+      }
+    }
+    return { ok: true, warnings, state: {
+      pr_state: node.state, merge_commit: node.mergeCommitOid, head_sha: node.headRefOid,
+      base_sha: node.baseRefOid,
+      merged_by: authorLogin(node.mergedBy), merged_by_type: digPath(node.mergedBy, "__typename"),
+      approval_policy_read: approvalPolicyRead,
+    } };
   }
 
   // CON-42/1's draft clause (zheref/nen#331) reads `isDraft`, and an answer
@@ -1803,6 +1820,7 @@ export async function fetchPrState(
       // author, base_ref and default_branch NON-EMPTY -- so a degraded read
       // falls back to the ordinary at-head rounds rather than to a wider gate.
       author: authorLogin(node.author),
+      author_type: digPath(node.author, "__typename"),
       base_ref: typeof node.baseRefName === "string" ? node.baseRefName : "",
       // The base's tip commit (zheref/nen#249, Feitan F1): where `pr ready`
       // reads `checks.excluded`. "" when GitHub answered none, which honours

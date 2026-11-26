@@ -691,7 +691,7 @@ export interface EvaluationContext {
   readonly reviewers: readonly string[];
   /** The approver set actually applied, in the shell's own list handling. */
   readonly approvers: readonly string[];
-  readonly approvalPolicy: "required" | "review-round-only";
+  readonly approvalPolicy: "required" | "review-round-only" | "merge-is-approval";
   readonly policy: RoundPolicy;
   readonly headSha: string;
   /** CON-40's carve-out, computed ONCE and threaded into both CON-32(b) limbs. */
@@ -1389,9 +1389,9 @@ export function evaluateReady(
   // (Cursor Bugbot + Sasuke, bankai-core#577). An EMPTY approver set makes the
   // approve predicate vacuous, which is correct: owed rounds are still enforced
   // by pendingRounds().
-  const approverList = reviewers.filter((name): boolean =>
-    identities.defaultApprovers.includes(name),
-  );
+  const approverList = identities.approvalPolicy === "merge-is-approval"
+    ? [...identities.defaultApprovers]
+    : reviewers.filter((name): boolean => identities.defaultApprovers.includes(name));
   let approversCsv = approverList.join(",");
 
   // The shell reaches `.reviews` here through a tolerant `jq -e` whose failure
@@ -1417,17 +1417,32 @@ export function evaluateReady(
         (review): boolean =>
           identity.loginPattern.test(review.author) && review.commitId === head,
       );
-    if (postedAtHead) approversCsv = `${approversCsv},${name}`;
+    if (postedAtHead) {
+      approversCsv = `${approversCsv},${name}`;
+      if (identities.approvalPolicy === "merge-is-approval") approverList.push(name);
+    }
   }
   // `split(",") | map(select(length > 0))` -- the shell's own approver-list
   // handling, empties dropped and whitespace KEPT. Never trimmed here: trimming
   // would make the gate MORE PERMISSIVE than the shell (see shellApproverNames
   // in ./predicates.ts).
-  const approvers = approversCsv.split(",").filter((name): boolean => name.length > 0);
+  const approvers = identities.approvalPolicy === "merge-is-approval"
+    ? approverList : approversCsv.split(",").filter((name): boolean => name.length > 0);
 
   // CON-40 delivery-PR carve-out (bankai-core#720). Computed ONCE and threaded
   // into BOTH CON-32(b) limbs; every other predicate is untouched by it.
   const delivery = isDeliveryPr(identities, deliveryEvidence(state));
+
+  const humanApprover = identities.approvalPolicy === "merge-is-approval"
+    ? identities.reviewer(identities.defaultApprovers[0] ?? "") : undefined;
+  const humanOwnPr = humanApprover?.kind === "human" &&
+    typeof state["author"] === "string" && humanApprover.loginPattern.test(state["author"]) &&
+    state["author_type"] === "User";
+  const humanMergeNote = humanOwnPr
+    ? `the merge decision remains with ${humanApprover.name} (${state["author"]}); no human approval is inferred and no merge has occurred; this does not authorize an agent merge`
+    : null;
+  const reviewApprovers = humanOwnPr
+    ? approvers.filter((name) => name !== humanApprover.name) : approvers;
 
   const approvalNote =
     identities.approvalPolicy === "review-round-only" && approversCsv === ""
@@ -1631,10 +1646,10 @@ export function evaluateReady(
     // "omitted" and "empty" are different values and the guard is the empty
     // array itself.
     if (
-      approversCsv === "" ||
-      reviewsAllApprovedAtHead(identities, reviews, head, approvers, delivery)
+      reviewApprovers.length === 0 ||
+      reviewsAllApprovedAtHead(identities, reviews, head, reviewApprovers, delivery)
     ) {
-      return passed(approvalNote);
+      return passed(humanMergeNote ?? approvalNote);
     }
     // NAME the approver(s) actually failing, with the reading applied to each,
     // rather than asserting which one it must be. On a delivery PR the old
@@ -1644,7 +1659,7 @@ export function evaluateReady(
     // BC-PR-#773). The verdict was right and the reason pointed at the wrong
     // reviewer, which is the "plausible, wrong" class bankai-core#639 and #698
     // were both about.
-    const unapproved = unapprovedApprovers(identities, reviews, head, approvers, delivery)
+    const unapproved = unapprovedApprovers(identities, reviews, head, reviewApprovers, delivery)
       .map(describeUnapproved)
       .join(";");
     if (unapproved !== "") {
@@ -1899,7 +1914,7 @@ export function evaluateReady(
   // row's sentence.
   const ready = firstFailed === undefined && firstUnknown === undefined;
   const line = ready
-    ? "ready"
+    ? humanMergeNote === null ? "ready" : `ready for the human merge decision: ${humanMergeNote}`
     : firstFailed !== undefined
       ? (firstFailed.reason ?? "not-ready")
       : `not-ready: ${firstUnknown?.clause ?? "CON-32"} could not be judged — ${firstUnknown?.missing ?? "a fact was missing"}`;

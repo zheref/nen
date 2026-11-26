@@ -11,7 +11,7 @@ import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 import type { PrReadyDeps } from "../verbs/pr_ready.js";
 import type { PrRef, PrStateSource } from "../github/pr_state.js";
 import type { PullRequestSnapshot } from "../github/graphql.js";
-import { EXIT_GH_NOT_RUNNABLE, EXIT_GH_REFUSED, MergeUnitUsageError, mergeUnit } from "./mergeunit.js";
+import { EXIT_GH_NOT_RUNNABLE, EXIT_GH_REFUSED, MergeUnitUsageError, mergeUnit, runReadyGate } from "./mergeunit.js";
 import { manifest, sha, VERSION_FILE, withOptIn } from "./version_collision.testkit.js";
 import type { ReleaseUnitEntry } from "../schema/workflow.js";
 
@@ -983,4 +983,22 @@ describe("merge unit shares trusted bot policy verdict (#408)", () => {
       expect(outcome.report.ok).toBe(false); expect(outcome.report.ran).toBe(false);
     }
   });
+});
+
+
+it.each([true, false])("keeps human readiness separate from agent merge authorization (%s) (NEN-661/AC-4)", async (forAgentMerge) => {
+  const root = tmpRoot();
+  const config = readFileSync(new URL("../schema/fixtures/human-merge/nen/gates.json", import.meta.url), "utf8");
+  writeFileSync(join(root, "nen/gates.json"), config);
+  const source = readySource();
+  const snapshot = await source.pullRequestSnapshot({ owner: "zheref", repo: "example" }, 9);
+  const result = await runReadyGate({ forAgentMerge, target: { owner: "zheref", repo: "example", slug: "zheref/example" }, seams: new ScriptedSeams([]), prNumber: 9, ghRepoFlag: "zheref/example", repoFlag: root, deps: readyDeps({
+    ...source,
+    pullRequestSnapshot: async () => ({ ...snapshot, pullRequest: { ...snapshot.pullRequest!, author: { login: "solo-maintainer", __typename: "User" } } }),
+    fileAtRef: async () => config,
+    reviews: async () => [{ user: { login: "review-bot" }, state: "COMMENTED", commit_id: HEAD, submitted_at: "2025-01-01T00:00:00Z" }],
+  }) });
+  expect(result.ok).toBe(!forAgentMerge);
+  expect(result.lines.join("\n")).toContain("ready for the human merge decision");
+  expect(result.lines.join("\n").includes("refused for an agent merge")).toBe(forAgentMerge);
 });

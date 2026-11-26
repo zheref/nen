@@ -643,6 +643,7 @@ export async function mergeDelivery(options: MergeDeliveryOptions): Promise<Merg
         };
 
   const readyGate = await runReadyGate({
+    forAgentMerge: true,
     target,
     prNumber: ref.number,
     repoFlag: options.repoFlag,

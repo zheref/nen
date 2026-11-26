@@ -360,7 +360,7 @@ export interface GateIdentities {
   /** The approval set when a caller names none. */
   readonly defaultApprovers: readonly string[];
   /** Whether a separate APPROVED review is required after reviewer rounds clear. */
-  readonly approvalPolicy: "required" | "review-round-only";
+  readonly approvalPolicy: "required" | "review-round-only" | "merge-is-approval";
   /** The reviewers configured on EVERY pull request, before enrolment. */
   readonly baseReviewers: readonly string[];
   /**
@@ -1254,11 +1254,11 @@ export function parseGateIdentities(path: string, value: unknown): GateIdentitie
   const rawApprovalPolicy = root["approval_policy"];
   const approvalPolicy =
     rawApprovalPolicy === undefined || rawApprovalPolicy === null ? "required" : rawApprovalPolicy;
-  if (approvalPolicy !== "required" && approvalPolicy !== "review-round-only") {
+  if (approvalPolicy !== "required" && approvalPolicy !== "review-round-only" && approvalPolicy !== "merge-is-approval") {
     throw new SchemaError(
       path,
       "approval_policy",
-      `expected 'required' or 'review-round-only', got ${describeValue(rawApprovalPolicy)}`,
+      `expected 'required', 'review-round-only' or 'merge-is-approval', got ${describeValue(rawApprovalPolicy)}`,
     );
   }
 
@@ -1303,6 +1303,22 @@ export function parseGateIdentities(path: string, value: unknown): GateIdentitie
       "default_approvers",
       "must be empty when approval_policy is 'review-round-only'. Naming approvers while declaring that no separate approval is required is contradictory.",
     );
+  }
+  if (approvalPolicy === "merge-is-approval") {
+    // Round selection still uses CSV and POSIX-space normalization. Reject
+    // aliases that could lose a declared round before evaluating this mode.
+    for (const [index, reviewer] of reviewers.entries()) {
+      if (reviewer.name.includes(",") || /^[ \t\n\v\f\r]|[ \t\n\v\f\r]$/.test(reviewer.name)) {
+        throw new SchemaError(path, `reviewers[${index}].name`,
+          "merge-is-approval requires reviewer names without commas or surrounding whitespace so every declared round retains its identity.");
+      }
+    }
+    const human = reviewers.find((reviewer) => reviewer.name === defaultApprovers[0]);
+    if (defaultApprovers.length !== 1 || human?.kind !== "human" ||
+        !/^\^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*\$$/.test(human.loginPattern.source)) {
+      throw new SchemaError(path, "default_approvers",
+        "merge-is-approval requires exactly one declared reviewer with kind 'human' and a login_pattern naming one whole literal GitHub login (^login$).");
+    }
   }
   const baseReviewers = readNames(
     "base_reviewers",
