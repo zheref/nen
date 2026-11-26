@@ -77,6 +77,11 @@ function usableGit(): boolean {
 }
 
 const HAVE_GIT = usableGit();
+
+// NN#712: multi-step cases on the shared Windows pool straddled 5s
+// (4.93s passing, 5.07–5.13s timing out). Allow bounded Git/filesystem
+// overhead here; other platforms inherit the runner timeout, as before.
+const REAL_GIT_SUITE_OPTIONS = process.platform === "win32" ? { timeout: 15_000 } : {};
 /** A real symlink on disk needs a privilege on Windows that CI does not grant; those fixtures are POSIX-only. */
 const LINKS = process.platform !== "win32";
 
@@ -227,7 +232,7 @@ function publishPr(w: World, number = 650): string {
 
 const prArgs = (head: string, number = 650): string[] => ["--name", "kagutsuchi", "--pr", String(number), "--head", head];
 
-describe.skipIf(!HAVE_GIT)("NN#650 pinned PR worktrees", () => {
+describe.skipIf(!HAVE_GIT)("NN#650 pinned PR worktrees", REAL_GIT_SUITE_OPTIONS, () => {
   it("AC-1 creates detached at the pinned PR head and copies the same ignored files", async () => {
     const w = world();
     const head = publishPr(w);
@@ -400,7 +405,7 @@ describe.skipIf(!HAVE_GIT)("NN#650 pinned PR worktrees", () => {
   });
 });
 
-describe.skipIf(!HAVE_GIT)("nen wc worktree -- against the real git, one world per test", () => {
+describe.skipIf(!HAVE_GIT)("nen wc worktree -- against the real git, one world per test", REAL_GIT_SUITE_OPTIONS, () => {
   it("refuses a missing --name, a missing --base, a bad name, a bad copy path and a non-checkout, all at exit 2", async () => {
     const w = world();
     expect((await wc(["--base", "main"], w.C)).code).toBe(2);
