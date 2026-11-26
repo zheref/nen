@@ -17,7 +17,8 @@ import { commaList } from "../cli/comma.js";
 import { readJsonFile, readTextFile, resolveAgainstRepo, splitList } from "../cli/inputs.js";
 import { shapePreflight } from "./preflight.js";
 import { isUtf8 } from "node:buffer";
-import { readFileSync, statSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
+import { sameFile } from "./same-file.js";
 import { parseTarget, type Target , TargetError} from "../github/target.js";
 import type { FlagSpec } from "../cli/args.js";
 import {
@@ -1569,28 +1570,6 @@ function editBody(context: CommandContext): number {
   context.io.out(`replaced ${target.slug}#${issue}'s body (${bytes} byte(s))`);
   if (check.result === "matched") context.io.out(bodyCheckLine(check, "write"));
   return 0;
-}
-
-/**
- * Whether two paths name ONE file -- lexically, or, when both exist, by
- * identity (device + inode, following links), so a symlink, a hard link or a
- * case-insensitive alias of the --body-file is caught too: `writeFileSync`
- * follows a link, and would overwrite the caller's fold through any of them.
- * A path that does not exist yet can only be the same file lexically.
- */
-function sameFile(a: string, b: string): boolean {
-  if (a === b) return true;
-  const identity = (path: string): { dev: number; ino: number } | null => {
-    try {
-      const stats = statSync(path);
-      return { dev: stats.dev, ino: stats.ino };
-    } catch {
-      return null;
-    }
-  };
-  const left = identity(a);
-  const right = identity(b);
-  return left !== null && right !== null && left.dev === right.dev && left.ino === right.ino;
 }
 
 /** One human line for --current-body-out's result. */

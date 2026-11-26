@@ -1,1 +1,2 @@
 - Acceptance criteria now admit catalogue-declared priority annotations and skip withdrawn rows, preserve epic IDs in body checks, ignore unrelated PR tables and paths, and can be read from one trusted marker comment with explicit source provenance (#553, #558, #610).
+- Issue body conflict output preserves full-width file identities, avoiding false same-file refusals for distinct Windows files while retaining hard-link and symlink protections.
