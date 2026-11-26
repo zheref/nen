@@ -84,7 +84,7 @@ export interface SnapshotAlias {
 export interface RegistryAlias {
   readonly provider: string;
   readonly family: string;
-  /** Registry-owned model line; null in older registries or for unlabelled aliases. */
+  /** Registry-owned model line; only reviewer aliases may be unlabelled. */
   readonly line: string | null;
   /** The surface the alias runs on by default, or null (a reviewer bot has none). */
   readonly surface: string | null;
@@ -93,6 +93,8 @@ export interface RegistryAlias {
   /** A reviewer alias is never an aggregate winner (./resolve.ts). */
   readonly reviewer: boolean;
   readonly selection: string;
+  /** Optional in legacy registries; the declared recommendation may escalate here. */
+  readonly escalation?: string | null;
 }
 
 export interface RegistrySurface {
@@ -167,9 +169,18 @@ export interface RoutingEntry {
 export const MISMATCH_COMPARES: readonly string[] = ["surface", "model", "effort"];
 export const MISMATCH_LEDGER = ".nen/direct/<effort>.json";
 
+export const WITHIN_PICKS = ["primary", "recommended", "fallback"] as const;
+export type WithinPick = typeof WITHIN_PICKS[number];
+
 export interface MismatchPolicy {
   readonly compares: readonly string[];
   readonly ledger: string;
+  readonly within?: readonly WithinPick[];
+}
+
+export interface PickPolicy {
+  readonly fallbackRule: boolean;
+  readonly recommended: readonly ({ readonly maxJobWeight: number } | { readonly effortLevel: string })[] | null;
 }
 
 export interface DirectRegistry {
@@ -189,6 +200,8 @@ export interface DirectRegistry {
   /** Alias names, earliest wins a tie. */
   readonly precedence: readonly string[];
   readonly mismatch: MismatchPolicy;
+  readonly picks?: PickPolicy;
+  readonly companionRoles?: Readonly<Record<string, string>>;
   readonly phases: Readonly<Record<string, string>>;
   /** job -> domain -> entry. */
   readonly routing: Readonly<Record<string, Readonly<Record<string, RoutingEntry>>>>;
@@ -252,11 +265,12 @@ function parseAliases(path: string, value: unknown, surfaceNames: readonly strin
     aliases[name] = {
       provider: requireString(path, `${pointer}.provider`, row["provider"]),
       family: requireString(path, `${pointer}.family`, row["family"]),
-      line: row["line"] === undefined ? null : stringOrNull(path, `${pointer}.line`, row["line"]),
+      line: reviewer ? (row["line"] === undefined ? null : stringOrNull(path, `${pointer}.line`, row["line"])) : requireString(path, `${pointer}.line`, row["line"]),
       surface,
       tier,
       reviewer,
       selection: requireString(path, `${pointer}.selection`, row["selection"]),
+      escalation: row["escalation"] === undefined ? null : stringOrNull(path, `${pointer}.escalation`, row["escalation"]),
     };
   }
   if (Object.keys(aliases).length === 0) {
@@ -454,7 +468,9 @@ function parseMismatch(path: string, value: unknown): MismatchPolicy {
   if (ledger !== MISMATCH_LEDGER) {
     throw new SchemaError(path, "mismatch.ledger", `must be ${describeValue(MISMATCH_LEDGER)}, the one ledger this binary writes; got ${describeValue(ledger)}`);
   }
-  return { compares, ledger };
+  const within = record["within"] === undefined ? [...WITHIN_PICKS] : requireStringList(path, "mismatch.within.set", requireRecord(path, "mismatch.within", record["within"])["set"]);
+  if (within.length !== WITHIN_PICKS.length || WITHIN_PICKS.some((pick): boolean => !within.includes(pick))) throw new SchemaError(path, "mismatch.within.set", "must list primary, recommended and fallback exactly once, in comparison order");
+  return { compares, ledger, within: within as WithinPick[] };
 }
 
 function parseSide(
@@ -557,6 +573,67 @@ function parseRouting(
   return routing;
 }
 
+/** Optional additions preserve older registry documents; declared policies fail closed. */
+function parsePicks(path: string, value: unknown, effort: EffortPolicy): PickPolicy {
+  if (value === undefined) return { fallbackRule: false, recommended: null };
+  const row = requireRecord(path, "picks", value);
+  const fallbackRule = row["fallbackRule"] !== undefined;
+  if (fallbackRule) requireString(path, "picks.fallbackRule", row["fallbackRule"]);
+  if (row["recommended"] === undefined) return { fallbackRule, recommended: null };
+  const rule = requireRecord(path, "picks.recommended", row["recommended"]);
+  for (const [field, expected] of [["then", "aliases.<primary>.escalation"], ["else", "primary"]] as const) {
+    if (rule[field] !== expected) throw new SchemaError(path, `picks.recommended.${field}`, `expected ${JSON.stringify(expected)}`);
+  }
+  const when = requireRecord(path, "picks.recommended.when", rule["when"]);
+  if (entriesOf(when).length !== 1 || !("anyOf" in when)) throw new SchemaError(path, "picks.recommended.when", "expected only anyOf predicates");
+  const predicates = requireArray(path, "picks.recommended.when.anyOf", when["anyOf"]);
+  if (predicates.length === 0) throw new SchemaError(path, "picks.recommended.when.anyOf", "must not be empty");
+  const recommended = predicates.map((value, index): NonNullable<PickPolicy["recommended"]>[number] => {
+    const pointer = `picks.recommended.when.anyOf[${index}]`;
+    const predicate = requireRecord(path, pointer, value);
+    const keys = entriesOf(predicate).map(([key]): string => key);
+    if (keys.length === 1 && keys[0] === "maxJobWeight") {
+      const weight = predicate["maxJobWeight"];
+      if (typeof weight === "number" && Number.isInteger(weight) && weight >= 1 && weight <= WEIGHT_MAX) return { maxJobWeight: weight };
+      throw new SchemaError(path, `${pointer}.maxJobWeight`, `expected a whole weight from 1 to ${WEIGHT_MAX}`);
+    }
+    if (keys.length === 1 && keys[0] === "effortLevel") {
+      const level = requireString(path, `${pointer}.effortLevel`, predicate["effortLevel"]);
+      if (effort.levels.includes(level)) return { effortLevel: level };
+      throw new SchemaError(path, `${pointer}.effortLevel`, "must name a declared effort level");
+    }
+    throw new SchemaError(path, pointer, "expected exactly one maxJobWeight or effortLevel predicate");
+  });
+  return { fallbackRule, recommended };
+}
+
+function checkPickAliases(path: string, aliases: Readonly<Record<string, RegistryAlias>>): void {
+  for (const [name, alias] of Object.entries(aliases)) {
+    if (alias.escalation !== null && alias.escalation !== undefined) {
+      const target = Object.prototype.hasOwnProperty.call(aliases, alias.escalation) ? aliases[alias.escalation] : undefined;
+      if (target === undefined || target.reviewer) throw new SchemaError(path, `aliases.${name}.escalation`, "must name a declared actionable alias, or null");
+    }
+  }
+}
+
+function checkFallbacks(path: string, routing: DirectRegistry["routing"], aliases: DirectRegistry["aliases"]): void {
+  const actionable = (side: RoutedSide): RegistryAlias | undefined => {
+    const alias = aliases[side.alias];
+    return alias?.reviewer ? (side.also === null ? undefined : aliases[side.also]) : alias;
+  };
+  for (const [job, domains] of Object.entries(routing)) {
+    for (const [domain, entry] of Object.entries(domains)) {
+      for (const [lang, cell] of Object.entries(entry.cells)) {
+        const primary = actionable(cell.winner);
+        const fallback = actionable(cell.runnerUp);
+        if (primary !== undefined && fallback !== undefined && primary.provider === fallback.provider && primary.surface === fallback.surface) {
+          throw new SchemaError(path, `routing.${job}.${domain}.cells.${lang}.runnerUp`, "actionable fallback must differ from the primary in provider or surface (picks.fallbackRule)");
+        }
+      }
+    }
+  }
+}
+
 export function parseDirectRegistry(path: string, value: unknown): DirectRegistry {
   const root = requireRecord(path, "$", value);
   const schema = requireString(path, "$schema", root["$schema"]);
@@ -584,6 +661,12 @@ export function parseDirectRegistry(path: string, value: unknown): DirectRegistr
     ]),
   );
 
+  const effort = parseEffort(path, root["effort"], surfaceNames);
+  const picks = parsePicks(path, root["picks"], effort);
+  checkPickAliases(path, aliases);
+  const routing = parseRouting(path, root["routing"], phases, aliases, surfaceNames);
+  if (picks.fallbackRule) checkFallbacks(path, routing, aliases);
+  const companionRoles = root["companions"] === undefined ? {} : Object.fromEntries(entriesOf(requireRecord(path, "companions.role", requireRecord(path, "companions", root["companions"])["role"])).map(([job, role]): [string, string] => [job, requireString(path, `companions.role.${job}`, role)]));
   return {
     path,
     schema,
@@ -593,11 +676,13 @@ export function parseDirectRegistry(path: string, value: unknown): DirectRegistr
     surfaces,
     nativeInteractive,
     liveLookup: parseLiveLookup(path, root["liveLookup"]),
-    effort: parseEffort(path, root["effort"], surfaceNames),
+    effort,
+    picks,
+    companionRoles,
     precedence: parsePrecedence(path, root["aggregation"], aliasNames),
     mismatch: parseMismatch(path, root["mismatch"]),
     phases,
-    routing: parseRouting(path, root["routing"], phases, aliases, surfaceNames),
+    routing,
   };
 }
 

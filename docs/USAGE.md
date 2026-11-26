@@ -7599,10 +7599,35 @@ alias, the surfaces, the live-lookup sources and a counts line. `--json` prints 
 top-level keys, in this order: `contract` (`nen.direct.registry/v0.1`), `registry` (the resolved
 path), `snapshot` (`asOf` and the per-alias quotes), `aliases`, `surfaces`, `liveLookup` and `counts`
 (`aliases`, `routingJobs`, `routingCells`). Each `aliases.<name>.line` equals the registry
-file's string or explicit `null`; older registries omitting it report `null`. Exit 0 when the file is valid; exit 1 when it is not (the
+file's nonempty string for actionable aliases; reviewer aliases may declare `null` or omit it. Exit 0 when the file is valid; exit 1 when it is not (the
 refusal names the pointer) or cannot be read; exit 2 when `--registry` is missing.
 
 ### `nen direct resolve`
+
+The resolver also reports `recommended` beside `winner` and `runnerUp`, using the registry's
+`picks.recommended.when.anyOf` predicates (`maxJobWeight` or `effortLevel`). A matching predicate
+selects `aliases.<primary>.escalation`; a null escalation keeps the primary. Both `then` and `else`
+are validated, and unknown predicate shapes refuse at exit 1. Without this optional policy the
+recommended pick is the primary. Versions and prices are never queried by this command.
+
+`mismatch.within` is `primary | fallback | recommended | none`. The registry's `mismatch.within.set`
+supplies priority (default: primary, recommended, fallback), with each
+pick compared in the existing alias and effort-dial space. `match` still compares the primary.
+`compares[].primary` names that value; `compares[].recommended` remains its deprecated alias.
+A pick needs at least one readable matching compare to establish membership. With every comparison
+unread, `within` is `none`, `readable` is false, and the legacy `match` value is unchanged.
+
+Taxonomy jobs marked `companion: true` retain their pair rows, the flag and `companions.role` value
+(`null` if undeclared). When another job exists, companion jobs do not influence the domain,
+aggregate tally, effort or picks. Companion-only requests still direct themselves.
+
+When `picks.fallbackRule` is declared, every cell's actionable runner-up must differ from its
+primary in provider **or** surface; reviewer stand-ins are checked too. At the aggregate, a
+same-pool runner-up is replaced by the highest-precedence other-pool candidate among counted
+pairs' winners and runner-ups. `nen direct registry` also requires a nonempty `line` on every
+actionable alias and refuses escalation names that are unknown or refer to reviewer-only aliases.
+Older registries must supply their model-line declarations before loading; omitted recommendation
+policy and escalation fields remain supported.
 
 Answers "which model, where, at what effort" for one classification, reporting each step:
 
@@ -7723,12 +7748,12 @@ job axis. `--json` prints one document; top-level keys, in this order: `contract
 (`nen.direct.resolve/v0.1`), `inputs` (`langs`, `jobs`, `kind`, `role`, `labels`, and the session's
 `surface`, `model`, `effort`), `undirectable` (`null`, or the reason), `domain` (`domain`, `rule` — the
 matched row's `order` — `because`, `fallbacks`), `pairs` (an array of `{ job, lang, domain,
-fallbackFrom, phase, phaseName, cell, winner, runnerUp }`), `aggregate` (`skipped`, `tally`),
-`winner` and `runnerUp` (each `{ alias, provider, family, reviewer, surface, tier, surfaceAlias,
+fallbackFrom, phase, phaseName, cell, winner, runnerUp, companion?, role? }`), `aggregate` (`skipped`, `tally`),
+`winner`, `runnerUp` and `recommended` (each `{ alias, provider, family, reviewer, surface, tier, surfaceAlias,
 restart, effortControl, interactive, note, substituted, snapshot, liveLookup }`), `effort` (`score`, `weight`,
-`level`, `derivation`, `surfaceEffort`), `mismatch` (`null`, or `{ match, compares: [{ field, session,
-recommended, verdict }] }` with `verdict` one of `match`, `mismatch`, `unread`), `effortId` and
-`record` (the written path, or `null`); `domain`, `aggregate`, `winner`, `runnerUp` and `effort` are
+`level`, `derivation`, `surfaceEffort`), `mismatch` (`null`, or `{ match, within, readable, compares: [{ field, session,
+primary, recommended, verdict }] }` with `verdict` one of `match`, `mismatch`, `unread`), `effortId` and
+`record` (the written path, or `null`); `domain`, `aggregate`, `winner`, `runnerUp`, `recommended` and `effort` are
 `null` when undirectable, and `runnerUp` is also `null` when no alias distinct from the winner exists. Exit 0 for every resolution, **including a mismatch and an
 undirectable one**; exit 1 for an invalid registry or taxonomy (an unknown predicate shape, a cell
 whose surface is not its alias's), an unreadable workflow, a taxonomy with no weight on a carried job,

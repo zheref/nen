@@ -62,6 +62,7 @@ import {
   MANY_JOBS,
   MANY_LANGS,
   SHARED_CELL,
+  WITHIN_PICKS,
   type DirectRegistry,
   type RoutedSide,
   type RoutingEntry,
@@ -226,9 +227,15 @@ export function requireDomains(taxonomy: ClassifyTaxonomy): DomainPolicy {
   return taxonomy.domains;
 }
 
+/** Companion-only requests retain their own cells; mixed requests use only primary jobs. */
+function directingInputs(taxonomy: ClassifyTaxonomy, inputs: DirectInputs): DirectInputs {
+  const jobs = inputs.jobs.filter((job): boolean => taxonomy.axes.job.keys.find((entry): boolean => entry.key === job)?.companion !== true);
+  return jobs.length === 0 ? inputs : { ...inputs, jobs };
+}
+
 /** The first rule row whose predicate holds, in `order`. */
 export function deriveDomain(taxonomy: ClassifyTaxonomy, inputs: DirectInputs): Omit<DomainVerdict, "fallbacks"> {
-  const facts: DomainFacts = { kind: inputs.kind, role: inputs.role, labels: inputs.labels, jobs: inputs.jobs };
+  const facts: DomainFacts = { kind: inputs.kind, role: inputs.role, labels: inputs.labels, jobs: directingInputs(taxonomy, inputs).jobs };
   for (const row of requireDomains(taxonomy).rule) {
     if (evaluatePredicate(taxonomy, row.when, facts)) return { domain: row.domain, rule: row.order, because: row.note };
   }
@@ -264,6 +271,8 @@ export interface PairSide {
 
 export interface Pair {
   readonly job: string;
+  readonly companion?: boolean;
+  readonly role?: string | null;
   /** The language, or the shared cell's key when no language was given. */
   readonly lang: string;
   readonly domain: string;
@@ -329,8 +338,10 @@ export function collectPairs(
       if (cell === undefined) {
         throw new DirectError(`${registry.path}: at routing.${job}.${used}.cells, there is no shared cell.`);
       }
+      const companion = taxonomy.axes.job.keys.find((entry): boolean => entry.key === job)?.companion === true;
       pairs.push({
         job,
+        ...(companion ? { companion: true, role: own(registry.companionRoles ?? {}, job) ?? null } : {}),
         lang,
         domain: used,
         fallbackFrom: used === domain ? null : domain,
@@ -385,7 +396,8 @@ function rank(registry: DirectRegistry, seen: readonly string[]): string[] {
 export function aggregate(registry: DirectRegistry, pairs: readonly Pair[]): Aggregate {
   const skipped: Skipped[] = [];
   const counted: Pair[] = [];
-  for (const pair of pairs) {
+  const primaryPairs = pairs.filter((pair): boolean => pair.companion !== true);
+  for (const pair of primaryPairs.length === 0 ? pairs : primaryPairs) {
     if (isReviewer(registry, pair.winner.alias)) {
       skipped.push({ job: pair.job, lang: pair.lang, alias: pair.winner.alias });
     } else {
@@ -404,6 +416,17 @@ export function aggregate(registry: DirectRegistry, pairs: readonly Pair[]): Agg
     ranked.map((alias): [string, number] => [alias, counted.filter((pair): boolean => pair.winner.alias === alias).length]),
   );
 
+  const poolDifferent = (candidate: string): boolean => {
+    const primary = own(registry.aliases, winner);
+    const other = own(registry.aliases, candidate);
+    return other !== undefined && !other.reviewer && (primary?.provider !== other.provider || primary.surface !== other.surface);
+  };
+  const legacyRunner = ranked[1] ?? rank(registry, winning.map((pair): string => pair.runnerUp.alias).filter((alias): boolean => alias !== winner))[0] ?? null;
+  if (registry.picks?.fallbackRule && (legacyRunner === null || !poolDifferent(legacyRunner))) {
+    const candidates = counted.flatMap((pair): PairSide[] => [pair.winner, pair.runnerUp]);
+    const runnerUp = registry.precedence.find((alias): boolean => poolDifferent(alias) && candidates.some((side): boolean => side.alias === alias)) ?? null;
+    return { winner, runnerUp, winnerSides: winning.map((pair): PairSide => pair.winner), runnerUpSides: candidates.filter((side): boolean => side.alias === runnerUp), skipped, tally };
+  }
   const nextWinner = ranked[1];
   if (nextWinner !== undefined) {
     return {
@@ -539,6 +562,7 @@ export function scoreEffort(
   inputs: DirectInputs,
   domain: string,
 ): Omit<EffortVerdict, "surfaceEffort"> {
+  inputs = directingInputs(taxonomy, inputs);
   const jobEntries = inputs.jobs.map((job): { job: string; weight: number | null } => ({
     job,
     weight: taxonomy.axes.job.keys.find((entry): boolean => entry.key === job)?.weight ?? null,
@@ -595,6 +619,8 @@ export interface Compare {
   readonly session: string;
   /** What the recommendation says in the session's own terms (the effort as the session surface's dial). */
   readonly recommended: string | null;
+  /** Primary comparison value; recommended remains a deprecated compatibility alias. */
+  readonly primary?: string | null;
   readonly verdict: Verdict;
 }
 
@@ -603,6 +629,8 @@ export interface Mismatch {
   readonly match: boolean;
   /** One entry per value the session gave, in the order surface, model, effort. */
   readonly compares: readonly Compare[];
+  readonly within?: "primary" | "fallback" | "recommended" | "none";
+  readonly readable?: boolean;
 }
 
 /**
@@ -656,6 +684,7 @@ export interface Resolution {
   readonly winner: ResolvedSide | null;
   /** Null when undirectable, or when no alias distinct from the winner exists. */
   readonly runnerUp: ResolvedSide | null;
+  readonly recommended: ResolvedSide | null;
   readonly effort: EffortVerdict | null;
   readonly mismatch: Mismatch | null;
 }
@@ -698,7 +727,7 @@ export function resolveDirection(context: ResolveContext, inputs: DirectInputs, 
   const { registry, taxonomy } = context;
   checkRegistryAgainstTaxonomy(registry, taxonomy);
   if (inputs.jobs.length === 0) {
-    return { inputs, session, undirectable: UNDIRECTABLE_JOB, domain: null, pairs: [], aggregate: null, winner: null, runnerUp: null, effort: null, mismatch: null };
+    return { inputs, session, undirectable: UNDIRECTABLE_JOB, domain: null, pairs: [], aggregate: null, winner: null, runnerUp: null, recommended: null, effort: null, mismatch: null };
   }
   return resolveInDomain(context, inputs, session, deriveDomain(taxonomy, inputs));
 }
@@ -724,6 +753,26 @@ export function resolveInDomain(
   const winner = resolveSide(registry, models, decided.winner, decided.winnerSides, inputs.langs, scored.level);
   const runnerUp =
     decided.runnerUp === null ? null : resolveSide(registry, models, decided.runnerUp, decided.runnerUpSides, inputs.langs, scored.level);
+  const shouldEscalate = registry.picks?.recommended?.some((predicate): boolean => "maxJobWeight" in predicate ? scored.weight === predicate.maxJobWeight : scored.level === predicate.effortLevel) ?? false;
+  const escalation = own(registry.aliases, winner.alias)?.escalation;
+  const recommended = shouldEscalate && escalation != null ? resolveSide(registry, models, escalation, [], inputs.langs, scored.level) : winner;
+  const primaryCompare = compareSession(registry, session, winner, scored.level);
+  const comparisons = {
+    primary: primaryCompare,
+    recommended: compareSession(registry, session, recommended, scored.level),
+    fallback: runnerUp === null ? null : compareSession(registry, session, runnerUp, scored.level),
+  };
+  const readable = Object.values(comparisons).some((compare): boolean => compare?.compares.some((entry): boolean => entry.verdict !== "unread") ?? false);
+  const within = (registry.mismatch.within ?? WITHIN_PICKS).find((pick): boolean => {
+    const comparison = comparisons[pick];
+    return comparison?.match === true && comparison.compares.some((entry): boolean => entry.verdict === "match");
+  }) ?? "none";
+  const mismatch: Mismatch | null = primaryCompare === null ? null : {
+    ...primaryCompare,
+    compares: primaryCompare.compares.map((compare): Compare => ({ ...compare, primary: compare.recommended })),
+    within,
+    readable,
+  };
   return {
     inputs,
     session,
@@ -733,7 +782,8 @@ export function resolveInDomain(
     aggregate: { skipped: decided.skipped, tally: decided.tally },
     winner,
     runnerUp,
+    recommended,
     effort: { ...scored, surfaceEffort: dial(registry, winner.surface, scored.level) },
-    mismatch: compareSession(registry, session, winner, scored.level),
+    mismatch,
   };
 }

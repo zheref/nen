@@ -78,6 +78,8 @@ export interface AxisKey {
   readonly code: boolean;
   /** A job key's weight, WEIGHT_MIN..WEIGHT_MAX, or null when the file states none. */
   readonly weight: number | null;
+  /** Companion jobs are reported but do not direct a mixed effort. */
+  readonly companion?: boolean;
   /** A job key's phases per domain (domain -> phase ids, in file order), or null when the file states none. */
   readonly phases: Readonly<Record<string, readonly string[]>> | null;
 }
@@ -275,6 +277,7 @@ function parseKeyedShape(
       // zheref/nen#380) -- so a job is always code, a language never weighs.
       code: axis === "lang" ? optionalBoolean(path, `${keyPointer}.code`, keyRecord["code"], true) : true,
       weight: axis === "job" ? parseWeight(path, `${keyPointer}.weight`, keyRecord["weight"]) : null,
+      ...(axis === "job" && keyRecord["companion"] !== undefined ? { companion: requireBoolean(path, `${keyPointer}.companion`, keyRecord["companion"]) } : {}),
       phases: axis === "job" ? parsePhases(path, `${keyPointer}.phases`, keyRecord["phases"]) : null,
     };
   });
