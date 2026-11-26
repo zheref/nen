@@ -1327,6 +1327,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
   // `--run`, and its bare form reads the runners list and nothing more.
   runner: {
     subcommands: {
+      summary: RO("reads only the newest local registration summary after launch"),
       inventory: RO("lists a repository's self-hosted runners and runner downloads -- gh api GET reads only"),
       plan: GATED(["--out"], "computes a registration plan from gh reads; --out writes it to a file"),
       script: DRY("writes the rendered host script to --out unless --dry-run is given; never runs it"),

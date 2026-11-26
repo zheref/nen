@@ -12,7 +12,7 @@ repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
 what each version changed: 50 command
-families, 184 verbs, every flag checked against that binary.
+families, 185 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -258,7 +258,7 @@ including every refusal reason. The raw NUL-delimited stream
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **115 shapes** and **119 ids** (`nen.runner.plan`
+binary carries**, writing or reading — **116 shapes** and **120 ids** (`nen.runner.plan`
 and `nen.wc.worktree.copies` each have two versions, `nen.stop.mark` three, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -314,7 +314,7 @@ file formats).
 - **`report`** — `nen.report.check/v0.1` · `nen.report.data/v0.1` · `nen.report.graph/v0.1` · `nen.report.render/v0.1`
 - **`review`** — `nen.review.scopes/v0.1`
 - **`run`** — `nen.run.record/v0.1` · `nen.run/v0.1`
-- **`runner`** — `nen.runner.plan/v0.1` · `nen.runner.plan/v0.2`
+- **`runner`** — `nen.runner.plan/v0.1` · `nen.runner.plan/v0.2`, `nen.runner.summary/v0.1`
 - **`scaffold`** — `nen.scaffold.init/v0.1` · `nen.scaffold.migrate/v0.1` · `nen.scaffold.new/v0.1` · `nen.scaffold.template/v0.1`
 - **`schema`** — `nen.schema.set/v0.1`
 - **`session`** — `nen.session.ledger/v0.1`
@@ -1077,7 +1077,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 184 verbs, grouped as the README groups them. **Reads** is what a
+All 185 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -1178,6 +1178,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`runner`](#family-runner) | [`nen runner inventory`](#nen-runner-inventory) | every self-hosted runner a repository has, each name parsed as `<machine>-<consumer>R<slot>` or runner 0, grouped by the pools `--repo`'s `runners` block declares (online, free, and the runners still without the pool's own label) plus the unpooled, and the runner package GitHub offers with its SHA-256 | github (gh api GET runners, every page, and runners/downloads); nen/workflow.json with --repo or --pool | yes |
 | [`runner`](#family-runner) | [`nen runner plan`](#nen-runner-plan) | which runners to add: the lowest free slots for a machine and consumer code, install dirs under the root in the host's separators, the service identity (or `ask`), the pool's mode, and the package with its SHA-256 -- the `nen.runner.plan/v0.2` contract, `--out` writes it; on the pool's own host, a stderr warning (exit 0) when the account already runs another repository's runners of different visibility | nen/workflow.json (runners), nen/repos.json (product_codes), github (gh api GET), this host's runner services (powershell Get-CimInstance / systemctl, read-only); writes --out only | yes |
 | [`runner`](#family-runner) | [`nen runner script`](#nen-runner-script) | render a plan's host script -- PowerShell 5.1 (elevated; locks the runner root first, asks the password once, mints each token itself, hands both to config.cmd through the environment, never argv; an interactive Windows plan asks no password and registers logon tasks instead of services), bash for Linux (sudo) and macOS (as yourself) -- and print the one launch line; never runs it | a caller-named --plan file; writes --out unless --dry-run; no gh | yes |
+| [`runner`](#family-runner) | [`nen runner summary`](#nen-runner-summary) | newest registration counts after launch, or distinct none/unreadable/malformed | local plan and summary files only; no subprocesses | yes |
 | [`runner`](#family-runner) | [`nen runner verify`](#nen-runner-verify) | poll the runners list until every expected name is present, online and labelled -- with `--pool`, with every label of that pool, its own `pool-<id>` included; never exits 0 on a partial pass | github (gh api GET runners); nen/workflow.json with --pool | yes |
 | [`runner`](#family-runner) | [`nen runner workflow`](#nen-runner-workflow) | render a pool's preflight workflow from a caller's `@@NAME@@` template, refusing a leftover placeholder or invalid YAML, and a changed file without --force | nen/workflow.json (runners), a caller-named --template; writes .github/workflows/<preflightWorkflow> (or --out) unless --dry-run | yes |
 | [`runner`](#family-runner) | [`nen runner preflight`](#nen-runner-preflight) | dispatch the pool's preflight workflow, find the run it created by id, and wait for its verdict; a job still queued at the deadline is named -- no free runner picked it up | github (gh repo view, gh run list, gh api GET runs/jobs; gh workflow run unless --dry-run) | yes |
@@ -20709,6 +20710,31 @@ sha256 28e57708069963439e7f51ec799140ef96c7873f76732a193c7e3779264ebdb0; the run
 launch (elevated): powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process powershell -Verb RunAs -Wait -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','C:\Users\maintainer\AppData\Local\nen\jusshin\register.ps1'"
 ```
 (run for real on the plan above with v0.18.3, the profile's user name replaced with `maintainer`; #319's stale-slot check changed the script's bytes, so a later build prints another `sha256`. The rendered script's bytes are pinned by `src/runner/fixtures/register.windows.golden.ps1`)
+
+### `nen runner summary`
+
+
+`nen runner summary --plan <plan.json> --after 2026-11-24T12:00:00Z --json`
+reads the newest `register-*.summary` strictly newer than the launch time under
+the plan’s project directory, using file modification times and path order for ties.
+It never launches a script or opens a transcript. The `nen.runner.summary/v0.1`
+result reports `read` with counts/path/time, `none` with null counts, or
+`unreadable`/`malformed` with a reason. Exit 0 means a successful read or no new
+summary, not successful registration: inspect `failed`. A missing directory,
+link, non-regular file or unstable read is exit 1, as is a malformed newest
+summary (no fallback). Invalid plan, host path or UTC ISO launch time is exit 2.
+Summary content is never echoed on refusal.
+
+On Windows, newly generated registration scripts grant the same user read-attributes
+rights on the runner root and project directory, without inheritance or directory-listing
+access. This lets an unelevated token validate those parents while reading `_jusshin`.
+Older scripts must be regenerated and run through the existing elevated registration
+flow to apply those grants; insufficient permissions remain `unreadable`, never `none`.
+
+**`--json` top-level keys:** `contract`, `verdict`, `after`, `directory`, `path`, `writtenAt`,
+`registered`, `skipped`, `failed`, `reason`. Tied write times sort by path.
+`--plan` and `--after` are required; `--repo` resolves a relative plan filename.
+`--json` selects JSON output; all other runner-specific flags are refused.
 
 ### `nen runner verify`
 

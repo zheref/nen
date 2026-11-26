@@ -181,7 +181,8 @@ try {
     # other projects' accounts hold on it are kept). The project folders: owner
     # Administrators, their own explicit entries reset. The package folder: no
     # inheritance at all. You (the elevated user) may READ _jusshin, where the
-    # transcript and the summary file land.
+    # transcript and the summary file land. Parent attributes let the normal
+    # token validate those directories without listing their other contents.
     $Me = '*' + [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
     if (-not (Test-Path -LiteralPath $Root)) { New-Item -ItemType Directory -Path $Root | Out-Null }
     Invoke-Icacls @($Root, '/setowner', $AdminsSid)
@@ -192,6 +193,8 @@ try {
         Invoke-Icacls @($dir, '/reset')
     }
     Invoke-Icacls @($PkgDir, '/inheritance:r', '/grant:r', ($SystemSid + ':(OI)(CI)F'), ($AdminsSid + ':(OI)(CI)F'))
+    Invoke-Icacls @($Root, '/grant', ($Me + ':(RA)'))
+    Invoke-Icacls @($ProjectDir, '/grant', ($Me + ':(RA)'))
     Invoke-Icacls @($WorkDir, '/grant', ($Me + ':(OI)(CI)RX'))
     Write-Host ('jusshin: {0} locked down (owner Administrators; SYSTEM and Administrators full control; no inherited entries).' -f $Root)
 

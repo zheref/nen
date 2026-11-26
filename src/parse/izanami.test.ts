@@ -2172,3 +2172,7 @@ describe("izanami's read-only row for wc ahead is tied to doAhead's refusals (zh
     expect(await runFamily(wcCommand, ["wc", "ahead", "--repo", ".", "--of", "HEAD", "--out", "x"], process.cwd(), false, io, never)).toBe(2);
   });
 });
+
+it("classifies runner summary as read-only", () => {
+  expect(classifyCommand("nen runner summary --plan plan.json --after 2026-11-24T12:00:00Z").classification).toBe("read-only");
+});

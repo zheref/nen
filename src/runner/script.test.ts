@@ -214,6 +214,14 @@ describe("the Windows script -- PowerShell 5.1, and the secrets never leave the 
     expect(windows.text).toContain("return ((Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash -eq $Sha256)");
   });
 
+  it("grants the summary reader attributes on parents without inherited content access (NN#647)", () => {
+    expect(windows.text).toContain("Invoke-Icacls @($Root, '/grant', ($Me + ':(RA)'))");
+    expect(windows.text).toContain("Invoke-Icacls @($ProjectDir, '/grant', ($Me + ':(RA)'))");
+    const grants = code.filter((line) => /Invoke-Icacls @\(\$(Root|ProjectDir), '\/grant',/.test(line));
+    expect(grants).toHaveLength(2);
+    for (const grant of grants) expect(grant).not.toMatch(/\(OI\)|\(CI\)|\(RX\)|\(F\)/);
+  });
+
   it("empties a pending runner folder before extracting into it: nothing that predates the lockdown is trusted", () => {
     expect(windows.text).toContain("                Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction Stop");
     // A folder still held open fails that runner alone, never the whole run (#319 review).
