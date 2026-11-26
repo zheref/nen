@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, readSync, renameSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { makeTempDir } from "../testing/tempdir.js";
 import { runFamily } from "../index.js";
@@ -7,6 +8,7 @@ import { ScriptedSeams } from "../seam/scripted.js";
 import { runnerCommand } from "./command.js";
 import { launchTime, localSummaryRoot, readSummary, readSummaryPlan, renderSummary } from "./summary.js";
 import { planFor } from "./testkit.js";
+import { renderScript } from "./script.js";
 
 const LAUNCH = "2026-11-24T12:00:00.000Z";
 function fixture(): { root: string; dir: string; plan: string } {
@@ -34,6 +36,54 @@ async function run(plan: string, args: string[] = []): Promise<{ code: number; o
 }
 
 describe("runner summary", () => {
+  it.runIf(process.platform === "win32")("reads through metadata-only parent ACLs without elevation (NN#647)", () => {
+    const f = fixture();
+    summary(f.dir, "register-permissions.summary", 2);
+    const plan = readSummaryPlan(f.plan, "win32");
+    const grantLines = renderScript(plan, "0.0.0-test").text.split("\n")
+      .filter((line) => /Invoke-Icacls @\(\$(Root|ProjectDir), '\/grant',/.test(line));
+    expect(grantLines).toHaveLength(2);
+    const ps = (source: string, saved = ""): ReturnType<typeof spawnSync> => spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", source], {
+      encoding: "utf8", timeout: 20_000,
+      env: { ...process.env, NEN_SUMMARY_ROOT: f.root, NEN_SUMMARY_PROJECT: plan.projectDir, NEN_SUMMARY_SAVED: saved },
+    });
+    const preamble = "$ErrorActionPreference = 'Stop'; $Root = $env:NEN_SUMMARY_ROOT; $ProjectDir = $env:NEN_SUMMARY_PROJECT; $WorkDir = Join-Path $ProjectDir '_jusshin'; $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User;";
+    // Save every ACL before changing either directory; owner WRITE_DAC permits
+    // restoration even while ordinary data/attribute access is restricted.
+    const snapshot = ps(`${preamble} @($Root, $ProjectDir, $WorkDir) | ForEach-Object { @{ Path = $_; Sddl = (Get-Acl -LiteralPath $_).Sddl } } | ConvertTo-Json -Compress`);
+    expect(snapshot.status, String(snapshot.stderr)).toBe(0);
+    const saved = String(snapshot.stdout).trim();
+    try {
+      const restricted = ps(`${preamble}
+        $workAcl = New-Object Security.AccessControl.DirectorySecurity
+        $workAcl.SetAccessRuleProtection($true, $false)
+        $workAcl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid, 'ReadAndExecute', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
+        Set-Acl -LiteralPath $WorkDir -AclObject $workAcl
+        foreach ($p in @($Root, $ProjectDir)) {
+          $acl = New-Object Security.AccessControl.DirectorySecurity
+          $acl.SetAccessRuleProtection($true, $false)
+          $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid, 'Traverse', 'Allow')))
+          Set-Acl -LiteralPath $p -AclObject $acl
+        }`);
+      expect(restricted.status, String(restricted.stderr)).toBe(0);
+      expect(readSummary(plan, LAUNCH, "win32").verdict).toBe("unreadable");
+      const granted = ps(`${preamble}
+        $Me = '*' + $sid.Value
+        function Invoke-Icacls { & icacls @args | Out-Null; if ($LASTEXITCODE -ne 0) { throw 'icacls failed' } }
+        ${grantLines.join("\n")}`);
+      expect(granted.status, String(granted.stderr)).toBe(0);
+      expect(readSummary(plan, LAUNCH, "win32")).toMatchObject({ verdict: "read", registered: 2, skipped: 1, failed: 0 });
+    } finally {
+      const restored = ps(`${preamble}
+        foreach ($entry in (ConvertFrom-Json $env:NEN_SUMMARY_SAVED)) {
+          $acl = New-Object Security.AccessControl.DirectorySecurity
+          $acl.SetSecurityDescriptorSddlForm($entry.Sddl)
+          Set-Acl -LiteralPath $entry.Path -AclObject $acl
+        }`, saved);
+      expect(restored.status, String(restored.stderr)).toBe(0);
+    }
+  }, 60_000);
+
   it("returns only the newest post-launch summary by write time, without subprocesses", async () => {
     const f = fixture();
     summary(f.dir, "register-z.summary", -1);
