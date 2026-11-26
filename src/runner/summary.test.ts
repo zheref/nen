@@ -50,7 +50,7 @@ describe("runner summary", () => {
     const preamble = "$ErrorActionPreference = 'Stop'; $Root = $env:NEN_SUMMARY_ROOT; $ProjectDir = $env:NEN_SUMMARY_PROJECT; $WorkDir = Join-Path $ProjectDir '_jusshin'; $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User;";
     // Save every ACL before changing either directory; owner WRITE_DAC permits
     // restoration even while ordinary data/attribute access is restricted.
-    const snapshot = ps(`${preamble} @($Root, $ProjectDir, $WorkDir) | ForEach-Object { @{ Path = $_; Sddl = (Get-Acl -LiteralPath $_).Sddl } } | ConvertTo-Json -Compress`);
+    const snapshot = ps(`${preamble} @($Root, $ProjectDir, $WorkDir) | ForEach-Object { @{ Path = $_; Sddl = (Get-Acl -LiteralPath $_).GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access) } } | ConvertTo-Json -Compress`);
     expect(snapshot.status, String(snapshot.stderr)).toBe(0);
     const saved = String(snapshot.stdout).trim();
     try {
@@ -58,12 +58,12 @@ describe("runner summary", () => {
         $workAcl = New-Object Security.AccessControl.DirectorySecurity
         $workAcl.SetAccessRuleProtection($true, $false)
         $workAcl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid, 'ReadAndExecute', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
-        Set-Acl -LiteralPath $WorkDir -AclObject $workAcl
+        [IO.Directory]::SetAccessControl($WorkDir, $workAcl)
         foreach ($p in @($Root, $ProjectDir)) {
           $acl = New-Object Security.AccessControl.DirectorySecurity
           $acl.SetAccessRuleProtection($true, $false)
           $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid, 'Traverse', 'Allow')))
-          Set-Acl -LiteralPath $p -AclObject $acl
+          [IO.Directory]::SetAccessControl($p, $acl)
         }`);
       expect(restricted.status, String(restricted.stderr)).toBe(0);
       expect(readSummary(plan, LAUNCH, "win32").verdict).toBe("unreadable");
@@ -75,11 +75,15 @@ describe("runner summary", () => {
       expect(readSummary(plan, LAUNCH, "win32")).toMatchObject({ verdict: "read", registered: 2, skipped: 1, failed: 0 });
     } finally {
       const restored = ps(`${preamble}
+        $restoreFailed = $false
         foreach ($entry in (ConvertFrom-Json $env:NEN_SUMMARY_SAVED)) {
-          $acl = New-Object Security.AccessControl.DirectorySecurity
-          $acl.SetSecurityDescriptorSddlForm($entry.Sddl)
-          Set-Acl -LiteralPath $entry.Path -AclObject $acl
-        }`, saved);
+          try {
+            $acl = New-Object Security.AccessControl.DirectorySecurity
+            $acl.SetSecurityDescriptorSddlForm($entry.Sddl, [Security.AccessControl.AccessControlSections]::Access)
+            [IO.Directory]::SetAccessControl($entry.Path, $acl)
+          } catch { $restoreFailed = $true }
+        }
+        if ($restoreFailed) { throw 'could not restore all temporary DACLs' }`, saved);
       expect(restored.status, String(restored.stderr)).toBe(0);
     }
   }, 60_000);
