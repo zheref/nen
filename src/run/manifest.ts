@@ -85,10 +85,9 @@ export interface RunManifest {
   readonly parked: readonly RunParked[];
   /**
    * The run's CLAIMED efforts, VERBATIM as stored, or absent when the run
-   * recorded none (zheref/nen#521). Kept unparsed on purpose: no nen verb writes
-   * claims yet (how a run records one is not this module's -- #521's scope),
-   * so a row this build cannot read is carried through every rewrite untouched
-   * and judged only by `readClaims`, which a reader asks and which fails closed.
+   * recorded none (zheref/nen#521). Kept unparsed so unrelated rewrites carry
+   * unreadable claims untouched. `run claim` validates through `readClaims`
+   * before adding a row (zheref/nen#564); it never repairs stored claims.
    */
   readonly claims?: unknown;
 }
@@ -712,13 +711,49 @@ export function planAppend(manifest: RunManifest, input: AppendInput): AppendOut
 export type ParkOutcome =
   | { readonly outcome: "parked" | "unchanged"; readonly manifest: RunManifest; readonly entry: RunParked };
 
-/**
- * What `run park` does to a manifest -- pure. An effort parked on a row is
- * recorded once; parking it on the same row again is `unchanged` (the retry).
- */
-export function planPark(manifest: RunManifest, issue: string, row: string, now: string): ParkOutcome {
-  const previous = manifest.parked.find((entry): boolean => entry.issue === issue && entry.row === row);
-  if (previous !== undefined) return { outcome: "unchanged", manifest, entry: previous };
+/** A claim is retryable until a later claim or park changes the effort. */
+export function planClaim(
+  manifest: RunManifest, issue: string, branch: string | null, now: string,
+  normalise: (issue: string) => string = (value): string => value,
+): { readonly outcome: "claimed" | "unchanged"; readonly manifest: RunManifest; readonly entry: RunClaim } {
+  const read = readClaims(manifest);
+  if (!read.ok) throw new RunManifestError("cannot record claim: stored claims are unreadable; expected issue, branch and timestamp fields; values left untouched.");
+  const previous = read.claims.filter((entry): boolean => normalise(entry.issue).toLowerCase() === issue.toLowerCase())
+    .reduce<RunClaim | undefined>((latest, entry) => latest === undefined || Date.parse(entry.at) >= Date.parse(latest.at) ? entry : latest, undefined);
+  const pair = read.claims.filter((entry): boolean => normalise(entry.issue).toLowerCase() === issue.toLowerCase() && entry.branch === branch)
+    .reduce<RunClaim | undefined>((latest, entry) => latest === undefined || Date.parse(entry.at) >= Date.parse(latest.at) ? entry : latest, undefined);
+  const parks = manifest.parked.filter((entry): boolean => normalise(entry.issue).toLowerCase() === issue.toLowerCase());
+  const parked = pair !== undefined && parks.some((entry): boolean => Date.parse(entry.at) >= Date.parse(pair.at));
+  if (pair !== undefined && !parked) return { outcome: "unchanged", manifest, entry: pair };
+  // The slot reader gives parks precedence on equal timestamps. Never invent
+  // a future instant or claim success while that reader would still see a park.
+  if ((previous !== undefined && Date.parse(now) < Date.parse(previous.at)) || parks.some((entry): boolean => Date.parse(now) <= Date.parse(entry.at))) {
+    throw new RunManifestError("cannot record claim: clock must not precede this issue's latest claim and must advance past its latest park; retry later.");
+  }
+  const entry: RunClaim = { issue, branch, at: now };
+  const rawClaims = manifest.claims as readonly unknown[] | undefined;
+  return { outcome: "claimed", manifest: { ...manifest, claims: [...(rawClaims ?? []), entry] }, entry };
+}
+
+/** A same-row retry stays unchanged unless a newer claim needs parking. */
+export function planPark(
+  manifest: RunManifest, issue: string, row: string, now: string,
+  normalise: (issue: string) => string = (value): string => value,
+): ParkOutcome {
+  const matches = (ref: string): boolean => normalise(ref).toLowerCase() === normalise(issue).toLowerCase();
+  const previous = manifest.parked.filter((entry): boolean => matches(entry.issue) && entry.row === row)
+    .reduce<RunParked | undefined>((latest, entry) => latest === undefined || Date.parse(entry.at) > Date.parse(latest.at) ? entry : latest, undefined);
+  if (previous !== undefined) {
+    if (Date.parse(now) <= Date.parse(previous.at)) return { outcome: "unchanged", manifest, entry: previous };
+    const read = readClaims(manifest);
+    if (!read.ok) throw new RunManifestError("cannot record park: stored claims are unreadable; values left untouched.");
+    const reclaimed = read.claims.some((claim): boolean => matches(claim.issue) && Date.parse(claim.at) > Date.parse(previous.at) && Date.parse(claim.at) <= Date.parse(now));
+    // Imported parks carry their original time. Replaying an old park must
+    // neither erase a newer park nor manufacture one after a reclaim.
+    if (!reclaimed) return { outcome: "unchanged", manifest, entry: previous };
+    const entry: RunParked = { ...previous, issue, at: now };
+    return { outcome: "parked", manifest: { ...manifest, parked: manifest.parked.map((park): RunParked => park === previous ? entry : park) }, entry };
+  }
   const entry: RunParked = { issue, row, at: now };
   return { outcome: "parked", manifest: { ...manifest, parked: [...manifest.parked, entry] }, entry };
 }

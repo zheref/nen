@@ -11,8 +11,8 @@ binary](#getting-the-binary)), or as `bun src/index.ts` from a checkout of this
 repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
-what each version changed: 50 command
-families, 184 verbs, every flag checked against that binary.
+what each version changed: 51 command
+families, 188 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -258,7 +258,7 @@ including every refusal reason. The raw NUL-delimited stream
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **115 shapes** and **119 ids** (`nen.runner.plan`
+binary carries**, writing or reading — **118 shapes** and **122 ids** (`nen.runner.plan`
 and `nen.wc.worktree.copies` each have two versions, `nen.stop.mark` three, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -314,9 +314,10 @@ file formats).
 - **`report`** — `nen.report.check/v0.1` · `nen.report.data/v0.1` · `nen.report.graph/v0.1` · `nen.report.render/v0.1`
 - **`review`** — `nen.review.scopes/v0.1`
 - **`run`** — `nen.run.record/v0.1` · `nen.run/v0.1`
-- **`runner`** — `nen.runner.plan/v0.1` · `nen.runner.plan/v0.2`
+- **`runner`** — `nen.runner.plan/v0.1` · `nen.runner.plan/v0.2`, `nen.runner.summary/v0.1`
 - **`scaffold`** — `nen.scaffold.init/v0.1` · `nen.scaffold.migrate/v0.1` · `nen.scaffold.new/v0.1` · `nen.scaffold.template/v0.1`
 - **`schema`** — `nen.schema.set/v0.1`
+- **`scorecard`** — `nen.scorecard.snapshot/v0.1` · `nen.scorecard.trend/v0.1`
 - **`session`** — `nen.session.ledger/v0.1`
 - **`shu`** — `nen.shu.<verb>/v0.1` · `nen.shu.coverage-capture/v0.1` · `nen.shu.coverage/v0.1` · `nen.shu.detect/v0.1` · `nen.shu.evidence/v0.1` · `nen.shu.proof/v0.1` · `nen.shu.test-report/v0.1` · `nen.shu.tools/v0.1` · `nen.shu.warmup/v0.1`
 - **`spec`** — `nen.spec.check/v0.1` · `nen.spec.cite-check/v0.1` · `nen.spec.converge/v0.1` · `nen.spec.coverage/v0.1` · `nen.spec.diff/v0.1` · `nen.spec.due/v0.1` · `nen.spec.index/v0.1` · `nen.spec.inventory/v0.1` · `nen.spec.number/v0.1` · `nen.spec.parity/v0.1` · `nen.spec.tasks/v0.1` · `nen.spec.trace/v0.1`
@@ -1077,7 +1078,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 184 verbs, grouped as the README groups them. **Reads** is what a
+All 188 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -1171,6 +1172,8 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`report`](#family-report) | [`nen report render`](#nen-report-render) | fill a template with a data document and write the result: {{token}}, {{{token}}}, {{#each}}, {{#if}} and nothing else, refusing an unknown token by name; --variant injects a declared variant's section flags and --graph injects a validated architecture-delta graph | caller-named --template + --data (+ --graph) files, nen/workflow.json's reports.sections under --variant; writes --out, inside --repo, unless --dry-run | yes |
 | [`report`](#family-report) | [`nen report mermaid`](#nen-report-mermaid) | print the mermaid text for a graph document and nothing else | a caller-named --graph file; writes nothing; no git/gh | no |
 | [`report`](#family-report) | [`nen report check`](#nen-report-check) | render every declared variant in both formats from its example data and refuse a block-order, desk or escaping miss | nen/workflow.json's reports.sections, templates/&lt;slug&gt;.{md,html}, templates/report-examples/; writes nothing | no |
+| [`scorecard`](#family-scorecard) | [`nen scorecard trend`](#nen-scorecard-trend) | each repository's merged pull requests scored per ISO week on the aspects a caller's section catalogue declares, every aspect in catalogue order, net = improves − regresses; plain or `--markdown` review page | caller-named --catalogue JSON, github (gh pr list --state merged, read only); writes nothing | yes |
+| [`scorecard`](#family-scorecard) | [`nen scorecard snapshot`](#nen-scorecard-snapshot) | one repository's completed-week score snapshot, written as &lt;out&gt;/&lt;YYYY-Www&gt;.json with no generation time, so a rerun over unchanged pull requests and catalogue writes the same bytes | caller-named --catalogue JSON, github (gh pr list --state merged, read only); writes --out inside --repo | yes |
 | [`review`](#family-review) | [`nen review scopes`](#nen-review-scopes) | which review scopes a branch diff raises, off the repository's own review.scopes block, plus the changed paths no scope claims | nen/workflow.json's review block, git diff --name-only; writes nothing; no gh | yes |
 | [`audit`](#family-audit) | [`nen audit deps`](#nen-audit-deps) | a directory's dependency pins read from its lockfile or Package.resolved (never by running its package manager) and, with --query, asked about at the declaring contract's OSV querybatch endpoint; four exits: clean, findings, wiring, not scanned | the --contract row (an absolute JSON file), package.json and the lockfile directly under --repo (pnpm, yarn, npm) or Package.resolved (root, .xcodeproj, .xcworkspace), OSV over https (with --query); never git, gh or the package manager | yes |
 | [`surface`](#family-surface) | [`nen surface mirror generate`](#nen-surface-mirror-generate) | render every &lt;name&gt;/SKILL.md under a skills directory into another agent surface's own layout (codex, cursor, antigravity): the body verbatim but for its relative links, re-aimed for the depth each copy lands at, the frontmatter reduced to the keys that surface documents, invocation mentions respelled, personas written where the surface keeps them — plus, per flag, the surface's hook manifest (`--hooks`), rules file (`--rules`), permission pack (`--permissions`) and model aliases (`--models`), and a `--stamp` in the marker | caller-named --source + --agents directories and pack files; writes --out; no git/gh | yes |
@@ -1178,6 +1181,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`runner`](#family-runner) | [`nen runner inventory`](#nen-runner-inventory) | every self-hosted runner a repository has, each name parsed as `<machine>-<consumer>R<slot>` or runner 0, grouped by the pools `--repo`'s `runners` block declares (online, free, and the runners still without the pool's own label) plus the unpooled, and the runner package GitHub offers with its SHA-256 | github (gh api GET runners, every page, and runners/downloads); nen/workflow.json with --repo or --pool | yes |
 | [`runner`](#family-runner) | [`nen runner plan`](#nen-runner-plan) | which runners to add: the lowest free slots for a machine and consumer code, install dirs under the root in the host's separators, the service identity (or `ask`), the pool's mode, and the package with its SHA-256 -- the `nen.runner.plan/v0.2` contract, `--out` writes it; on the pool's own host, a stderr warning (exit 0) when the account already runs another repository's runners of different visibility | nen/workflow.json (runners), nen/repos.json (product_codes), github (gh api GET), this host's runner services (powershell Get-CimInstance / systemctl, read-only); writes --out only | yes |
 | [`runner`](#family-runner) | [`nen runner script`](#nen-runner-script) | render a plan's host script -- PowerShell 5.1 (elevated; locks the runner root first, asks the password once, mints each token itself, hands both to config.cmd through the environment, never argv; an interactive Windows plan asks no password and registers logon tasks instead of services), bash for Linux (sudo) and macOS (as yourself) -- and print the one launch line; never runs it | a caller-named --plan file; writes --out unless --dry-run; no gh | yes |
+| [`runner`](#family-runner) | [`nen runner summary`](#nen-runner-summary) | newest registration counts after launch, or distinct none/unreadable/malformed | local plan and summary files only; no subprocesses | yes |
 | [`runner`](#family-runner) | [`nen runner verify`](#nen-runner-verify) | poll the runners list until every expected name is present, online and labelled -- with `--pool`, with every label of that pool, its own `pool-<id>` included; never exits 0 on a partial pass | github (gh api GET runners); nen/workflow.json with --pool | yes |
 | [`runner`](#family-runner) | [`nen runner workflow`](#nen-runner-workflow) | render a pool's preflight workflow from a caller's `@@NAME@@` template, refusing a leftover placeholder or invalid YAML, and a changed file without --force | nen/workflow.json (runners), a caller-named --template; writes .github/workflows/<preflightWorkflow> (or --out) unless --dry-run | yes |
 | [`runner`](#family-runner) | [`nen runner preflight`](#nen-runner-preflight) | dispatch the pool's preflight workflow, find the run it created by id, and wait for its verdict; a job still queued at the deadline is named -- no free runner picked it up | github (gh repo view, gh run list, gh api GET runs/jobs; gh workflow run unless --dry-run) | yes |
@@ -1190,6 +1194,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`run`](#family-run) | [`nen run rerun-failed`](#nen-run-rerun-failed) | re-run a workflow run's failed jobs (gh run rerun --failed) | github (gh) | yes |
 | [`run`](#family-run) | [`nen run start`](#nen-run-start) | start a batch run's manifest (`nen.run/v0.1`) at `<git-common-dir>/.nen/runs/<id>.json` with its repository and launch-time idle answers (HR-5); the same answers again is the resume, other answers or another repository refused | git (rev-parse --git-common-dir); writes the manifest unless --dry-run | yes |
 | [`run`](#family-run) | [`nen run append`](#nen-run-append) | record one PR the run opened, whatever its base, read live (base, branch, head); a PR created before the run started is refused; idempotent on the same facts, updated on a moved head or base, refused on another issue, kind or effort | git (rev-parse --git-common-dir), the manifest, github (gh pr view); writes it unless --dry-run | yes |
+| [`run`](#family-run) | [`nen run claim`](#nen-run-claim) | record a claimed effort under the manifest lock; retries are unchanged until parked | git (rev-parse --git-common-dir), the manifest; writes it unless --dry-run | yes |
 | [`run`](#family-run) | [`nen run park`](#nen-run-park) | record an effort parked on an unanswered ask-once row (HR-5's park state), once | git (rev-parse --git-common-dir), the manifest; writes it unless --dry-run | yes |
 | [`run`](#family-run) | [`nen run import`](#nen-run-import) | read Hatsu's futon run manifest (`hatsu.futon.run/v0.2`) into this one, every PR read live, so one manifest owns the run; idempotent, the Hatsu file never written; a conflict or an unread PR refuses the whole import | git (rev-parse --git-common-dir), `<git-common-dir>/hatsu/futon/run-<id>.json` or --from, github (gh pr view); writes the manifest unless --dry-run | yes |
 | [`run`](#family-run) | [`nen run verify`](#nen-run-verify) | read every PR the run recorded live and report open, merged and closed-unmerged with the unmerged list; an unread PR is exit 1 and counted nowhere | the manifest, github (gh pr view); moves a legacy-path manifest once unless --dry-run | yes |
@@ -10509,11 +10514,54 @@ appended: #478 NN#453 [delivery] opus/kurapika/sdd-n8-schema-keys -> integration
 ```
 (shape from `src/run/manifest-command.test.ts`; this verb reaches GitHub)
 
+### `nen run claim`
+
+Records one claimed effort in a started run: `claims[] { issue, branch, at }`, in that key order.
+Uses the same lock and atomic write as `run append` and `run park`. The latest claim matching the
+same issue and branch is `unchanged` if no park occurred at or after it, even if another branch was claimed in between. A later claim after a
+park resumes the effort under the existing `loop slots --from-run` rules. A new claim must be
+no earlier than that issue's latest claim and strictly later than its latest park. Distinct
+branches can be claimed at the same timestamp; a backwards clock or park tie refuses. Parking
+the same row after a reclaim advances its park timestamp; retries and historical imports
+preserve that effective park. Unreadable stored claims are refused without repair.
+
+**Usage**
+
+```text
+nen run claim --id <run-id> --issue <ref> [--branch <name>] [--repo <path>] [--dry-run] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--id <run-id>` | yes | The started run. | As `run start`. |
+| `--issue <ref>` | yes | The claimed issue. | `<CODE>#<N>` resolves through `nen/repos.json`; `<owner/name>#<N>` is stored. |
+| `--branch <name>` | no | The effort branch. | Validated as other manifest branches; defaults to null. |
+| `--repo <path>` | no | Any checkout of the project. | Defaults to the current directory. |
+| `--dry-run` | no | Preview the outcome. | No file, mode change, or legacy move; unchanged retries remain unchanged. |
+
+**Output and exit codes** — prints the outcome, issue, run, branch and timestamp, followed by
+manifest mode evidence when applicable. `--json`: `{ outcome, path, entry, mode }`, where
+`outcome` is `claimed` | `unchanged` | `dry-run`, and `entry` is `{ issue, branch, at }`.
+Exit 0 records or previews a claim, or confirms an unchanged retry. Exit 1 refuses a missing
+run, unreadable claims or manifest, or an ambiguous clock. Exit 2 rejects malformed flags.
+`nen exits run claim` exposes the shared 0/1/2 scheme. Bare execution is mutating;
+`--dry-run` is read-only for `nen parse izanami`.
+
+**Example**
+
+```bash
+nen run claim --id batch-2026-11-25 --issue NN#564 --branch effort/run-claim --repo .
+```
+
 ### `nen run park`
 
 Records that an effort is **parked** on an unanswered ask-once row (HR-5: an idle batch parks the
 effort instead of asking): `parked[] { issue, row, at }`. Parking the same issue on the same row again is
-`unchanged`. A run nobody started is exit 1.
+`unchanged` unless a later claim reclaimed it; then the park timestamp advances. A live park
+whose clock precedes the latest claim refuses at exit 1, as do unreadable claims and a run nobody
+started. Historical imports retain their original timestamps and replay without manufacturing a new park.
 
 **Usage**
 
@@ -18736,6 +18784,117 @@ reads no `--repo`. `--json` emits `nen.report.check/v0.1` with `variants`,
 nen report check --repo . --variant turn
 ```
 
+<a id="family-scorecard"></a>
+
+**`nen scorecard`**
+
+Merged pull requests, scored on improvement aspects, per repository per ISO
+week (Monday 00:00 UTC to the next Monday). `trend` charts a run of weeks
+across one or more repositories for a review; `snapshot` records one completed
+week for one repository, as the file a scheduled workflow commits. Both are
+**read-only on GitHub**: the only call is `gh pr list --state merged`, and no
+pull request is commented on, labelled or edited.
+
+**The aspects are the caller's.** `--catalogue` names a section catalogue read
+**at run time**; its top-level `aspects` array is the list and the order (a
+non-empty array of unique strings, compared case-insensitively, none holding
+`|`, `*`, `_` or `` ` ``, which a table cell's emphasis loses). No aspect is compiled into nen, so a consumer adding a fourteenth aspect
+changes data, never a nen release, and nen takes no build-time dependency on
+the catalogue's owner. A relative path resolves against `--repo`.
+
+**The row grammar is nen's.** A pull request scores an aspect through the
+**first** markdown table row whose first cell is that aspect and whose second
+cell is a delta: `⬆` (or `improves`) +1, `➖` (or `unchanged`) 0, `⬇` (or
+`regresses`) −1; variation selectors and emphasis are ignored. Rows inside
+fenced code and HTML comments are not rows, nor is a row indented four or more
+spaces or by a tab (indented code), and a later row naming the same
+aspect, such as a quoted older table, never overwrites the first. A named row
+with no delta reads `unreadable`; an aspect with no row reads `absent`; both
+count as `unrecorded`.
+
+Each cell carries `improves`, `unchanged`, `regresses`, `unrecorded` and `net`
+(`improves − regresses`). `net` is `null` (rendered `·`) when no merged pull
+request of the week recorded the aspect, which is never the same as `0`.
+**Every catalogue aspect appears for every repository**, recorded or not.
+
+The search is widened a day either side of the window and each pull request
+is bucketed by its exact `mergedAt`. A repository whose read fails, answers
+something other than merged rows, or fills `gh pr list`'s 1000-row ceiling is
+`could-not-read` with the reason, **never an empty row**.
+
+### `nen scorecard trend`
+
+`--weeks` weeks (default 4, at most 52) ending with `--through`: by default
+the last completed week; `current` takes the running one, marked `partial`
+(`*` in plain text, `(running)` in markdown), because its numbers can still
+move; a `--through` week that has not started is refused. One `gh pr list` per `--target`. `--markdown` prints a review page
+instead of the plain rendering: one table per repository, aspects down in
+catalogue order, weeks across, each cell `**net** (⬆/➖/⬇)`, under a
+`merged / scored` row.
+
+**Usage**
+
+```text
+nen scorecard trend --catalogue <pr-sections.json> --target <owner/name>[,<owner/name>...]
+                    [--weeks <n>] [--through <YYYY-Www> | --through current]
+                    [--markdown] [--repo <path>] [--json]
+```
+
+**Exit codes**: `0` every repository read · `1` a repository could not be
+read; the others are still reported · `2` usage (a missing flag, a malformed
+week, target or catalogue, a repository named twice, a `--through` week not
+started yet).
+
+**`--json`** top-level keys, in this order:
+
+```text
+{ contract: "nen.scorecard.trend/v0.1", catalogue: { path, contract, sha256, aspects },
+  weeks, repositories: [{ repository, unreadable,
+    weeks: [{ week, start, end, partial, merged, scored, pulls }],
+    aspects: [{ aspect, tallies: [{ improves, unchanged, regresses, unrecorded, net }] }] }] }
+```
+
+`catalogue.sha256` hashes the catalogue file's bytes with CRLF read as LF, so
+for a CRLF file it differs from `sha256sum` of the file and agrees across hosts.
+
+### `nen scorecard snapshot`
+
+One **completed** week (`--through`, default the last completed one; a
+running week is refused) for **one** `--target`, written to
+`<out>/<YYYY-Www>.json`, `--out` resolving against `--repo` and refused
+(exit 2, before GitHub is read) unless the path the kernel would write stays
+inside it, symbolic links resolved; a snapshot file that is itself a symbolic
+link is refused too. The file is replaced by temp file and rename, so a killed
+run never leaves half a snapshot. The file carries
+the repository, the period, the catalogue's `contract` and `sha256` (of its
+bytes with CRLF read as LF, so every host names the same one), the merged
+and scored counts, the pull request numbers and every aspect's tally, and **no
+generation time**: a rerun over unchanged pull requests and an unchanged
+catalogue file (its `sha256` is recorded) reads `unchanged` and writes nothing, so the workflow that commits it has nothing to commit; a CRLF checkout of an unchanged snapshot reads `unchanged` too. A pull
+request body edited after the fact reads `updated`. When the repository cannot
+be read, nothing is written.
+
+**Usage**
+
+```text
+nen scorecard snapshot --catalogue <pr-sections.json> --target <owner/name>
+                       --out <dir> [--through <YYYY-Www>] [--repo <path>] [--json]
+```
+
+**Exit codes**: `0` written, updated or unchanged · `1` the repository could
+not be read, or the snapshot file could not be read or written (`reason`
+names the fault); nothing written · `2` usage, an `--out` outside `--repo`
+included.
+
+**`--json`** top-level keys, in this order:
+
+```text
+{ path, written, reason, snapshot: { contract: "nen.scorecard.snapshot/v0.1", repository,
+  period: { week, start, end }, catalogue: { contract, sha256 }, merged, scored, pulls,
+  aspects: [{ aspect, improves, unchanged, regresses, unrecorded, net }] } }
+written: created | updated | unchanged | null (could not read or write; snapshot null, reason says why)
+```
+
 ## Reviewers
 
 Which reviewers a branch raises, read off the repository's own declaration. The
@@ -20709,6 +20868,31 @@ sha256 28e57708069963439e7f51ec799140ef96c7873f76732a193c7e3779264ebdb0; the run
 launch (elevated): powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process powershell -Verb RunAs -Wait -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','C:\Users\maintainer\AppData\Local\nen\jusshin\register.ps1'"
 ```
 (run for real on the plan above with v0.18.3, the profile's user name replaced with `maintainer`; #319's stale-slot check changed the script's bytes, so a later build prints another `sha256`. The rendered script's bytes are pinned by `src/runner/fixtures/register.windows.golden.ps1`)
+
+### `nen runner summary`
+
+
+`nen runner summary --plan <plan.json> --after 2026-11-24T12:00:00Z --json`
+reads the newest `register-*.summary` strictly newer than the launch time under
+the plan’s project directory, using file modification times and path order for ties.
+It never launches a script or opens a transcript. The `nen.runner.summary/v0.1`
+result reports `read` with counts/path/time, `none` with null counts, or
+`unreadable`/`malformed` with a reason. Exit 0 means a successful read or no new
+summary, not successful registration: inspect `failed`. A missing directory,
+link, non-regular file or unstable read is exit 1, as is a malformed newest
+summary (no fallback). Invalid plan, host path or UTC ISO launch time is exit 2.
+Summary content is never echoed on refusal.
+
+On Windows, newly generated registration scripts grant the same user read-attributes
+rights on the runner root and project directory, without inheritance or directory-listing
+access. This lets an unelevated token validate those parents while reading `_jusshin`.
+Older scripts must be regenerated and run through the existing elevated registration
+flow to apply those grants; insufficient permissions remain `unreadable`, never `none`.
+
+**`--json` top-level keys:** `contract`, `verdict`, `after`, `directory`, `path`, `writtenAt`,
+`registered`, `skipped`, `failed`, `reason`. Tied write times sort by path.
+`--plan` and `--after` are required; `--repo` resolves a relative plan filename.
+`--json` selects JSON output; all other runner-specific flags are refused.
 
 ### `nen runner verify`
 

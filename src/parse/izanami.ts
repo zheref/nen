@@ -1306,6 +1306,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       // ledgers), and a refused budget claim writes nothing either.
       start: DRY("writes the run manifest under the git common dir unless --dry-run is given"),
       append: DRY("reads the PR over gh pr view and records it in the run manifest unless --dry-run is given"),
+      claim: DRY("records a claimed effort in the run manifest unless --dry-run is given"),
       park: DRY("records a parked effort in the run manifest unless --dry-run is given"),
       // zheref/nen#486 AC-5: reads the consumer's run manifest (never writes it)
       // and every PR over gh pr view; writes nen's manifest unless --dry-run.
@@ -1327,6 +1328,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
   // `--run`, and its bare form reads the runners list and nothing more.
   runner: {
     subcommands: {
+      summary: RO("reads only the newest local registration summary after launch"),
       inventory: RO("lists a repository's self-hosted runners and runner downloads -- gh api GET reads only"),
       plan: GATED(["--out"], "computes a registration plan from gh reads; --out writes it to a file"),
       script: DRY("writes the rendered host script to --out unless --dry-run is given; never runs it"),
@@ -1358,6 +1360,12 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       migrate: DRY(
         "writes each absent nen/colors.yml and nen/gates.json from its seed, never an existing file, unless --dry-run is given, which writes nothing and spawns nothing",
       ),
+    },
+  },
+  scorecard: {
+    subcommands: {
+      trend: RO("reads a catalogue file and merged pull requests through gh pr list; writes nothing"),
+      snapshot: MUT("writes <out>/<YYYY-Www>.json after reading merged pull requests through gh pr list"),
     },
   },
   // THE `shu` FAMILY'S ROWS, AND WHY EVERY EXECUTING VERB IS `dry-run-gated`.

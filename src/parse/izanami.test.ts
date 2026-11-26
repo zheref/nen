@@ -330,6 +330,8 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     // verify, budget, wc overlap, stage check and loop slots --from-run read.
     expect(classifyCommand("nen run start --id r1 --repo .").classification).toBe("mutating");
     expect(classifyCommand("nen run start --id r1 --repo . --dry-run").classification).toBe("read-only");
+    expect(classifyCommand("nen run claim --id r1 --issue NN#564").classification).toBe("mutating");
+    expect(classifyCommand("nen run claim --id r1 --issue NN#564 --dry-run").classification).toBe("read-only");
     expect(classifyCommand("nen run append --id r1 --issue NN#1 --pr 2 --base main --kind delivery --head abcdef1").classification).toBe("mutating");
     expect(classifyCommand("nen run append --id r1 --issue NN#1 --pr 2 --base main --kind delivery --head abcdef1 --dry-run").classification).toBe("read-only");
     // zheref/nen#522: verify and budget move a legacy-path manifest on read, so
@@ -2171,4 +2173,8 @@ describe("izanami's read-only row for wc ahead is tied to doAhead's refusals (zh
     // A flag no wc verb declares never reaches doAhead: the parser refuses it.
     expect(await runFamily(wcCommand, ["wc", "ahead", "--repo", ".", "--of", "HEAD", "--out", "x"], process.cwd(), false, io, never)).toBe(2);
   });
+});
+
+it("classifies runner summary as read-only", () => {
+  expect(classifyCommand("nen runner summary --plan plan.json --after 2026-11-24T12:00:00Z").classification).toBe("read-only");
 });
