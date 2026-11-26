@@ -54,7 +54,7 @@ import type { ListedEntry, ListedSection, RepoRegistry } from "../schema/repos.j
 import { nameHalf, RepoResolutionError, resolveToken } from "./resolve.js";
 
 export type ScenarioResult =
-  | { readonly ok: true; readonly scenario: string }
+  | { readonly ok: true; readonly scenario: string; readonly sourceRows: readonly string[] }
   | { readonly ok: false; readonly reason: string };
 
 // What each section is FOR, in the remedy's own words. A repository the file
@@ -70,6 +70,7 @@ const SECTION_GUIDE =
 interface StatedScenario {
   readonly scenario: string;
   readonly row: string;
+  readonly pointer: string;
 }
 
 /**
@@ -169,10 +170,10 @@ export function resolveScenario(registry: RepoRegistry, repoSlug: string): Scena
   const states = (scenario: string | null): scenario is string => scenario !== null && scenario !== "";
   const stated: StatedScenario[] = [];
   if (consumer !== null && states(consumer.scenario)) {
-    stated.push({ scenario: consumer.scenario, row: "its consumers[] entry" });
+    stated.push({ scenario: consumer.scenario, row: "its consumers[] entry", pointer: `consumers[${registry.consumers.indexOf(consumer)}]` });
   }
   for (const row of rows) {
-    if (states(row.scenario)) stated.push({ scenario: row.scenario, row: `its ${row.section}[${row.index}] row` });
+    if (states(row.scenario)) stated.push({ scenario: row.scenario, row: `its ${row.section}[${row.index}] row`, pointer: `${row.section}[${row.index}]` });
   }
 
   // Cause 4: two rows, two answers. Compared exactly -- a scenario is a
@@ -186,7 +187,7 @@ export function resolveScenario(registry: RepoRegistry, repoSlug: string): Scena
     };
   }
   const found = stated[0];
-  if (found !== undefined) return { ok: true, scenario: found.scenario };
+  if (found !== undefined) return { ok: true, scenario: found.scenario, sourceRows: stated.map((item) => item.pointer) };
 
   if (consumer !== null) {
     // Cause 2, as a consumer: onboarded, and its entry never states a

@@ -101,6 +101,7 @@ describe("parseExcludeCheckNames -- every occurrence, in order, repeats folded",
 function matrixSource(windowsConclusion: "FAILURE" | "SUCCESS" | null): PrStateSource {
   const snapshot: PullRequestSnapshot = {
     pullRequest: {
+      state: "OPEN",
       number: 9,
       mergeable: "MERGEABLE",
       isDraft: false,

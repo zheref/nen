@@ -1061,6 +1061,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       // The canon prose verbs (SDD piece N9): pure reads of the checkout, plus
       // git merge-base/diff/show/ls-files under --base and --leaves.
       lint: RO("reads the rules contract, the baseline and the canon's Markdown, and under --base git merge-base, diff and show; writes nothing"),
+      "clause cites": RO("reads request, clause homes and a caller-declared status vocabulary; writes nothing"),
       "clause check": RO("reads one Markdown file, a base file or git object, and under --leaves git ls-files and diff; writes nothing"),
     },
   },
@@ -1284,6 +1285,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       data: RO("assembles one report document from git reads and files already on disk -- it has no write path in any form"),
       render: DRY("fills a template and WRITES --out, unless --dry-run is given, which prints the token list and writes nothing"),
       mermaid: RO("prints the mermaid text for a --graph document -- one file read, nothing written, no template involved"),
+      check: RO("renders each declared report variant in both formats from its example data and refuses a block, desk or escaping miss -- reads files, writes nothing into the repository"),
     },
   },
   // `review scopes` classifies a branch diff against the repository's own

@@ -12,7 +12,7 @@ repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the binary this repository
 builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
 what each version changed: 50 command
-families, 182 verbs, every flag checked against that binary.
+families, 185 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -258,7 +258,7 @@ including every refusal reason. The raw NUL-delimited stream
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **113 shapes** and **117 ids** (`nen.runner.plan`
+binary carries**, writing or reading — **116 shapes** and **120 ids** (`nen.runner.plan`
 and `nen.wc.worktree.copies` each have two versions, `nen.stop.mark` three, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -294,7 +294,7 @@ file formats).
 
 <!-- contract-ids:begin -->
 - **`audit`** — `nen.audit.deps/v0.1`
-- **`canon`** — `nen.canon.checkout/v0.1` · `nen.canon.clause-check/v0.1` · `nen.canon.lint/v0.1` · `nen.canon.mirror.check/v0.1` · `nen.canon.mirror.generate/v0.1` · `nen.canon.pin.write/v0.1` · `nen.canon.pin/v0.1`
+- **`canon`** — `nen.canon.checkout/v0.1` · `nen.canon.clause-check/v0.1` · `nen.canon.clause-cites/v0.1` · `nen.canon.lint/v0.1` · `nen.canon.mirror.check/v0.1` · `nen.canon.mirror.generate/v0.1` · `nen.canon.pin.write/v0.1` · `nen.canon.pin/v0.1`
 - **`classify`** — `nen.classify.apply/v0.1` · `nen.classify.install/v0.1` · `nen.classify.labels/v0.1` · `nen.classify.status/v0.1`
 - **`commit`** — `nen.commit.check/v0.1` · `nen.commit.write/v0.1`
 - **`contract`** — `nen.contract/v0.1`
@@ -311,7 +311,7 @@ file formats).
 - **`release`** — `nen.release.unit-check/v0.1`
 - **`repo`** — `nen.repo.classify/v0.1` · `nen.repo.family/v0.1`
 - **`refusal`** — `nen.refusal/v0.1`
-- **`report`** — `nen.report.data/v0.1` · `nen.report.graph/v0.1` · `nen.report.render/v0.1`
+- **`report`** — `nen.report.check/v0.1` · `nen.report.data/v0.1` · `nen.report.graph/v0.1` · `nen.report.render/v0.1`
 - **`review`** — `nen.review.scopes/v0.1`
 - **`run`** — `nen.run.record/v0.1` · `nen.run/v0.1`
 - **`runner`** — `nen.runner.plan/v0.1` · `nen.runner.plan/v0.2`, `nen.runner.summary/v0.1`
@@ -321,7 +321,7 @@ file formats).
 - **`shu`** — `nen.shu.<verb>/v0.1` · `nen.shu.coverage-capture/v0.1` · `nen.shu.coverage/v0.1` · `nen.shu.detect/v0.1` · `nen.shu.evidence/v0.1` · `nen.shu.proof/v0.1` · `nen.shu.test-report/v0.1` · `nen.shu.tools/v0.1` · `nen.shu.warmup/v0.1`
 - **`spec`** — `nen.spec.check/v0.1` · `nen.spec.cite-check/v0.1` · `nen.spec.converge/v0.1` · `nen.spec.coverage/v0.1` · `nen.spec.diff/v0.1` · `nen.spec.due/v0.1` · `nen.spec.index/v0.1` · `nen.spec.inventory/v0.1` · `nen.spec.number/v0.1` · `nen.spec.parity/v0.1` · `nen.spec.tasks/v0.1` · `nen.spec.trace/v0.1`
 - **`stop`** — `nen.stop.answer/v0.1` · `nen.stop.list/v0.1` · `nen.stop.mark/v0.1` · `nen.stop.mark/v0.2` · `nen.stop.mark/v0.3` · `nen.stop.prompt/v0.1` · `nen.stop.proposed-issue/v0.1` · `nen.stop.sixth-stop/v0.1`
-- **`surface`** — `nen.surface.capabilities/v0.1` · `nen.surface.install/v0.1` · `nen.surface.mirror.check-installed/v0.1` · `nen.surface.mirror.check-plugin/v0.1` · `nen.surface.mirror.check/v0.1` · `nen.surface.mirror.generate/v0.1` · `nen.surface.status/v0.1`
+- **`surface`** — `nen.surface.marker/v0.1` · `nen.surface.capabilities/v0.1` · `nen.surface.install/v0.1` · `nen.surface.mirror.check-installed/v0.1` · `nen.surface.mirror.check-plugin/v0.1` · `nen.surface.mirror.check/v0.1` · `nen.surface.mirror.generate/v0.1` · `nen.surface.status/v0.1`
 - **`tests`** — `nen.tests.map/v0.1`
 - **`usage`** — `nen.usage.ledger/v0.1`
 - **`wc`** — `nen.wc.catch-up/v0.2` · `nen.wc.prune/v0.1` · `nen.wc.publish/v0.1` · `nen.wc.squash/v0.1` · `nen.wc.swap.state/v0.1` · `nen.wc.swap/v0.1` · `nen.wc.worktree.copies/v0.1` · `nen.wc.worktree.copies/v0.2` · `nen.wc.worktree/v0.1` · `nen.wc.worktrees/v0.1`
@@ -448,6 +448,7 @@ The complete list:
 | [`pr threads`](#nen-pr-threads) | `3` / `4` / `5` | the thread is already resolved / no thread with that id / the credential could not authenticate. `settle`: `3` every other entry settled and at least one was already resolved (nothing sent to it); an unknown id is `2` there, refused with the rest of the file before any write; `4` only when the pull request itself is not visible ([#230](https://github.com/zheref/nen/issues/230)) |
 | [`pr merge`](#nen-pr-merge) | `5` / `6` / `7` | `gh pr merge` refused / `gh` could not be started / `--delivery` only: **merged without authority** — GitHub reports the merge landed in a protected name or a base other than the one gated; tell the maintainer ([#286](https://github.com/zheref/nen/issues/286)). `--delivery`'s `2` is also **refused by ruling** (a protected base), told apart from usage by its stdout line and `refused: true` |
 | [`pr ready`](#nen-pr-ready) | `8` | `--require-head` did not match GitHub's head; no verdict |
+| [`pr ready`](#nen-pr-ready) | `10` | merged or closed pull request; state and merge commit are reported, no readiness verdict needed |
 | [`pr version-collision`](#nen-pr-version-collision) | `8` | `--require-head` did not match GitHub's head; no collision decided — `pr ready`'s code for the same fact |
 | [`pr mark-ready`](#nen-pr-mark-ready) | `8` | `--require-head` did not match GitHub's head — deliberately `pr ready`'s code for the same fact, so a caller pinning a head across both verbs branches on one number |
 | [`pr request-reviews`](#nen-pr-request-reviews) | `9` | a bot request GitHub accepted but did not list in the response's pending-review page; this does not prove recording failure or allowance exhaustion. Its `2` is also **refused by the round ceiling** (`round_policy.maxRounds`, [#240](https://github.com/zheref/nen/issues/240)), told apart from usage by its `refused:` line |
@@ -1018,8 +1019,8 @@ retryable exit `4` ([#228](https://github.com/zheref/nen/issues/228)). Fetch
 the bootstrap script, then run it:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.30.0/bootstrap/nen.sh -o nen-bootstrap.sh
-bash nen-bootstrap.sh --ref v0.30.0
+curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.31.0/bootstrap/nen.sh -o nen-bootstrap.sh
+bash nen-bootstrap.sh --ref v0.31.0
 ```
 
 It verifies the downloaded binary against that manifest, caches it under
@@ -1027,7 +1028,7 @@ It verifies the downloaded binary against that manifest, caches it under
 executable binary on stdout and nothing else — so it composes directly:
 
 ```bash
-nen="$(bash nen-bootstrap.sh --ref v0.30.0)"
+nen="$(bash nen-bootstrap.sh --ref v0.31.0)"
 "$nen" --version
 ```
 
@@ -1076,7 +1077,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 182 verbs, grouped as the README groups them. **Reads** is what a
+All 185 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -1169,6 +1170,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`report`](#family-report) | [`nen report data`](#nen-report-data) | one document describing a branch against a base: commits, changed files (with a caller-supplied tier), the evidence seam, the lane's coverage report if it is on disk, the build proof, the last recorded stop, and -- only when one of the five register flags is given -- the issues and pull requests the effort is about; then where the effort is (worktree, stage, gate, turn, local clock), derived | git (rev-parse/symbolic-ref/remote get-url/log/diff), the zoneinfo file the zone names, nen/repos.json for the gate, nen/contract.json for the lane, .nen/proof/&lt;lane&gt;.json, .nen/last-stop.json, the declared coverage artifact, a caller-supplied --tiers file; under --target/--prs/--issues/--backlog also github (gh api, gh pr view) and nen's own in-process readiness gate; under --objects-from a caller-supplied file instead | yes |
 | [`report`](#family-report) | [`nen report render`](#nen-report-render) | fill a template with a data document and write the result: {{token}}, {{{token}}}, {{#each}}, {{#if}} and nothing else, refusing an unknown token by name; --variant injects a declared variant's section flags and --graph injects a validated architecture-delta graph | caller-named --template + --data (+ --graph) files, nen/workflow.json's reports.sections under --variant; writes --out, inside --repo, unless --dry-run | yes |
 | [`report`](#family-report) | [`nen report mermaid`](#nen-report-mermaid) | print the mermaid text for a graph document and nothing else | a caller-named --graph file; writes nothing; no git/gh | no |
+| [`report`](#family-report) | [`nen report check`](#nen-report-check) | render every declared variant in both formats from its example data and refuse a block-order, desk or escaping miss | nen/workflow.json's reports.sections, templates/&lt;slug&gt;.{md,html}, templates/report-examples/; writes nothing | no |
 | [`review`](#family-review) | [`nen review scopes`](#nen-review-scopes) | which review scopes a branch diff raises, off the repository's own review.scopes block, plus the changed paths no scope claims | nen/workflow.json's review block, git diff --name-only; writes nothing; no gh | yes |
 | [`audit`](#family-audit) | [`nen audit deps`](#nen-audit-deps) | a directory's dependency pins read from its lockfile or Package.resolved (never by running its package manager) and, with --query, asked about at the declaring contract's OSV querybatch endpoint; four exits: clean, findings, wiring, not scanned | the --contract row (an absolute JSON file), package.json and the lockfile directly under --repo (pnpm, yarn, npm) or Package.resolved (root, .xcodeproj, .xcworkspace), OSV over https (with --query); never git, gh or the package manager | yes |
 | [`surface`](#family-surface) | [`nen surface mirror generate`](#nen-surface-mirror-generate) | render every &lt;name&gt;/SKILL.md under a skills directory into another agent surface's own layout (codex, cursor, antigravity): the body verbatim but for its relative links, re-aimed for the depth each copy lands at, the frontmatter reduced to the keys that surface documents, invocation mentions respelled, personas written where the surface keeps them — plus, per flag, the surface's hook manifest (`--hooks`), rules file (`--rules`), permission pack (`--permissions`) and model aliases (`--models`), and a `--stamp` in the marker | caller-named --source + --agents directories and pack files; writes --out; no git/gh | yes |
@@ -1184,6 +1186,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`runner`](#family-runner) | [`nen runner relabel`](#nen-runner-relabel) | add a pool's own label, `pool-<id>`, to runners registered before it existed (#340) -- only runners named with `--runner` (`--run` without it is exit 2); a dry run without `--runner` lists the candidates; every write read back | nen/workflow.json (runners), github (gh api GET runners and runners/<id>/labels; gh api POST runners/<id>/labels with --run) | yes |
 | [`surface`](#family-surface) | [`nen surface install`](#nen-surface-install) | make, re-point or report a host's FIRST-PARTY install of a plugin from a checkout, per surface: the Claude Code skills-directory link with the hand-over of a prior marketplace copy, the Codex marketplace and plugin, the Antigravity global plugin link -- never replacing what it did not make, never editing a settings file, every write read back | the checkout's manifests; the surface's own directory (--config-dir) and registry files; claude / codex / agy and one `git rev-parse`; writes a link under --config-dir and runs the surface's install CLI unless --dry-run; no gh | yes |
 | [`surface`](#family-surface) | [`nen surface status`](#nen-surface-status) | the version each surface serves for a plugin, read back from `claude plugin list --json`, `codex plugin list` or the linked `plugin.json`, and whether it is a given checkout; with `--trees`, the copies Claude Code SERVES judged as `check --plugin` judges them | the surface's directory and registry files; claude / codex / agy list and validate commands; with --trees, the copies and the source; writes nothing; no gh | yes |
+| [`surface`](#family-surface) | [`nen surface marker`](#nen-surface-marker) | read a placed file’s surface and grammar, or find current generated files under a directory | placed files | yes |
 | [`surface`](#family-surface) | [`nen surface capabilities`](#nen-surface-capabilities) | what a running session on a surface can do -- picker, subagent, hook events and decision key, worktree isolation, artifact, notify, permissions file and shape, agent model key, rules file and limit, description budget -- as data with a citation per row | nothing; a table this binary ships | yes |
 | [`run`](#family-run) | [`nen run rerun-failed`](#nen-run-rerun-failed) | re-run a workflow run's failed jobs (gh run rerun --failed) | github (gh) | yes |
 | [`run`](#family-run) | [`nen run start`](#nen-run-start) | start a batch run's manifest (`nen.run/v0.1`) at `<git-common-dir>/.nen/runs/<id>.json` with its repository and launch-time idle answers (HR-5); the same answers again is the resume, other answers or another repository refused | git (rev-parse --git-common-dir); writes the manifest unless --dry-run | yes |
@@ -1216,9 +1219,10 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`canon`](#family-canon) | [`nen canon mirror generate`](#nen-canon-mirror-generate) | render every canonical rule file, {{TOKEN}}s bound, into the rules location of EACH agent surface the consumer declares (a directory of marked files, or one marked block inside AGENTS.md), writing only changed files, deleting marked orphans, refusing to touch a hand-written file | --rules-dir, or --stack-dir/--leaf inside the canon checkout `canon checkout` resolves (read-only git) + --canon-values; the surface table (src/surface/rules.ts); writes under --repo; no gh | yes |
 | [`canon`](#family-canon) | [`nen canon mirror check`](#nen-canon-mirror-check) | render the mirror in memory and diff every declared surface's committed copy against it: ok / missing / extra / stale / hand-edited per file, foreign for the consumer's own | --rules-dir, or --stack-dir/--leaf inside the resolved canon checkout (read-only git) + --canon-values; the surface table; reads under --repo; --markdown-out writes its table (and its parent directory) there; no gh | yes |
 | [`canon`](#family-canon) | [`nen canon lint`](#nen-canon-lint) | a canon repository's prose held to a caller-owned rules contract (each rule's class picks the check) behind a shrink-only baseline; fenced code and quoted words exempt; never green over a file it could not read | nen/workflow.json `canon.lint`, the --rules contract and the files it names (version source, decisions, rulings, declared values), the --baseline and --base-baseline, the Markdown its include globs match under --root; with --base, git (merge-base, diff, show) | yes |
+| [`canon`](#family-canon) | [`nen canon clause cites`](#nen-canon-clause-cites) | read cited IDs and their status/binding, following displacement chains from caller-declared homes and vocabulary | --text, --home, --status-vocabulary | yes |
 | [`canon`](#family-canon) | [`nen canon clause check`](#nen-canon-clause-check) | a clause id space (HR-{n}, CON-{n}) held unique -- definitions counted, citations never, gaps a notice -- and, with --leaves, every changed clause matched by a change in each file citing it or a `no-leaf-change:` line | --file under --repo; --base as a file or `git show <ref>:<path>`; with --leaves, git (ls-files, diff) and the --body-from file | yes |
 | [`quality`](#family-quality) | [`nen quality tooling`](#nen-quality-tooling) | look up the e2e/adversarial/perf tooling recorded for a scenario in a caller-supplied table | caller's own --table JSON (never a table shipped in nen) | yes |
-| [`quality`](#family-quality) | [`nen quality perf-compare`](#nen-quality-perf-compare) | classify a measured-vs-baseline regression at QA-13's fixed 10%/25% thresholds | none (pure arithmetic over the two numbers given) | yes |
+| [`quality`](#family-quality) | [`nen quality perf-compare`](#nen-quality-perf-compare) | compare relative regression and declared absolute ceilings | optional caller-supplied ceiling declaration | yes |
 | [`quality`](#family-quality) | [`nen quality method-check`](#nen-quality-method-check) | validate a QA-15 method block: device/OS stated, Release with no debugger, n&gt;=5 with the first discarded, median+p90, thermal+network stated | caller's own --input JSON method block | yes |
 | [`commit`](#family-commit) | [`nen commit format`](#nen-commit-format) | format and validate ONE Conventional Commits message's shape (type, subject, scope, breaking, trailers) the repository's `subject-case` rule (commitlint's own when readable as data, else `commits.subjectCase`), and its body/footer line lengths, wrapping `--body` to them (commitlint's own when readable as data, else `commits.bodyMaxLineLength`, else 100) -- never its content | on every run: nen/workflow.json under --repo (the attribution-trailer policy, commits.subjectCase and commits.bodyMaxLineLength), and the commitlint config commitlint would load from --repo's root (data forms parsed; JS/TS never executed) | yes |
 | [`commit`](#family-commit) | [`nen commit check`](#nen-commit-check) | is this working copy the one a green build proved? compares .nen/proof/<lane>.json's tree against the tree now | .nen/proof/<lane>.json under --repo, git (add/rm/write-tree into a scratch index) | yes |
@@ -12110,6 +12114,32 @@ always load: handbooks/uzf-core.md, handbooks/security-baseline.md, handbooks/ux
 stack handbook: handbooks/stacks/swiftui-tca-uzf-v2/architecture.md
 ```
 
+**Manifest-aware availability (#569).** The legacy path-derivation form above
+checks token shape, not membership or file existence. To prove availability,
+use the canon's governing Markdown INDEX and its checkout root explicitly:
+
+```sh
+nen canon resolve --repo /consumer --target owner/product \
+  --canon-root /handbooks-checkout --manifest handbooks/INDEX.md
+```
+
+This form reads the INDEX's `Always load` and `Load exactly ONE stack handbook`
+tables, verifies every referenced file inside the resolved root, and returns
+`availability: "verified"`, the manifest path, the authoritative always-load set
+and exactly one stack path. Unknown scenarios fail with `invalid-scenario`, the
+target and registry named. Missing/type-invalid scenario rows keep the existing
+registry refusals. Do not combine manifest authority with `--always-load`,
+`--stack-dir` or `--leaf`. Schema-only registry checks do not prove membership.
+The caller supplies the pinned, verified canon root (e.g. `canon checkout`).
+
+**Directed ports (#457).** Add `--port-from <scenario>`; `--ports-dir` defaults
+to `handbooks/ports`. The JSON includes `portHandbook` beside the target stack;
+a genuinely absent pair is `null` with a reason on stderr, not a failure.
+Self-pairs and source scenarios absent from the manifest (or legacy stack
+folder set) refuse at exit 2. The legacy form can also resolve ports when
+`--canon-root` supplies the tree in which its stack paths exist. A malformed,
+unreadable or escaping pair is refused, never read as absent.
+
 ### `nen canon pin`
 
 Answers "which canonical handbooks repository does this consumer mirror, and at which tag" from the consumer's **own** `nen/repos.json`: the `pinned` field on that repository's `maintained_tools` entry. The pin is data there for two reasons this family depends on: a sync has to know the tag **before** it can check the canon out and render, and [`canon mirror check`](#nen-canon-mirror-check) has to know it to hold the mirror to it -- a mirror that cannot name the tag it was rendered from cannot be checked for drift against it. It lives on `maintained_tools`, not `consumers[]`, because [`repo classify`](#nen-repo-classify) reads a `consumers` entry as a consumer at G2 while a canon repository stands at G4, and `maintained_tools` is the list whose entries classify as canon. [`schema check`](#nen-schema-check) reports the same pin on its `nen/repos.json` row. Where several `maintained_tools` rows name one tool, the **last** row answers for both the pin and the checkout [`canon checkout`](#nen-canon-checkout) reads, so a later unpinned row erases an earlier pin.
@@ -12132,14 +12162,14 @@ nen canon pin --repo <consumer> --write <tag> [--source <owner/name>]
 | `--canon-checkout <path>` | no | With `--write`: an explicit canon checkout, step 1 of [`canon checkout`](#nen-canon-checkout)'s order. | Refused without `--write`. |
 | `--dry-run` | no | With `--write`: print the pin before → after and write nothing. | Refused without `--write`. |
 
-**Output and exit codes** -- prints `source: <owner/name>`, `ref: <tag>`, `recorded in: <path> (maintained_tools[].pinned)`. `--json`: `{ contract: "nen.canon.pin/v0.1", source, ref, tagShaped, recordedIn }`. Exit 0 when exactly one pin answers. Exit **1**, with a distinct reason naming `maintained_tools[].pinned` as the field to record, when `--repo` has no `nen/repos.json`, when no maintained tool is pinned, when several are and `--source` does not say which, or when `--source` names a tool the registry does not pin. A recorded pin that is not tag-shaped (`main`, a SHA) is printed and then **exits 1** too: a canon mirror is rendered from a tag, never a floating branch (`CON-13`). Exit 2 on an omitted `--repo` or an empty `--source`.
+**Output and exit codes** -- prints `source: <owner/name>`, `ref: <tag>`, `commit: <sha or unrecorded>`, `recorded in: <path> (maintained_tools[].pinned)`. `--json`: `{ contract: "nen.canon.pin/v0.1", source, ref, commit, tagShaped, recordedIn }`. Exit 0 when exactly one pin answers. Exit **1**, with a distinct reason naming `maintained_tools[].pinned` as the field to record, when `--repo` has no `nen/repos.json`, when no maintained tool is pinned, when several are and `--source` does not say which, or when `--source` names a tool the registry does not pin. A recorded pin that is not tag-shaped (`main`, a SHA) is printed and then **exits 1** too: a canon mirror is rendered from a tag, never a floating branch (`CON-13`). Exit 2 on an omitted `--repo` or an empty `--source`.
 
 #### Moving the pin: `--write <tag>`
 
 A repin used to be a hand-edit of one JSON key followed by [`schema check`](#nen-schema-check) to read it back -- the one step of a repin that was a text edit, and one that could be applied without the regenerate it owes ([#291](https://github.com/zheref/nen/issues/291)). `--write <tag>` makes it a verb:
 
 - **It writes the row the read form answers from**: the **last** `maintained_tools` row naming the source, compared case-insensitively -- the row [`canon checkout`](#nen-canon-checkout) reads the checkout declaration from too. An earlier row a later one shadows is never touched.
-- **It changes one value and no other byte.** The file is scanned, never re-serialised: indentation, key order, `$comment`s, the other rows, CRLF line endings and a trailing newline (or its absence) are kept, and only the string literal of that one `pinned` is replaced. Where `maintained_tools`, or the edited row's `repo` or `pinned`, appears **more than once**, the edit is refused (`not-one-value-edit`): `JSON.parse` keeps only the last, so the value a reader sees and the one a reviewer reads could differ -- fix the file by hand first. A duplicate anywhere else is not the edit path's. The new text is then **proved** before anything is written: it must parse to the old document with that one value changed, or the write is refused.
+- **It changes the pin and its recorded commit, preserving every unrelated byte.** The file is scanned, never re-serialised: indentation, key order, `$comment`s, the other rows, CRLF line endings and a trailing newline (or its absence) are kept. The `pinned` string is replaced and `pinnedCommit` is inserted or updated on that row. Where `maintained_tools`, or the edited row's `repo`, `pinned` or `pinnedCommit`, appears **more than once**, the edit is refused (`not-one-value-edit`): `JSON.parse` keeps only the last, so the value a reader sees and the one a reviewer reads could differ -- fix the file by hand first. A duplicate anywhere else is not the edit path's. The new text is then **proved** before anything is written: it must parse to the old document with only the intended `pinned` and `pinnedCommit` updates, or the write is refused.
 - **The tag must resolve on the canon, as `refs/tags/<tag>`.** The canon checkout is found exactly as [`canon checkout`](#nen-canon-checkout) finds it -- `--canon-checkout`, then `checkout_env`, then `checkout` -- and verified with the same read-only, isolated git calls as far as the tag: the top of a work tree whose `origin` names the source on the consumer's own host, holding `refs/tags/<tag>` (a branch of the same name does not count) **as a ref of its own**: `git rev-parse --symbolic-full-name refs/tags/<tag>` must print exactly `refs/tags/<tag>`, so a symbolic ref under `refs/tags/` that follows a branch is `tag-missing` too. The **recorded** pin must itself be tag-shaped, as the read form requires: a row pinned to `main` is refused (`pin-not-tag-shaped`) rather than moved -- fix it by hand. A missing tag's advice is the fetch alone (`git -C <checkout> fetch --tags origin`): checking the tag out is the regenerate's step, not this one's. **HEAD need not be on the tag yet and the tree need not be clean**: the pin moves first, and the regenerate that must follow verifies the checkout at the new pin. nen fetches nothing: fetch the tag into the checkout first. A checkout that does not resolve is a refusal with its code (`unresolvable`, `tag-missing`, `wrong-source`, `wrong-host`, ...), never a pin written on trust.
 - **Checked after the tag, read from what was checked.** The row is picked from a first read, but nothing is edited from it. Only after every git call of the tag resolution is the registry's path resolved, its containment checked (below), and the text read again **from that checked real path** -- opened without following a final link, its device, inode, size, modification time and status-change time (ctime) recorded. That text must still pick the same source, row and pin, or the run is refused (`registry-changed`): a file swapped or edited while git ran is never the one edited.
 - **Inside the repository only.** The registry's real path (`realpath`, links resolved) must lie inside `--repo`'s own real root: a `nen/repos.json` that links **out** of the repository is refused at exit 1 (`registry-outside-repo`), naming both paths, and neither file is touched. A link that stays inside is written **through** -- the link is kept, its target replaced -- and the output names the real file written (`written: <real> (through the link <path>)`) -- only when `nen/repos.json` itself is a symbolic link; a symlinked consumer root or a case-variant `--repo` names the real file with no link. In `--json`, `target` is that real file on every run, `--dry-run` included, and `writtenTo` is the same path when a write happened and `null` otherwise.
@@ -12148,7 +12178,7 @@ A repin used to be a hand-edit of one JSON key followed by [`schema check`](#nen
 - **Read back.** After the write the file is reloaded through the registry loader and the new pin checked in the same row; [`schema check`](#nen-schema-check)'s `nen/repos.json` row reads the result exactly as it read the old one, with the new pin in its `pinned tools`.
 - **The mirror is now stale, and it is said.** A moved pin leaves every mirrored file naming the old tag -- which [`canon mirror check`](#nen-canon-mirror-check) reports as `stale` on every surface -- so the output and a `nen: note:` on stderr name the regenerate that must land **in the same commit**: `nen canon mirror generate --repo '<consumer>' --canon-values <path> (--stack-dir <dir> --leaf <name> | --rules-dir <dir>)` -- a **POSIX shell** command, labelled so, with the root printed as one single-quoted word -- which now defaults to the new pin. `--json` carries the same command as `mirror.regenerate` and as an argv array, `mirror.regenerateArgv`.
 
-**Every refusal comes before any write.** Exit **2**: `<tag>` is not tag-shaped (`v<major>.<minor>[.<patch>][-pre]`); an empty `--write`/`--source`, a `--source` that is not `owner/name`, or a flag another `canon` verb reads (`--ref` above all -- the tag is `--write`'s value -- `--rules-dir`, `--stack-dir`, ...); a `nen/repos.json` that does not parse or validate (the loader's pointer). Exit **1**: `--repo` has no `nen/repos.json`, or its real file is outside `--repo`, or it changed while the tag was resolved; the recorded pin is not tag-shaped; no maintained tool is pinned; several are and `--source` does not say which; `--source` names a tool with no pin to move (`--write` moves a recorded pin -- record the first by hand); or `<tag>` does not resolve in the canon checkout, the refusal naming the tag and the checkout step. A `<tag>` equal to the current pin writes nothing and exits 0 once the tag resolves. A failed replace is exit 1 too. `--write` is refused on every other `canon` verb.
+**Every refusal comes before any write.** Exit **2**: `<tag>` is not tag-shaped (`v<major>.<minor>[.<patch>][-pre]`); an empty `--write`/`--source`, a `--source` that is not `owner/name`, or a flag another `canon` verb reads (`--ref` above all -- the tag is `--write`'s value -- `--rules-dir`, `--stack-dir`, ...); a `nen/repos.json` that does not parse or validate (the loader's pointer). Exit **1**: `--repo` has no `nen/repos.json`, or its real file is outside `--repo`, or it changed while the tag was resolved; the recorded pin is not tag-shaped; no maintained tool is pinned; several are and `--source` does not say which; `--source` names a tool with no pin to move (`--write` moves a recorded pin -- record the first by hand); or `<tag>` does not resolve in the canon checkout, the refusal naming the tag and the checkout step. A `<tag>` equal to the current pin records a missing commit; with the same recorded identity it writes nothing and exits 0. A different recorded identity refuses as a moved tag. A failed replace is exit 1 too. `--write` is refused on every other `canon` verb.
 
 **Output** -- `source: <owner/name>`, `pin: <before> -> <after>` (`(unchanged)` when equal), `recorded in: <path> (maintained_tools[<i>].pinned, line <n>)`, `tag: <tag> is <sha12> in <checkout> (resolved from <kind> <what>)`, `written: ...`, and, when the pin moved, `mirror: now STALE -- regenerate it in the same commit (POSIX shell): <command>` (`would be STALE` under `--dry-run`). Text lines are stripped of control characters. `--json`: `{ contract: "nen.canon.pin.write/v0.1", ok: true, source, before, after, changed, dryRun, written, recordedIn, target, writtenTo, row, line, tag: { commit, checkout, resolvedFrom }, mirror: { stale, regenerate, regenerateArgv }, failure: null }`. **Every refusal it names emits a document under `--json` too**, as [`canon checkout`](#nen-canon-checkout) does: `{ contract: "nen.canon.pin.write/v0.1", ok: false, [written: true on read-back-mismatch], failure: { code, message } }`, where `code` is `no-registry`, `registry-outside-repo`, `registry-changed`, `pin-not-tag-shaped`, `no-pin`, `ambiguous-source`, `source-not-pinned`, `not-one-value-edit`, `write-failed`, `read-back-mismatch`, or the checkout's own code when the tag does not resolve (`unresolvable`, `tag-missing`, `wrong-source`, `wrong-host`, ...). An exit-2 usage error carries no document: its refusal is on stderr alone.
 
@@ -12180,6 +12210,19 @@ nen canon pin --repo /path/to/consumer --json
 }
 ```
 (for a registry whose `maintained_tools` carries `{ "repo": "owner/handbooks", "role": "canonical handbooks", "pinned": "v0.6.0" }`; shape from `src/canon/command.test.ts`)
+
+**Recorded commit integrity (#506).** Every `canon pin --write <tag>` now
+records the resolved full SHA as `pinnedCommit` on the same maintained-tools
+row, preserving every other existing byte. An existing field is updated; an
+unchanged tag with an unrecorded commit is upgraded on its next write. A
+same-tag move cannot overwrite a different recorded identity. Bare pin reads
+return `commit` (or `null` and `commit: unrecorded` for legacy rows). When a
+checkout is supplied with `--canon-checkout` or declared in the registry, pin
+reads verify the tag without requiring HEAD to be checked out there. With no
+checkout declaration, the read reports the recorded identity only; no live tag
+verification is claimed. `canon checkout` and both mirror forms compare the
+recorded commit before accepting the tag, naming both SHAs on a moved tag,
+including when an existing checkout's HEAD remains at the old commit.
 
 ### `nen canon checkout`
 
@@ -12328,6 +12371,18 @@ surface: codex -> AGENTS.md
   note: AGENTS.md's canon block is 158211 bytes; 'codex' documents that it stops reading project documents at 32768 bytes (project_doc_max_bytes in .codex/config.toml) ...
 ```
 (shape derived from `src/canon/mirror.ts`'s `renderSurface`/`writeSurface` and `src/canon/command.test.ts`)
+
+**Incoming port mirrors (#457).** The verified-checkout form automatically
+adds every `<from>--<consumer-scenario>.md` pair under `handbooks/ports` (or
+`--ports-dir`) to the same surface rules location, with the normal generated
+marker and drift/orphan rules. Outgoing pairs and the pair INDEX are excluded.
+For standalone `--rules-dir`, also pass `--canon-root` to identify the tree
+containing the ports. That root must pass the same source, host, pinned tag,
+recorded commit and clean-tree verification as `--canon-checkout`; the rules
+directory must be contained within it after resolving links. Without it Nen explicitly reports port handbooks
+unavailable rather than claiming they were included. A supplied `--ports-dir`
+without a root is refused. Source name collisions and escaping links refuse
+before writes. `--not-mirrored` applies to pair filenames as to stack rules.
 
 ### `nen canon mirror check`
 
@@ -12570,6 +12625,42 @@ canon lint: 187 files · 0 new · 0 stale · 0 grown · PL-01 189/189b · PL-02 
 `canon.lint` block above added to its `nen/workflow.json` — the guard's counts
 exactly)
 
+### `nen canon clause cites`
+
+Read a request's cited clause IDs once each, with their definition file/line,
+status and binding, then follow displaced clauses transitively. Homes and the
+status vocabulary are explicit caller data; Nen does not decide conflicts or
+infer a product's floor or skill-touch policy.
+
+```sh
+nen canon clause cites --repo /consumer --text request.md \
+  --home HR=docs/ROSTER.md,CON=/canon/CONSTITUTION.md \
+  --status-vocabulary statuses.json --include CON-4,HR-10 --json
+```
+
+`--home` is a comma-separated `PREFIX=file` list; duplicate or malformed homes
+refuse. `--status-vocabulary` is a JSON object, for example:
+
+```json
+{"whole":["ruled","constitution"],"none":["reading"],"displacement":["reversed by","superseded by"],"unannotated":{"CON":"constitution"}}
+```
+
+Status comes from a `Status` table column or balanced parenthesis after the
+anchored bold ID; conflicting or unknown statuses refuse. Bullet definitions
+can use the explicitly declared per-prefix unannotated status. Displacements
+name one or more comma-separated clause IDs, optionally followed by one part
+annotation. Whole displacement binds nothing; a part annotation leaves the
+rest binding as `part`. Cycles terminate and followed IDs remain unique. An
+explicit `--include` list lets the caller supply floor/touch-derived IDs.
+
+`--json`: `{ contract: "nen.canon.clause-cites/v0.1", clauses, readSet, dangling, exit }`, with `clauses` (defined/dangling resolution,
+file, line, status, binding, displacedBy, via), binding `readSet` labels,
+`dangling` and `exit`. Every referenced definition is reported even when it is
+nonbinding; `readSet` is the subset binding whole or in part. Exit 0 when all
+resolve, 1 naming every dangling ID (including a missing displacement target),
+2 for unreadable request/home/vocabulary, unknown or ambiguous status, a prefix
+with no definitions, or malformed inputs. No conflict verdict is implied.
+
 ### `nen canon clause check`
 
 A clause id space held unique, and a changed clause held to the files that cite
@@ -12681,33 +12772,45 @@ scenario: swiftui-tca-uzf-v2
 
 ### `nen quality perf-compare`
 
-Classifies one measured-vs-baseline pair at QA-13's fixed thresholds: a regression over 10% (relative to `--baseline`) is `high`, over 25% is `critical`; lower is always better, so an improvement is never flagged. The metric name is not restricted to a fixed list in code -- QA-11 names seven canonical ones (cold launch, warm launch, frame hitches, memory high-water, artifact size, network payload/requests, longest main-thread block), but this verb compares whatever `--metric` names against whatever `--baseline` it is given.
-
-**Usage**
+Compares a measured value with its baseline at QA-13's unchanged relative thresholds (>10% high, >25% critical) and, optionally, an explicitly declared absolute ceiling. Lower is better. Metric names match exactly; Nen never infers a ceiling from a tool or metric name.
 
 ```text
-nen quality perf-compare --metric <name> --baseline <n> --measured <n>
+nen quality perf-compare --metric <name> --baseline <n> --measured <n> [--ceilings <path.json>]
 ```
-
-**Arguments**
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
-| `--metric <name>` | yes | The metric's name, echoed back verbatim. | Not validated against a fixed vocabulary. |
-| `--baseline <n>` | yes | The recorded baseline value. | A zero baseline is refused outright (exit 1) -- a percentage regression against zero is not a defined number. |
-| `--measured <n>` | yes | The newly measured value. | |
+| `--metric <name>` | yes | Exact metric key. | Case-sensitive; no aliases. |
+| `--baseline <n>` | yes | Recorded baseline. | Zero yields a null percentage/severity and a refusal reason, while still reporting the absolute verdict. |
+| `--measured <n>` | yes | Newly measured value. | Use the declaration's unit; Nen performs no conversion. |
+| `--ceilings <path.json>` | no | Caller-owned ceiling declaration. | Resolves against `--repo`; source, metric and unit must be nonempty single-line strings, ceilings finite and nonnegative, and metric keys unique. |
 
-**Output and exit codes** -- prints `<metric>: <pct>% vs baseline -- <severity>`. `--json`: `{ metric, baseline, measured, regressionPct, severity }`. Exit 0 when severity is `ok`; exit 1 when `high` or `critical` (or on a zero baseline).
+A declaration records its authority, for example:
 
-**Example**
+```json
+{
+  "source": "zheref/bankai-handbooks@v0.12.0 handbooks/quality-baseline.md QA-13",
+  "ceilings": [
+    {"metric": "P1-reference-median", "ceiling": 2000, "unit": "ms"},
+    {"metric": "P7-apple", "ceiling": 250, "unit": "ms"},
+    {"metric": "P7-android-jank", "ceiling": 5, "unit": "%"},
+    {"metric": "P7-web-INP", "ceiling": 200, "unit": "ms"},
+    {"metric": "P5-web-initial-transfer", "ceiling": 300, "unit": "KB compressed"}
+  ]
+}
+```
+
+The caller owns the declaration's accuracy, scenario and units; the source string is reported verbatim, not fetched or authenticated. No declaration, or an absent exact metric, reports `no-ceiling`, never an absolute pass. An empty ceilings array is explicit absence. Equality is within the inclusive ceiling.
+
+**Output and exits:** human output includes the relative row and an absolute row naming the ceiling, unit and source. `--json`: top-level keys retain `metric`, `baseline`, `measured`, `regressionPct`, `severity`, and adds `percentageReason` (null unless refused) plus `absolute: {status, ceiling, unit, source}`. Status is `within`, `breached`, or `no-ceiling`; absent fields are null. Exit 1 for a relative high/critical verdict, an absolute breach, or an undefined percentage at zero baseline; exit 0 otherwise. Malformed input/declarations exit 2. A relative improvement cannot hide an absolute breach. A percentage outside the finite numeric range is null with an overflow reason; its relative severity and absolute verdict remain available. Blank numeric values are refused, not interpreted as zero. `--ceilings` is refused on the other quality subcommands.
 
 ```bash
 nen quality perf-compare --metric cold_launch_ms --baseline 1200 --measured 1400
 ```
 ```text
 cold_launch_ms: 16.7% vs baseline -- high
+absolute: no ceiling applies (no declaration)
 ```
-(run for real)
 
 ### `nen quality method-check`
 
@@ -13568,8 +13671,9 @@ differs: fixture-owner/fixture-app aaaaaaaaaaaa -> aaaaaaaaaaaa -- 1 added, 1 re
 A merged folder held against a **newer inventory of one member**, its gaps
 classified, and — under `--write` — **only ever appended to** (zheref/nen#493
 AC-6; SP-9, SP-10). Every citation of `--code` on a requirement line (FR, SC,
-story) is re-read: its cited bytes at its own sha, and the same range at the
-inventory's sha, both through git in the checkout the checkouts file names
+story) or an acceptance-scenario definition (`AC-###`) is re-read: its cited
+bytes at its own sha, and the same range at the inventory's sha, both through
+git in the checkout the checkouts file names
 (the member chain of [`spec cite-check`](#nen-spec-cite-check), its `origin`
 read back as the inventory's). Each range is `current`, `moved` (the bytes
 are elsewhere in the file now), `changed` (they are nowhere in it),
@@ -13588,8 +13692,9 @@ requirement with a gap is listed under `claims` and closes nothing.
 
 `--write` appends **two things and nothing else**: a `[STALE @ <cited sha>]`
 companion right after each moved, changed or vanished citation — the sentence
-and its citation stay byte for byte, and [`spec check`](#nen-spec-check) reads
-the companion as stale — and one `## Phase <N>: Convergence <date>` section
+and its citation stay byte for byte; [`spec check`](#nen-spec-check) reads
+the companion as stale on FR/SC/story lines, while converge reports it on
+scenario lines too — and one `## Phase <N>: Convergence <date>` section
 (SP-9's heading) at the end of `tasks.md` (created when absent). Its first
 body line, `Inventory: <CODE> @ <sha12>`, records the commit read and is the
 key a rerun finds. Then one open task per gap, numbered after the highest
@@ -13602,6 +13707,9 @@ earlier convergence row, the new row ends `· supersedes T<nnn>` (SP-10's
 reversal line, computed from the two rows). It never renumbers and never
 deletes. A **second run on the same inputs finds its companions and its phase
 and changes zero bytes**; a folder with no gap is left byte-identical.
+If an earlier Nen already recorded the same inventory before it could read
+AC scenarios, convergence appends a new phase containing only the newly
+visible scenario tasks. Existing phases and tasks stay byte-identical.
 
 **Usage**
 
@@ -13632,7 +13740,16 @@ unrequested · action <action>`, one line per gap, per claim and per write.
 `gaps` (`{ class, id, line, detail }` each), `unrequested` (rows, or null),
 `unrequestedReason`, `claims` (`{ line, text, ids }` each), `writes` (`{ file,
 kind: "stale"|"phase", line, text }` each), `action` (`none` \| `written` \|
-`would-write` \| `refused`), `counts` (per class), `reason`. Exit 0 when
+`would-write` \| `refused`), `counts` (per gap class plus `scenariosRead` and
+`scenariosCited`), `reason`. Scenario counts are definition **lines**, outside
+fenced source data: `scenariosRead` includes uncited scenarios;
+`scenariosCited` counts each line once when it has at least one valid citation
+of `--code`, even when that range is stale or unreadable. Other-member or
+malformed citations produce no row. Multiple matching citations still produce
+one `citations[]` entry per range. Text output prints both scenario counts.
+Unreadable reports return zero counts with their refusal reason; they carry
+no partial comparison. Ticked tasks naming an `AC-###` gap are claims just
+as FR/SC tasks are. Exit 0 when
 `converged`; exit 1 on any gap — written or not, it stands until the author
 acts — and when the inputs could not be read; exit 2 on a usage error or a
 spec file resolving outside `--repo`.
@@ -13644,6 +13761,7 @@ nen spec converge --repo . --folder specs/007-converge --inventory /tmp/FX-now.j
 ```
 ```text
 gaps: specs/007-converge against FX fixture-owner/fixture-app @ 0123456789ab -- 0 missing · 1 partial · 0 contradicts · 0 unrequested · action written
+  scenarios: 0 scenario line(s) read · 0 citing FX
   partial FR-001 (spec.md:3) -- 1 moved at 0123456789ab
   unrequested: not computed -- capture/FX/inventory.json does not exist, so there is no earlier capture to tell new rows from old ones
   claim tasks.md:5 ticks FR-001 -- a tick is not evidence; the gap stands
@@ -15345,6 +15463,15 @@ nen shu typecheck: lane 'docs' (gatsby) declares no 'typecheck'. It declares: bu
 ### `nen shu archive`
 
 Produce the lane's distributable artifact. Across the stacks this family is designed for, most lanes declare `{ "unsupported": "<why>" }` here, and the refusal quotes that sentence at exit 4.
+
+On `archive` only, each declared `artifacts[]` row retains `kind`, `value`, `exists` and gains `archive: {status, bytes, modifiedAt, runStartedAt, runEndedAt, producedThisRun, freshness, digest, error}`. Human output names the same facts beside each artifact.
+
+Regular readable files report byte size, UTC modification time, and `digest: {algorithm: "sha256", value: "<hex>"}`. The reader uses a 64KiB buffer, checks the open descriptor against the observed file, and withholds the digest if the file changes during reading. Empty files have zero bytes and their standard SHA-256 digest. Directories, symlinks and other non-regular files are named by status and are never traversed or hashed. Missing files have `status: "missing"` and `exists: false`; filesystem/read failures are `unreadable` with an error, not silently missing. Unavailable byte/digest/freshness facts are null.
+
+For a successfully read file, `producedThisRun` is the timestamp-based freshness verdict: true only when mtime, at the run clock's millisecond precision, lies within the archive invocation's start/end interval (`freshness: "during-run"`). Older artifacts are false/`older-than-run`; future-dated artifacts are false/`after-run`. This is an observation, **not provenance proof**: a timestamp can be preserved or altered, and the build proof still binds a source tree to a build, not an artifact to that tree. Dry runs, preflight refusals and a first child that could not start report `not-inspected`, `not-run` and null freshness/digest facts without opening artifact content.
+
+Artifact facts also accompany a failed archive command; freshness does not mean the command succeeded. These observations do not change the command's exit code or the existing containment refusals. No upload, publication or build-proof behavior changes.
+
 
 
 **Output and exit codes** — the report, as text or `--json`; `0`/`1`/`2`/`3`/`4`/`5` as the family's table above. `--json` is the family's [shared run report](#shu-run-report), with `contract: "nen.shu.archive/v0.1"`.
@@ -17469,14 +17596,15 @@ replayed 10 fixture(s): 10 passed, 0 failed
 Parse a skill invocation against the grammar that skill publishes, echo the
 parse, and refuse an unparseable line with a corrected line ready to paste.
 Three skills carry their own grammar and extra domain logic here because each
-does more than match a template; every other skill supplies its grammar as a
-`--grammar` template.
+does more than match a template. `kage-bunshin` also carries a published
+default template and still accepts explicit `--grammar`; other skills supply
+their grammar as a `--grammar` template.
 
 <a id="family-parse"></a>
 
 **`nen parse`**
 
-Parses a skill invocation against the grammar that skill itself publishes, echoes the parse, and refuses an unparseable line with a corrected line ready to paste -- it never decides that a parsed line is a good idea, only that it matches its own grammar. Three skills (`futon`, `izanagi`, `izanami`) carry their own grammar and extra domain logic baked into this binary because each does strictly more than "match a template": `futon` resolves its repo token against `nen/repos.json`, `izanami` classifies every command against its own read-only allow/refuse table, `izanagi` enforces that its cap is never defaulted. Every OTHER skill name is a caller-supplied `--grammar` template matched against `--line`.
+Parses a skill invocation against the grammar that skill itself publishes, echoes the parse, and refuses an unparseable line with a corrected line ready to paste -- it never decides that a parsed line is a good idea, only that it matches its own grammar. Three skills (`futon`, `izanagi`, `izanami`) carry their own grammar and extra domain logic baked into this binary because each does strictly more than "match a template": `futon` resolves its repo token against `nen/repos.json`, `izanami` classifies every command against its own read-only allow/refuse table, `izanagi` enforces that its cap is never defaulted. `kage-bunshin` defaults to its published template and accepts an explicit `--grammar` for existing callers. Other skill names use a caller-supplied `--grammar` template matched against `--line`.
 
 ### `nen parse <skill>`
 
@@ -17496,8 +17624,8 @@ nen parse <skill> --grammar <template> --line <invocation>
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
-| `<skill>` (positional) | yes | The skill name; used only to build the corrected line. | Any name other than `futon`/`izanagi`/`izanami`. |
-| `--grammar <template>` | yes | The template, exactly as the skill documents it. | A template the engine cannot split unambiguously is a usage error (exit 2), same as an unparseable `--line`. |
+| `<skill>` (positional) | yes | The skill name; used only to build the corrected line. | Any name other than `futon`/`izanagi`/`izanami`; `kage-bunshin` also has a default template. |
+| `--grammar <template>` | except for `kage-bunshin` | The template, exactly as the skill documents it. | A template the engine cannot split unambiguously is a usage error (exit 2), same as an unparseable `--line`. |
 | `--line <text>` | yes | The invocation to parse. | **May be empty** when every clause of the grammar is optional -- see below. |
 
 **An empty `--line` is a complete invocation when nothing is required.** For a
@@ -17549,6 +17677,32 @@ Corrected line:
   backlog-state <repo>
 ```
 (exit 0, exit 0, exit 2: `<repo>` is required, so the empty line is still a refusal there)
+
+For a final optional free-text clause, append `{first}` to its bracket group:
+`<from:a|b> to <to:a|b> [ruling <text>]{first}`. Its literal is matched at the
+first **case-sensitive whole-word** occurrence, before resolving earlier slots.
+Repeated `to` or `ruling` words inside the tail remain text. Unmarked clauses
+keep their existing last-occurrence, case-insensitive behavior. The modifier is
+refused on enumerated/list/suffixed slots, literal-only clauses and clauses
+followed by more grammar. Internal tail whitespace is preserved; surrounding
+invocation/slot whitespace is trimmed as usual.
+
+A space list is written `<urls>{ }`. Whitespace-separated values yield `items`,
+with runs of whitespace normalized to one space in `value`. Hyphen-only symbol
+introducers in corrected lines have a space before them.
+
+The published shadow-clone grammar needs no `--grammar`:
+
+```sh
+nen parse kage-bunshin "https://github.com/zheref/hatsu/issues/470 https://github.com/zheref/nen/issues/300 --parallel --cap 3"
+nen parse kage-bunshin --line="https://github.com/zheref/nen/issues/300 --sequential"
+```
+
+Its template is `<urls>{ } --<mode:sequential|parallel> [--cap <cap>]`.
+Missing URLs or mode and unknown modes refuse by slot name. An absent cap is
+reported as `cap: (clause absent)` and supplies no slot or default number. Cap
+ceilings and URL/repository resolution remain the caller's policy. For a line
+beginning with a hyphen, use `--line=...`, as for other nen flag values.
 
 ### `nen parse futon`
 
@@ -17799,10 +17953,10 @@ nen bootstrap --ref <tag> [--source <owner/name>] [--cache-dir <dir>] [--script 
 **Example**
 
 ```bash
-nen bootstrap --ref v0.30.0 --source zheref/nen
+nen bootstrap --ref v0.31.0 --source zheref/nen
 ```
 ```text
-/home/me/.cache/nen/zheref_nen/v0.30.0/nen-linux-x64
+/home/me/.cache/nen/zheref_nen/v0.31.0/nen-linux-x64
 ```
 (shape derived from `bootstrap/nen.sh`'s own header and `src/supply/bootstrap.ts`/`bootstrap.test.ts` -- not run live, this needs the network and a real published release)
 
@@ -18192,7 +18346,7 @@ no coverage bar is applied, no readiness is computed, nothing is published.
 
 **`nen report`**
 
-`data` gathers what is on a branch against a base — commits, changed files, the artifacts a run left under `.nen/`, the coverage report the lane's declaration names — into one document; `render` fills a template with that document and writes the result. They are two verbs and not one for the same reason [`board build`](#nen-board-build) and [`board render`](#nen-board-render) are: a verb that gathered AND filled would be a verb whose facts exist only inside the rendering that consumed them, so you could neither diff them, store them beside the report, nor re-render from them. `render` takes any JSON, so a caller who assembles their own facts is not locked out of the templating.
+`data` gathers what is on a branch against a base — commits, changed files, the artifacts a run left under `.nen/`, the coverage report the lane's declaration names — into one document; `render` fills a template with that document and writes the result. They are two verbs and not one for the same reason [`board build`](#nen-board-build) and [`board render`](#nen-board-render) are: a verb that gathered AND filled would be a verb whose facts exist only inside the rendering that consumed them, so you could neither diff them, store them beside the report, nor re-render from them. `render` takes any JSON, so a caller who assembles their own facts is not locked out of the templating. [`check`](#nen-report-check) renders every variant `reports.sections` declares, in Markdown and HTML, from the example data, and refuses when the two renders do not hold the declared blocks, the desk or the escaping.
 
 ### `nen report data`
 
@@ -18522,6 +18676,51 @@ flowchart LR
   classDef added stroke-width:2px
   classDef changed stroke-width:2px,stroke-dasharray:0
   classDef removed stroke-width:1px,stroke-dasharray:4 2
+```
+
+### `nen report check`
+
+Renders every variant declared under `reports.sections` in both formats from
+the example data document, and refuses when the two renders do not hold
+([#406](https://github.com/zheref/nen/issues/406)). For each variant — or the
+one `--variant` names — it fills `templates/<template>.md` and
+`templates/<template>.html` from
+`templates/report-examples/<variant>.data.json`. The fill is the same one
+[`report render`](#nen-report-render) uses: the variant's section flags, and,
+when `templates/report-examples/<variant>.graph.json` or
+`templates/graph.example.json` is present, the same graph keys `--graph`
+injects. **Nothing is written** into the repository.
+
+Block order is the `<!-- <slug>:block <name> -->` lines, in the order
+`reports.sections` declares them. The slug is the one the template already
+writes. An HTML render with none of those comments is read from the anchors the
+templates already render (a masthead header, a section id per block). An ask
+is `<!-- <slug>:ask -->`, and exactly one of its option
+lines (`- **A** · …`) carries a star. A value whose HTML escaping shows inside
+a Markdown code span, fence or indented code block is a refusal: a cell that
+shows `&amp;` literally is not the value that was filled.
+
+**Usage**
+
+```text
+nen report check --repo <path> [--variant <name>] [--self-test] [--json]
+```
+
+**Output and exit codes** — one line on stdout when every checked variant
+conforms. Exit 1 prints each miss on stderr, naming the variant, the template
+and the rule: a refused render, a surviving `{{`, a block sequence that is not
+the declared one in either format, the two formats disagreeing, an ask with
+zero or more than one starred option, or escaping that shows in a Markdown
+cell. Exit 2 is wiring: no `reports.sections`, a policy that will not parse, an
+unknown `--variant`, or a missing template or example. `--self-test` renders
+throwaway fixtures for each of those refusals and for the wiring exits, and
+reads no `--repo`. `--json` emits `nen.report.check/v0.1` with `variants`,
+`ok` and `findings`.
+
+**Example**
+
+```bash
+nen report check --repo . --variant turn
 ```
 
 ## Reviewers
@@ -19232,6 +19431,37 @@ declares it — `network: not declared` otherwise) and `config.toml.fragment`
 every persona (the tier under `modelMapped`), `hooks.json`, `cli.json`
 (`Shell(exe:args)` rows plus whatever `surfaces.cursor` declares) and
 `rules/rules.mdc`.
+
+### `nen surface marker`
+
+Read which surface a placed file was generated for, using the same marker reader as
+`surface mirror`. This performs no comparison, refresh or write.
+
+```sh
+nen surface marker --file <path> [--repo <path>] [--json]
+nen surface marker --under <directory> --surface <name> [--repo <path>] [--json]
+```
+
+Relative paths resolve against `--repo` when supplied, otherwise the working directory.
+`--json` emits top-level `contract`, `file`, `generated`, `surface`, `stamp`,
+and `grammar` for a file; or `contract`, `under`, `surface`, `generated`, `matches`
+and `skipped` for a directory. The contract is `nen.surface.marker/v0.1`.
+The file result contains `generated`, `surface`, `stamp`
+and `grammar`: `nen-surface-mirror`, `retired-antigravity`, or null. Current markers
+are read at the first body line after frontmatter, a TOML first line, a script's
+second line, or a JSON top-level `$generated` property or native hook-definition
+name. Quoted markers elsewhere do not count. Retired Antigravity markdown, script
+and JSON-description markers report their grammar and surface with `generated: false`.
+
+Directory results list sorted relative `matches` for current markers of the named
+surface and `skipped` symlinks/special files. Symlink inputs are refused; entries
+inside the directory observed as links are skipped. This is a read-only traversal,
+not an atomic filesystem snapshot; callers must keep the tree stable during the query.
+A read failure refuses the
+whole report, even if another file matched. Exit **0** means a current marker was
+found, **1** means none (including a retired marker), and **2** means invalid
+arguments or a filesystem read failure. A file's marker is provenance metadata,
+not a content-integrity or authenticity check.
 
 ### `nen surface capabilities`
 
@@ -21313,8 +21543,8 @@ notification or an audible cue, because it only ever shells out to `git` and
 
 ```bash
 # 1. Two-step fetch, pinned. Never `latest`.
-curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.30.0/bootstrap/nen.sh -o nen-bootstrap.sh
-nen="$(bash nen-bootstrap.sh --ref v0.30.0)"
+curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.31.0/bootstrap/nen.sh -o nen-bootstrap.sh
+nen="$(bash nen-bootstrap.sh --ref v0.31.0)"
 "$nen" --version
 ```
 
@@ -21325,7 +21555,7 @@ retried. Once a `nen` exists, the in-CLI form pins a second one — pass
 find `bootstrap/nen.sh` relative to itself:
 
 ```bash
-nen bootstrap --ref v0.30.0 --source zheref/nen --script ./nen-bootstrap.sh
+nen bootstrap --ref v0.31.0 --source zheref/nen --script ./nen-bootstrap.sh
 ```
 
 ```bash
@@ -21591,6 +21821,40 @@ A `severity` enumeration with `[+]` is highest-first; two severities such as
 the existing refusal without an invented correction; legacy scalar placeholders stay.
 
 
+#### Readiness states and check detail (#531)
+
+`pr ready` reports each latest check on a non-green checks row in
+`conjuncts[].checks`: `{name, conclusion, excluded}`. Human output names
+conclusions alongside failures and pending checks, and prints excluded checks
+under separate `EXCLUDED` lines. Declared exclusions retain their existing
+ruling/expiry notices; diagnosed offline runners retain the separate runner
+availability report under `--explain`/`--json`. No check policy or offline-runner
+exemption is introduced.
+
+A known MERGED or CLOSED snapshot bypasses readiness-only reads and answers
+`merged` or `closed`, with `terminal: {state, mergeCommit}` in JSON and exit
+`10` rather than not-ready's `1`. MERGED requires a valid full merge commit SHA;
+CLOSED can carry `null`. Terminal answers contain no synthetic unknown gate
+rows and never imply ready-to-merge. Open `mergeable=UNKNOWN` wording is
+unchanged.
+
+#### File-load failures in red checkpoints (#559)
+
+For `tests map --require-red`, give `--names-from-report <file>[,<file>...]`
+when the red run failed before it could list individual tests. This reads
+another complete per-test report for titles and suite identities only; it
+executes nothing and makes no claim about the names report's statuses. A name
+in an exactly matching load-failed suite inherits failure. Names in other
+suites do not, and a criterion is red only if **every** mapped test is red.
+Existing test outcomes always take precedence over inferred file failures.
+JSON records the source paths as `namesReports` and the failed suites as
+`loadFailures`.
+
+Without individual names, a file-level failure returns `could-not-read`, names
+the load-failed suites, and sets criterion checkpoints to `unreadable`, rather
+than silently reporting untested criteria. A names source containing only
+file-level failure placeholders still cannot supply individual titles. The
+flag requires `--require-red`; it does not change `--before-report` semantics.
 `nen stop --prompt-shown --repo <checkout> --effort <id> --pr <number>
 --head <full-judged-sha> --gate G2|G4 [--json]` explicitly records that the
 merge prompt has already been shown. Run it only after displaying the prompt;
