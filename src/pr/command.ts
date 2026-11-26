@@ -1570,6 +1570,7 @@ export const prCommand: Command = {
     { verb: "pr merge", code: 5, meaning: "gh pr merge refused" },
     { verb: "pr merge", code: 6, meaning: "gh could not be started" },
     { verb: "pr merge", code: 7, meaning: "--delivery: merged without authority; GitHub reports a base other than the one gated" },
+    { verb: "pr ready", code: 10, meaning: "the pull request is merged or closed; no readiness verdict is needed" },
     { verb: "pr ready", code: 8, meaning: "--require-head did not match GitHub's head; no verdict" },
     { verb: "pr version-collision", code: 8, meaning: "--require-head did not match GitHub's head; no collision decided" },
     { verb: "pr converge", code: 3, meaning: "--composite: a read did not finish, or was at another head than --require-head; no verdict" },
@@ -1715,6 +1716,7 @@ function convergeVerb(context: CommandContext): number | Promise<number> {
   const report = converge(input.issues, input.body, policy, catalogue);
   const closingIssues = input.issues.map((issue) => ({
     issue: `${issue.target}#${issue.number}`,
+    ...(issue.report.criteriaSource?.kind === "comment" ? { criteriaSource: issue.report.criteriaSource } : {}),
     criteria: issue.report.criteria.length,
     verifiable: issue.report.verifiable,
     unrecognised: issue.report.unrecognised,
@@ -1737,6 +1739,7 @@ function convergeVerb(context: CommandContext): number | Promise<number> {
         `${counts["malformed-row"]} malformed-row, ${counts["duplicate-rows"]} duplicate-rows, ${counts["not-verifiable"]} not-verifiable`;
   const lines = [
     head,
+    ...input.issues.flatMap((issue): string[] => issue.report.criteriaSource?.kind === "comment" ? [`CRITERIA SOURCE ${issue.target}#${issue.number}: ${issue.report.criteriaSource.url}; ignored: ${issue.report.criteriaSource.ignored.join(", ")}`] : []),
     ...report.criteria.map(
       (entry): string =>
         `${entry.coverage.toUpperCase()}  ${entry.issue}/${entry.id ?? "(no AC row)"}` +

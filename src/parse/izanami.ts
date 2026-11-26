@@ -1285,6 +1285,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       data: RO("assembles one report document from git reads and files already on disk -- it has no write path in any form"),
       render: DRY("fills a template and WRITES --out, unless --dry-run is given, which prints the token list and writes nothing"),
       mermaid: RO("prints the mermaid text for a --graph document -- one file read, nothing written, no template involved"),
+      check: RO("renders each declared report variant in both formats from its example data and refuses a block, desk or escaping miss -- reads files, writes nothing into the repository"),
     },
   },
   // `review scopes` classifies a branch diff against the repository's own
@@ -1305,6 +1306,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       // ledgers), and a refused budget claim writes nothing either.
       start: DRY("writes the run manifest under the git common dir unless --dry-run is given"),
       append: DRY("reads the PR over gh pr view and records it in the run manifest unless --dry-run is given"),
+      claim: DRY("records a claimed effort in the run manifest unless --dry-run is given"),
       park: DRY("records a parked effort in the run manifest unless --dry-run is given"),
       // zheref/nen#486 AC-5: reads the consumer's run manifest (never writes it)
       // and every PR over gh pr view; writes nen's manifest unless --dry-run.
@@ -1326,6 +1328,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
   // `--run`, and its bare form reads the runners list and nothing more.
   runner: {
     subcommands: {
+      summary: RO("reads only the newest local registration summary after launch"),
       inventory: RO("lists a repository's self-hosted runners and runner downloads -- gh api GET reads only"),
       plan: GATED(["--out"], "computes a registration plan from gh reads; --out writes it to a file"),
       script: DRY("writes the rendered host script to --out unless --dry-run is given; never runs it"),

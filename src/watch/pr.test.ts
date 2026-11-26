@@ -190,6 +190,7 @@ const CHECK_NAMES = ["compile", "linux", "macos"];
 function source(snapshot: Snapshot): PrStateSource {
   const pr: PullRequestSnapshot = {
     pullRequest: {
+      state: "OPEN",
       number: 9,
       mergeable: "MERGEABLE",
       isDraft: false,

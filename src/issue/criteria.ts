@@ -19,7 +19,7 @@
 // wrong number of cells) is `malformed-row`, never skipped, and two rows for
 // one criterion are `duplicate-rows`: nen will not pick one.
 
-import { criterionCellPatterns, criterionGrammar, criterionId, DEFAULT_CRITERION_GRAMMAR, MAX_CRITERION_CELL, MAX_QUALIFIED_CELL, maskedLines, readIdRows, sectionLines, type CriterionGrammar, type IssueSectionsCatalogue } from "./shape.js";
+import { LIST_LEAD, criterionCellPatterns, criterionGrammar, criterionId, DEFAULT_CRITERION_GRAMMAR, MAX_CRITERION_CELL, MAX_QUALIFIED_CELL, maskedLines, readIdRows, sectionLines, type CriterionGrammar, type IssueSectionsCatalogue } from "./shape.js";
 
 /** The `--json` contract of `nen issue criteria`. */
 export const ISSUE_CRITERIA_CONTRACT = "nen.issue.criteria/v0.1";
@@ -38,6 +38,7 @@ export interface Criterion {
 }
 
 export interface CriteriaReport {
+  readonly criteriaSource?: { readonly kind: "body" | "comment"; readonly url: string; readonly ignored: readonly string[] };
   /** False when the body carries no AC row: nothing to verify, never "all verified". */
   readonly verifiable: boolean;
   readonly criteria: readonly Criterion[];
@@ -66,7 +67,16 @@ export function extractCriteria(body: string, catalogue: IssueSectionsCatalogue 
     catalogue === null || catalogue.criteriaSections.length === 0
       ? maskedLines(body, { keepInlineCode: true })
       : sectionLines(body, catalogue, catalogue.criteriaSections, { keepInlineCode: true });
-  const read = readIdRows(scope, grammar.prefix, grammar.tail);
+  const rule = catalogue?.sections.find((section) => catalogue.criteriaSections.includes(section.id))?.rows;
+  const open = rule?.pattern === undefined ? null : new RegExp(rule.pattern);
+  const resolved = rule?.resolvedPattern === undefined ? null : new RegExp(rule.resolvedPattern);
+  const admitted = scope.filter((line) => {
+    const lead = LIST_LEAD.exec(line.text);
+    if (lead === null || (lead[1] ?? "").includes(">")) return true;
+    const canonical = `- ${line.text.slice(lead[0].length)}`;
+    return resolved === null || !resolved.test(canonical);
+  });
+  const read = readIdRows(admitted, grammar.prefix, grammar.tail, open);
   const criteria: Criterion[] = read.rows.map((row): Criterion => ({ id: row.id, number: row.number, text: row.text, line: row.line }));
   const lines = new Map<string, number[]>();
   for (const criterion of criteria) lines.set(criterion.id, [...(lines.get(criterion.id) ?? []), criterion.line]);
@@ -121,10 +131,10 @@ function unwrap(cell: string): string {
 /** A table line's cells, split on unescaped pipes (GFM: a pipe inside a code span splits too unless escaped). */
 function cellsOf(text: string): string[] | null {
   const trimmed = text.trim();
-  if (!trimmed.startsWith("|")) return null;
+  if (!trimmed.includes("|")) return null;
   const cells: string[] = [];
   let current = "";
-  for (let index = 1; index < trimmed.length; index += 1) {
+  for (let index = trimmed.startsWith("|") ? 1 : 0; index < trimmed.length; index += 1) {
     const char = trimmed[index] as string;
     if (char === "\\" && trimmed[index + 1] === "|") {
       current += "|";
@@ -175,13 +185,24 @@ export function readVerifyRows(body: string, grammar: CriterionGrammar = DEFAULT
   // default, `<id>` and the shape for a catalogue's.
   const n = grammar.tail === DEFAULT_CRITERION_GRAMMAR.tail ? "<n>" : "<id>";
   const shapeNote = n === "<n>" ? "" : ` (<id> in the shape '${grammar.tail}')`;
-  for (const line of maskedLines(body, { keepInlineCode: true })) {
+  let table = true;
+  const lines = maskedLines(body, { keepInlineCode: true });
+  for (const [index, line] of lines.entries()) {
     const cells = cellsOf(line.text);
-    if (cells === null || cells.length === 0) continue;
+    if (cells === null || cells.length === 0) {
+      if (line.text.trim() === "" || /^ {0,3}(?:#|>|[-+*]\s|\d+[.)]\s)/.test(line.text)) table = true;
+      continue;
+    }
+    const next = cellsOf(lines[index + 1]?.text ?? "");
+    if (next !== null && next.every((cell) => /^:?-+:?$/.test(cell))) {
+      table = cells.length === 3 && cells.map(unwrap).map((cell) => cell.toLowerCase()).join("|") === "criterion|coverage|evidence";
+      continue;
+    }
+    if (!table) continue;
     const first = cells[0] as string;
     const criterion = parseCriterionCell(first, grammar);
     if (criterion === null) {
-      if (mention.test(first)) {
+      if (mention.test(unwrap(first))) {
         rows.push({ line: line.line, raw: line.text.trim(), cell: first, criterion: null, word: null, evidence: "", problem: `'${first}' is not a criterion: write ${p}-${n}, <CODE>#<N>/${p}-${n}, <owner/name>#<N>/${p}-${n} or none${shapeNote}${overCap(unwrap(first)) ? `; a criterion id is at most ${MAX_CRITERION_CELL} characters, its cell at most ${MAX_QUALIFIED_CELL}` : ""}` });
       }
       continue;

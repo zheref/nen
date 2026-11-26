@@ -1,7 +1,7 @@
 {
   "contract": "nen.pr.ready/v0.1",
   "verdict": "not-ready",
-  "gateLine": "not-ready: required checks reported but are not all green (CON-32a) — failing: ci / build",
+  "gateLine": "not-ready: required checks reported but are not all green (CON-32a) — failing: ci / build (FAILURE)",
   "firstFailing": "checks-green",
   "failing": [
     "checks-green"
@@ -25,9 +25,16 @@
       "title": "Every reported check green, on the latest run per check name",
       "order": 2,
       "status": "failed",
-      "reason": "not-ready: required checks reported but are not all green (CON-32a) — failing: ci / build",
+      "reason": "not-ready: required checks reported but are not all green (CON-32a) — failing: ci / build (FAILURE)",
       "note": null,
-      "missing": null
+      "missing": null,
+      "checks": [
+        {
+          "name": "ci / build",
+          "conclusion": "FAILURE",
+          "excluded": false
+        }
+      ]
     },
     {
       "id": "round-stalled",
