@@ -19,6 +19,7 @@ import {
   type LineLengthRules,
 } from "./bodywidth.js";
 import { loadWorkflow } from "../schema/workflow.js";
+import { makeTempDir } from "../testing/tempdir.js";
 
 /** A checkout root holding exactly these files. */
 function repo(files: Record<string, string>): string {
@@ -298,13 +299,19 @@ describe("lineLengthFindings -- the one check both verbs run", () => {
     expect(within.notes[1]).toMatch(/^'footer-max-line-length' NOT read: /);
     const bare = lineLengthFindings(message("w".repeat(60), "Refs: #1"), readLineLengthRules(repo({}), declared(50)));
     expect(bare.refusals).toHaveLength(1);
-    // The note ends at the scratch path: no "keep the two in step" clause. Matched by
-    // what follows the path, never by the path's own last character -- the temp
-    // directory's random suffix ends in any letter (a suffix ending in 'p' failed
-    // the old `[^p]$` on the macOS runner, delivery round on zheref/nen#498).
-    const notes = lineLengthFindings(message("short"), readLineLengthRules(repo({}), declared(50))).notes;
-    expect(notes).toEqual([expect.stringMatching(/applies it because no commitlint config was found at \S+$/)]);
-    expect(notes[0]).not.toMatch(/keep the two in step/);
+  });
+
+  it("prints the exact no-config note when the checkout name ends in p (#347)", () => {
+    const root = join(makeTempDir("nen-bodywidth-"), "checkout-p");
+    mkdirSync(join(root, ".git"), { recursive: true });
+    // A suffix ending in 'p' failed the former `[^p]$` assertion (macOS CI on
+    // #498). The note is the sentence plus this directory, final character included.
+    const found = lineLengthFindings(message("short"), readLineLengthRules(root, declared(50)));
+    expect(found).toEqual({
+      refusals: [],
+      warnings: [],
+      notes: [`body-max-line-length checked against commits.bodyMaxLineLength in /r/nen/workflow.json, 50; nen applies it because no commitlint config was found at ${root}`],
+    });
   });
 
   it("prints the not-applied note on every run beside a readable config, and follows the config", () => {
