@@ -70,7 +70,19 @@ describe("runner summary", () => {
       const granted = ps(`${preamble}
         $Me = '*' + $sid.Value
         function Invoke-Icacls { & icacls @args | Out-Null; if ($LASTEXITCODE -ne 0) { throw 'icacls failed' } }
-        ${grantLines.join("\n")}`);
+        # icacls resolves the child through its parent. The real writer is
+        # elevated; this fixture grants temporary parent listing only while
+        # applying the child's rule, then removes it before the reader runs.
+        $writerAcl = New-Object Security.AccessControl.DirectorySecurity
+        $writerAcl.SetAccessRuleProtection($true, $false)
+        $writerAcl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid, 'Traverse,ListDirectory', 'Allow')))
+        [IO.Directory]::SetAccessControl($Root, $writerAcl)
+        ${grantLines.find((line) => line.includes("$ProjectDir"))}
+        $readerAcl = New-Object Security.AccessControl.DirectorySecurity
+        $readerAcl.SetAccessRuleProtection($true, $false)
+        $readerAcl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid, 'Traverse', 'Allow')))
+        [IO.Directory]::SetAccessControl($Root, $readerAcl)
+        ${grantLines.find((line) => line.includes("$Root"))}`);
       expect(granted.status, String(granted.stderr)).toBe(0);
       expect(readSummary(plan, LAUNCH, "win32")).toMatchObject({ verdict: "read", registered: 2, skipped: 1, failed: 0 });
     } finally {
