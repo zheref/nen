@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { makeTempDir } from "../testing/tempdir.js";
 import { planClaim, planPark, planStart, type RunManifest } from "./manifest.js";
 import { normaliseManifest } from "./issue.js";
 import { planImport, type ConsumerRun } from "./import.js";
@@ -66,4 +69,30 @@ describe("claim and park lifecycle (NN#564)", () => {
     const parked = planPark(second, ISSUE, "hold", time(1)).manifest;
     expect(() => planClaim(parked, ISSUE, "C", time(1))).toThrow(/clock/);
   });
+  it("imports a park after a legacy code-form reclaim without rewriting claim history", async () => {
+    const root = makeTempDir("nen-claim-replay-");
+    mkdirSync(join(root, "nen"));
+    writeFileSync(join(root, "nen", "repos.json"), JSON.stringify({ consumers: [{ repo: "zheref/nen", code: "NN", consumes: [] }], product_codes: { NN: "zheref/nen" } }));
+    const manifest = { ...empty(), claims: [{ issue: "NN#564", branch: "A", at: time(3) }], parked: [{ issue: ISSUE, row: "hold", at: time(2) }] };
+    const result = planImport(new ScriptedSeams([]), manifest, historical(time(4)), "r1", time(6), root);
+    expect(result.manifest.claims).toEqual(manifest.claims);
+    expect((await readSlots(result.manifest)).efforts).toHaveLength(0);
+    expect(planImport(new ScriptedSeams([]), result.manifest, historical(time(2)), "r1", time(6), root).outcome).toBe("unchanged");
+  });
+
+  it("writes the canonical caller identity when reparking a legacy cross-repository row", async () => {
+    const issue = "zheref/hatsu#564";
+    const manifest = { ...empty(), claims: [{ issue, branch: "A", at: time(3) }], parked: [{ issue: "HA#564", row: "hold", at: time(2) }] };
+    const result = planPark(manifest, issue, "hold", time(4), (ref): string => ref === "HA#564" ? issue : ref);
+    expect(result.entry.issue).toBe(issue);
+    expect((await readSlots(result.manifest)).efforts).toHaveLength(0);
+  });
+
+  it("replays an existing historical park without needing to interpret unreadable claims", () => {
+    const manifest = { ...empty(), claims: "unreadable", parked: [{ issue: ISSUE, row: "hold", at: time(4) }] };
+    expect(planPark(manifest, ISSUE, "hold", time(2)).manifest).toBe(manifest);
+    expect(planPark(manifest, ISSUE, "hold", time(4)).manifest).toBe(manifest);
+    expect(() => planPark(manifest, ISSUE, "hold", time(5))).toThrow(/stored claims are unreadable/);
+  });
+
 });

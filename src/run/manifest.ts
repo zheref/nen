@@ -744,13 +744,14 @@ export function planPark(
   const previous = manifest.parked.filter((entry): boolean => matches(entry.issue) && entry.row === row)
     .reduce<RunParked | undefined>((latest, entry) => latest === undefined || Date.parse(entry.at) > Date.parse(latest.at) ? entry : latest, undefined);
   if (previous !== undefined) {
+    if (Date.parse(now) <= Date.parse(previous.at)) return { outcome: "unchanged", manifest, entry: previous };
     const read = readClaims(manifest);
     if (!read.ok) throw new RunManifestError("cannot record park: stored claims are unreadable; values left untouched.");
     const reclaimed = read.claims.some((claim): boolean => matches(claim.issue) && Date.parse(claim.at) > Date.parse(previous.at) && Date.parse(claim.at) <= Date.parse(now));
     // Imported parks carry their original time. Replaying an old park must
     // neither erase a newer park nor manufacture one after a reclaim.
-    if (!reclaimed || Date.parse(now) <= Date.parse(previous.at)) return { outcome: "unchanged", manifest, entry: previous };
-    const entry: RunParked = { ...previous, at: now };
+    if (!reclaimed) return { outcome: "unchanged", manifest, entry: previous };
+    const entry: RunParked = { ...previous, issue, at: now };
     return { outcome: "parked", manifest: { ...manifest, parked: manifest.parked.map((park): RunParked => park === previous ? entry : park) }, entry };
   }
   const entry: RunParked = { issue, row, at: now };
