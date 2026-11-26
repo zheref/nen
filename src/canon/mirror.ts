@@ -633,6 +633,15 @@ export function guardSurface(root: string, rendering: SurfaceRendering): readonl
         );
       }
     }
+    // A marked orphan is not in the rendering, so the loop above never sees it.
+    // Deleting one that still holds a conflict would throw away an unresolved
+    // merge (zheref/nen#349). Refuse it with the same cause as a conflicted write.
+    const generated = new Set(rendering.files.map((file): string => file.path));
+    for (const entry of directoryEntries(root, rule)) {
+      if (generated.has(entry.path) || !entry.marked) continue;
+      const conflict = findConflictMarker(readFileSync(absolute(root, entry.path), "utf8"));
+      if (conflict !== null) refusals.push(conflictRefusal(entry.path, conflict));
+    }
     return refusals;
   }
   const path = absolute(root, rule.file);
@@ -738,6 +747,12 @@ export function writeSurface(root: string, rendering: SurfaceRendering, dryRun =
 
 export type DriftClass = "missing" | "extra" | "stale" | "handEdited";
 
+/** An unresolved merge conflict `check` found. The line is 1-based in the whole destination (zheref/nen#349). */
+export interface MirrorConflict {
+  readonly path: string;
+  readonly line: number;
+}
+
 export interface SurfaceCheckReport {
   readonly surface: string;
   readonly location: string;
@@ -751,6 +766,8 @@ export interface SurfaceCheckReport {
   readonly stale: readonly string[];
   /** Marked for this pin but not a fresh rendering's bytes -- or carrying no marker at all. */
   readonly handEdited: readonly string[];
+  /** Destinations holding a real conflict fence. Named instead of hand-edited (zheref/nen#349). */
+  readonly conflicts: readonly MirrorConflict[];
   /** Unmarked, sourceless files beside the mirror: the consumer's own, not drift. */
   readonly foreign: readonly string[];
 }
@@ -758,7 +775,7 @@ export interface SurfaceCheckReport {
 const BLOCK_PREAMBLE = "(text inside the block before its first canon section)";
 
 function emptyReport(rendering: SurfaceRendering): SurfaceCheckReport {
-  return { surface: rendering.surface, location: rendering.location, ok: [], missing: [], extra: [], stale: [], handEdited: [], foreign: [] };
+  return { surface: rendering.surface, location: rendering.location, ok: [], missing: [], extra: [], stale: [], handEdited: [], conflicts: [], foreign: [] };
 }
 
 function checkDirectory(root: string, rendering: SurfaceRendering, rule: DirectoryRule, pin: CanonPin): SurfaceCheckReport {
@@ -766,6 +783,7 @@ function checkDirectory(root: string, rendering: SurfaceRendering, rule: Directo
   const missing: string[] = [];
   const stale: string[] = [];
   const handEdited: string[] = [];
+  const conflicts: MirrorConflict[] = [];
   for (const file of rendering.files) {
     const path = absolute(root, file.path);
     if (!existsSync(path) || !statSync(path).isFile()) {
@@ -773,6 +791,14 @@ function checkDirectory(root: string, rendering: SurfaceRendering, rule: Directo
       continue;
     }
     const existing = normalizeEol(readFileSync(path, "utf8"));
+    // Before the marker: a conflict on line 1 has no readable marker, and one
+    // below an intact marker differs in bytes. Either used to read as hand-edited
+    // (zheref/nen#349). findConflictMarker is the same detector generate uses.
+    const conflict = findConflictMarker(existing);
+    if (conflict !== null) {
+      conflicts.push({ path: file.path, line: conflict.line });
+      continue;
+    }
     const marker = readFileMarker(existing);
     if (marker === null) handEdited.push(file.path);
     else if (!samePin(marker, pin)) stale.push(file.path);
@@ -793,6 +819,7 @@ function checkDirectory(root: string, rendering: SurfaceRendering, rule: Directo
     extra: extra.sort(),
     stale: stale.sort(),
     handEdited: handEdited.sort(),
+    conflicts: conflicts.sort((a, b): number => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)),
     foreign: foreign.sort(),
   };
 }
@@ -839,7 +866,12 @@ function checkDocument(
   const base = emptyReport(rendering);
   const path = absolute(root, rule.file);
   if (!existsSync(path) || !statSync(path).isFile()) return { ...base, missing: files };
-  const lookup = findBlock(normalizeEol(readFileSync(path, "utf8")));
+  const existing = normalizeEol(readFileSync(path, "utf8"));
+  // The whole document is one destination. A conflict in the block or in the
+  // consumer's prose is the conflict cause, not a hand edit of every section.
+  const conflict = findConflictMarker(existing);
+  if (conflict !== null) return { ...base, conflicts: [{ path: rule.file, line: conflict.line }] };
+  const lookup = findBlock(existing);
   if (lookup.kind === "none") return { ...base, missing: files };
   // A block whose marker pair is broken is a hand edit to every rule in it:
   // nothing inside can be trusted to be where nen left it.
@@ -874,7 +906,7 @@ export function checkSurface(
 }
 
 export function surfaceReportOk(report: SurfaceCheckReport): boolean {
-  return report.missing.length === 0 && report.extra.length === 0 && report.stale.length === 0 && report.handEdited.length === 0;
+  return report.missing.length === 0 && report.extra.length === 0 && report.stale.length === 0 && report.handEdited.length === 0 && report.conflicts.length === 0;
 }
 
 const ISSUE_LABELS: Readonly<Record<DriftClass, string>> = {
@@ -888,6 +920,9 @@ const ISSUE_LABELS: Readonly<Record<DriftClass, string>> = {
 export function renderReportMarkdown(reports: readonly SurfaceCheckReport[]): string {
   const rows: string[] = [];
   for (const report of reports) {
+    for (const conflict of report.conflicts) {
+      rows.push(`| \`${report.surface}\` | \`${conflict.path}\` | unresolved merge conflict (line ${conflict.line}) |`);
+    }
     for (const key of ["handEdited", "stale", "missing", "extra"] as const) {
       for (const file of report[key]) rows.push(`| \`${report.surface}\` | \`${file}\` | ${ISSUE_LABELS[key]} |`);
     }

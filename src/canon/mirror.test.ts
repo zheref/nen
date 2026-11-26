@@ -342,6 +342,22 @@ describe("a directory surface on disk -- guard, write, check", () => {
     expect(guardSurface(root, renderSurface(row("claude-code"), sources(), PIN))).toEqual([]);
   });
 
+  it("refuses a marked orphan that holds a conflict, and still deletes one whose only '=======' is a setext heading (#349)", () => {
+    const root = tempDir();
+    const dir = join(root, ".claude", "rules");
+    mkdirSync(dir, { recursive: true });
+    const rendering = renderSurface(row("claude-code"), sources(), PIN);
+    const conflicted = `${fileMarker(PIN, "99-gone.md")}\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> topic\n`;
+    writeFileSync(join(dir, "99-gone.md"), conflicted);
+    expect(guardSurface(root, rendering)).toEqual([
+      ".claude/rules/99-gone.md has an unresolved merge conflict (line 2: '<<<<<<< HEAD'), so it is not regenerated over and nothing is written. Finish the merge -- resolve the conflict, or check out either side -- then regenerate.",
+    ]);
+    expect(readFileSync(join(dir, "99-gone.md"), "utf8")).toBe(conflicted);
+    writeFileSync(join(dir, "99-gone.md"), `${fileMarker(PIN, "99-gone.md")}\nTesting\n=======\n`);
+    expect(guardSurface(root, rendering)).toEqual([]);
+    expect(writeSurface(root, rendering).deleted).toEqual([".claude/rules/99-gone.md"]);
+  });
+
   it("findConflictMarker reports the first '<<<<<<<'/'>>>>>>>' line, 1-based, or null", () => {
     expect(findConflictMarker("a\nb\n")).toBeNull();
     expect(findConflictMarker("Testing\n=======\n")).toBeNull();
@@ -509,8 +525,48 @@ describe("a document surface on disk -- the managed block inside AGENTS.md", () 
   });
 });
 
+describe("checkSurface conflict causes (#349)", () => {
+  const hunk = "<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> topic\n";
+
+  for (const surface of ["claude-code", "codex"]) {
+    it.each([1, 2])(`${surface}: reports the conflict line before classifying markers (line %i)`, (line) => {
+      const root = tempDir();
+      const src = sources();
+      const rendering = renderSurface(row(surface), src, PIN);
+      writeSurface(root, rendering);
+      const path = surface === "codex" ? "AGENTS.md" : ".claude/rules/01-a.md";
+      const original = readFileSync(join(root, path), "utf8");
+      const firstBreak = original.indexOf("\n") + 1;
+      const text = line === 1 ? hunk + original : original.slice(0, firstBreak) + hunk + original.slice(firstBreak);
+      writeFileSync(join(root, path), text);
+      const report = checkSurface(root, rendering, PIN, src);
+      expect(report.conflicts).toEqual([{ path, line }]);
+      expect(report.handEdited).toEqual([]);
+      expect(surfaceReportOk(report)).toBe(false);
+      expect(renderReportMarkdown([report])).toContain(`| \`${surface}\` | \`${path}\` | unresolved merge conflict (line ${line}) |`);
+      expect(readFileSync(join(root, path), "utf8")).toBe(text);
+    });
+
+    it(`${surface}: keeps a hand-written setext heading out of the conflict class`, () => {
+      const root = tempDir();
+      const src = sources();
+      const rendering = renderSurface(row(surface), src, PIN);
+      writeSurface(root, rendering);
+      const path = surface === "codex" ? "AGENTS.md" : ".claude/rules/01-a.md";
+      const text = surface === "codex"
+        ? readFileSync(join(root, path), "utf8").replace("Hello World.", "Testing\n=======")
+        : "Testing\n=======\n";
+      writeFileSync(join(root, path), text);
+      const report = checkSurface(root, rendering, PIN, src);
+      expect(report.conflicts).toEqual([]);
+      expect(report.handEdited).toEqual([surface === "codex" ? "01-a.md" : path]);
+      expect(surfaceReportOk(report)).toBe(false);
+    });
+  }
+});
+
 describe("renderReportMarkdown", () => {
-  const empty = { location: "x", ok: [], missing: [], extra: [], stale: [], handEdited: [], foreign: [] };
+  const empty = { location: "x", ok: [], missing: [], extra: [], stale: [], handEdited: [], conflicts: [], foreign: [] };
 
   it("renders one row per drift entry, naming the surface, and no row for ok or foreign", () => {
     const markdown = renderReportMarkdown([
