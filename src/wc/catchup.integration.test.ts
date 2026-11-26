@@ -61,8 +61,8 @@ const HAVE_GIT = usableGit();
 
 // NN#712: the shared Windows pool took 5.2–5.6s for the fork case's
 // sequential local Git operations. Keep a finite per-test budget here;
-// other platforms retain 5s and explicitly longer cases keep their limits.
-const REAL_GIT_TEST_MS = process.platform === "win32" ? 15_000 : 5_000;
+// other platforms inherit the runner timeout and explicit cases keep their limits.
+const REAL_GIT_SUITE_OPTIONS = process.platform === "win32" ? { timeout: 15_000 } : {};
 
 function pin(repo: string): void {
   mustGit(repo, ["config", "core.autocrlf", "false"]);
@@ -143,7 +143,7 @@ afterAll(() => {
   }
 });
 
-describe.skipIf(!HAVE_GIT)("nen wc catch-up, against the real git", { timeout: REAL_GIT_TEST_MS }, () => {
+describe.skipIf(!HAVE_GIT)("nen wc catch-up, against the real git", REAL_GIT_SUITE_OPTIONS, () => {
   it("REBASE conflict: `ours` is this branch's side even though git holds it in stage 3, and a staged resolution resumes", async () => {
     const work = branchWith("rebase-conflict", { "README.md": "branch side\n" });
     advanceMain({ "README.md": "main side\n" }, "docs: main side");
@@ -309,7 +309,7 @@ const releaseEdits = (dir: string, version: string, extra: Readonly<Record<strin
   ...extra,
 });
 
-describe.skipIf(!HAVE_GIT)("nen wc catch-up classifies a conflict, against the real git (#326)", { timeout: REAL_GIT_TEST_MS }, () => {
+describe.skipIf(!HAVE_GIT)("nen wc catch-up classifies a conflict, against the real git (#326)", REAL_GIT_SUITE_OPTIONS, () => {
   it("a MIXED stop: every path classed and counted, the mechanical commands printed, and still exit 1 because one path is 'other'", async () => {
     seedCase("mixed");
     const work = branchWith("mixed-classes", releaseEdits("mixed", "0.2.0", { "mixed/src.ts": "export const x = 2;\n" }));
@@ -480,7 +480,7 @@ describe.skipIf(!HAVE_GIT)("nen wc catch-up classifies a conflict, against the r
   }, GIT_CASE_MS);
 });
 
-describe.skipIf(!HAVE_GIT)("nen wc publish, against the real git", { timeout: REAL_GIT_TEST_MS }, () => {
+describe.skipIf(!HAVE_GIT)("nen wc publish, against the real git", REAL_GIT_SUITE_OPTIONS, () => {
   it("pushes the branch as refs/heads/<b>:refs/heads/<b>, and -u sets the upstream", async () => {
     const work = branchWith("plain-push", { "push.txt": "push\n" });
     const sha = mustGit(work, ["rev-parse", "HEAD"]);
