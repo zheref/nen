@@ -986,19 +986,19 @@ describe("merge unit shares trusted bot policy verdict (#408)", () => {
 });
 
 
-it("refuses the shared bounded agent merge gate under merge-is-approval (NEN-661/AC-4)", async () => {
+it.each([true, false])("keeps human readiness separate from agent merge authorization (%s) (NEN-661/AC-4)", async (forAgentMerge) => {
   const root = tmpRoot();
   const config = readFileSync(new URL("../schema/fixtures/human-merge/nen/gates.json", import.meta.url), "utf8");
   writeFileSync(join(root, "nen/gates.json"), config);
   const source = readySource();
   const snapshot = await source.pullRequestSnapshot({ owner: "zheref", repo: "example" }, 9);
-  const result = await runReadyGate({ target: { owner: "zheref", repo: "example", slug: "zheref/example" }, seams: new ScriptedSeams([]), prNumber: 9, ghRepoFlag: "zheref/example", repoFlag: root, deps: readyDeps({
+  const result = await runReadyGate({ forAgentMerge, target: { owner: "zheref", repo: "example", slug: "zheref/example" }, seams: new ScriptedSeams([]), prNumber: 9, ghRepoFlag: "zheref/example", repoFlag: root, deps: readyDeps({
     ...source,
     pullRequestSnapshot: async () => ({ ...snapshot, pullRequest: { ...snapshot.pullRequest!, author: { login: "solo-maintainer", __typename: "User" } } }),
     fileAtRef: async () => config,
     reviews: async () => [{ user: { login: "review-bot" }, state: "COMMENTED", commit_id: HEAD, submitted_at: "2025-01-01T00:00:00Z" }],
   }) });
-  expect(result.ok).toBe(false);
-  expect(result.lines.join("\n")).toContain("ready: ready for the human merge decision");
-  expect(result.lines.join("\n")).toContain("refused for an agent merge");
+  expect(result.ok).toBe(!forAgentMerge);
+  expect(result.lines.join("\n")).toContain("ready for the human merge decision");
+  expect(result.lines.join("\n").includes("refused for an agent merge")).toBe(forAgentMerge);
 });

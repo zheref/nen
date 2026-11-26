@@ -139,6 +139,8 @@ function captureIo(): { readonly io: Io; readonly outLines: string[]; readonly e
 }
 
 export interface RunReadyGate {
+  /** Mutating callers additionally enforce that the decision belongs to a human. */
+  readonly forAgentMerge?: boolean;
   readonly target: Target;
   readonly prNumber: number;
   readonly repoFlag: string | null;
@@ -222,7 +224,7 @@ export async function runReadyGate(options: RunReadyGate): Promise<ReadyGateOutc
   // --reviewers, so the base's file is the one route a merge may rest on; an
   // absent `meta.identities`, or a route a later build adds, is refused.
   const read = parsed.meta?.identities?.read;
-  const humanOnly = parsed.meta?.approvalPolicy === "merge-is-approval";
+  const humanOnly = options.forAgentMerge === true && parsed.meta?.approvalPolicy === "merge-is-approval";
   const untrusted = read !== "base";
   const refusal =
     untrusted && parsed.verdict === "ready"
@@ -702,6 +704,7 @@ export async function mergeUnit(options: MergeUnitOptions): Promise<MergeUnitOut
   const target = resolveTargetForMerge(options.seams, options.root, ref);
 
   const readyGate = await runReadyGate({
+    forAgentMerge: true,
     target,
     prNumber: ref.number,
     repoFlag: options.repoFlag,

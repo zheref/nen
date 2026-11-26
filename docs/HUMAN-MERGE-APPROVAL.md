@@ -9,16 +9,18 @@ still requires their review round, because this policy changes only the approval
 
 On that human's own PR (GitHub must identify the author as a User), readiness
 retains the approver and says **ready for the human merge decision**. It explicitly
-states that no review approval or merge has occurred. Required checks, reviewer
+states that no human approval is inferred and no merge has occurred. Required checks, reviewer
 rounds, conditional approvers and thread conditions remain binding. For another
 author, the named human's ordinary approval remains required.
 
 After a merge, `pr ready` reports the merge as the human approval decision only
 when GitHub's `mergedBy` User matches the declared identity and the gate declaration
-was read successfully. A different, missing, or bot merger is not confirmed as human
+was read successfully from the recorded PR base or an explicit external caller-supplied
+file. The report names that source and qualifies the approval under that declaration;
+it does not claim to have verified which policy was in force at merge time. An
+alternate checkout-local file cannot establish approval. A different, missing, or bot merger is not confirmed as human
 approval; a closed PR is never approval. Terminal exit code 10 stays unchanged.
 This records the GitHub actor; it cannot distinguish a person from software using
 that person's credentials. No review is created, and Nen's bounded agent merge
 routes refuse this policy. Repositories without this explicit opt-in keep their
 existing behavior. Consumer adoption follows a release containing this capability.
-

@@ -4,6 +4,7 @@
 // network -- `deps.openSource` is the one seam this file drives).
 
 import { afterEach, describe, expect, it } from "vitest";
+import { makeTempDir } from "../testing/tempdir.js";
 import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -3230,7 +3231,7 @@ it("honours the requested head before reporting a terminal state (#531)", async 
 
 describe("human merge reporting (NEN-661/AC-2, AC-4)", () => {
   const config = readFileSync(new URL("../schema/fixtures/human-merge/nen/gates.json", import.meta.url), "utf8");
-  const humanRoot = mkdtempSync(join(tmpdir(), "nen-human-merge-"));
+  const humanRoot = makeTempDir("nen-human-merge-");
   mkdirSync(join(humanRoot, "nen"));
   writeFileSync(join(humanRoot, "nen/gates.json"), config);
   const ownInput = (json = true): PrReadyInput => input({ repoFlag: humanRoot, values: { "gh-repo": "zheref/example" }, booleans: new Set(json ? ["json"] : []) });
@@ -3248,12 +3249,14 @@ describe("human merge reporting (NEN-661/AC-2, AC-4)", () => {
     expect(await prReady(ownInput(), result.io, stubDeps(await humanSource()))).toBe(0);
     const report = JSON.parse(result.out.join("\n"));
     expect(report.meta.approvers).toEqual(["maintainer"]);
-    expect(report.gateLine).toContain("no review approval or merge has occurred");
+    expect(report.gateLine).toContain("no human approval is inferred and no merge has occurred");
   });
   it.each([true, false])("reports a verified human merge without creating a review (JSON %s)", async (json) => {
     const result = capture();
     expect(await prReady(ownInput(json), result.io, stubDeps(await humanSource("MERGED")))).toBe(10);
-    expect(result.out.join("\n")).toContain("human approval decision: maintainer (solo-maintainer) performed the merge");
+    expect(result.out.join("\n")).toContain("GitHub recorded maintainer (solo-maintainer) as the merger");
+    expect(result.out.join("\n")).toContain("under the recorded PR base declaration at");
+    expect(result.out.join("\n")).toContain("merge-time policy was not verified");
   });
   it.each([null, { login: "other-human", __typename: "User" }, { login: "solo-maintainer", __typename: "Bot" }, { login: "solo-maintainer" }])("does not substitute or infer a merger: %j", async (merger) => {
     const result = capture();
@@ -3265,10 +3268,26 @@ describe("human merge reporting (NEN-661/AC-2, AC-4)", () => {
     expect(await prReady(ownInput(), result.io, stubDeps(await humanSource("CLOSED")))).toBe(10);
     expect(result.out.join("\n")).toContain("human approval decision not confirmed");
   });
+  it("refuses an alternate checkout-local declaration for terminal approval", async () => {
+    const path = join(humanRoot, "alternate.json");
+    writeFileSync(path, config);
+    const result = capture();
+    expect(await prReady({ ...ownInput(), values: { "gh-repo": "zheref/example", gates: path } }, result.io, stubDeps(await humanSource("MERGED")))).toBe(10);
+    expect(result.out.join("\n")).toContain("human approval decision not confirmed");
+    expect(result.out.join("\n")).not.toContain("counts as the human approval decision");
+  });
+  it("identifies an external caller-supplied declaration in terminal approval", async () => {
+    const path = join(makeTempDir("nen-human-caller-"), "gates.json");
+    writeFileSync(path, config);
+    const result = capture();
+    expect(await prReady({ ...ownInput(), values: { "gh-repo": "zheref/example", gates: path } }, result.io, stubDeps(await humanSource("MERGED")))).toBe(10);
+    expect(result.out.join("\n")).toContain("under the caller-supplied gates declaration");
+    expect(result.out.join("\n")).toContain("merge-time policy was not verified");
+  });
   it("does not trust local policy after a failed base read", async () => {
     const source = await humanSource("MERGED");
     const result = capture();
     expect(await prReady(ownInput(), result.io, stubDeps({ ...source, fileAtRef: async () => { throw new Error("unread"); } }))).toBe(10);
-    expect(result.out.join("\n")).not.toContain("performed the merge");
+    expect(result.out.join("\n")).not.toContain("counts as the human approval decision");
   });
 });

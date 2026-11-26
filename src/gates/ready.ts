@@ -1417,13 +1417,17 @@ export function evaluateReady(
         (review): boolean =>
           identity.loginPattern.test(review.author) && review.commitId === head,
       );
-    if (postedAtHead) approversCsv = `${approversCsv},${name}`;
+    if (postedAtHead) {
+      approversCsv = `${approversCsv},${name}`;
+      if (identities.approvalPolicy === "merge-is-approval") approverList.push(name);
+    }
   }
   // `split(",") | map(select(length > 0))` -- the shell's own approver-list
   // handling, empties dropped and whitespace KEPT. Never trimmed here: trimming
   // would make the gate MORE PERMISSIVE than the shell (see shellApproverNames
   // in ./predicates.ts).
-  const approvers = approversCsv.split(",").filter((name): boolean => name.length > 0);
+  const approvers = identities.approvalPolicy === "merge-is-approval"
+    ? approverList : approversCsv.split(",").filter((name): boolean => name.length > 0);
 
   // CON-40 delivery-PR carve-out (bankai-core#720). Computed ONCE and threaded
   // into BOTH CON-32(b) limbs; every other predicate is untouched by it.
@@ -1435,7 +1439,7 @@ export function evaluateReady(
     typeof state["author"] === "string" && humanApprover.loginPattern.test(state["author"]) &&
     state["author_type"] === "User";
   const humanMergeNote = humanOwnPr
-    ? `ready for the human merge decision by ${humanApprover.name} (${state["author"]}); no review approval or merge has occurred; this does not authorize an agent merge`
+    ? `the merge decision remains with ${humanApprover.name} (${state["author"]}); no human approval is inferred and no merge has occurred; this does not authorize an agent merge`
     : null;
   const reviewApprovers = humanOwnPr
     ? approvers.filter((name) => name !== humanApprover.name) : approvers;
@@ -1910,7 +1914,7 @@ export function evaluateReady(
   // row's sentence.
   const ready = firstFailed === undefined && firstUnknown === undefined;
   const line = ready
-    ? humanMergeNote === null ? "ready" : `ready: ${humanMergeNote}`
+    ? humanMergeNote === null ? "ready" : `ready for the human merge decision: ${humanMergeNote}`
     : firstFailed !== undefined
       ? (firstFailed.reason ?? "not-ready")
       : `not-ready: ${firstUnknown?.clause ?? "CON-32"} could not be judged — ${firstUnknown?.missing ?? "a fact was missing"}`;

@@ -1961,10 +1961,13 @@ export async function readReady(
       ? applied.identities.reviewer(applied.identities.defaultApprovers[0] ?? "") : undefined;
     const merger = fetched.state["merged_by"];
     const humanApproved = state === "merged" && fetched.state["approval_policy_read"] === true &&
-      (!readsBase || applied.read === "base") && human?.kind === "human" &&
+      (applied.read === "base" || applied.read === "gates-flag") && human?.kind === "human" &&
       fetched.state["merged_by_type"] === "User" && typeof merger === "string" && human.loginPattern.test(merger);
+    const declaration = applied.read === "base"
+      ? `the recorded PR base declaration at ${String(fetched.state["base_sha"])}`
+      : `the caller-supplied gates declaration ${applied.path ?? "(unknown path)"}`;
     const approval = human === undefined ? "" : humanApproved
-      ? `; human approval decision: ${human.name} (${merger}) performed the merge; no review was created`
+      ? `; GitHub recorded ${human.name} (${merger}) as the merger; the merge counts as the human approval decision under ${declaration}; merge-time policy was not verified; no review was created`
       : "; human approval decision not confirmed: no merge by the declared human was verified";
     return verdictOf({ ...report, judgedHead: githubHead === "" ? null : githubHead, meta: { ...report.meta, requiredHead: requiredHead ?? null, warnings: [...report.meta.warnings, ...fetched.warnings] }, conjuncts: [], verdict: state, gateLine: `${state}: merge commit ${mergeCommit ?? "(none recorded)"}${approval}`, terminal: { state, mergeCommit } });
   }

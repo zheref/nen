@@ -1470,7 +1470,7 @@ export async function fetchPrState(
   if (node.state === "MERGED" || node.state === "CLOSED") {
     if ((node.state === "MERGED" || node.mergeCommitOid !== null && node.mergeCommitOid !== undefined) && (typeof node.mergeCommitOid !== "string" || !/^[0-9a-f]{40}$/i.test(node.mergeCommitOid))) return { ok: false, reason: "terminal pull request has no valid full merge commit SHA", remedy: "Ask GitHub again; a merged PR must name its merge commit." };
     // Terminal reporting remains available if gate configuration cannot be read.
-    // An approval decision, however, may only use the same trusted base read as readiness.
+    // Attribution uses the recorded PR base declaration, not proof of merge-time policy.
     let approvalPolicyRead = options.identitiesAtBase === undefined;
     const warnings: string[] = [];
     if (options.identitiesAtBase !== undefined) {
@@ -1483,6 +1483,7 @@ export async function fetchPrState(
     }
     return { ok: true, warnings, state: {
       pr_state: node.state, merge_commit: node.mergeCommitOid, head_sha: node.headRefOid,
+      base_sha: node.baseRefOid,
       merged_by: authorLogin(node.mergedBy), merged_by_type: digPath(node.mergedBy, "__typename"),
       approval_policy_read: approvalPolicyRead,
     } };

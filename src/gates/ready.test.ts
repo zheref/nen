@@ -2424,8 +2424,8 @@ describe("named human merge decision (NEN-661/AC-2, AC-3, AC-5)", () => {
     const result = evaluateReady(ids, own, OPTIONS);
     expect(result.ready).toBe(true);
     expect(result.context.approvers).toEqual(["maintainer"]);
-    expect(result.line).toContain("human merge decision by maintainer (solo-maintainer)");
-    expect(result.line).toContain("no review approval or merge has occurred");
+    expect(result.line).toContain("the merge decision remains with maintainer (solo-maintainer)");
+    expect(result.line).toContain("no human approval is inferred and no merge has occurred");
     expect(result.line).toContain("does not authorize an agent merge");
     expect(own.reviews).toHaveLength(1);
   });
@@ -2441,6 +2441,27 @@ describe("named human merge decision (NEN-661/AC-2, AC-3, AC-5)", () => {
     const result = evaluateReady(ids, { ...own, ...(change as object) }, OPTIONS);
     expect(result.ready).toBe(false);
     expect(result.failing).toContain(failure);
+  });
+  it("keeps delimiter-containing human identities binding for another author", () => {
+    for (const name of [",", "maintainer,solo"]) {
+      const named = parseGateIdentities("gates.json", { ...config, default_approvers: [name], reviewers: [{ ...config.reviewers[0], name }, config.reviewers[1]] });
+      const result = evaluateReady(named, { ...own, author: "someone-else" }, OPTIONS);
+      expect(result.context.approvers).toEqual([name]);
+      expect(result.failing).toContain("approvals-at-head");
+    }
+  });
+  it("does not promise readiness in the approval limb while another condition fails", () => {
+    const result = evaluateReady(ids, { ...own, unresolved_threads: 1 }, OPTIONS);
+    expect(result.ready).toBe(false);
+    expect(JSON.stringify(result)).not.toContain("ready for the human merge decision");
+    expect(JSON.stringify(result)).toContain("no human approval is inferred");
+  });
+  it("does not deny an actual conditional approval", () => {
+    const conditional = parseGateIdentities("gates.json", { ...config, reviewers: [config.reviewers[0], { ...config.reviewers[1], approves_when_posted_at_head: true }] });
+    const result = evaluateReady(conditional, { ...own, reviews: [{ author: "review-bot", state: "APPROVED", commit_id: HEAD, submitted_at: NOW }] }, OPTIONS);
+    expect(result.ready).toBe(true);
+    expect(result.line).not.toContain("no review approval");
+    expect(result.context.approvers).toEqual(["maintainer", "review-bot"]);
   });
   it("does not waive a human's separately configured review round", () => {
     const withRound = parseGateIdentities("gates.json", { ...config, base_reviewers: ["review-bot", "maintainer"] });
