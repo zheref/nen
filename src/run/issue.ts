@@ -47,7 +47,7 @@ export function normaliseLenient(root: string, issue: string): string {
 
 /**
  * A manifest with every recorded issue in the one spelling, parked rows that
- * collapse to the same issue and row deduplicated (the earliest kept), and
+ * collapse to the same issue and row deduplicated (the latest park kept), and
  * whether anything changed. Rows written before the spelling was fixed (a
  * `<CODE>#<N>`) would otherwise be parked twice by an import.
  */
@@ -56,8 +56,9 @@ export function normaliseManifest(root: string, manifest: RunManifest): { manife
   const parked: RunParked[] = [];
   for (const row of manifest.parked) {
     const issue = normaliseLenient(root, row.issue);
-    if (parked.some((kept): boolean => kept.issue === issue && kept.row === row.row)) continue;
-    parked.push({ ...row, issue });
+    const index = parked.findIndex((kept): boolean => kept.issue.toLowerCase() === issue.toLowerCase() && kept.row === row.row);
+    if (index === -1) parked.push({ ...row, issue });
+    else if (Date.parse(row.at) > Date.parse(parked[index]!.at)) parked[index] = { ...row, issue };
   }
   const next = { ...manifest, prs, parked };
   return { manifest: next, changed: JSON.stringify(next) !== JSON.stringify(manifest) };

@@ -10502,8 +10502,10 @@ Records one claimed effort in a started run: `claims[] { issue, branch, at }`, i
 Uses the same lock and atomic write as `run append` and `run park`. The latest claim matching the
 same issue and branch is `unchanged` if no park occurred at or after it, even if another branch was claimed in between. A later claim after a
 park resumes the effort under the existing `loop slots --from-run` rules. A new claim must be
-strictly later than that issue's latest claim and park; a tied or backwards clock refuses, so
-callers retry after the clock advances. Unreadable stored claims are refused without repair.
+no earlier than that issue's latest claim and strictly later than its latest park. Distinct
+branches can be claimed at the same timestamp; a backwards clock or park tie refuses. Parking
+the same row after a reclaim advances its park timestamp; retries and historical imports
+preserve that effective park. Unreadable stored claims are refused without repair.
 
 **Usage**
 

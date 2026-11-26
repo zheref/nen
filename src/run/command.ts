@@ -142,12 +142,12 @@ the file in place. start, append, park and import print 'mode: would set file
   claim   Record claims[] { issue, branch, at } under the manifest lock.
           Issue codes resolve as append does; an omitted branch is null.
           The latest matching issue and branch is unchanged until parked.
-          A reclaim must be later than the latest claim and park; an equal
-          or backwards clock refuses (exit 1). Unreadable claims are refused
+          A new claim cannot predate the latest claim and must follow the
+          latest park; a backwards clock or park tie refuses (exit 1). Unreadable claims are refused
           without rewriting them. --dry-run previews without writing.
   park    Record that an effort is parked on an unanswered ask-once row
           (HR-5): parked[] { issue, row, at }. The same issue and row again:
-          'unchanged'. No manifest: exit 1.
+          'unchanged' unless reclaimed since that park. No manifest: exit 1.
   verify  Read every recorded PR live (gh pr view) and report open, merged
           and closed-unmerged, with the unmerged list. --target must name the
           run's repo (exit 2 otherwise). Exit 0 when every PR was read, 1
@@ -514,7 +514,7 @@ function doPark(context: CommandContext): number {
       path,
       (existing) => {
         if (existing === null) throw new RunManifestError(`no run '${id}' at ${path} -- 'nen run start --id ${id}' first.`);
-        return planPark(existing, issue, row, context.seams.now().toISOString());
+        return planPark(existing, issue, row, context.seams.now().toISOString(), (ref): string => normaliseLenient(root, ref));
       },
       !dryRun,
       { readPath: located.readPath, ops: modeOps(context) },
