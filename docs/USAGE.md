@@ -20711,6 +20711,12 @@ link, non-regular file or unstable read is exit 1, as is a malformed newest
 summary (no fallback). Invalid plan, host path or UTC ISO launch time is exit 2.
 Summary content is never echoed on refusal.
 
+On Windows, newly generated registration scripts grant the same user read-attributes
+rights on the runner root and project directory, without inheritance or directory-listing
+access. This lets an unelevated token validate those parents while reading `_jusshin`.
+Older scripts must be regenerated and run through the existing elevated registration
+flow to apply those grants; insufficient permissions remain `unreadable`, never `none`.
+
 **`--json` top-level keys:** `contract`, `verdict`, `after`, `directory`, `path`, `writtenAt`,
 `registered`, `skipped`, `failed`, `reason`. Tied write times sort by path.
 `--plan` and `--after` are required; `--repo` resolves a relative plan filename.
