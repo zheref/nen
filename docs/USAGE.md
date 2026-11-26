@@ -9489,10 +9489,23 @@ still missing, the row appends why (`missing: #N -- #N not reconciled by the
 release-PR allowance: …`). A `--range` with a revision beginning with `-` is
 refused at exit 2 as there, and here before any tool runs, `gh` included.
 
+**Post-cut reading.** Add `--expect-tag-at <commit-sha>` after the tag is cut.
+Only the tag row changes: it passes when origin resolves that tag to the caller's
+expected cut commit. The expected SHA must name a locally readable commit;
+`git --no-lazy-fetch cat-file -t` runs with replacement objects and lazy fetching
+disabled. This mode requires the `--no-lazy-fetch` capability (Git 2.45+); older
+Git refuses the probe and the tag row fails closed.
+The tag row fails naming absence, another commit, or unreadable
+remote evidence. Annotated tags are compared by their peeled object, not their
+tag-object hash. `--tag` is a literal name, never a `^{}` selector. A failed remote
+read remains a tooling failure, never an absent tag. Every other row keeps its
+meaning, and exit 0 still requires all six to pass. Without this flag, the
+original pre-cut behavior is unchanged. The verb only reads.
+
 **Usage**
 
 ```text
-nen release preflight --repo-slug <owner/name> --tag <vX.Y.Z> --range <vPrev>..<cut-point> --changelog <path> --owner-repo <owner/name> [--hold-var <name>] [--critical-issues <n,n>] [--live-chores-from <path>] [--fragment-dir <dir>] [--repo <path>] [--json]
+nen release preflight --repo-slug <owner/name> --tag <vX.Y.Z> --range <vPrev>..<cut-point> --changelog <path> --owner-repo <owner/name> [--hold-var <name>] [--critical-issues <n,n>] [--live-chores-from <path>] [--fragment-dir <dir>] [--expect-tag-at <commit-sha>] [--repo <path>] [--json]
 ```
 
 **Arguments**
@@ -9507,6 +9520,7 @@ nen release preflight --repo-slug <owner/name> --tag <vX.Y.Z> --range <vPrev>..<
 | `--hold-var <name>` | no | the gh variable to read | default `RELEASE_HOLD`; case-insensitive `true`/`1`/`yes` = held, `false`/`0`/`no`/unset = not held, any other non-empty value fails CLOSED as held |
 | `--critical-issues <n,n>` | bracketed, but **required to pass the row** | open critical-severity issue numbers, gathered by the caller | omitting it reports "not supplied -- not checked" and fails the row; pass `''` to assert none |
 | `--live-chores-from <path>` | bracketed, but **required to pass the row** | a JSON array of the CON-36 three-part test's inputs per chore | omitting it fails the row the same way; a file containing `[]` asserts none live |
+| `--expect-tag-at <commit-sha>` | no | post-cut: the literal tag must exist on origin at this full 40-character commit SHA | annotated tags use the peeled object; no tag or release mutation |
 | `--fragment-dir <dir>` | no | same default and empty/non-directory rules as `nen changelog completeness` | default `changelog.d` |
 | `--repo <path>` | no | the checkout whose `origin` the tag is checked against and whose history is reconciled; resolves relative `--changelog`/`--live-chores-from`/`--fragment-dir` | default cwd; those files are checked once `--repo` resolves (an empty `--fragment-dir` is refused either way) |
 | `--json` | no | machine-readable preflight table | — |
@@ -21825,6 +21839,31 @@ A `severity` enumeration with `[+]` is highest-first; two severities such as
 `high+low` are corrected to `low+`. The refused input remains exit 2 and JSON carries
 `corrected`. Mixed alternatives, incomplete lines and boundary-changing rewrites keep
 the existing refusal without an invented correction; legacy scalar placeholders stay.
+
+### Criteria source and table scope
+
+`issue criteria --ref` and `pr converge` read every page of issue comments.
+One comment beginning with `<!-- nen:issue-criteria -->` overrides the issue
+body's acceptance criteria. Include the normal acceptance heading when using a
+catalogue. The result names the comment URL in `criteriaSource` and names the
+ignored body URL; remove the marker to return to body criteria. Multiple marked
+comments are an error: keep exactly one active marker. Unmarked comments do not
+change the criteria. Failed or malformed comment reads never mean no criteria.
+Local `--body-file` reads remain local and do not inspect comments.
+
+Verify tables use `Criterion | Coverage | Evidence` headers (case insensitive).
+Tables with other headers are ignored. Headerless row fragments remain accepted
+for compatibility. Paths and words containing `ac-` are not criterion cells;
+criterion-shaped invalid IDs such as `AC-x`, `HA#1/AC-`, or lowercase `ac-1`
+are malformed and block. Criterion IDs are case sensitive.
+Catalogue-admitted priority annotations are retained when reading acceptance
+rows; catalogue-resolved withdrawn rows need no coverage row.
+A marked comment must be authored by a repository OWNER, MEMBER or COLLABORATOR
+with effective repository write or admin permission. GitHub maps Maintain to write;
+Read and Triage access is refused. Permission lookup failures also refuse.
+Nen checks its GraphQL author/editor provenance and refuses a comment edited by
+someone other than its author, or one that changes between the two reads.
+An untrusted marker is an error, never an override or a silently ignored source.
 
 
 #### Readiness states and check detail (#531)

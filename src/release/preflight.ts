@@ -46,6 +46,7 @@
 // which chores are LIVE (hold) versus which have no partial scope on main
 // (the G5 judgement getsuga §5 says is never this tool's call to make alone).
 
+import { postCutTagCheck, type PostCutTag } from "./postcut.js";
 import { describeReleasePrAllowance, type ReleasePrAllowance } from "../changelog/completeness.js";
 
 export interface LiveChoreCandidate {
@@ -126,6 +127,7 @@ export interface PreflightInputs {
    * allowance evaluated", and the row renders exactly as it always did.
    */
   readonly releasePrAllowance?: ReleasePrAllowance | null;
+  readonly postCutTag?: PostCutTag;
   readonly tagAlreadyExists: boolean;
   readonly tag: string;
 }
@@ -228,11 +230,11 @@ export function runPreflight(inputs: PreflightInputs): PreflightReport {
             : `every merged PR has a CHANGELOG entry or fragment, but one, excused by the release-PR allowance -- ${allowanceNote}`
           : `missing: ${inputs.missingChangelogPrs.map((n): string => `#${n}`).join(", ")}${allowanceNote === null ? "" : ` -- ${allowanceNote}`}`,
     },
-    {
+    inputs.postCutTag === undefined ? {
       name: "tag does not already exist",
       ok: !inputs.tagAlreadyExists,
       detail: inputs.tagAlreadyExists ? `'${inputs.tag}' already exists -- re-tagging is never the fix` : "clear",
-    },
+    } : postCutTagCheck(inputs.tag, inputs.postCutTag),
   ];
 
   return { checks, liveChores, releasePrAllowance, ok: checks.every((check): boolean => check.ok) };
