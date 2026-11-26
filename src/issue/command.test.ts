@@ -2965,7 +2965,7 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
       targetVisibility: "public",
       listSize: 2,
       owners: 1,
-      hits: [{ field: "body", line: 1, index: 2, normalised: false, ignored: false }],
+      hits: [{ field: "body", line: 1, index: 2, normalised: false, ignored: false, ignoredBy: null }],
       error: null,
     });
     expect(result.out.join("\n")).not.toMatch(/vault/i);
@@ -3086,7 +3086,7 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
     expect(report["outcome"]).toBe("private-name");
     expect(report["written"]).toBe(false);
     expect((report["privateNameCheck"] as { hits: unknown[] }).hits).toEqual([
-      { field: "body", line: 3, index: 2, normalised: false, ignored: false },
+      { field: "body", line: 3, index: 2, normalised: false, ignored: false, ignoredBy: null },
     ]);
   });
 
@@ -3129,7 +3129,7 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
         targetVisibility: "public",
         listSize: 2,
         owners: 1,
-        hits: [{ field: "body", line: 1, index: 2, normalised: false, ignored: true }],
+        hits: [{ field: "body", line: 1, index: 2, normalised: false, ignored: true, ignoredBy: "ignore-file" }],
         error: null,
       });
     });
@@ -3500,7 +3500,7 @@ describe("nen issue consolidate-close -- the private-name guard on the close com
     expect(result.code).toBe(4);
     const report = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
     expect(report["refused"]).toBe(true);
-    expect((report["privateNameCheck"] as { hits: unknown[] }).hits).toEqual([{ field: "close-comment[5]", line: 1, index: 1, normalised: false, ignored: false }]);
+    expect((report["privateNameCheck"] as { hits: unknown[] }).hits).toEqual([{ field: "close-comment[5]", line: 1, index: 1, normalised: false, ignored: false, ignoredBy: null }]);
     expect(result.out.join("\n")).not.toMatch(/hidden-thing/i);
   });
 

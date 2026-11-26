@@ -268,6 +268,8 @@ describe("nen schema set -- gate changes fail closed (Feitan F1, Nobunaga R1)", 
     const root = site(METADATA_REPO);
     // gates.json: a reviewer's flags, and the dependabot carve-out.
     await gated(root, "nen/gates.json", "/reviewers/0/delivery_holistic_pass", "false");
+    // workflow.json: the private-name guard's committed named list (zheref/nen#441).
+    await gated(root, "nen/workflow.json", "/privateNames", '{"namedFile":"scripts/private_name_named.txt"}');
     await gated(root, "nen/gates.json", "/reviewers/2/bounded_policy_exempt", "false");
     await gated(root, "nen/gates.json", "/dependabot_carve_out/satisfied_by_context/0", '"anything / green"');
     // contract.json: the dependency's probe and the bootstrap's sha256, a lane's cwd.

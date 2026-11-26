@@ -2112,3 +2112,68 @@ it("#440: AI bot-round waivers do not waive an event-run stall", () => {
   }), { ...OPTIONS, aiReviewers: "optional", trustedBotReviewers: ["lane-a", "lane-b", "lane-c"] });
   expect(evaluation.conjuncts.find((row): boolean => row.id === "round-stalled")?.status).toBe("failed");
 });
+
+describe("event delivery readiness (F440-1)", () => {
+  const raw = JSON.parse(readFileSync(join(EVENT_REPO, "nen/gates.json"), "utf8")) as { reviewers: Record<string, unknown>[] };
+  const identities = parseGateIdentities("event-delivery/nen/gates.json", {
+    ...raw,
+    reviewers: raw.reviewers.map((identity) => identity.name === "lane-c" ? { ...identity, delivery_holistic_pass: true } : identity),
+  });
+  const historical = readyState({
+    author: "delivery-bot", base_ref: "main", default_branch: "main", head_ref: "delivery/feature",
+    reviews: [approvedAtHead("human"), approvedAtHead("lane-a[bot]"), approvedAtHead("lane-c[bot]", "opensha")],
+  });
+  const options = { ...OPTIONS, aiReviewers: "required" as const };
+  it("F440-1: required AI delivery readiness refuses an old holistic review without current SUCCESS", () => {
+    const evaluation = evaluateReady(identities, historical, options);
+    expect.soft(evaluation.context.deliveryPr).toBe(true);
+    expect.soft(evaluation.ready).toBe(false);
+    const owed = evaluation.conjuncts.find((row): boolean => row.id === "rounds-owed")!;
+    expect.soft(owed.status).toBe("failed");
+    expect.soft(owed.owedRounds).toContainEqual({ reviewer: "lane-c", reason: "delivery-no-definitive-success-review-check", state: "no-run", coveredByQuorum: false, kind: "bot" });
+    expect.soft(owed.roundQuorum).toMatchObject({ count: 1, minimum: 2, met: false });
+  });
+  it("accepts a current formal review, and reports the CON-40 historical-review-plus-SUCCESS exception truthfully", () => {
+    const current = { ...historical, reviews: [approvedAtHead("human"), approvedAtHead("lane-a[bot]"), approvedAtHead("lane-c[bot]")] };
+    expect(evaluateReady(identities, current, options).ready).toBe(true);
+    for (const roundPolicyDefault of ["bounded", "strict"] as const) {
+      const evaluation = evaluateReady(identities, { ...historical, checks: [greenCheck(), greenCheck("lane-c / review")] }, { ...options, roundPolicyDefault });
+      expect(evaluation.ready).toBe(true);
+      expect(evaluation.conjuncts.find((row) => row.id === "rounds-owed")?.roundQuorum?.members[2]).toMatchObject({ round: "delivery-holistic-pass", reading: "current-head", eventRun: { state: "posted" } });
+    }
+  });
+  it("a current SUCCESS without any posted holistic review leaves required AI readiness owed", () => {
+    const evaluation = evaluateReady(identities, { ...historical, reviews: [approvedAtHead("human"), approvedAtHead("lane-a[bot]")], checks: [greenCheck(), greenCheck("lane-c / review")] }, options);
+    expect(evaluation.ready).toBe(false);
+    const owed = evaluation.conjuncts.find((row) => row.id === "rounds-owed")!;
+    expect(owed.owedRounds).toContainEqual({ reviewer: "lane-c", reason: "delivery-holistic-pass-never-posted", state: "completed-without-review", coveredByQuorum: false, kind: "bot" });
+    expect(owed.roundQuorum).toMatchObject({ count: 1, met: false });
+  });
+  const activeState = (startedAt: unknown, status = "IN_PROGRESS"): Record<string, unknown> => ({
+    ...historical,
+    reviews: [approvedAtHead("human"), approvedAtHead("lane-a[bot]"), approvedAtHead("lane-b[bot]"), approvedAtHead("lane-c[bot]")],
+    checks: [greenCheck(), { name: "lane-c / review", status, conclusion: null, startedAt }],
+    stall_requested_at: "2020-01-01T00:00:00Z",
+  });
+  it.each(["QUEUED", "IN_PROGRESS", "PENDING", "WAITING"])("%s supersedes even the current formal delivery review, binds despite met quorum, and stalls from its run start", (status) => {
+    const evaluation = evaluateReady(identities, activeState("2025-06-01T11:30:00Z", status), options);
+    expect(evaluation.ready).toBe(false);
+    const owed = evaluation.conjuncts.find((row) => row.id === "rounds-owed")!;
+    expect(owed.status).toBe("failed");
+    expect(owed.owedRounds).toContainEqual({ reviewer: "lane-c", reason: "no-round-at-head", state: "in-flight", coveredByQuorum: false, kind: "bot" });
+    expect(owed.roundQuorum).toMatchObject({ count: 2, met: true });
+    expect(owed.roundQuorum?.members[2]).toMatchObject({ round: null, eventRun: { state: "in-flight", startedAt: "2025-06-01T11:30:00Z" } });
+    expect(evaluation.conjuncts.find((row) => row.id === "round-stalled")).toMatchObject({ status: "failed", reason: expect.stringContaining("30 min") });
+  });
+  it.each(["2025-06-01T11:30:01Z", "2025-06-01T12:01:00Z", "invalid", null])("run start %s cannot establish a 30 minute stall, while the active delivery lane stays owed", (startedAt) => {
+    const evaluation = evaluateReady(identities, activeState(startedAt), options);
+    expect(evaluation.conjuncts.find((row) => row.id === "round-stalled")?.status).toBe("ready");
+    expect(evaluation.conjuncts.find((row) => row.id === "rounds-owed")?.status).toBe("failed");
+  });
+  it("passes actual non-delivery context through the bounded event reading", () => {
+    const evaluation = evaluateReady(identities, { ...historical, head_ref: "fix/ordinary" }, options);
+    expect(evaluation.context.deliveryPr).toBe(false);
+    expect(evaluation.ready).toBe(true);
+    expect(evaluation.conjuncts.find((row) => row.id === "rounds-owed")?.roundQuorum?.members[2]).toMatchObject({ round: "review", reading: "any-head", eventRun: { state: "posted" } });
+  });
+});

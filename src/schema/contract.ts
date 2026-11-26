@@ -112,6 +112,7 @@ export const INSTALLERS = [
   "verify-only",
   "corepack",
   "gem",
+  "gem-user",
   "wrapper",
   "npx",
   "sdkmanager",

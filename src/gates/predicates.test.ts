@@ -37,6 +37,7 @@ import {
   reviewerReviewCheckPattern,
   reviewsAllApprovedAtHead,
   roundQuorum,
+  reviewerRoundFacts,
   unapprovedApprovers,
   uncheckedChecks,
   waitingCheckEntries,
@@ -3049,6 +3050,50 @@ describe("event lanes (#440)", () => {
     const quorum = roundQuorum(identities, input(checks), "headsha", "bounded")!;
     expect(quorum.members[2]?.eventRun?.state).toBe("in-flight");
     expect(quorum.members[1]?.eventRun?.state).toBe("no-run");
+  });
+});
+
+describe("event delivery holistic rounds (F440-1)", () => {
+  const raw = JSON.parse(readFileSync(join(EVENT_REPO, "nen/gates.json"), "utf8")) as { reviewers: Record<string, unknown>[] };
+  const identities = parseGateIdentities("event-delivery/nen/gates.json", {
+    ...raw,
+    reviewers: raw.reviewers.map((identity) => identity.name === "lane-c" ? { ...identity, delivery_holistic_pass: true } : identity),
+  });
+  const historical = rounds({ reviews: [review({ author: "lane-a[bot]" }), review({ author: "lane-c[bot]", commitId: "opensha" })] });
+
+  it("F440-1: an old holistic review without a current check remains owed and cannot meet the quorum", () => {
+    expect.soft(pendingRounds(identities, historical, "headsha", [], "bounded", true)).toContainEqual({
+      reviewer: "lane-c", reason: "delivery-no-definitive-success-review-check", state: "no-run",
+    });
+    expect.soft(reviewerRoundFacts(identities, historical, "headsha", ["lane-c"], "bounded", true)[0]).toMatchObject({ posted: 1, round: null });
+    const quorum = roundQuorum(identities, historical, "headsha", "bounded", true)!;
+    expect.soft(quorum).toMatchObject({ count: 1, minimum: 2, met: false });
+    expect.soft(quorum.members[2]).toMatchObject({ round: null, reading: "current-head", eventRun: { state: "no-run" } });
+  });
+  it.each(["NEUTRAL", "SKIPPED", "FAILURE"] as const)("a terminal %s cannot substitute for the delivery SUCCESS", (conclusion) => {
+    const inputs = { ...historical, checks: [checkRun({ name: "lane-c / review", status: "COMPLETED", conclusion })] };
+    expect(pendingRounds(identities, inputs, "headsha", [], "bounded", true)).toContainEqual({ reviewer: "lane-c", reason: "delivery-no-definitive-success-review-check", state: "completed-without-review" });
+    expect(roundQuorum(identities, inputs, "headsha", "bounded", true)).toMatchObject({ count: 1, met: false });
+  });
+  it.each(["bounded", "strict"] as const)("%s accepts a current formal review or the historical holistic pass plus current SUCCESS, with truthful via", (policy) => {
+    const atHead = { ...historical, reviews: [...historical.reviews, review({ author: "lane-c[bot]" })] };
+    expect(roundQuorum(identities, atHead, "headsha", policy, true)?.members[2]).toMatchObject({ round: "review", eventRun: { state: "posted" } });
+    const abstain = { ...historical, checks: [checkRun({ name: "lane-c / review", status: "COMPLETED", conclusion: "SUCCESS" })] };
+    expect(pendingRounds(identities, abstain, "headsha", [], policy, true).some((entry) => entry.reviewer === "lane-c")).toBe(false);
+    expect(reviewerRoundFacts(identities, abstain, "headsha", ["lane-c"], policy, true)[0]).toMatchObject({ posted: 1, round: "delivery-holistic-pass" });
+    expect(roundQuorum(identities, abstain, "headsha", policy, true)?.members[2]).toMatchObject({ round: "delivery-holistic-pass", reading: "current-head", eventRun: { state: "posted" } });
+  });
+  it.each([{ reviews: [] }, { reviews: [review({ author: "lane-c[bot]", state: "PENDING", commitId: "opensha" })] }, { reviews: [review({ author: "lane-c[bot]", state: "PENDING" })] }])("SUCCESS without a submitted holistic review never creates a round (%j)", ({ reviews }) => {
+    const inputs = rounds({ reviews, checks: [checkRun({ name: "lane-c / review", status: "COMPLETED", conclusion: "SUCCESS" })] });
+    expect(pendingRounds(identities, inputs, "headsha", [], "bounded", true)).toContainEqual({ reviewer: "lane-c", reason: "delivery-holistic-pass-never-posted", state: "completed-without-review" });
+    expect(reviewerRoundFacts(identities, inputs, "headsha", ["lane-c"], "bounded", true)[0]).toMatchObject({ posted: 0, round: null });
+    expect(roundQuorum(identities, inputs, "headsha", "bounded", true)?.members[2]).toMatchObject({ round: null, eventRun: { state: "completed-without-review" } });
+  });
+  it("keeps ordinary bounded any-head leniency off a delivery PR, and strict still requires the current head", () => {
+    expect(pendingRounds(identities, historical, "headsha", [], "bounded", false).some((entry) => entry.reviewer === "lane-c")).toBe(false);
+    expect(roundQuorum(identities, historical, "headsha", "bounded", false)?.members[2]).toMatchObject({ round: "review", reading: "any-head", eventRun: { state: "posted" } });
+    expect(pendingRounds(identities, historical, "headsha", [], "strict", false)).toContainEqual({ reviewer: "lane-c", reason: "no-round-at-head", state: "no-run" });
+    expect(roundQuorum(identities, historical, "headsha", "strict", false)?.members[2]).toMatchObject({ round: null, reading: "current-head", eventRun: { state: "no-run" } });
   });
 });
 

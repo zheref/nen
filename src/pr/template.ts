@@ -327,6 +327,13 @@ export function stripComments(line: string, inComment: boolean): { text: string;
 }
 
 const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+/** A backtick fence's info string cannot itself contain a backtick. */
+export function validFenceOpening(line: string): string | null {
+  const match = FENCE.exec(line);
+  if (match === null) return null;
+  const fence = match[1] as string;
+  return fence[0] === "`" && line.slice(match[0].length).includes("`") ? null : fence;
+}
 const HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/;
 const SETEXT_UNDERLINE = /^ {0,3}(=+|-+)[ \t]*$/;
 const THEMATIC_BREAK = /^ {0,3}([-*_])( *\1){2,} *$/;
@@ -342,7 +349,7 @@ const HTML_TAGS_ONLY = /^(?:\s*<\/?[A-Za-z][^<>]*>)+\s*$/;
  * included (a boundary with no title); a Setext underline turns the paragraph
  * line above it into a heading boundary, so its title is not content.
  */
-export function readLines(source: string): ReadLine[] {
+export function readLines(source: string, options: { readonly strictFences?: boolean } = {}): ReadLine[] {
   const lines = source.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n").split("\n");
   const read: ReadLine[] = [];
   let fence: string | null = null;
@@ -377,9 +384,11 @@ export function readLines(source: string): ReadLine[] {
     }
     const htmlBlock = /^ {0,3}<!--/.test(line);
     if (!htmlBlock) {
-      const open = FENCE.exec(text);
+      // Existing derived callers retain their historical fence reading;
+      // exact body validation opts into the Markdown opener restriction.
+      const open = options.strictFences ? validFenceOpening(text) : FENCE.exec(text)?.[1] ?? null;
       if (open !== null) {
-        fence = open[1] as string;
+        fence = open;
         read.push({ kind: "content", text: text.trim() });
         continue;
       }
@@ -486,8 +495,9 @@ export interface DerivedResult extends RequirementResult {
 export function checkDerivedBody(
   body: string,
   requirements: readonly DerivedRequirement[],
+  options: { readonly strictFences?: boolean } = {},
 ): { readonly results: readonly DerivedResult[]; readonly ok: boolean } {
-  const read = readLines(body);
+  const read = readLines(body, options);
   const results = requirements.map((requirement): DerivedResult => {
     const regex = new RegExp(requirement.pattern, "i");
     const placeholder = new Set(requirement.placeholder);

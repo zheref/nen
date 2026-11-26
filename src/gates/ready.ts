@@ -1661,7 +1661,7 @@ export function evaluateReady(
       };
       stalledRow = passed();
       for (const entry of owed) {
-        const event = eventRoundFacts(identities.reviewer(entry.reviewer), roundInputs.reviews, roundInputs.checks, head, policy);
+        const event = eventRoundFacts(identities.reviewer(entry.reviewer), roundInputs.reviews, roundInputs.checks, head, policy, delivery);
         if (event?.state !== "in-flight" || event.startedAt === null) continue;
         const age = minutesSince(event.startedAt, options.now);
         if (age !== undefined && age >= options.stallMinutes) {

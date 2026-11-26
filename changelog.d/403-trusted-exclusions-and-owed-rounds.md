@@ -1,1 +1,0 @@
-Intersect declared check exclusions at immutable PR-base and default-tip commits, report owed review obligations and actual quorum coverage structurally, and accept optional declared reviewer kinds. AI-reviewer policy and wake/state behavior remain with #408 and #440.
