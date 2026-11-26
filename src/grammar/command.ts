@@ -89,13 +89,14 @@ parse, and refuse an unparseable line with the corrected line ready to paste.
                      are refused at exit 2 (zheref/nen#419) -- such a slot
                      could never be told apart from the end of the one
                      before it, and was silently dropped at ok:true.
-  --line <text>      The invocation to parse. MAY BE EMPTY when every clause
-                     of the grammar is optional: 'at [<gate>]' accepts
-                     --line "" and --line "at" identically, both reporting
-                     'gate: (clause absent)', because the invocation with
-                     nothing in it is the ordinary one for a skill whose only
-                     clause is optional. A grammar carrying a REQUIRED clause
-                     still refuses an empty line at exit 2, naming the slot.
+  --line <text>      The invocation to parse. MAY BE EMPTY only when every
+                     clause, including its introducing literal, is optional:
+                     '[at <gate>]' accepts an empty line, but the leading 'at' in
+                     'at [<gate>]' is required (only its value is optional). Missing required
+                     literals refuse at exit 2 with a corrected line. Word literals
+                     match whole whitespace-delimited tokens: 'backlog-loop' does
+                     not supply the literal 'backlog'. Symbol separators retain
+                     their declared adjacency rules.
 
 The echo names every clause the template declares, filled or not: a supplied
 slot as '<name>: <value>', one nobody filled as '<name>: (clause absent)', and
