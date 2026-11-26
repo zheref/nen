@@ -1306,6 +1306,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       // ledgers), and a refused budget claim writes nothing either.
       start: DRY("writes the run manifest under the git common dir unless --dry-run is given"),
       append: DRY("reads the PR over gh pr view and records it in the run manifest unless --dry-run is given"),
+      claim: DRY("records a claimed effort in the run manifest unless --dry-run is given"),
       park: DRY("records a parked effort in the run manifest unless --dry-run is given"),
       // zheref/nen#486 AC-5: reads the consumer's run manifest (never writes it)
       // and every PR over gh pr view; writes nen's manifest unless --dry-run.

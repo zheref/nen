@@ -43,7 +43,7 @@ import {
   type RunManifest,
 } from "./manifest.js";
 import { readLivePr } from "./verify.js";
-import { normaliseManifest } from "./issue.js";
+import { normaliseLenient, normaliseManifest } from "./issue.js";
 import imports from "./imports.json";
 
 /** The contracts a consumer run manifest may carry (./imports.json). */
@@ -182,7 +182,7 @@ export function planImport(seams: Seams, existing: RunManifest | null, run: Cons
   }
   const parked: { issue: string; outcome: string }[] = [];
   for (const row of run.parked) {
-    const planned = planPark(manifest, ref(row.issue), row.row, row.at);
+    const planned = planPark(manifest, ref(row.issue), row.row, row.at, (issue): string => normaliseLenient(root, issue));
     manifest = planned.manifest;
     changed ||= planned.outcome !== "unchanged";
     parked.push({ issue: ref(row.issue), outcome: planned.outcome });

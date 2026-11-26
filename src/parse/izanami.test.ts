@@ -330,6 +330,8 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     // verify, budget, wc overlap, stage check and loop slots --from-run read.
     expect(classifyCommand("nen run start --id r1 --repo .").classification).toBe("mutating");
     expect(classifyCommand("nen run start --id r1 --repo . --dry-run").classification).toBe("read-only");
+    expect(classifyCommand("nen run claim --id r1 --issue NN#564").classification).toBe("mutating");
+    expect(classifyCommand("nen run claim --id r1 --issue NN#564 --dry-run").classification).toBe("read-only");
     expect(classifyCommand("nen run append --id r1 --issue NN#1 --pr 2 --base main --kind delivery --head abcdef1").classification).toBe("mutating");
     expect(classifyCommand("nen run append --id r1 --issue NN#1 --pr 2 --base main --kind delivery --head abcdef1 --dry-run").classification).toBe("read-only");
     // zheref/nen#522: verify and budget move a legacy-path manifest on read, so

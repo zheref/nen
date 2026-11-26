@@ -1191,6 +1191,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`run`](#family-run) | [`nen run rerun-failed`](#nen-run-rerun-failed) | re-run a workflow run's failed jobs (gh run rerun --failed) | github (gh) | yes |
 | [`run`](#family-run) | [`nen run start`](#nen-run-start) | start a batch run's manifest (`nen.run/v0.1`) at `<git-common-dir>/.nen/runs/<id>.json` with its repository and launch-time idle answers (HR-5); the same answers again is the resume, other answers or another repository refused | git (rev-parse --git-common-dir); writes the manifest unless --dry-run | yes |
 | [`run`](#family-run) | [`nen run append`](#nen-run-append) | record one PR the run opened, whatever its base, read live (base, branch, head); a PR created before the run started is refused; idempotent on the same facts, updated on a moved head or base, refused on another issue, kind or effort | git (rev-parse --git-common-dir), the manifest, github (gh pr view); writes it unless --dry-run | yes |
+| [`run`](#family-run) | [`nen run claim`](#nen-run-claim) | record a claimed effort under the manifest lock; retries are unchanged until parked | git (rev-parse --git-common-dir), the manifest; writes it unless --dry-run | yes |
 | [`run`](#family-run) | [`nen run park`](#nen-run-park) | record an effort parked on an unanswered ask-once row (HR-5's park state), once | git (rev-parse --git-common-dir), the manifest; writes it unless --dry-run | yes |
 | [`run`](#family-run) | [`nen run import`](#nen-run-import) | read Hatsu's futon run manifest (`hatsu.futon.run/v0.2`) into this one, every PR read live, so one manifest owns the run; idempotent, the Hatsu file never written; a conflict or an unread PR refuses the whole import | git (rev-parse --git-common-dir), `<git-common-dir>/hatsu/futon/run-<id>.json` or --from, github (gh pr view); writes the manifest unless --dry-run | yes |
 | [`run`](#family-run) | [`nen run verify`](#nen-run-verify) | read every PR the run recorded live and report open, merged and closed-unmerged with the unmerged list; an unread PR is exit 1 and counted nowhere | the manifest, github (gh pr view); moves a legacy-path manifest once unless --dry-run | yes |
@@ -10510,11 +10511,54 @@ appended: #478 NN#453 [delivery] opus/kurapika/sdd-n8-schema-keys -> integration
 ```
 (shape from `src/run/manifest-command.test.ts`; this verb reaches GitHub)
 
+### `nen run claim`
+
+Records one claimed effort in a started run: `claims[] { issue, branch, at }`, in that key order.
+Uses the same lock and atomic write as `run append` and `run park`. The latest claim matching the
+same issue and branch is `unchanged` if no park occurred at or after it, even if another branch was claimed in between. A later claim after a
+park resumes the effort under the existing `loop slots --from-run` rules. A new claim must be
+no earlier than that issue's latest claim and strictly later than its latest park. Distinct
+branches can be claimed at the same timestamp; a backwards clock or park tie refuses. Parking
+the same row after a reclaim advances its park timestamp; retries and historical imports
+preserve that effective park. Unreadable stored claims are refused without repair.
+
+**Usage**
+
+```text
+nen run claim --id <run-id> --issue <ref> [--branch <name>] [--repo <path>] [--dry-run] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--id <run-id>` | yes | The started run. | As `run start`. |
+| `--issue <ref>` | yes | The claimed issue. | `<CODE>#<N>` resolves through `nen/repos.json`; `<owner/name>#<N>` is stored. |
+| `--branch <name>` | no | The effort branch. | Validated as other manifest branches; defaults to null. |
+| `--repo <path>` | no | Any checkout of the project. | Defaults to the current directory. |
+| `--dry-run` | no | Preview the outcome. | No file, mode change, or legacy move; unchanged retries remain unchanged. |
+
+**Output and exit codes** — prints the outcome, issue, run, branch and timestamp, followed by
+manifest mode evidence when applicable. `--json`: `{ outcome, path, entry, mode }`, where
+`outcome` is `claimed` | `unchanged` | `dry-run`, and `entry` is `{ issue, branch, at }`.
+Exit 0 records or previews a claim, or confirms an unchanged retry. Exit 1 refuses a missing
+run, unreadable claims or manifest, or an ambiguous clock. Exit 2 rejects malformed flags.
+`nen exits run claim` exposes the shared 0/1/2 scheme. Bare execution is mutating;
+`--dry-run` is read-only for `nen parse izanami`.
+
+**Example**
+
+```bash
+nen run claim --id batch-2026-11-25 --issue NN#564 --branch effort/run-claim --repo .
+```
+
 ### `nen run park`
 
 Records that an effort is **parked** on an unanswered ask-once row (HR-5: an idle batch parks the
 effort instead of asking): `parked[] { issue, row, at }`. Parking the same issue on the same row again is
-`unchanged`. A run nobody started is exit 1.
+`unchanged` unless a later claim reclaimed it; then the park timestamp advances. A live park
+whose clock precedes the latest claim refuses at exit 1, as do unreadable claims and a run nobody
+started. Historical imports retain their original timestamps and replay without manufacturing a new park.
 
 **Usage**
 

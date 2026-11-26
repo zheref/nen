@@ -19,6 +19,7 @@ import {
   type Command,
   type CommandContext,
 } from "../cli/command.js";
+import { plainLine } from "../cli/plain.js";
 import { splitList } from "../cli/inputs.js";
 import { resolveRepoRoot } from "../repo/root.js";
 import { loadWorkflow } from "../schema/workflow.js";
@@ -33,9 +34,11 @@ import {
   locateRunManifest,
   parseIdleAnswers,
   planAppend,
+  planClaim,
   planPark,
   planStart,
   combineModes,
+  readClaims,
   readRunManifest,
   renderModes,
   ROW_ID,
@@ -51,13 +54,13 @@ import {
   type RunManifest,
 } from "./manifest.js";
 import { readLivePr, renderVerify, verifyRun } from "./verify.js";
-import { normaliseIssue } from "./issue.js";
+import { normaliseIssue, normaliseLenient } from "./issue.js";
 import { CONSUMER_RUN_CONTRACTS, CONSUMER_RUN_DISPLAY, consumerRunPath, planImport, readConsumerRun } from "./import.js";
 import { computeBudget, renderBudget, runEfforts, type BudgetCeiling } from "./budget.js";
 import { chmodSync, readFileSync } from "node:fs";
 import { readRecord, RECORD_SCHEMAS, recordSchema, renderRecord, runIdMatches, unreadableRecord, writeRecord } from "./record.js";
 
-const SUBCOMMANDS = ["rerun-failed", "start", "append", "verify", "budget", "park", "record", "import"] as const;
+const SUBCOMMANDS = ["rerun-failed", "start", "append", "claim", "verify", "budget", "park", "record", "import"] as const;
 type Subcommand = (typeof SUBCOMMANDS)[number];
 
 const USAGE = `nen run rerun-failed -- re-run a workflow run's failed jobs, senkei's dead-reviewer recovery.
@@ -70,6 +73,7 @@ usage:
   nen run append --id <run-id> --pr <N> --kind delivery|integration|release
                  [--issue <ref>] [--base <branch>] [--head <sha>] [--effort <id>]
                  [--repo <path>] [--dry-run] [--json]
+  nen run claim  --id <run-id> --issue <ref> [--branch <name>] [--repo <path>] [--dry-run] [--json]
   nen run park   --id <run-id> --issue <ref> --row <decisions-row-id> [--repo <path>]
                  [--dry-run] [--json]
   nen run verify --id <run-id> --target <owner/name> [--repo <path>] [--dry-run]
@@ -136,9 +140,15 @@ the file in place. start, append, park and import print 'mode: would set file
           'unchanged'; a moved head or a retargeted base: 'updated'; another
           issue, kind or effort for a recorded PR: refused, exit 1. No
           manifest, or a PR that could not be read: exit 1.
+  claim   Record claims[] { issue, branch, at } under the manifest lock.
+          Issue codes resolve as append does; an omitted branch is null.
+          The latest matching issue and branch is unchanged until parked.
+          A new claim cannot predate the latest claim and must follow the
+          latest park; a backwards clock or park tie refuses (exit 1). Unreadable claims are refused
+          without rewriting them. --dry-run previews without writing.
   park    Record that an effort is parked on an unanswered ask-once row
           (HR-5): parked[] { issue, row, at }. The same issue and row again:
-          'unchanged'. No manifest: exit 1.
+          'unchanged' unless reclaimed since that park. No manifest: exit 1.
   verify  Read every recorded PR live (gh pr view) and report open, merged
           and closed-unmerged, with the unmerged list. --target must name the
           run's repo (exit 2 otherwise). Exit 0 when every PR was read, 1
@@ -187,11 +197,12 @@ Exit 2 for a malformed flag or a flag another subcommand owns.`;
 const OWNED: Readonly<Record<string, readonly Subcommand[]>> = {
   "run-id": ["rerun-failed"],
   target: ["rerun-failed", "start", "verify"],
-  id: ["start", "append", "verify", "budget", "park", "record", "import"],
+  id: ["start", "append", "claim", "verify", "budget", "park", "record", "import"],
   schema: ["record"],
   from: ["record", "import"],
   "idle-answers": ["start"],
-  issue: ["append", "park"],
+  issue: ["append", "park", "claim"],
+  branch: ["claim"],
   pr: ["append"],
   base: ["append"],
   kind: ["append"],
@@ -202,7 +213,7 @@ const OWNED: Readonly<Record<string, readonly Subcommand[]>> = {
   "max-tokens": ["budget"],
 };
 const OWNED_BOOLEANS: Readonly<Record<string, readonly Subcommand[]>> = {
-  "dry-run": ["rerun-failed", "start", "append", "park", "record", "import", "verify", "budget"],
+  "dry-run": ["rerun-failed", "start", "append", "claim", "park", "record", "import", "verify", "budget"],
   claim: ["budget"],
 };
 
@@ -226,7 +237,7 @@ export const runCommand: Command = {
   summary: "Re-run a workflow run's failed jobs; keep and read a batch run's manifest and a caller's run record.",
   usage: USAGE,
   flags: {
-    values: ["target", "run-id", "id", "idle-answers", "issue", "pr", "base", "kind", "head", "row", "effort", "max-minutes", "max-tokens", "schema", "from"],
+    values: ["target", "run-id", "id", "idle-answers", "issue", "pr", "base", "kind", "head", "row", "effort", "max-minutes", "max-tokens", "schema", "from", "branch"],
     booleans: ["dry-run", "claim"],
   },
   run(context: CommandContext): number {
@@ -236,6 +247,7 @@ export const runCommand: Command = {
     if (subcommand === "start") return doStart(context);
     if (subcommand === "append") return doAppend(context);
     if (subcommand === "verify") return doVerify(context);
+    if (subcommand === "claim") return doClaim(context);
     if (subcommand === "park") return doPark(context);
     if (subcommand === "record") return doRecord(context);
     if (subcommand === "import") return doImport(context);
@@ -456,6 +468,35 @@ function doAppend(context: CommandContext): number {
   return result.outcome === "conflict" ? 1 : 0;
 }
 
+function doClaim(context: CommandContext): number {
+  const id = runId(context);
+  const rawIssue = requireValue(context.args, "issue", "It is the claimed issue, as <CODE>#<N> or <owner/name>#<N>.");
+  if (!ISSUE_REF.test(rawIssue)) throw new VerbUsageError(`--issue '${rawIssue}' is not <CODE>#<N> or <owner/name>#<N>.`);
+  const branch = context.args.values["branch"] ?? null;
+  if (branch !== null && !BRANCH_NAME.test(branch)) throw new VerbUsageError(`--branch '${branch}' is not a branch name.`);
+  const root = resolveRepoRoot({ repoFlag: context.repoFlag });
+  const issue = normaliseIssue(root, rawIssue);
+  const dryRun = context.args.booleans.has("dry-run");
+  const located = locateManifest(context, root, id, dryRun);
+  if (located === null) return 1;
+  try {
+    const result = withManifest(located.path, (existing) => {
+      if (existing === null) throw new RunManifestError(`no run '${id}' at ${located.path} -- 'nen run start --id ${id}' first.`);
+      return planClaim(existing, issue, branch, context.seams.now().toISOString(), (value): string => normaliseLenient(root, value));
+    }, !dryRun, { readPath: located.readPath, ops: modeOps(context) });
+    const outcome = dryRun && result.outcome === "claimed" ? "dry-run" : result.outcome;
+    const mode = combineModes(located.modes, result.modes);
+    emit(context.io, context.json, { outcome, path: located.path, entry: result.entry, mode }, [
+      `${outcome}: ${issue} claimed in run ${id} (branch ${branch ?? "none"}, since ${result.entry.at})`,
+      ...renderModes(mode),
+    ]);
+    return 0;
+  } catch (error) {
+    context.io.err(plainLine(`nen: ${error instanceof Error ? error.message : String(error)}`));
+    return 1;
+  }
+}
+
 function doPark(context: CommandContext): number {
   const id = runId(context);
   const issueRaw = requireValue(context.args, "issue", "It is the issue whose effort is parked, as <CODE>#<N> or <owner/name>#<N>.");
@@ -474,7 +515,13 @@ function doPark(context: CommandContext): number {
       path,
       (existing) => {
         if (existing === null) throw new RunManifestError(`no run '${id}' at ${path} -- 'nen run start --id ${id}' first.`);
-        return planPark(existing, issue, row, context.seams.now().toISOString());
+        const now = context.seams.now().toISOString();
+        const claims = readClaims(existing);
+        if (!claims.ok) throw new RunManifestError("cannot record park: stored claims are unreadable; values left untouched.");
+        if (claims.claims.some((claim): boolean => normaliseLenient(root, claim.issue).toLowerCase() === issue.toLowerCase() && Date.parse(claim.at) > Date.parse(now))) {
+          throw new RunManifestError("cannot record park: clock precedes this issue's latest claim; retry later.");
+        }
+        return planPark(existing, issue, row, now, (ref): string => normaliseLenient(root, ref));
       },
       !dryRun,
       { readPath: located.readPath, ops: modeOps(context) },
