@@ -877,6 +877,9 @@ describe.skipIf(!HAVE_GIT)("nen wc worktree -- against the real git, one world p
     expect(later.doc["removed"]).toEqual([{ path: SECRET, action: "removed" }]);
   });
 
+  // Builds a real Git world, creates a worktree and runs two more commands.
+  // Windows run 45722593596 exceeded the 5s default under shared-runner load;
+  // use the same bounded 20s allowance as catchup.integration's real-Git cases.
   it("a v0.1 record's entries are kept as unverifiable, and the record is rewritten as v0.2 (N3)", async () => {
     const w = await worldWithWorktree();
     const sha256 = createHash("sha256").update(readFileSync(join(w.W, SECRET))).digest("hex");
@@ -888,7 +891,7 @@ describe.skipIf(!HAVE_GIT)("nen wc worktree -- against the real git, one world p
     expect(readRecord(w)).toEqual({ contract: MANIFEST_CONTRACT, copies: [{ path: SECRET, hmac: null }] });
     rmSync(join(w.W, SECRET));
     expect((await wc(KG, w.C, true)).doc["kept"]).toEqual([]);
-  });
+  }, 20_000);
 
   it("a crashed run's leftovers in the worktree git dir are swept on the next real run, and only those (N2)", async () => {
     const w = await worldWithWorktree();

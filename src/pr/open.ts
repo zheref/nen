@@ -262,7 +262,7 @@ export function openPullRequest(seams: Seams, cwd: string, target: Target, optio
   // 2. PUBLISHED, AND CURRENT ON THE REMOTE.
   const upstream = seams.run(GIT, ["rev-parse", "--abbrev-ref", `${head}@{upstream}`], { cwd });
   if (upstream.code !== 0) {
-    return { kind: "refused", reason: `'${head}' has no upstream -- it has never been published, so there is nothing on GitHub to open a pull request from. Push it first ('nen wc publish --set-upstream').` };
+    return { kind: "refused", reason: `'${head}' has no upstream in checkout ${JSON.stringify(cwd)} (target ${target.slug}). If this is not the intended checkout, select it with '--repo <effort-checkout>'; otherwise publish this branch with 'nen wc publish --set-upstream'. Nothing was opened.` };
   }
   // THE REMOTE IS THE UPSTREAM'S, never a hard-coded `origin` (Nobunaga N7):
   // `<remote>/<branch>` is split the way ../wc/publish.ts splits it, and it is
